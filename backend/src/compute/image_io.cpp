@@ -47,4 +47,29 @@ cv::Mat read_png(const std::string& path) {
     return img;
 }
 
+std::string encode_rgba8(const cv::Mat& bgr) {
+    if (bgr.empty() || bgr.type() != CV_8UC3) {
+        throw std::runtime_error("encode_rgba8: expected non-empty CV_8UC3 Mat");
+    }
+    const int width = bgr.cols;
+    const int height = bgr.rows;
+    const std::size_t pixelCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    std::string rgba(pixelCount * 4, '\0');
+    auto* dst = reinterpret_cast<unsigned char*>(rgba.data());
+
+    for (int y = 0; y < height; ++y) {
+        const unsigned char* src = bgr.ptr<unsigned char>(y);
+        unsigned char* row = dst + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) * 4;
+        for (int x = 0; x < width; ++x) {
+            row[0] = src[2];
+            row[1] = src[1];
+            row[2] = src[0];
+            row[3] = 255;
+            src += 3;
+            row += 4;
+        }
+    }
+    return rgba;
+}
+
 } // namespace fsd::compute

@@ -39,6 +39,9 @@ std::string HttpServer::makeHttpResponse(int status, const std::string& body, co
        << "Access-Control-Allow-Origin: *\r\n"
        << "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
        << "Access-Control-Allow-Headers: Content-Type\r\n"
+       << "Access-Control-Expose-Headers: "
+       << "X-FSD-Status, X-FSD-Request-Id, X-FSD-Generated-Ms, X-FSD-Engine, "
+       << "X-FSD-Scalar, X-FSD-Width, X-FSD-Height, X-FSD-Pixel-Format\r\n"
        << extraHeaders
        << "Content-Length: " << body.size() << "\r\n"
        << "Connection: close\r\n\r\n"
@@ -73,6 +76,13 @@ std::string HttpServer::handleRequest(const std::string& request) const {
 
     // Map (native)
     if (method == "POST" && path == "/api/map/render") return makeHttpResponse(200, mapRenderRoute(repoRoot_, runner_, body));
+    if (method == "POST" && path == "/api/map/render-inline") {
+        int status = 200;
+        std::string contentType;
+        std::string extraHeaders;
+        const std::string bodyText = mapRenderInlineRoute(repoRoot_, body, status, contentType, extraHeaders);
+        return makeHttpResponse(status, bodyText, contentType, extraHeaders);
+    }
     if (method == "POST" && path == "/api/map/preempt") return makeHttpResponse(200, mapPreemptRoute(body));
     if (method == "POST" && path == "/api/map/field")  return makeHttpResponse(200, mapFieldRoute(repoRoot_, body));
     if (method == "POST" && path == "/api/map/ln")     return makeHttpResponse(200, lnMapRenderRoute(repoRoot_, runner_, body));

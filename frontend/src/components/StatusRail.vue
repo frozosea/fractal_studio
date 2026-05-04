@@ -82,6 +82,11 @@ function taskPercent(task: ActiveTask): string {
   if (typeof c === 'number' && typeof total === 'number' && total > 0) return `${Math.round(c / total * 100)}%`
   return '—'
 }
+
+function taskEta(task: ActiveTask): string {
+  const eta = task.progress?.estimatedRemainingMs
+  return typeof eta === 'number' && isFinite(eta) && eta >= 0 ? fmtElapsed(eta) : '—'
+}
 </script>
 
 <template>
@@ -158,6 +163,7 @@ function taskPercent(task: ActiveTask): string {
         <div class="row"><span class="k">progress</span><span class="v num">{{ taskPercent(task) }}</span></div>
         <div class="bar"><span :style="{ width: taskPercent(task) === '—' ? '0%' : taskPercent(task) }"></span></div>
         <div class="row"><span class="k">elapsed</span><span class="v num">{{ fmtElapsed(task.elapsedMs) }}</span></div>
+        <div class="row"><span class="k">eta</span><span class="v num">{{ taskEta(task) }}</span></div>
       </div>
     </div>
     </template>

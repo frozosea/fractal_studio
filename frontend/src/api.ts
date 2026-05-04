@@ -29,6 +29,33 @@ async function getJson<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function postArrayBuffer(path: string, body: unknown, signal?: AbortSignal): Promise<{ status: number; headers: Headers; data?: ArrayBuffer }> {
+  const res = await fetch(BASE + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (res.status === 204) {
+    return { status: res.status, headers: res.headers }
+  }
+  if (!res.ok) {
+    const text = await res.text()
+    const err = new Error(`${path}: ${res.status} ${text}`) as Error & { status?: number; data?: any }
+    err.status = res.status
+    try { err.data = JSON.parse(text) } catch {}
+    throw err
+  }
+  return { status: res.status, headers: res.headers, data: await res.arrayBuffer() }
+}
+
+function numberHeader(headers: Headers, name: string, fallback = 0): number {
+  const raw = headers.get(name)
+  if (raw === null || raw === '') return fallback
+  const value = Number(raw)
+  return Number.isFinite(value) ? value : fallback
+}
+
 // ---- Types ----
 
 export type Variant =
@@ -106,6 +133,18 @@ export interface MapRenderResponse {
   width: number
   height: number
   effective: Record<string, any>
+}
+
+export interface MapRenderInlineResponse {
+  status: string
+  requestId?: string
+  data?: ArrayBuffer
+  generatedMs: number
+  width: number
+  height: number
+  engineUsed?: string
+  scalarUsed?: string
+  pixelFormat?: string
 }
 
 export interface SpecialPoint {
@@ -678,6 +717,21 @@ export const api = {
   capabilities:() => getJson<Record<string, any>>('/api/system/capabilities'),
 
   mapRender:  (req: MapRenderRequest, signal?: AbortSignal)  => postJson<MapRenderResponse>('/api/map/render', req, signal),
+  mapRenderInline: async (req: MapRenderRequest, signal?: AbortSignal): Promise<MapRenderInlineResponse> => {
+    const res = await postArrayBuffer('/api/map/render-inline', req, signal)
+    const status = res.headers.get('X-FSD-Status') ?? (res.status === 204 ? 'cancelled' : 'completed')
+    return {
+      status,
+      requestId: res.headers.get('X-FSD-Request-Id') ?? undefined,
+      data: res.data,
+      generatedMs: numberHeader(res.headers, 'X-FSD-Generated-Ms', 0),
+      width: numberHeader(res.headers, 'X-FSD-Width', req.width),
+      height: numberHeader(res.headers, 'X-FSD-Height', req.height),
+      engineUsed: res.headers.get('X-FSD-Engine') ?? undefined,
+      scalarUsed: res.headers.get('X-FSD-Scalar') ?? undefined,
+      pixelFormat: res.headers.get('X-FSD-Pixel-Format') ?? undefined,
+    }
+  },
   mapPreempt: (req: Pick<MapRenderRequest, 'preemptKey' | 'preemptSeq'>) =>
     postJson<{ status: string; preemptKey?: string; preemptSeq?: number }>('/api/map/preempt', req),
   mapField:   (req: MapFieldRequest)   => postJson<MapFieldResponse>('/api/map/field', req),

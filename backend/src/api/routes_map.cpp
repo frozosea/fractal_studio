@@ -2,7 +2,8 @@
 //
 // Native map renderer endpoint. All 10 variants × all metrics × optional
 // Mandelbrot↔Burning-Ship transition. Dispatches to compute/map_kernel.cpp or
-// compute/transition_kernel.cpp and writes a PNG via OpenCV.
+// compute/transition_kernel.cpp. Export requests write PNG artifacts;
+// interactive requests can return raw RGBA8 frames without run/artifact I/O.
 
 #include "routes.hpp"
 #include "routes_common.hpp"
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -168,67 +170,272 @@ int thetaToMilliDeg(double theta) {
         static_cast<long long>(std::llround(radians * 180.0 * THETA_SCALE / PI)));
 }
 
+struct MapRenderInput {
+    Json j;
+    double cRe = -0.75;
+    double cIm = 0.0;
+    double scale = 3.0;
+    int width = 1024;
+    int height = 768;
+    int iters = 1024;
+    std::string variantStr = "mandelbrot";
+    std::string metricStr = "escape";
+    std::string colormapStr = "classic_cos";
+    bool julia = false;
+    double juliaRe = 0.0;
+    double juliaIm = 0.0;
+    std::string requestId;
+    std::string preemptKey;
+    long long preemptSeq = 0;
+    bool hasTheta = false;
+    int thetaMilliDeg = 0;
+    double theta = 0.0;
+    std::string scalarType = "auto";
+    std::string engine = "openmp";
+    bool smooth = false;
+    bool stillExport = false;
+};
+
+struct MapRenderImage {
+    cv::Mat image;
+    std::string artifactName = "map.png";
+    std::string scalarUsed = "fp64";
+    std::string engineUsed = "openmp";
+    double elapsed = 0.0;
+    double effectiveBailout = 2.0;
+    double effectiveBailoutSq = 4.0;
+};
+
+MapRenderInput parseMapRenderInput(const std::string& body) {
+    MapRenderInput in;
+    in.j = parseJsonBody(body);
+    const Json& j = in.j;
+
+    in.cRe = j.value("centerRe", -0.75);
+    in.cIm = j.value("centerIm", 0.0);
+    in.scale = j.value("scale", 3.0);
+    in.width = j.value("width", 1024);
+    in.height = j.value("height", 768);
+    in.iters = j.value("iterations", 1024);
+    in.variantStr = j.value("variant", std::string("mandelbrot"));
+    in.metricStr = j.value("metric", std::string("escape"));
+    in.colormapStr = j.value("colorMap", std::string("classic_cos"));
+    in.julia = j.value("julia", false);
+    in.juliaRe = j.value("juliaRe", 0.0);
+    in.juliaIm = j.value("juliaIm", 0.0);
+    in.requestId = j.value("requestId", std::string(""));
+    in.preemptKey = j.value("preemptKey", std::string(""));
+    in.preemptSeq = j.value("preemptSeq", 0LL);
+
+    const bool hasThetaMilliDeg =
+        j.contains("transitionThetaMilliDeg") && !j["transitionThetaMilliDeg"].is_null();
+    in.hasTheta = hasThetaMilliDeg || (j.contains("transitionTheta") && !j["transitionTheta"].is_null());
+    in.thetaMilliDeg = hasThetaMilliDeg
+        ? normalizeTransitionMilliDeg(j.value("transitionThetaMilliDeg", 0LL))
+        : (in.hasTheta ? thetaToMilliDeg(j.value("transitionTheta", 0.0)) : 0);
+    in.theta = static_cast<double>(in.thetaMilliDeg) * PI / (180.0 * THETA_SCALE);
+
+    in.scalarType = j.value("scalarType", std::string("auto"));
+    in.engine = j.value("engine", std::string("openmp"));
+    in.smooth = j.value("smooth", false);
+    in.stillExport = j.value("taskType", std::string("")) == "still_export";
+
+    if (!(in.scale > 0.0) || !std::isfinite(in.scale)) throw std::runtime_error("invalid scale");
+    if (in.width < 64 || in.width > 4096) throw std::runtime_error("invalid width");
+    if (in.height < 64 || in.height > 4096) throw std::runtime_error("invalid height");
+    if (in.iters < 1 || in.iters > 1000000) throw std::runtime_error("invalid iterations");
+    if (!std::isfinite(in.cRe) || !std::isfinite(in.cIm)) throw std::runtime_error("invalid center");
+
+    return in;
+}
+
+std::shared_ptr<std::atomic<bool>> registerMapRenderPreempt(const MapRenderInput& in) {
+    const bool interactivePreempt = !in.stillExport && !in.preemptKey.empty() && !in.requestId.empty();
+    return interactivePreempt
+        ? registerInteractiveMapRequest(in.preemptKey, in.preemptSeq)
+        : std::shared_ptr<std::atomic<bool>>{};
+}
+
+Json cancelledMapRenderJson(const std::string& runId, const MapRenderInput& in) {
+    Json resp = {
+        {"status", "cancelled"},
+        {"requestId", in.requestId},
+    };
+    if (!runId.empty()) resp["runId"] = runId;
+    return resp;
+}
+
+Json mapRenderEffectiveJson(const MapRenderInput& in, const MapRenderImage& rendered) {
+    return {
+        {"centerRe", in.cRe},
+        {"centerIm", in.cIm},
+        {"scale", in.scale},
+        {"iterations", in.iters},
+        {"variant", in.variantStr},
+        {"metric", in.metricStr},
+        {"colorMap", in.colormapStr},
+        {"bailout", rendered.effectiveBailout},
+        {"bailoutSq", rendered.effectiveBailoutSq},
+        {"julia", in.julia},
+        {"juliaRe", in.juliaRe},
+        {"juliaIm", in.juliaIm},
+        {"transitionTheta", in.hasTheta ? in.theta : 0.0},
+        {"transitionThetaMilliDeg", in.hasTheta ? in.thetaMilliDeg : 0},
+        {"transitionActive", in.hasTheta},
+        {"transitionFrom", in.hasTheta ? in.j.value("transitionFrom", std::string("mandelbrot")) : std::string("")},
+        {"transitionTo", in.hasTheta ? in.j.value("transitionTo", std::string("burning_ship")) : std::string("")},
+    };
+}
+
+void throwIfMapRenderCancelled(const std::function<bool()>& shouldCancel) {
+    if (shouldCancel && shouldCancel()) throw std::runtime_error("cancelled");
+}
+
+MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
+                              const MapRenderInput& in,
+                              const std::function<bool()>& shouldCancel) {
+    MapRenderImage rendered;
+    const Json& j = in.j;
+
+    if (in.hasTheta) {
+        throwIfMapRenderCancelled(shouldCancel);
+        double bailout = j.contains("bailout") && !j["bailout"].is_null()
+            ? j.value("bailout", 2.0)
+            : 2.0;
+        const double bailoutSq = bailoutSqFromJson(j, bailout, 4.0);
+        if (j.contains("bailoutSq") && !j["bailoutSq"].is_null() &&
+            !(j.contains("bailout") && !j["bailout"].is_null())) {
+            bailout = std::sqrt(bailoutSq);
+        }
+        if (!(bailout > 0.0) || !std::isfinite(bailout)) throw std::runtime_error("invalid bailout");
+        if (!(bailoutSq > 0.0) || !std::isfinite(bailoutSq)) throw std::runtime_error("invalid bailoutSq");
+        rendered.effectiveBailout = bailout;
+        rendered.effectiveBailoutSq = bailoutSq;
+        const compute::Variant fromVariant = parseBuiltinVariant(
+            j.value("transitionFrom", std::string("mandelbrot")),
+            compute::Variant::Mandelbrot);
+        const compute::Variant toVariant = parseBuiltinVariant(
+            j.value("transitionTo", std::string("burning_ship")),
+            compute::Variant::Boat);
+        if (!compute::variant_supports_axis_transition(fromVariant) ||
+            !compute::variant_supports_axis_transition(toVariant)) {
+            throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
+        }
+        compute::TransitionParams p;
+        p.center_re = in.cRe;
+        p.center_im = in.cIm;
+        p.scale = in.scale;
+        p.width = in.width;
+        p.height = in.height;
+        p.iterations = in.iters;
+        p.bailout = bailout;
+        p.bailout_sq = bailoutSq;
+        p.theta = in.theta;
+        p.theta_milli_deg_set = true;
+        p.theta_milli_deg = in.thetaMilliDeg;
+        p.metric = parseMetric(in.metricStr);
+        p.colormap = parseColormap(in.colormapStr);
+        p.smooth = in.smooth;
+        p.pairwise_cap = j.value("pairwiseCap", 64);
+        p.from_variant = fromVariant;
+        p.to_variant = toVariant;
+        p.scalar_type = in.scalarType;
+        p.engine = in.engine;
+        p.should_cancel = shouldCancel;
+        auto stats = compute::render_transition(p, rendered.image);
+        throwIfMapRenderCancelled(shouldCancel);
+        rendered.elapsed = stats.elapsed_ms;
+        rendered.scalarUsed = stats.scalar_used;
+        rendered.engineUsed = stats.engine_used;
+        rendered.artifactName = "transition.png";
+        return rendered;
+    }
+
+    throwIfMapRenderCancelled(shouldCancel);
+    const auto vr = resolveVariant(in.variantStr, repoRoot);
+    double bailout = j.contains("bailout") && !j["bailout"].is_null()
+        ? j.value("bailout", 2.0)
+        : resolvedDefaultBailout(vr);
+    const double bailoutSq = bailoutSqFromJson(j, bailout, resolvedDefaultBailoutSq(vr));
+    if (j.contains("bailoutSq") && !j["bailoutSq"].is_null() &&
+        !(j.contains("bailout") && !j["bailout"].is_null())) {
+        bailout = std::sqrt(bailoutSq);
+    }
+    if (!(bailout > 0.0) || !std::isfinite(bailout)) throw std::runtime_error("invalid bailout");
+    if (!(bailoutSq > 0.0) || !std::isfinite(bailoutSq)) throw std::runtime_error("invalid bailoutSq");
+    rendered.effectiveBailout = bailout;
+    rendered.effectiveBailoutSq = bailoutSq;
+
+    compute::MapParams p;
+    p.center_re = in.cRe;
+    p.center_im = in.cIm;
+    p.scale = in.scale;
+    p.width = in.width;
+    p.height = in.height;
+    p.iterations = in.iters;
+    p.bailout = bailout;
+    p.bailout_sq = bailoutSq;
+    p.variant = vr.var;
+    p.custom_step_fn = vr.fn;
+    p.metric = parseMetric(in.metricStr);
+    p.colormap = parseColormap(in.colormapStr);
+    p.julia = in.julia;
+    p.julia_re = in.juliaRe;
+    p.julia_im = in.juliaIm;
+    p.scalar_type = in.scalarType;
+    p.engine = in.engine;
+    p.smooth = in.smooth;
+    p.should_cancel = shouldCancel;
+
+    auto stats = compute::render_map(p, rendered.image);
+    throwIfMapRenderCancelled(shouldCancel);
+    rendered.elapsed = stats.elapsed_ms;
+    rendered.scalarUsed = stats.scalar_used;
+    rendered.engineUsed = stats.engine_used;
+    rendered.artifactName = "map.png";
+    return rendered;
+}
+
+std::string safeHeaderValue(std::string value) {
+    for (char& ch : value) {
+        if (ch == '\r' || ch == '\n') ch = ' ';
+    }
+    return value;
+}
+
+std::string inlineMapHeaders(const MapRenderInput& in, const std::string& status) {
+    return std::string("Cache-Control: no-store\r\n") +
+        "X-FSD-Status: " + safeHeaderValue(status) + "\r\n" +
+        "X-FSD-Request-Id: " + safeHeaderValue(in.requestId) + "\r\n";
+}
+
+std::string inlineMapHeaders(const MapRenderInput& in, const MapRenderImage& rendered) {
+    return inlineMapHeaders(in, "completed") +
+        "X-FSD-Generated-Ms: " + std::to_string(rendered.elapsed) + "\r\n" +
+        "X-FSD-Engine: " + safeHeaderValue(rendered.engineUsed) + "\r\n" +
+        "X-FSD-Scalar: " + safeHeaderValue(rendered.scalarUsed) + "\r\n" +
+        "X-FSD-Width: " + std::to_string(in.width) + "\r\n" +
+        "X-FSD-Height: " + std::to_string(in.height) + "\r\n" +
+        "X-FSD-Pixel-Format: rgba8\r\n";
+}
+
 } // namespace
 
 std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
-    const Json j = parseJsonBody(body);
-
-    const double cRe     = j.value("centerRe", -0.75);
-    const double cIm     = j.value("centerIm",  0.0);
-    const double scale   = j.value("scale",     3.0);
-    const int width      = j.value("width",     1024);
-    const int height     = j.value("height",     768);
-    const int iters      = j.value("iterations", 1024);
-    const std::string variantStr  = j.value("variant",  std::string("mandelbrot"));
-    const std::string metricStr   = j.value("metric",   std::string("escape"));
-    const std::string colormapStr = j.value("colorMap", std::string("classic_cos"));
-    const bool julia              = j.value("julia",    false);
-    const double juliaRe          = j.value("juliaRe",  0.0);
-    const double juliaIm          = j.value("juliaIm",  0.0);
-    const std::string requestId   = j.value("requestId", std::string(""));
-    const std::string preemptKey  = j.value("preemptKey", std::string(""));
-    const long long preemptSeq    = j.value("preemptSeq", 0LL);
-
-    const bool hasThetaMilliDeg = j.contains("transitionThetaMilliDeg") && !j["transitionThetaMilliDeg"].is_null();
-    const bool hasTheta = hasThetaMilliDeg || (j.contains("transitionTheta") && !j["transitionTheta"].is_null());
-    const int thetaMilliDeg = hasThetaMilliDeg
-        ? normalizeTransitionMilliDeg(j.value("transitionThetaMilliDeg", 0LL))
-        : (hasTheta ? thetaToMilliDeg(j.value("transitionTheta", 0.0)) : 0);
-    const double theta = static_cast<double>(thetaMilliDeg) * PI / (180.0 * THETA_SCALE);
-
-    const std::string scalarType = j.value("scalarType", std::string("auto"));
-    const std::string engine     = j.value("engine",     std::string("openmp"));
-    const bool smooth            = j.value("smooth",     false);
-    const bool stillExport       = j.value("taskType", std::string("")) == "still_export";
-    const bool interactivePreempt = !stillExport && !preemptKey.empty() && !requestId.empty();
-    auto preemptFlag = interactivePreempt
-        ? registerInteractiveMapRequest(preemptKey, preemptSeq)
-        : std::shared_ptr<std::atomic<bool>>{};
-    auto shouldCancel = [preemptFlag]() {
+    const MapRenderInput in = parseMapRenderInput(body);
+    auto preemptFlag = registerMapRenderPreempt(in);
+    std::function<bool()> shouldCancel = [preemptFlag]() {
         return preemptFlag && preemptFlag->load(std::memory_order_relaxed);
     };
-    auto throwIfCancelled = [&]() {
-        if (shouldCancel()) throw std::runtime_error("cancelled");
-    };
 
-    // Basic validation.
-    if (!(scale > 0.0) || !std::isfinite(scale))            throw std::runtime_error("invalid scale");
-    if (width < 64 || width  > 4096)                        throw std::runtime_error("invalid width");
-    if (height < 64 || height > 4096)                       throw std::runtime_error("invalid height");
-    if (iters < 1 || iters > 1000000)                       throw std::runtime_error("invalid iterations");
-    if (!std::isfinite(cRe) || !std::isfinite(cIm))         throw std::runtime_error("invalid center");
-
-    auto run = runner.createRun(stillExport ? "map-export" : "map", body);
+    auto run = runner.createRun(in.stillExport ? "map-export" : "map", body);
     if (shouldCancel()) {
         runner.setStatus(run.id, "cancelled");
-        return Json{
-            {"runId", run.id},
-            {"status", "cancelled"},
-            {"requestId", requestId},
-        }.dump();
+        return cancelledMapRenderJson(run.id, in).dump();
     }
+
     ResourceManager::Lease heavyLease;
-    if (stillExport) {
+    if (in.stillExport) {
         std::string conflictLock, activeRunId;
         if (!resourceManager().tryAcquire(run.id, "still_export", {"cuda_heavy", "cpu_heavy"}, heavyLease, conflictLock, activeRunId)) {
             runner.setStatus(run.id, "failed");
@@ -246,8 +453,8 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
             {"current", 0},
             {"total", 1},
             {"percent", 0.0},
-            {"engine", engine},
-            {"scalar", scalarType},
+            {"engine", in.engine},
+            {"scalar", in.scalarType},
             {"elapsedMs", runner.runElapsedMs(run.id)},
             {"cancelable", false},
             {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
@@ -257,124 +464,23 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
     (void)heavyLease;
     runner.setStatus(run.id, "running");
 
-    std::string artifactName;
-    std::string scalarUsed = "fp64";
-    std::string engineUsed = "openmp";
-    double elapsed = 0.0;
-    double effectiveBailout = 2.0;
-    double effectiveBailoutSq = 4.0;
-
+    MapRenderImage rendered;
     try {
-        cv::Mat out;
-        if (hasTheta) {
-            throwIfCancelled();
-            double bailout = j.contains("bailout") && !j["bailout"].is_null()
-                ? j.value("bailout", 2.0)
-                : 2.0;
-            const double bailoutSq = bailoutSqFromJson(j, bailout, 4.0);
-            if (j.contains("bailoutSq") && !j["bailoutSq"].is_null() &&
-                !(j.contains("bailout") && !j["bailout"].is_null())) {
-                bailout = std::sqrt(bailoutSq);
-            }
-            if (!(bailout > 0.0) || !std::isfinite(bailout)) throw std::runtime_error("invalid bailout");
-            if (!(bailoutSq > 0.0) || !std::isfinite(bailoutSq)) throw std::runtime_error("invalid bailoutSq");
-            effectiveBailout = bailout;
-            effectiveBailoutSq = bailoutSq;
-            const compute::Variant fromVariant = parseBuiltinVariant(
-                j.value("transitionFrom", std::string("mandelbrot")),
-                compute::Variant::Mandelbrot);
-            const compute::Variant toVariant = parseBuiltinVariant(
-                j.value("transitionTo", std::string("burning_ship")),
-                compute::Variant::Boat);
-            if (!compute::variant_supports_axis_transition(fromVariant) ||
-                !compute::variant_supports_axis_transition(toVariant)) {
-                throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
-            }
-            compute::TransitionParams p;
-            p.center_re = cRe;
-            p.center_im = cIm;
-            p.scale     = scale;
-            p.width     = width;
-            p.height    = height;
-            p.iterations = iters;
-            p.bailout    = bailout;
-            p.bailout_sq = bailoutSq;
-            p.theta      = theta;
-            p.theta_milli_deg_set = true;
-            p.theta_milli_deg = thetaMilliDeg;
-            p.metric       = parseMetric(metricStr);
-            p.colormap     = parseColormap(colormapStr);
-            p.smooth       = smooth;
-            p.pairwise_cap = j.value("pairwiseCap", 64);
-            p.from_variant = fromVariant;
-            p.to_variant   = toVariant;
-            p.scalar_type  = scalarType;
-            p.engine       = engine;
-            p.should_cancel = shouldCancel;
-            auto stats = compute::render_transition(p, out);
-            throwIfCancelled();
-            elapsed = stats.elapsed_ms;
-            scalarUsed = stats.scalar_used;
-            engineUsed = stats.engine_used;
-            artifactName = "transition.png";
-        } else {
-            throwIfCancelled();
-            const auto vr = resolveVariant(variantStr, repoRoot);
-            double bailout = j.contains("bailout") && !j["bailout"].is_null()
-                ? j.value("bailout", 2.0)
-                : resolvedDefaultBailout(vr);
-            const double bailoutSq = bailoutSqFromJson(j, bailout, resolvedDefaultBailoutSq(vr));
-            if (j.contains("bailoutSq") && !j["bailoutSq"].is_null() &&
-                !(j.contains("bailout") && !j["bailout"].is_null())) {
-                bailout = std::sqrt(bailoutSq);
-            }
-            if (!(bailout > 0.0) || !std::isfinite(bailout)) throw std::runtime_error("invalid bailout");
-            if (!(bailoutSq > 0.0) || !std::isfinite(bailoutSq)) throw std::runtime_error("invalid bailoutSq");
-            effectiveBailout = bailout;
-            effectiveBailoutSq = bailoutSq;
-            compute::MapParams p;
-            p.center_re  = cRe;
-            p.center_im  = cIm;
-            p.scale      = scale;
-            p.width      = width;
-            p.height     = height;
-            p.iterations = iters;
-            p.bailout    = bailout;
-            p.bailout_sq = bailoutSq;
-            p.variant    = vr.var;
-            p.custom_step_fn = vr.fn;
-            p.metric     = parseMetric(metricStr);
-            p.colormap   = parseColormap(colormapStr);
-            p.julia      = julia;
-            p.julia_re   = juliaRe;
-            p.julia_im   = juliaIm;
-            p.scalar_type = scalarType;
-            p.engine      = engine;
-            p.smooth      = smooth;
-            p.should_cancel = shouldCancel;
-
-            auto stats = compute::render_map(p, out);
-            throwIfCancelled();
-            elapsed = stats.elapsed_ms;
-            scalarUsed = stats.scalar_used;
-            engineUsed = stats.engine_used;
-            artifactName = "map.png";
-        }
-
-        throwIfCancelled();
+        rendered = renderMapImage(repoRoot, in, shouldCancel);
+        throwIfMapRenderCancelled(shouldCancel);
         const std::filesystem::path imagePath =
-            std::filesystem::path(run.outputDir) / artifactName;
-        compute::write_png(imagePath.string(), out);
+            std::filesystem::path(run.outputDir) / rendered.artifactName;
+        compute::write_png(imagePath.string(), rendered.image);
         runner.addArtifact(run.id, Artifact{"map", imagePath.string(), "image"});
-        if (stillExport) {
+        if (in.stillExport) {
             runner.setProgress(run.id, Json{
                 {"taskType", "map_export"},
                 {"stage", "completed"},
                 {"current", 1},
                 {"total", 1},
                 {"percent", 100.0},
-                {"engine", engineUsed},
-                {"scalar", scalarUsed},
+                {"engine", rendered.engineUsed},
+                {"scalar", rendered.scalarUsed},
                 {"elapsedMs", runner.runElapsedMs(run.id)},
                 {"cancelable", false},
                 {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
@@ -385,49 +491,65 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
     } catch (const std::exception& ex) {
         if (isCancelledException(ex)) {
             runner.setStatus(run.id, "cancelled");
-            return Json{
-                {"runId", run.id},
-                {"status", "cancelled"},
-                {"requestId", requestId},
-            }.dump();
+            return cancelledMapRenderJson(run.id, in).dump();
         }
         runner.setStatus(run.id, "failed");
         throw;
     }
 
-    const std::string artifactId = run.id + ":" + artifactName;
+    const std::string artifactId = run.id + ":" + rendered.artifactName;
     Json resp = {
-        {"runId",    run.id},
-        {"status",   "completed"},
+        {"runId", run.id},
+        {"status", "completed"},
         {"artifactId", artifactId},
         {"imagePath", "/api/artifacts/content?artifactId=" + artifactId},
-        {"generatedMs", elapsed},
-        {"width",  width},
-        {"height", height},
-        {"scalarUsed", scalarUsed},
-        {"engineUsed", engineUsed},
-        {"requestId", requestId},
-        {"effective", {
-            {"centerRe",  cRe},
-            {"centerIm",  cIm},
-            {"scale",     scale},
-            {"iterations", iters},
-            {"variant",   variantStr},
-            {"metric",    metricStr},
-            {"colorMap",  colormapStr},
-            {"bailout",   effectiveBailout},
-            {"bailoutSq", effectiveBailoutSq},
-            {"julia",     julia},
-            {"juliaRe",   juliaRe},
-            {"juliaIm",   juliaIm},
-            {"transitionTheta", hasTheta ? theta : 0.0},
-            {"transitionThetaMilliDeg", hasTheta ? thetaMilliDeg : 0},
-            {"transitionActive", hasTheta},
-            {"transitionFrom", hasTheta ? j.value("transitionFrom", std::string("mandelbrot")) : std::string("")},
-            {"transitionTo",   hasTheta ? j.value("transitionTo",   std::string("burning_ship")) : std::string("")},
-        }},
+        {"generatedMs", rendered.elapsed},
+        {"width", in.width},
+        {"height", in.height},
+        {"scalarUsed", rendered.scalarUsed},
+        {"engineUsed", rendered.engineUsed},
+        {"requestId", in.requestId},
+        {"effective", mapRenderEffectiveJson(in, rendered)},
     };
     return resp.dump();
+}
+
+std::string mapRenderInlineRoute(const std::filesystem::path& repoRoot,
+                                 const std::string& body,
+                                 int& status,
+                                 std::string& contentType,
+                                 std::string& extraHeaders) {
+    const MapRenderInput in = parseMapRenderInput(body);
+    if (in.stillExport) {
+        throw HttpError(400, Json{{"error", "render-inline does not create artifacts"}}.dump());
+    }
+
+    contentType = "application/octet-stream";
+    auto preemptFlag = registerMapRenderPreempt(in);
+    std::function<bool()> shouldCancel = [preemptFlag]() {
+        return preemptFlag && preemptFlag->load(std::memory_order_relaxed);
+    };
+    if (shouldCancel()) {
+        status = 204;
+        extraHeaders = inlineMapHeaders(in, "cancelled");
+        return {};
+    }
+
+    try {
+        const MapRenderImage rendered = renderMapImage(repoRoot, in, shouldCancel);
+        throwIfMapRenderCancelled(shouldCancel);
+        std::string pixels = compute::encode_rgba8(rendered.image);
+        status = 200;
+        extraHeaders = inlineMapHeaders(in, rendered);
+        return pixels;
+    } catch (const std::exception& ex) {
+        if (isCancelledException(ex)) {
+            status = 204;
+            extraHeaders = inlineMapHeaders(in, "cancelled");
+            return {};
+        }
+        throw;
+    }
 }
 
 std::string mapPreemptRoute(const std::string& body) {

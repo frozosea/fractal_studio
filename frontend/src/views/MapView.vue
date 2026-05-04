@@ -338,9 +338,9 @@ function onMapViewportSize(size: { width: number; height: number }) {
   if (size.height >= 16) mapViewportH.value = size.height
 }
 
-function onRendered(meta: { generatedMs: number; artifactId: string; engineUsed?: string; scalarUsed?: string }) {
+function onRendered(meta: { generatedMs: number; artifactId?: string; engineUsed?: string; scalarUsed?: string }) {
   lastMs.value         = meta.generatedMs
-  lastArtifactId.value = meta.artifactId
+  lastArtifactId.value = meta.artifactId ?? ''
   lastEngine.value     = meta.engineUsed ?? ''
   lastScalar.value     = meta.scalarUsed ?? ''
   syncStatus()
@@ -482,16 +482,34 @@ const exportEstimatedFrames = computed(() =>
   Math.max(2, Math.round(exportEstimatedDuration.value * Math.max(1, exportFps.value)))
 )
 const visiblePreview = computed(() => exportPreviewResult.value ?? exportResult.value)
+
+function fmtDurationMs(ms?: number | null): string {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) return '<1s'
+  const totalSec = Math.ceil(ms / 1000)
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m ${s}s`
+  return `${s}s`
+}
+
+function etaSuffix(ms?: number | null): string {
+  const eta = fmtDurationMs(ms)
+  return eta ? ` · ETA ${eta}` : ''
+}
+
 const exportProgressDetail = computed(() => {
   const p = exportProgress.value
   if (!p.stage) return ''
   if (p.stage === 'ln_map') {
-    return `ln-map ${p.current || 0}/${p.total || 0} rows · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}`
+    return `ln-map ${p.current || 0}/${p.total || 0} rows · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
   }
   if (p.stage === 'video_warp_encode') {
-    return `encode ${p.current || 0}/${p.total || 0} frames`
+    return `encode ${p.current || 0}/${p.total || 0} frames${etaSuffix(p.estimatedRemainingMs)}`
   }
-  if (p.stage === 'final_frame') return `final frame ${p.current || 0}/${p.total || 1}`
+  if (p.stage === 'final_frame') return `final frame ${p.current || 0}/${p.total || 1}${etaSuffix(p.estimatedRemainingMs)}`
   return p.stage
 })
 const exportMemoryEstimateMiB = computed(() => {

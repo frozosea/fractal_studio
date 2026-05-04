@@ -1,8 +1,6 @@
 // compute/image_io.hpp
 //
-// Thin OpenCV wrapper for writing/reading PNG artifacts. We don't need a
-// lot — just one writer that takes a path and a BGR cv::Mat and does
-// deterministic PNG output, plus a reader for the ln-map video pipeline.
+// Thin OpenCV wrapper for PNG artifacts plus raw interactive frame transport.
 
 #pragma once
 
@@ -19,5 +17,9 @@ std::string write_png(const std::string& path, const cv::Mat& bgr);
 
 // Read a PNG into a BGR CV_8UC3 Mat. Throws std::runtime_error on failure.
 cv::Mat read_png(const std::string& path);
+
+// Convert a BGR CV_8UC3 Mat into tightly-packed RGBA8 bytes for direct canvas
+// upload. This avoids PNG encode/decode and disk I/O for interactive frames.
+std::string encode_rgba8(const cv::Mat& bgr);
 
 } // namespace fsd::compute

@@ -56,10 +56,12 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -847,6 +849,55 @@ LnMapLookup resolveLnMap(const std::filesystem::path& repoRoot, const std::strin
     return { png, Json::parse(ss.str()) };
 }
 
+struct VideoEtaState {
+    std::string stage;
+    int total = 0;
+    int last_current = 0;
+    long long stage_started_ms = 0;
+};
+
+std::mutex g_video_eta_mu;
+std::unordered_map<std::string, VideoEtaState> g_video_eta;
+
+long long etaClockMs() {
+    static const auto origin = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(now - origin).count();
+}
+
+long long estimateStageRemainingMs(const std::string& runId, const std::string& stage, int current, int total) {
+    const long long now = etaClockMs();
+    const bool terminal = stage == "failed" || stage == "cancelled";
+    std::lock_guard<std::mutex> lk(g_video_eta_mu);
+    if (terminal) {
+        g_video_eta.erase(runId);
+        return -1;
+    }
+
+    auto& state = g_video_eta[runId];
+    if (state.stage != stage || state.total != total || current < state.last_current) {
+        state.stage = stage;
+        state.total = total;
+        state.last_current = std::max(0, current);
+        state.stage_started_ms = now;
+    } else {
+        state.last_current = std::max(state.last_current, current);
+    }
+
+    if (total <= 0 || current <= 0) return -1;
+    if (current >= total) {
+        if (stage == "video_warp_encode") g_video_eta.erase(runId);
+        return 0;
+    }
+
+    const long long elapsed = std::max(1LL, now - state.stage_started_ms);
+    if (elapsed < 1000) return -1;
+    return static_cast<long long>(
+        std::ceil(static_cast<double>(elapsed) *
+                  static_cast<double>(total - current) /
+                  static_cast<double>(current)));
+}
+
 void setVideoProgress(
     JobRunner& runner,
     const std::string& runId,
@@ -860,13 +911,16 @@ void setVideoProgress(
     Json details = Json::object()
 ) {
     const double percent = total > 0 ? (100.0 * static_cast<double>(current) / static_cast<double>(total)) : 0.0;
+    const long long elapsedMs = runner.runElapsedMs(runId);
+    const long long estimatedRemainingMs = estimateStageRemainingMs(runId, stage, current, total);
     Json j = {
         {"taskType", "video_export"},
         {"stage", stage},
         {"current", current},
         {"total", total},
         {"percent", percent},
-        {"elapsedMs", runner.runElapsedMs(runId)},
+        {"elapsedMs", elapsedMs},
+        {"estimatedRemainingMs", estimatedRemainingMs >= 0 ? Json(estimatedRemainingMs) : Json(nullptr)},
         {"cancelable", true},
         {"resourceLocks", Json::array({"video_export", "cuda_heavy", "cpu_heavy"})},
         {"depthOctave", depthCurrent},

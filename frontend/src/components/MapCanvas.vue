@@ -32,7 +32,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'viewport-change', v: { centerRe: number; centerIm: number; scale: number }): void
   (e: 'viewport-size', size: { width: number; height: number }): void
-  (e: 'rendered', meta: { generatedMs: number; artifactId: string; engineUsed?: string; scalarUsed?: string }): void
+  (e: 'rendered', meta: { generatedMs: number; artifactId?: string; engineUsed?: string; scalarUsed?: string }): void
   (e: 'click-world', pos: { re: number; im: number }): void
   (e: 'hover-special-point', id: string): void
   (e: 'select-special-point', p: SpecialPointEnumResult): void
@@ -115,6 +115,21 @@ function canvasStyle(index: number) {
   }
 }
 
+function drawRgbaFrame(data: ArrayBuffer, width: number, height: number): number | null {
+  const expectedBytes = width * height * 4
+  if (data.byteLength !== expectedBytes) {
+    throw new Error(`inline frame size mismatch: got ${data.byteLength}, expected ${expectedBytes}`)
+  }
+  const next = activeCanvas.value === 0 ? 1 : 0
+  const target = canvasByIndex(next)
+  resizeCanvas(target, width, height)
+  const ctx = target?.getContext('2d')
+  if (!ctx) return null
+  const imageData = new ImageData(new Uint8ClampedArray(data), width, height)
+  ctx.putImageData(imageData, 0, 0)
+  return next
+}
+
 async function renderFrame() {
   if (domW.value < 16 || domH.value < 16) return
   pending.value = true
@@ -159,40 +174,29 @@ async function renderFrame() {
   if (props.scalarType)               (req as any).scalarType       = props.scalarType
 
   try {
-    const resp = await api.mapRender(req, controller.signal) as any
+    const resp = await api.mapRenderInline(req, controller.signal) as any
     if (seq !== renderSeq || (resp.requestId && resp.requestId !== requestId)) return
-    if (resp.status === 'cancelled' || !resp.artifactId) return
-    const imgUrl = api.artifactContentUrl(resp.artifactId)
-    await new Promise<void>((res, rej) => {
-      const img = new Image()
-      img.onload = () => {
-        if (seq !== renderSeq) { res(); return }
-        const next = activeCanvas.value === 0 ? 1 : 0
-        const target = canvasByIndex(next)
-        resizeCanvas(target, reqW, reqH)
-        const ctx = target?.getContext('2d')
-        if (ctx) {
-          ctx.clearRect(0, 0, reqW, reqH)
-          ctx.drawImage(img, 0, 0, reqW, reqH)
-          renderedViewport = {
-            centerRe: req.centerRe,
-            centerIm: req.centerIm,
-            scale: req.scale,
-          }
-          hasFrame.value = true
-          activeCanvas.value = next
-        }
-        res()
-      }
-      img.onerror = rej
-      img.src = imgUrl
-    })
+    if (resp.status === 'cancelled' || !resp.data) return
+    if (resp.pixelFormat && resp.pixelFormat !== 'rgba8') {
+      throw new Error(`unsupported inline frame format: ${resp.pixelFormat}`)
+    }
+    const frameW = resp.width || reqW
+    const frameH = resp.height || reqH
+    const next = drawRgbaFrame(resp.data, frameW, frameH)
+    if (next === null) return
     if (seq !== renderSeq) return
+    renderedViewport = {
+      centerRe: req.centerRe,
+      centerIm: req.centerIm,
+      scale: req.scale,
+    }
+    hasFrame.value = true
+    activeCanvas.value = next
     emit('rendered', {
       generatedMs: resp.generatedMs,
-      artifactId:  resp.artifactId,
-      engineUsed:  resp.effective?.engine ?? resp.engineUsed,
-      scalarUsed:  resp.effective?.scalar ?? resp.scalarUsed,
+      artifactId:  '',
+      engineUsed:  resp.engineUsed,
+      scalarUsed:  resp.scalarUsed,
     })
   } catch (e: any) {
     if (seq === renderSeq && e?.name !== 'AbortError') error.value = e?.message ?? String(e)

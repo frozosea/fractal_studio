@@ -27,8 +27,13 @@ std::string systemHardwareRoute();
 std::string systemCapabilitiesRoute();
 
 // Map (native): escape/metric/transition all dispatch through here.
-// Body is JSON; response is JSON describing the generated artifact.
+// Artifact route returns JSON; inline route returns binary frame bytes.
 std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body);
+std::string mapRenderInlineRoute(const std::filesystem::path& repoRoot,
+                                 const std::string& body,
+                                 int& status,
+                                 std::string& contentType,
+                                 std::string& extraHeaders);
 std::string mapPreemptRoute(const std::string& body);
 
 // Raw field data (no colorization) — high-frequency tile endpoint, no artifact storage.
