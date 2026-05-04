@@ -8,10 +8,12 @@
 #include <opencv2/core.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 
 #if defined(__AVX2__)
 #  include <immintrin.h>
@@ -222,15 +224,24 @@ MapStats render_avx2_variant(const MapParams& p, cv::Mat& out) {
     const double re_min = p.center_re - span_re * 0.5;
     const double im_max = p.center_im + span_im * 0.5;
     const int thread_count = resolve_render_threads(p.render_threads);
+    std::atomic<bool> cancelled{false};
 
     const auto t0 = std::chrono::steady_clock::now();
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 4)
     for (int y = 0; y < H; ++y) {
+        if (cancelled.load(std::memory_order_relaxed)) continue;
+        if (map_render_cancel_requested(p)) {
+            cancelled.store(true, std::memory_order_relaxed);
+            continue;
+        }
         avx2_fp64_row<VariantId>(
             y, W, H, re_min, im_max, span_re, span_im,
             p.bailout_sq, p.iterations,
             p.julia, p.julia_re, p.julia_im,
             p.metric, p.colormap, out.ptr<uint8_t>(y));
+    }
+    if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+        throw std::runtime_error("cancelled");
     }
 
     const auto t1 = std::chrono::steady_clock::now();

@@ -32,9 +32,11 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace fsd::compute {
@@ -88,6 +90,25 @@ inline int ceil_div(int value, int step) {
     return (value + step - 1) / step;
 }
 
+[[noreturn]] void throw_render_cancelled() {
+    throw std::runtime_error("cancelled");
+}
+
+inline bool mark_cancelled_if_requested(const MapParams& p, std::atomic<bool>& cancelled) {
+    if (cancelled.load(std::memory_order_relaxed)) return true;
+    if (map_render_cancel_requested(p)) {
+        cancelled.store(true, std::memory_order_relaxed);
+        return true;
+    }
+    return false;
+}
+
+inline void throw_if_cancelled(const MapParams& p, const std::atomic<bool>& cancelled) {
+    if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+        throw_render_cancelled();
+    }
+}
+
 // Generic OpenMP kernel templated on Variant, Scalar, and metric.
 template <Variant V, typename S, Metric M, IterResultMask NeedMask>
 void render_variant_metric_impl(const MapParams& p, cv::Mat& out) {
@@ -104,6 +125,7 @@ void render_variant_metric_impl(const MapParams& p, cv::Mat& out) {
     const int tiles_x = ceil_div(W, tile_size);
     const int tiles_y = ceil_div(H, tile_size);
     const int tile_count = tiles_x * tiles_y;
+    std::atomic<bool> cancelled{false};
 
     const S jre = scalar_from_double<S>(p.julia_re);
     const S jim = scalar_from_double<S>(p.julia_im);
@@ -118,6 +140,7 @@ void render_variant_metric_impl(const MapParams& p, cv::Mat& out) {
 
         #pragma omp for schedule(dynamic, 1)
         for (int tile = 0; tile < tile_count; tile++) {
+            if (mark_cancelled_if_requested(p, cancelled)) continue;
             const int tile_x = tile % tiles_x;
             const int tile_y = tile / tiles_x;
             const int x0 = tile_x * tile_size;
@@ -126,6 +149,7 @@ void render_variant_metric_impl(const MapParams& p, cv::Mat& out) {
             const int y1 = std::min(H, y0 + tile_size);
 
             for (int y = y0; y < y1; y++) {
+                if (mark_cancelled_if_requested(p, cancelled)) break;
                 uint8_t* row = out.ptr<uint8_t>(y);
                 const double im_d = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
                 const S im = scalar_from_double<S>(im_d);
@@ -175,6 +199,7 @@ void render_variant_metric_impl(const MapParams& p, cv::Mat& out) {
             }
         }
     }
+    throw_if_cancelled(p, cancelled);
 }
 
 template <int FRAC, Variant V, Metric M, IterResultMask NeedMask>
@@ -195,11 +220,13 @@ void render_variant_metric_fixed_impl(const MapParams& p, cv::Mat& out) {
     const int tiles_x = ceil_div(W, tile_size);
     const int tiles_y = ceil_div(H, tile_size);
     const int tile_count = tiles_x * tiles_y;
+    std::atomic<bool> cancelled{false};
 
     const Cx<S> c_const{S{vp.julia_re_raw}, S{vp.julia_im_raw}};
 
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 1)
     for (int tile = 0; tile < tile_count; tile++) {
+        if (mark_cancelled_if_requested(p, cancelled)) continue;
         const int tile_x = tile % tiles_x;
         const int tile_y = tile / tiles_x;
         const int x0 = tile_x * tile_size;
@@ -208,6 +235,7 @@ void render_variant_metric_fixed_impl(const MapParams& p, cv::Mat& out) {
         const int y1 = std::min(H, y0 + tile_size);
 
         for (int y = y0; y < y1; y++) {
+            if (mark_cancelled_if_requested(p, cancelled)) break;
             uint8_t* row = out.ptr<uint8_t>(y);
             const S im{fixed_pixel_im_raw<FRAC>(vp, y)};
             for (int x = x0; x < x1; x++) {
@@ -249,6 +277,7 @@ void render_variant_metric_fixed_impl(const MapParams& p, cv::Mat& out) {
             }
         }
     }
+    throw_if_cancelled(p, cancelled);
 }
 
 // Variant dispatch helpers — one for fp64, one for fx64.
@@ -486,11 +515,13 @@ static MapStats render_custom_openmp(const MapParams& p, cv::Mat& out) {
     const int tiles_x = ceil_div(W, tile_size);
     const int tiles_y = ceil_div(H, tile_size);
     const int tile_count = tiles_x * tiles_y;
+    std::atomic<bool> cancelled{false};
 
     const auto t0 = std::chrono::steady_clock::now();
 
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 1)
     for (int tile = 0; tile < tile_count; tile++) {
+        if (mark_cancelled_if_requested(p, cancelled)) continue;
         const int tile_x = tile % tiles_x;
         const int tile_y = tile / tiles_x;
         const int x0 = tile_x * tile_size;
@@ -499,6 +530,7 @@ static MapStats render_custom_openmp(const MapParams& p, cv::Mat& out) {
         const int y1 = std::min(H, y0 + tile_size);
 
         for (int y = y0; y < y1; y++) {
+            if (mark_cancelled_if_requested(p, cancelled)) break;
             uint8_t* row = out.ptr<uint8_t>(y);
             const double im_c = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
             for (int x = x0; x < x1; x++) {
@@ -533,6 +565,8 @@ static MapStats render_custom_openmp(const MapParams& p, cv::Mat& out) {
             }
         }
     }
+
+    throw_if_cancelled(p, cancelled);
 
     const auto t1 = std::chrono::steady_clock::now();
     MapStats s;
@@ -933,6 +967,7 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
     if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
         out.create(p.height, p.width, CV_8UC3);
     }
+    if (map_render_cancel_requested(p)) throw_render_cancelled();
 
     // Custom variant: bypass CUDA/AVX and go straight to OpenMP.
     if (p.variant == Variant::Custom && p.custom_step_fn) {
@@ -945,6 +980,20 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
     const std::string selected_engine = select_map_engine(p, fx);
 
     if (selected_engine == "hybrid") {
+        MapParams hybrid_params = p;
+        hybrid_params.scalar_type = fx ? fixed_precision_name(fixed_precision) : "fp64";
+        auto ts = render_map_hybrid(hybrid_params, out);
+        MapStats s;
+        s.elapsed_ms = ts.total_ms;
+        s.pixel_count = p.width * p.height;
+        s.scalar_used = ts.scalar_used;
+        s.engine_used = ts.engine_used;
+        return s;
+    }
+
+    // Interactive CUDA renders use tiles so stale requests can stop between
+    // small kernels instead of waiting for one full-frame kernel to return.
+    if (selected_engine == "cuda" && p.should_cancel) {
         MapParams hybrid_params = p;
         hybrid_params.scalar_type = fx ? fixed_precision_name(fixed_precision) : "fp64";
         auto ts = render_map_hybrid(hybrid_params, out);

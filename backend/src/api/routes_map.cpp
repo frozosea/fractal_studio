@@ -17,11 +17,16 @@
 #include "../compute/colormap.hpp"
 
 #include <cmath>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 
 namespace fsd {
 
@@ -32,6 +37,36 @@ constexpr double PI  = 3.14159265358979323846264338327950288;
 constexpr int THETA_SCALE = 1000;
 constexpr int THETA_HALF_TURN_MDEG = 180 * THETA_SCALE;
 constexpr int THETA_FULL_TURN_MDEG = 360 * THETA_SCALE;
+
+struct InteractiveMapPreemptEntry {
+    long long seq = -1;
+    std::weak_ptr<std::atomic<bool>> cancel_flag;
+};
+
+std::mutex g_interactive_map_preempt_mu;
+std::unordered_map<std::string, InteractiveMapPreemptEntry> g_interactive_map_preempt;
+
+std::shared_ptr<std::atomic<bool>> registerInteractiveMapRequest(const std::string& key, long long seq) {
+    auto flag = std::make_shared<std::atomic<bool>>(false);
+    if (key.empty()) return flag;
+
+    std::lock_guard<std::mutex> lk(g_interactive_map_preempt_mu);
+    auto& entry = g_interactive_map_preempt[key];
+    if (seq >= entry.seq) {
+        if (auto previous = entry.cancel_flag.lock()) {
+            previous->store(true, std::memory_order_relaxed);
+        }
+        entry.seq = seq;
+        entry.cancel_flag = flag;
+    } else {
+        flag->store(true, std::memory_order_relaxed);
+    }
+    return flag;
+}
+
+bool isCancelledException(const std::exception& ex) {
+    return std::string(ex.what()) == "cancelled";
+}
 
 // Resolve a variant string into (Variant enum, optional custom step fn).
 // Custom variants use the "custom:HASH" prefix and look up the dlopen registry.
@@ -151,6 +186,8 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
     const double juliaRe          = j.value("juliaRe",  0.0);
     const double juliaIm          = j.value("juliaIm",  0.0);
     const std::string requestId   = j.value("requestId", std::string(""));
+    const std::string preemptKey  = j.value("preemptKey", std::string(""));
+    const long long preemptSeq    = j.value("preemptSeq", 0LL);
 
     const bool hasThetaMilliDeg = j.contains("transitionThetaMilliDeg") && !j["transitionThetaMilliDeg"].is_null();
     const bool hasTheta = hasThetaMilliDeg || (j.contains("transitionTheta") && !j["transitionTheta"].is_null());
@@ -163,6 +200,16 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
     const std::string engine     = j.value("engine",     std::string("openmp"));
     const bool smooth            = j.value("smooth",     false);
     const bool stillExport       = j.value("taskType", std::string("")) == "still_export";
+    const bool interactivePreempt = !stillExport && !preemptKey.empty() && !requestId.empty();
+    auto preemptFlag = interactivePreempt
+        ? registerInteractiveMapRequest(preemptKey, preemptSeq)
+        : std::shared_ptr<std::atomic<bool>>{};
+    auto shouldCancel = [preemptFlag]() {
+        return preemptFlag && preemptFlag->load(std::memory_order_relaxed);
+    };
+    auto throwIfCancelled = [&]() {
+        if (shouldCancel()) throw std::runtime_error("cancelled");
+    };
 
     // Basic validation.
     if (!(scale > 0.0) || !std::isfinite(scale))            throw std::runtime_error("invalid scale");
@@ -172,6 +219,14 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
     if (!std::isfinite(cRe) || !std::isfinite(cIm))         throw std::runtime_error("invalid center");
 
     auto run = runner.createRun(stillExport ? "map-export" : "map", body);
+    if (shouldCancel()) {
+        runner.setStatus(run.id, "cancelled");
+        return Json{
+            {"runId", run.id},
+            {"status", "cancelled"},
+            {"requestId", requestId},
+        }.dump();
+    }
     ResourceManager::Lease heavyLease;
     if (stillExport) {
         std::string conflictLock, activeRunId;
@@ -212,6 +267,7 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
     try {
         cv::Mat out;
         if (hasTheta) {
+            throwIfCancelled();
             double bailout = j.contains("bailout") && !j["bailout"].is_null()
                 ? j.value("bailout", 2.0)
                 : 2.0;
@@ -254,12 +310,15 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
             p.to_variant   = toVariant;
             p.scalar_type  = scalarType;
             p.engine       = engine;
+            p.should_cancel = shouldCancel;
             auto stats = compute::render_transition(p, out);
+            throwIfCancelled();
             elapsed = stats.elapsed_ms;
             scalarUsed = stats.scalar_used;
             engineUsed = stats.engine_used;
             artifactName = "transition.png";
         } else {
+            throwIfCancelled();
             const auto vr = resolveVariant(variantStr, repoRoot);
             double bailout = j.contains("bailout") && !j["bailout"].is_null()
                 ? j.value("bailout", 2.0)
@@ -292,14 +351,17 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
             p.scalar_type = scalarType;
             p.engine      = engine;
             p.smooth      = smooth;
+            p.should_cancel = shouldCancel;
 
             auto stats = compute::render_map(p, out);
+            throwIfCancelled();
             elapsed = stats.elapsed_ms;
             scalarUsed = stats.scalar_used;
             engineUsed = stats.engine_used;
             artifactName = "map.png";
         }
 
+        throwIfCancelled();
         const std::filesystem::path imagePath =
             std::filesystem::path(run.outputDir) / artifactName;
         compute::write_png(imagePath.string(), out);
@@ -320,7 +382,15 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
             }.dump());
         }
         runner.setStatus(run.id, "completed");
-    } catch (const std::exception&) {
+    } catch (const std::exception& ex) {
+        if (isCancelledException(ex)) {
+            runner.setStatus(run.id, "cancelled");
+            return Json{
+                {"runId", run.id},
+                {"status", "cancelled"},
+                {"requestId", requestId},
+            }.dump();
+        }
         runner.setStatus(run.id, "failed");
         throw;
     }
@@ -358,6 +428,20 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
         }},
     };
     return resp.dump();
+}
+
+std::string mapPreemptRoute(const std::string& body) {
+    const Json j = parseJsonBody(body);
+    const std::string preemptKey = j.value("preemptKey", std::string(""));
+    const long long preemptSeq = j.value("preemptSeq", 0LL);
+    if (!preemptKey.empty()) {
+        registerInteractiveMapRequest(preemptKey, preemptSeq);
+    }
+    return Json{
+        {"status", "ok"},
+        {"preemptKey", preemptKey},
+        {"preemptSeq", preemptSeq},
+    }.dump();
 }
 
 // ─── /api/map/field — raw field data (no colorization) ───────────────────────

@@ -72,6 +72,8 @@ export const COLORMAPS: ColorMap[] = ['classic_cos', 'mod17', 'hsv_wheel', 'tri7
 
 export interface MapRenderRequest {
   requestId?: string
+  preemptKey?: string
+  preemptSeq?: number
   taskType?: string
   centerRe: number
   centerIm: number
@@ -676,6 +678,8 @@ export const api = {
   capabilities:() => getJson<Record<string, any>>('/api/system/capabilities'),
 
   mapRender:  (req: MapRenderRequest, signal?: AbortSignal)  => postJson<MapRenderResponse>('/api/map/render', req, signal),
+  mapPreempt: (req: Pick<MapRenderRequest, 'preemptKey' | 'preemptSeq'>) =>
+    postJson<{ status: string; preemptKey?: string; preemptSeq?: number }>('/api/map/preempt', req),
   mapField:   (req: MapFieldRequest)   => postJson<MapFieldResponse>('/api/map/field', req),
   lnMap:      (req: LnMapRequest)      => postJson<LnMapResponse>('/api/map/ln', req),
 

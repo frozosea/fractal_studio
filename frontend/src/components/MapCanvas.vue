@@ -31,6 +31,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'viewport-change', v: { centerRe: number; centerIm: number; scale: number }): void
+  (e: 'viewport-size', size: { width: number; height: number }): void
   (e: 'rendered', meta: { generatedMs: number; artifactId: string; engineUsed?: string; scalarUsed?: string }): void
   (e: 'click-world', pos: { re: number; im: number }): void
   (e: 'hover-special-point', id: string): void
@@ -51,6 +52,7 @@ let   ro: ResizeObserver | null = null
 let   renderTimer: ReturnType<typeof setTimeout> | null = null
 let   currentRender: AbortController | null = null
 let   renderSeq = 0
+const renderClientId = `map-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 
 type ViewportSnapshot = {
   centerRe: number
@@ -72,10 +74,26 @@ function resizeCanvas(c: HTMLCanvasElement | null, w: number, h: number) {
   if (c.height !== h) c.height = h
 }
 
+function notifyPreempt(seq: number) {
+  api.mapPreempt({ preemptKey: renderClientId, preemptSeq: seq }).catch(() => {})
+}
+
+function setDomSize(w: number, h: number) {
+  if (w === domW.value && h === domH.value) return
+  domW.value = w
+  domH.value = h
+  emit('viewport-size', { width: w, height: h })
+  if (!hasFrame.value) {
+    resizeCanvas(canvasA.value, w, h)
+    resizeCanvas(canvasB.value, w, h)
+  }
+}
+
 function invalidateCurrentRender() {
   currentRender?.abort()
   currentRender = null
   renderSeq += 1
+  notifyPreempt(renderSeq)
 }
 
 function previewTransform(): string {
@@ -107,12 +125,14 @@ async function renderFrame() {
   const controller = new AbortController()
   currentRender = controller
   const seq = ++renderSeq
-  const requestId = `${Date.now()}-${seq}`
+  const requestId = `${renderClientId}-${seq}`
   const reqW = domW.value
   const reqH = domH.value
 
   const req: MapRenderRequest = {
     requestId,
+    preemptKey: renderClientId,
+    preemptSeq: seq,
     centerRe:   props.centerRe,
     centerIm:   props.centerIm,
     scale:      props.scale,
@@ -141,6 +161,7 @@ async function renderFrame() {
   try {
     const resp = await api.mapRender(req, controller.signal) as any
     if (seq !== renderSeq || (resp.requestId && resp.requestId !== requestId)) return
+    if (resp.status === 'cancelled' || !resp.artifactId) return
     const imgUrl = api.artifactContentUrl(resp.artifactId)
     await new Promise<void>((res, rej) => {
       const img = new Image()
@@ -210,21 +231,13 @@ onMounted(() => {
     for (const e of entries) {
       const w = Math.round(e.contentRect.width)
       const h = Math.round(e.contentRect.height)
-      if (w !== domW.value || h !== domH.value) {
-        domW.value = w
-        domH.value = h
-        if (!hasFrame.value) {
-          resizeCanvas(canvasA.value, w, h)
-          resizeCanvas(canvasB.value, w, h)
-        }
-      }
+      setDomSize(w, h)
     }
   })
   ro.observe(wrapper.value)
   const w = Math.round(wrapper.value.clientWidth)
   const h = Math.round(wrapper.value.clientHeight)
-  domW.value = w
-  domH.value = h
+  setDomSize(w, h)
   resizeCanvas(canvasA.value, w, h)
   resizeCanvas(canvasB.value, w, h)
   scheduleRender(0)

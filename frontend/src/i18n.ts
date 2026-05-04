@@ -42,6 +42,7 @@ const dict: Dict = {
   engine:           { en: 'Engine',           zh: '引擎' },
   scalar:           { en: 'Scalar',           zh: '标量类型' },
   reset:            { en: 'Reset',            zh: '重置视图' },
+  reset_julia:      { en: 'Reset Julia view', zh: '重置 Julia 视图' },
 
   // ── Julia mode ──────────────────────────────────────────────────────────
   julia_selected_c: { en: 'Selected julia c', zh: '已选 Julia 常数 c' },

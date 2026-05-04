@@ -13,6 +13,7 @@
 #include <opencv2/core.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,11 @@ struct MapParams {
     // Points to the step_fn symbol from a dlopen'd shared library.
     // Always uses OpenMP (no CUDA/AVX512 for custom formulas).
     CustomStepFn custom_step_fn = nullptr;
+
+    // Optional cooperative cancellation hook for interactive renders. Kernels
+    // check it at row/tile boundaries so stale viewport requests can exit
+    // before finishing a full frame.
+    std::function<bool()> should_cancel;
 };
 
 struct MapStats {
@@ -78,6 +84,10 @@ struct MapStats {
 // Render a map into `out` (allocated BGR CV_8UC3 of size height x width).
 // Returns stats including which scalar type and engine were actually used.
 MapStats render_map(const MapParams& p, cv::Mat& out);
+
+inline bool map_render_cancel_requested(const MapParams& p) {
+    return p.should_cancel && p.should_cancel();
+}
 
 // Raw field output — no colorization.
 // Escape metric  → iter_u32[W*H] (uint32 iter count) + norm_f32[W*H] (float32 |z|² at escape, 0 if bounded).

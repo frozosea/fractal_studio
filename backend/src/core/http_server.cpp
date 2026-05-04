@@ -73,6 +73,7 @@ std::string HttpServer::handleRequest(const std::string& request) const {
 
     // Map (native)
     if (method == "POST" && path == "/api/map/render") return makeHttpResponse(200, mapRenderRoute(repoRoot_, runner_, body));
+    if (method == "POST" && path == "/api/map/preempt") return makeHttpResponse(200, mapPreemptRoute(body));
     if (method == "POST" && path == "/api/map/field")  return makeHttpResponse(200, mapFieldRoute(repoRoot_, body));
     if (method == "POST" && path == "/api/map/ln")     return makeHttpResponse(200, lnMapRenderRoute(repoRoot_, runner_, body));
     if (method == "POST" && path == "/api/video/zoom")       return makeHttpResponse(200, zoomVideoRoute(repoRoot_, runner_, body));

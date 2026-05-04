@@ -138,6 +138,8 @@ const specialPointResults = ref<SpecialPointEnumResult[]>([])
 const hoveredSpecialPointId = ref('')
 const selectedSpecialPointId = ref('')
 const specialPointVariantHint = ref('')
+const mapViewportW = ref(1200)
+const mapViewportH = ref(800)
 const transitionFrom = ref<string>('mandelbrot')
 const transitionTo   = ref<string>('burning_ship')
 const AXIS_TRANSITION_VARIANTS = VARIANTS.slice(0, 10)
@@ -316,7 +318,9 @@ onMounted(() => {
       if (typeof c.re === 'number' && typeof c.im === 'number') {
         centerRe.value = c.re
         centerIm.value = c.im
-        scale.value    = 0.01
+        if (typeof c.scale === 'number' && Number.isFinite(c.scale) && c.scale > 0) {
+          scale.value = c.scale
+        }
       }
     } catch {}
     sessionStorage.removeItem('fs_pending_center')
@@ -329,6 +333,11 @@ function onViewportChange(v: { centerRe: number; centerIm: number; scale: number
   scale.value    = v.scale
 }
 
+function onMapViewportSize(size: { width: number; height: number }) {
+  if (size.width >= 16) mapViewportW.value = size.width
+  if (size.height >= 16) mapViewportH.value = size.height
+}
+
 function onRendered(meta: { generatedMs: number; artifactId: string; engineUsed?: string; scalarUsed?: string }) {
   lastMs.value         = meta.generatedMs
   lastArtifactId.value = meta.artifactId
@@ -338,6 +347,12 @@ function onRendered(meta: { generatedMs: number; artifactId: string; engineUsed?
 }
 
 function resetView() {
+  if (juliaOn.value) {
+    jCenterRe.value = 0.0
+    jCenterIm.value = 0.0
+    jScale.value    = 4.0
+    return
+  }
   centerRe.value = 0.0
   centerIm.value = 0.0
   scale.value    = 4.0
@@ -346,15 +361,14 @@ function resetView() {
 function onImportPoint(p: SpecialPoint | SpecialPointEnumResult) {
   centerRe.value = 're' in p ? p.re : p.real
   centerIm.value = 'im' in p ? p.im : p.imag
-  scale.value    = 0.01
 }
 
 const specialPointViewport = computed(() => ({
   centerRe: centerRe.value,
   centerIm: centerIm.value,
   scale: scale.value,
-  width: 1200,
-  height: 800,
+  width: mapViewportW.value,
+  height: mapViewportH.value,
 }))
 
 function pointInCurrentView(p: SpecialPointEnumResult) {
@@ -367,6 +381,9 @@ function pointInCurrentView(p: SpecialPointEnumResult) {
 
 const visibleSpecialPoints = computed(() =>
   specialPointResults.value.filter(p => pointInCurrentView(p) && specialPointMatchesCurrentVariant(p))
+)
+const renderedSpecialPoints = computed(() =>
+  pointsCollapsed.value ? [] : visibleSpecialPoints.value
 )
 
 function onSpecialPointResults(points: SpecialPointEnumResult[]) {
@@ -773,7 +790,9 @@ async function pollVideoExport(initial: VideoExportResponse) {
         </select>
       </div>
 
-      <button @click="resetView" :title="t('reset')">⌂ {{ t('reset') }}</button>
+      <button @click="resetView" :title="juliaOn ? t('reset_julia') : t('reset')">
+        ⌂ {{ juliaOn ? t('reset_julia') : t('reset') }}
+      </button>
       <button @click="exportPng">{{ t('export_png') }}</button>
       <button @click="openExportModal">{{ t('export_video') }}</button>
     </div>
@@ -827,10 +846,11 @@ async function pollVideoExport(initial: VideoExportResponse) {
           :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
           :transitionFrom="transitionFrom" :transitionTo="transitionTo"
           :engine="engineMode" :scalarType="scalarMode"
-          :special-points="visibleSpecialPoints"
+          :special-points="renderedSpecialPoints"
           :hovered-special-point-id="hoveredSpecialPointId"
           :selected-special-point-id="selectedSpecialPointId"
           @viewport-change="onViewportChange"
+          @viewport-size="onMapViewportSize"
           @rendered="onRendered"
           @hover-special-point="onSpecialPointHover"
           @select-special-point="onSpecialPointSelect"
@@ -878,10 +898,11 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
                 :transitionFrom="transitionFrom" :transitionTo="transitionTo"
                 :engine="engineMode" :scalarType="scalarMode"
-                :special-points="visibleSpecialPoints"
+                :special-points="renderedSpecialPoints"
                 :hovered-special-point-id="hoveredSpecialPointId"
                 :selected-special-point-id="selectedSpecialPointId"
                 @viewport-change="onViewportChange"
+                @viewport-size="onMapViewportSize"
                 @rendered="onRendered"
                 @click-world="onPickJulia"
                 @hover-special-point="onSpecialPointHover"

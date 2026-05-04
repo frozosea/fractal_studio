@@ -30,6 +30,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <functional>
 #include <string>
 
 namespace fsd::compute {
@@ -64,6 +65,9 @@ struct TransitionParams {
     int      render_threads = 0;  // 0 = auto-select visible logical cores
     std::string scalar_type = "auto";
     std::string engine = "openmp";
+
+    // Optional cooperative cancellation hook for interactive renders.
+    std::function<bool()> should_cancel;
 };
 
 MapStats render_transition(const TransitionParams& p, cv::Mat& out);

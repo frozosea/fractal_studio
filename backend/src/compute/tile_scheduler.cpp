@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -234,6 +235,15 @@ TileSchedulerStats render_map_hybrid(
     const size_t n = tiles.size();
 
     std::atomic<size_t> next_tile{0};
+    std::atomic<bool> cancelled{false};
+    auto cancel_requested = [&]() {
+        if (cancelled.load(std::memory_order_relaxed)) return true;
+        if (map_render_cancel_requested(p)) {
+            cancelled.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    };
 
     const bool requested_fx = requested_fixed(p);
     const bool fx       = requested_fx && supports_fx64_int_path(p);
@@ -263,10 +273,12 @@ TileSchedulerStats render_map_hybrid(
         gpu_thread = std::thread([&]() {
             const size_t gpu_batch_tiles = runtime_capabilities().cuda_low_end ? 4u : 12u;
             while (true) {
+                if (cancel_requested()) break;
                 const size_t first = next_tile.fetch_add(gpu_batch_tiles);
                 if (first >= n) break;
                 const size_t last = std::min(n, first + gpu_batch_tiles);
                 for (size_t idx = first; idx < last; ++idx) {
+                if (cancel_requested()) break;
                 if (idx >= n) break;
                 const Tile& tile = tiles[idx];
                 const auto t0 = std::chrono::steady_clock::now();
@@ -305,6 +317,7 @@ TileSchedulerStats render_map_hybrid(
     for (int tid = 0; tid < n_cpu_threads; tid++) {
         cpu_threads.emplace_back([&]() {
             while (true) {
+                if (cancel_requested()) break;
                 const size_t idx = next_tile.fetch_add(1);
                 if (idx >= n) break;
                 const Tile& tile = tiles[idx];
@@ -329,6 +342,9 @@ TileSchedulerStats render_map_hybrid(
     // Wait for all workers
     for (auto& t : cpu_threads) t.join();
     if (gpu_thread.joinable()) gpu_thread.join();
+    if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+        throw std::runtime_error("cancelled");
+    }
 
     const auto t_end = std::chrono::steady_clock::now();
 

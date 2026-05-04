@@ -93,7 +93,15 @@ function taskPercent(task: ActiveTask): string {
       <span class="toggle-mark">{{ collapsed ? '‹' : '›' }}</span>
     </button>
 
-    <template v-if="!collapsed">
+    <div
+      v-if="collapsed"
+      class="collapsed-summary"
+      :title="`${t('status_time')}: ${fmtMs(status.renderMs)}`">
+      <span class="collapsed-label">{{ t('status_time') }}</span>
+      <span class="collapsed-time num">{{ fmtMs(status.renderMs) }}</span>
+    </div>
+
+    <template v-else>
     <!-- live bar -->
     <div class="live">
       <span class="dot"></span>
@@ -195,6 +203,30 @@ function taskPercent(task: ActiveTask): string {
   font-size: 16px;
   line-height: 1;
   letter-spacing: 0;
+}
+
+.collapsed-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--text-dim);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-family: var(--mono);
+}
+
+.collapsed-label {
+  color: var(--text-faint);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.collapsed-time {
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.02em;
 }
 
 .live {

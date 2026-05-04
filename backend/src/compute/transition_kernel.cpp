@@ -8,6 +8,7 @@
 #  include <omp.h>
 #endif
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -86,6 +87,23 @@ DirectSlice direct_slice_for_milli_deg(int milli_deg) {
     }
 }
 
+inline bool transition_cancel_requested(const TransitionParams& p) {
+    return p.should_cancel && p.should_cancel();
+}
+
+[[noreturn]] void throw_transition_cancelled() {
+    throw std::runtime_error("cancelled");
+}
+
+inline bool mark_cancelled_if_requested(const TransitionParams& p, std::atomic<bool>& cancelled) {
+    if (cancelled.load(std::memory_order_relaxed)) return true;
+    if (transition_cancel_requested(p)) {
+        cancelled.store(true, std::memory_order_relaxed);
+        return true;
+    }
+    return false;
+}
+
 MapStats render_direct_slice(const TransitionParams& p, DirectSlice slice, cv::Mat& out) {
     const bool flip_y = slice == DirectSlice::FromFlipY || slice == DirectSlice::ToFlipY;
 
@@ -108,6 +126,7 @@ MapStats render_direct_slice(const TransitionParams& p, DirectSlice slice, cv::M
     mp.render_threads = p.render_threads;
     mp.scalar_type = p.scalar_type;
     mp.engine = p.engine;
+    mp.should_cancel = p.should_cancel;
 
     MapStats stats = render_map(mp, out);
     if (flip_y) cv::flip(out, out, 0);
@@ -290,6 +309,7 @@ MapStats render_transition_metric(const TransitionParams& p, cv::Mat& out) {
     const int tiles_x = (W + tile_size - 1) / tile_size;
     const int tiles_y = (H + tile_size - 1) / tile_size;
     const int tile_count = tiles_x * tiles_y;
+    std::atomic<bool> cancelled{false};
 
     #pragma omp parallel num_threads(thread_count)
     {
@@ -300,6 +320,7 @@ MapStats render_transition_metric(const TransitionParams& p, cv::Mat& out) {
 
     #pragma omp for schedule(dynamic, 1)
     for (int tile = 0; tile < tile_count; tile++) {
+        if (mark_cancelled_if_requested(p, cancelled)) continue;
         const int tile_x = tile % tiles_x;
         const int tile_y = tile / tiles_x;
         const int x_begin = tile_x * tile_size;
@@ -308,6 +329,7 @@ MapStats render_transition_metric(const TransitionParams& p, cv::Mat& out) {
         const int y_end = std::min(H, y_begin + tile_size);
 
         for (int y = y_begin; y < y_end; y++) {
+            if (mark_cancelled_if_requested(p, cancelled)) break;
             uint8_t* row = out.ptr<uint8_t>(y);
             const double v = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
             for (int x = x_begin; x < x_end; x++) {
@@ -344,6 +366,9 @@ MapStats render_transition_metric(const TransitionParams& p, cv::Mat& out) {
         }
     }
     } // end omp parallel
+    if (cancelled.load(std::memory_order_relaxed) || transition_cancel_requested(p)) {
+        throw_transition_cancelled();
+    }
 
     const auto t1 = std::chrono::steady_clock::now();
     MapStats s;
@@ -361,6 +386,7 @@ MapStats render_transition(const TransitionParams& p, cv::Mat& out) {
         !variant_supports_axis_transition(p.to_variant)) {
         throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
     }
+    if (transition_cancel_requested(p)) throw_transition_cancelled();
 
     const NormalizedTheta theta = normalize_transition_theta(p);
     const DirectSlice direct = direct_slice_for_milli_deg(theta.milli_deg);

@@ -32,10 +32,12 @@
 
 #include <opencv2/core.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 
 // AVX-512 intrinsics are available if __AVX512F__ is defined.
 // We compile this file with -mavx512f via a target_compile_options guard in
@@ -354,11 +356,17 @@ MapStats render_map_avx512_fp64(const MapParams& p, cv::Mat& out) {
     const double bail2   = p.bailout_sq;
     const int variant_id = static_cast<int>(p.variant);
     const int thread_count = resolve_render_threads(p.render_threads);
+    std::atomic<bool> cancelled{false};
 
     const auto t0 = std::chrono::steady_clock::now();
 
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 4)
     for (int y = 0; y < H; y++) {
+        if (cancelled.load(std::memory_order_relaxed)) continue;
+        if (map_render_cancel_requested(p)) {
+            cancelled.store(true, std::memory_order_relaxed);
+            continue;
+        }
         avx512_fp64_row(
             y, W, H, re_min, im_max, span_re, span_im,
             bail2, p.iterations,
@@ -367,6 +375,9 @@ MapStats render_map_avx512_fp64(const MapParams& p, cv::Mat& out) {
             p.metric, p.colormap,
             out.ptr<uint8_t>(y)
         );
+    }
+    if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+        throw std::runtime_error("cancelled");
     }
 
     const auto t1 = std::chrono::steady_clock::now();
