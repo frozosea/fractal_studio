@@ -27,6 +27,7 @@
 
 #include "complex.hpp"
 #include <cmath>
+#include <type_traits>
 
 namespace fsd::compute {
 
@@ -99,6 +100,8 @@ Cx<S> apply_trig(Cx<S> z, Cx<S> c, Cx<double>(*fn)(Cx<double>)) {
     rd.im += cd.im;
     if constexpr (std::is_same_v<S, double>) {
         return { rd.re, rd.im };
+    } else if constexpr (std::is_same_v<S, float>) {
+        return { static_cast<float>(rd.re), static_cast<float>(rd.im) };
     } else {
         return { S::from_double(rd.re), S::from_double(rd.im) };
     }

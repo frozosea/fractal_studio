@@ -287,7 +287,7 @@ function onJuliaViewport(v: { centerRe: number; centerIm: number; scale: number 
 
 // ── Engine / scalar ───────────────────────────────────────────────────────────
 const engineMode = ref<'auto' | 'openmp' | 'avx2' | 'avx512' | 'cuda' | 'hybrid'>('auto')
-const scalarMode = ref<'auto' | 'fp64' | 'fx64'>('auto')
+const scalarMode = ref<'auto' | 'fp32' | 'fp64' | 'fx64'>('auto')
 
 // ── Status rail sync ─────────────────────────────────────────────────────────
 const lastMs         = ref<number | null>(null)
@@ -447,6 +447,8 @@ async function exportPng() {
       metric:     metric.value,
       colorMap:   colorMap.value,
       smooth:     smooth.value,
+      engine:     engineMode.value,
+      scalarType: scalarMode.value,
       julia:      juliaOn.value,
       juliaRe:    juliaRe.value,
       juliaIm:    juliaIm.value,
@@ -816,6 +818,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <label>{{ t('scalar') }}</label>
         <select v-model="scalarMode">
           <option value="auto">auto</option>
+          <option value="fp32">fp32</option>
           <option value="fp64">fp64</option>
           <option value="fx64">fx64</option>
         </select>

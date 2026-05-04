@@ -127,6 +127,8 @@ export interface MapRenderRequest {
   transitionThetaMilliDeg?: number
   transitionFrom?: Variant | string
   transitionTo?: Variant | string
+  engine?: string
+  scalarType?: string
 }
 
 export interface MapRenderResponse {

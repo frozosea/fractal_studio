@@ -168,10 +168,10 @@ async function renderFrame() {
   } else if (props.transitionTheta !== null) {
     req.transitionTheta = props.transitionTheta
   }
-  if (props.transitionFrom)           (req as any).transitionFrom  = props.transitionFrom
-  if (props.transitionTo)             (req as any).transitionTo    = props.transitionTo
-  if (props.engine)                   (req as any).engine           = props.engine
-  if (props.scalarType)               (req as any).scalarType       = props.scalarType
+  if (props.transitionFrom)           req.transitionFrom           = props.transitionFrom
+  if (props.transitionTo)             req.transitionTo             = props.transitionTo
+  if (props.engine)                   req.engine                    = props.engine
+  if (props.scalarType)               req.scalarType                = props.scalarType
 
   try {
     const resp = await api.mapRenderInline(req, controller.signal) as any

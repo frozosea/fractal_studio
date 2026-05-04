@@ -122,40 +122,58 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
         return r;
     };
 
-    setBenchmarkProgress(runner, run.id, "running", 0, 8);
+    const bool avx2_ok = compute::avx2_available() && compute::fma_available();
+    const bool avx512_ok = compute::avx512_available();
+#if USE_CUDA
+    const bool cuda_ok = fsd_cuda::cuda_available();
+#else
+    const bool cuda_ok = false;
+#endif
+    const int total = 3
+        + (avx2_ok ? 2 : 0)
+        + (avx512_ok ? 2 : 0)
+        + (cuda_ok ? 5 : 0);
 
-    // OpenMP fp64 / fx64
+    setBenchmarkProgress(runner, run.id, "running", 0, total);
+
+    // OpenMP fp32 / fp64 / fx64
+    results.push_back(run_bench("openmp", "fp32"));
+    setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
     results.push_back(run_bench("openmp", "fp64"));
-    setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), 8);
+    setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
     results.push_back(run_bench("openmp", "fx64"));
-    setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), 8);
+    setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
 
     // AVX2/FMA (mainstream CPU SIMD path)
-    if (compute::avx2_available() && compute::fma_available()) {
+    if (avx2_ok) {
+        results.push_back(run_bench("avx2", "fp32"));
+        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
         results.push_back(run_bench("avx2", "fp64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), 8);
+        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
     }
 
     // AVX-512 (only if available)
-    if (compute::avx512_available()) {
+    if (avx512_ok) {
+        results.push_back(run_bench("avx512", "fp32"));
+        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
         results.push_back(run_bench("avx512", "fp64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), 8);
+        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
     }
 
     // CUDA (only if available)
-#if USE_CUDA
-    if (fsd_cuda::cuda_available()) {
+    if (cuda_ok) {
         // CUDA path via render_map — uses CUDA internally when engine="cuda"
+        results.push_back(run_bench("cuda", "fp32"));
+        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
         results.push_back(run_bench("cuda", "fp64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), 8);
+        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
         results.push_back(run_bench("cuda", "fx64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), 8);
+        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
         results.push_back(run_bench("hybrid", "fp64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), 8);
+        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
         results.push_back(run_bench("hybrid", "fx64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), 8);
+        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
     }
-#endif
 
     Json jresults = Json::array();
     std::vector<compute::BenchmarkEntry> cache_entries;
@@ -179,7 +197,7 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
         {"iterations", iters},
         {"results",    jresults},
     };
-    setBenchmarkProgress(runner, run.id, "completed", 8, 8);
+    setBenchmarkProgress(runner, run.id, "completed", total, total);
     runner.setStatus(run.id, "completed");
     return resp.dump();
 }

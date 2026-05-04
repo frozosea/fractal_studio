@@ -91,6 +91,76 @@ static inline double norm2_to_01(double v, double bail2) {
     return std::min(1.0, std::sqrt(v) / std::sqrt(bail2));
 }
 
+static inline double norm2_to_01(float v, float bail2) {
+    if (!std::isfinite(v) || v <= 0.0f) return 0.0;
+    return std::min(1.0, static_cast<double>(std::sqrt(v) / std::sqrt(bail2)));
+}
+
+static inline __m512 avx512_abs_ps(__m512 v) {
+    const __m512 sign = _mm512_set1_ps(-0.0f);
+    return _mm512_andnot_ps(sign, v);
+}
+
+template <int VariantId>
+static inline void avx512_step_ps(
+    __m512 zre,
+    __m512 zim,
+    __m512 zre2,
+    __m512 zim2,
+    __m512 cre,
+    __m512 cim,
+    __m512& new_re,
+    __m512& new_im
+) {
+    const __m512 two = _mm512_set1_ps(2.0f);
+    const __m512 zero = _mm512_setzero_ps();
+    const __m512 sq_re = _mm512_sub_ps(zre2, zim2);
+    if constexpr (VariantId == 1) {
+        const __m512 sq_im = _mm512_mul_ps(_mm512_mul_ps(two, zre), zim);
+        new_re = _mm512_add_ps(sq_re, cre);
+        new_im = _mm512_fnmadd_ps(_mm512_set1_ps(1.0f), sq_im, cim);
+    } else if constexpr (VariantId == 2) {
+        const __m512 wre = avx512_abs_ps(zre);
+        const __m512 wim = avx512_abs_ps(zim);
+        new_re = _mm512_add_ps(sq_re, cre);
+        new_im = _mm512_add_ps(_mm512_mul_ps(_mm512_mul_ps(two, wre), wim), cim);
+    } else if constexpr (VariantId == 3) {
+        const __m512 wim = avx512_abs_ps(zim);
+        new_re = _mm512_add_ps(sq_re, cre);
+        new_im = _mm512_add_ps(_mm512_mul_ps(_mm512_mul_ps(two, zre), wim), cim);
+    } else if constexpr (VariantId == 4) {
+        const __m512 wre = avx512_abs_ps(zre);
+        const __m512 wim = _mm512_sub_ps(zero, zim);
+        new_re = _mm512_add_ps(sq_re, cre);
+        new_im = _mm512_add_ps(_mm512_mul_ps(_mm512_mul_ps(two, wre), wim), cim);
+    } else if constexpr (VariantId == 5) {
+        const __m512 sq_im = _mm512_mul_ps(_mm512_mul_ps(two, zre), zim);
+        new_re = _mm512_add_ps(avx512_abs_ps(sq_re), cre);
+        new_im = _mm512_add_ps(sq_im, cim);
+    } else if constexpr (VariantId == 6) {
+        const __m512 sq_im = _mm512_mul_ps(_mm512_mul_ps(two, zre), zim);
+        new_re = _mm512_add_ps(avx512_abs_ps(sq_re), cre);
+        new_im = _mm512_fnmadd_ps(_mm512_set1_ps(1.0f), sq_im, cim);
+    } else if constexpr (VariantId == 7) {
+        const __m512 sq_im = _mm512_mul_ps(_mm512_mul_ps(two, zre), zim);
+        new_re = _mm512_add_ps(avx512_abs_ps(sq_re), cre);
+        new_im = _mm512_add_ps(avx512_abs_ps(sq_im), cim);
+    } else if constexpr (VariantId == 8) {
+        const __m512 wim = avx512_abs_ps(zim);
+        const __m512 sq_im = _mm512_mul_ps(_mm512_mul_ps(two, zre), wim);
+        new_re = _mm512_add_ps(avx512_abs_ps(sq_re), cre);
+        new_im = _mm512_add_ps(sq_im, cim);
+    } else if constexpr (VariantId == 9) {
+        const __m512 wre = avx512_abs_ps(zre);
+        const __m512 sq_im = _mm512_mul_ps(_mm512_mul_ps(two, wre), zim);
+        new_re = _mm512_add_ps(avx512_abs_ps(sq_re), cre);
+        new_im = _mm512_fnmadd_ps(_mm512_set1_ps(1.0f), sq_im, cim);
+    } else {
+        new_re = _mm512_add_ps(sq_re, cre);
+        new_im = _mm512_add_ps(_mm512_mul_ps(_mm512_mul_ps(two, zre), zim), cim);
+    }
+}
+
 static void avx512_fp64_row(
     int y, int W, int H,
     double re_min, double im_max,
@@ -342,6 +412,152 @@ static void avx512_fp64_row(
     }
 }
 
+template <int VariantId>
+static void avx512_fp32_row(
+    int y, int W, int H,
+    float re_min, float im_max,
+    float span_re, float span_im,
+    float bail2, int max_iter,
+    bool julia, float julia_re, float julia_im,
+    Metric metric, Colormap cmap,
+    uint8_t* row_ptr
+) {
+    const float im_d = im_max - (static_cast<float>(y) + 0.5f) / static_cast<float>(H) * span_im;
+    const __m512 vbail2 = _mm512_set1_ps(bail2);
+    const __m512 vzero = _mm512_setzero_ps();
+    const bool track_min = (metric == Metric::MinAbs || metric == Metric::Envelope);
+    const bool track_max = (metric == Metric::MaxAbs || metric == Metric::Envelope);
+
+    for (int x = 0; x < W; x += 16) {
+        float re_arr[16];
+        int iter_arr[16];
+        for (int k = 0; k < 16; k++) {
+            const int px_x = x + k;
+            iter_arr[k] = max_iter;
+            re_arr[k] = (px_x < W)
+                ? re_min + (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re
+                : 1.0e20f;
+        }
+
+        const __m512 vpx_re = _mm512_loadu_ps(re_arr);
+        const __m512 vpx_im = _mm512_set1_ps(im_d);
+        __m512 zre, zim, cre, cim;
+        if (julia) {
+            zre = vpx_re;
+            zim = vpx_im;
+            cre = _mm512_set1_ps(julia_re);
+            cim = _mm512_set1_ps(julia_im);
+        } else {
+            zre = vzero;
+            zim = vzero;
+            cre = vpx_re;
+            cim = vpx_im;
+        }
+
+        __m512 zre2 = _mm512_mul_ps(zre, zre);
+        __m512 zim2 = _mm512_mul_ps(zim, zim);
+        __m512 vmn = _mm512_set1_ps(std::numeric_limits<float>::infinity());
+        __m512 vmx = vzero;
+        const int remaining = std::min(16, W - x);
+        __mmask16 active = remaining >= 16
+            ? static_cast<__mmask16>(0xFFFF)
+            : static_cast<__mmask16>((1u << std::max(0, remaining)) - 1u);
+
+        for (int i = 0; i < max_iter && active; i++) {
+            __m512 new_re, new_im;
+            avx512_step_ps<VariantId>(zre, zim, zre2, zim2, cre, cim, new_re, new_im);
+            const __m512 new_re2 = _mm512_mul_ps(new_re, new_re);
+            const __m512 new_im2 = _mm512_mul_ps(new_im, new_im);
+            const __m512 n2 = _mm512_add_ps(new_re2, new_im2);
+            if (track_min) vmn = _mm512_mask_min_ps(vmn, active, vmn, n2);
+            if (track_max) vmx = _mm512_mask_max_ps(vmx, active, vmx, n2);
+
+            const __mmask16 escaped_radius = _mm512_mask_cmp_ps_mask(active, n2, vbail2, _CMP_GT_OQ);
+            const __mmask16 escaped_nan = _mm512_mask_cmp_ps_mask(active, n2, n2, _CMP_UNORD_Q);
+            const __mmask16 escaped = escaped_radius | escaped_nan;
+            if (escaped) {
+                for (int k = 0; k < 16; k++) {
+                    if (escaped & (1 << k)) iter_arr[k] = i;
+                }
+                active &= static_cast<__mmask16>(~escaped);
+            }
+
+            zre = _mm512_mask_mov_ps(zre, active, new_re);
+            zim = _mm512_mask_mov_ps(zim, active, new_im);
+            zre2 = _mm512_mask_mov_ps(zre2, active, new_re2);
+            zim2 = _mm512_mask_mov_ps(zim2, active, new_im2);
+        }
+
+        float mn_arr[16], mx_arr[16];
+        if (track_min) _mm512_storeu_ps(mn_arr, vmn);
+        if (track_max) _mm512_storeu_ps(mx_arr, vmx);
+
+        for (int k = 0; k < 16 && (x + k) < W; k++) {
+            uint8_t* px = row_ptr + 3 * (x + k);
+            const bool escaped_k = !((active >> k) & 1);
+            if (metric == Metric::Escape) {
+                const int it = escaped_k ? iter_arr[k] : max_iter;
+                colorize_escape_bgr(it, max_iter, cmap, 0.0, false, px[0], px[1], px[2]);
+            } else if (metric == Metric::MinAbs) {
+                colorize_field_bgr(norm2_to_01(mn_arr[k], bail2), cmap, px[0], px[1], px[2]);
+            } else if (metric == Metric::MaxAbs) {
+                colorize_field_bgr(norm2_to_01(mx_arr[k], bail2), cmap, px[0], px[1], px[2]);
+            } else {
+                const double mn_v = norm2_to_01(mn_arr[k], bail2);
+                const double mx_v = norm2_to_01(mx_arr[k], bail2);
+                colorize_field_bgr(0.5 * (mn_v + mx_v), cmap, px[0], px[1], px[2]);
+            }
+        }
+    }
+}
+
+template <int VariantId>
+static MapStats render_avx512_fp32_variant(const MapParams& p, cv::Mat& out) {
+    if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
+        out.create(p.height, p.width, CV_8UC3);
+    }
+
+    const int W = p.width, H = p.height;
+    const double aspect = static_cast<double>(W) / H;
+    const double span_im = p.scale;
+    const double span_re = p.scale * aspect;
+    const double re_min = p.center_re - span_re * 0.5;
+    const double im_max = p.center_im + span_im * 0.5;
+    const int thread_count = resolve_render_threads(p.render_threads);
+    std::atomic<bool> cancelled{false};
+
+    const auto t0 = std::chrono::steady_clock::now();
+
+    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 4)
+    for (int y = 0; y < H; y++) {
+        if (cancelled.load(std::memory_order_relaxed)) continue;
+        if (map_render_cancel_requested(p)) {
+            cancelled.store(true, std::memory_order_relaxed);
+            continue;
+        }
+        avx512_fp32_row<VariantId>(
+            y, W, H,
+            static_cast<float>(re_min), static_cast<float>(im_max),
+            static_cast<float>(span_re), static_cast<float>(span_im),
+            static_cast<float>(p.bailout_sq), p.iterations,
+            p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im),
+            p.metric, p.colormap,
+            out.ptr<uint8_t>(y)
+        );
+    }
+    if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+        throw std::runtime_error("cancelled");
+    }
+
+    const auto t1 = std::chrono::steady_clock::now();
+    MapStats s;
+    s.elapsed_ms  = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    s.pixel_count = W * H;
+    s.scalar_used = "fp32";
+    s.engine_used = "avx512";
+    return s;
+}
+
 MapStats render_map_avx512_fp64(const MapParams& p, cv::Mat& out) {
     if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
         out.create(p.height, p.width, CV_8UC3);
@@ -389,6 +605,21 @@ MapStats render_map_avx512_fp64(const MapParams& p, cv::Mat& out) {
     return s;
 }
 
+MapStats render_map_avx512_fp32(const MapParams& p, cv::Mat& out) {
+    switch (static_cast<int>(p.variant)) {
+        case 1: return render_avx512_fp32_variant<1>(p, out);
+        case 2: return render_avx512_fp32_variant<2>(p, out);
+        case 3: return render_avx512_fp32_variant<3>(p, out);
+        case 4: return render_avx512_fp32_variant<4>(p, out);
+        case 5: return render_avx512_fp32_variant<5>(p, out);
+        case 6: return render_avx512_fp32_variant<6>(p, out);
+        case 7: return render_avx512_fp32_variant<7>(p, out);
+        case 8: return render_avx512_fp32_variant<8>(p, out);
+        case 9: return render_avx512_fp32_variant<9>(p, out);
+        default: return render_avx512_fp32_variant<0>(p, out);
+    }
+}
+
 MapStats render_map_avx512_fx64(const MapParams& p, cv::Mat& out) {
     (void)p; (void)out;
     MapStats s;
@@ -401,6 +632,10 @@ MapStats render_map_avx512_fx64(const MapParams& p, cv::Mat& out) {
 
 // Stub implementations when AVX-512 is not available at compile time.
 MapStats render_map_avx512_fp64(const MapParams& p, cv::Mat& out) {
+    (void)p; (void)out;
+    MapStats s; s.engine_used = "openmp_fallback"; return s;
+}
+MapStats render_map_avx512_fp32(const MapParams& p, cv::Mat& out) {
     (void)p; (void)out;
     MapStats s; s.engine_used = "openmp_fallback"; return s;
 }

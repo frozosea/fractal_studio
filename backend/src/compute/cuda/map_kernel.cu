@@ -6,7 +6,7 @@
 // Design:
 //   - One kernel handles all pixels via a flat thread grid (pixel = thread).
 //   - Variant and metric are selected at host-call time and compiled into
-//     templated fp64/fx64 kernels.
+//     templated fp32/fp64/fx64 kernels.
 //   - Output: raw BGR byte array copied into a cv::Mat on the host.
 //
 // Thread layout: 32×8 blocks. Each warp covers a contiguous row segment,
@@ -193,6 +193,141 @@ __device__ inline void step_fp64_cached(
         const double sq_im = 2.0 * zre * zim;
         new_re = sq_re + cre;
         new_im = sq_im + cim;
+    }
+}
+
+template <int VariantId>
+__device__ inline void step_fp32_cached(
+    float zre,
+    float zim,
+    float zre2,
+    float zim2,
+    float cre,
+    float cim,
+    float& new_re,
+    float& new_im
+) {
+    const float sq_re = zre2 - zim2;
+    if constexpr (VariantId == 1) {
+        const float sq_im = 2.0f * zre * zim;
+        new_re = sq_re + cre;
+        new_im = -sq_im + cim;
+    } else if constexpr (VariantId == 2) {
+        const float sq_im = 2.0f * fabsf(zre) * fabsf(zim);
+        new_re = sq_re + cre;
+        new_im = sq_im + cim;
+    } else if constexpr (VariantId == 3) {
+        const float sq_im = 2.0f * zre * fabsf(zim);
+        new_re = sq_re + cre;
+        new_im = sq_im + cim;
+    } else if constexpr (VariantId == 4) {
+        const float sq_im = 2.0f * fabsf(zre) * (-zim);
+        new_re = sq_re + cre;
+        new_im = sq_im + cim;
+    } else if constexpr (VariantId == 5) {
+        const float sq_im = 2.0f * zre * zim;
+        new_re = fabsf(sq_re) + cre;
+        new_im = sq_im + cim;
+    } else if constexpr (VariantId == 6) {
+        const float sq_im = 2.0f * zre * zim;
+        new_re = fabsf(sq_re) + cre;
+        new_im = -sq_im + cim;
+    } else if constexpr (VariantId == 7) {
+        const float sq_im = 2.0f * zre * zim;
+        new_re = fabsf(sq_re) + cre;
+        new_im = fabsf(sq_im) + cim;
+    } else if constexpr (VariantId == 8) {
+        const float sq_im = 2.0f * zre * fabsf(zim);
+        new_re = fabsf(sq_re) + cre;
+        new_im = sq_im + cim;
+    } else if constexpr (VariantId == 9) {
+        const float sq_im = 2.0f * fabsf(zre) * zim;
+        new_re = fabsf(sq_re) + cre;
+        new_im = -sq_im + cim;
+    } else {
+        const float sq_im = 2.0f * zre * zim;
+        new_re = sq_re + cre;
+        new_im = sq_im + cim;
+    }
+}
+
+// ---- fp32 kernel ----
+
+template <int VariantId, int MetricId>
+__global__ void fractal_fp32(
+    float center_re, float center_im, float scale,
+    int W, int H, int max_iter, float bail2, int colormap_id,
+    bool julia, float julia_re_p, float julia_im_p,
+    uint8_t* __restrict__ out
+) {
+    const int px_x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int px_y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (px_x >= W || px_y >= H) return;
+
+    const float aspect = static_cast<float>(W) / static_cast<float>(H);
+    const float span_im = scale;
+    const float span_re = scale * aspect;
+    const float re = (center_re - span_re * 0.5f) +
+        (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
+    const float im = (center_im + span_im * 0.5f) -
+        (static_cast<float>(px_y) + 0.5f) / static_cast<float>(H) * span_im;
+
+    float zre, zim, cre, cim;
+    if (julia) {
+        zre = re;   zim = im;
+        cre = julia_re_p; cim = julia_im_p;
+    } else {
+        zre = 0.0f; zim = 0.0f;
+        cre = re;   cim = im;
+    }
+
+    constexpr bool track_min = (MetricId == 1 || MetricId == 3);
+    constexpr bool track_max = (MetricId == 2 || MetricId == 3);
+    float mn = INFINITY;
+    float mx = 0.0f;
+    float zre2 = zre * zre;
+    float zim2 = zim * zim;
+
+    int i = 0;
+    for (; i < max_iter; i++) {
+        float next_re = 0.0f;
+        float next_im = 0.0f;
+        step_fp32_cached<VariantId>(zre, zim, zre2, zim2, cre, cim, next_re, next_im);
+        const bool finite_z = isfinite(next_re) && isfinite(next_im);
+        float next_re2 = 0.0f;
+        float next_im2 = 0.0f;
+        const float abs2 = finite_z
+            ? ((next_re2 = next_re * next_re) + (next_im2 = next_im * next_im))
+            : INFINITY;
+        if constexpr (track_min) {
+            if (abs2 < mn) mn = abs2;
+        }
+        if constexpr (track_max) {
+            if (abs2 > mx) mx = abs2;
+        }
+        if (!finite_z || abs2 > bail2) break;
+        zre = next_re;
+        zim = next_im;
+        zre2 = next_re2;
+        zim2 = next_im2;
+    }
+
+    uint8_t* px = out + (static_cast<size_t>(px_y) * W + px_x) * 3;
+
+    if constexpr (MetricId == 1) {
+        const float bailout = sqrtf(bail2);
+        const float v01 = fminf(1.0f, sqrtf(mn) / bailout);
+        colorize_field_bgr(v01, colormap_id, px);
+    } else if constexpr (MetricId == 2) {
+        const float bailout = sqrtf(bail2);
+        const float v01 = fminf(1.0f, sqrtf(mx) / bailout);
+        colorize_field_bgr(v01, colormap_id, px);
+    } else if constexpr (MetricId == 3) {
+        const float bailout = sqrtf(bail2);
+        const float v01 = fminf(1.0f, 0.5f * (sqrtf(mn) + sqrtf(mx)) / bailout);
+        colorize_field_bgr(v01, colormap_id, px);
+    } else {
+        colorize_escape_bgr(i, max_iter, colormap_id, px);
     }
 }
 
@@ -580,6 +715,38 @@ CudaDeviceInfo cuda_device_info() noexcept {
 }
 
 template <int MetricId>
+static void launch_fp32_metric(const CudaMapParams& p, dim3 grid, dim3 block, float bail2, uint8_t* out) {
+#define FSD_LAUNCH_FP32(VID) \
+    fractal_fp32<VID, MetricId><<<grid, block>>>( \
+        static_cast<float>(p.center_re), static_cast<float>(p.center_im), static_cast<float>(p.scale), \
+        p.width, p.height, p.iterations, bail2, p.colormap_id, \
+        p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im), out)
+
+    switch (p.variant_id) {
+        case 1:  FSD_LAUNCH_FP32(1); break;
+        case 2:  FSD_LAUNCH_FP32(2); break;
+        case 3:  FSD_LAUNCH_FP32(3); break;
+        case 4:  FSD_LAUNCH_FP32(4); break;
+        case 5:  FSD_LAUNCH_FP32(5); break;
+        case 6:  FSD_LAUNCH_FP32(6); break;
+        case 7:  FSD_LAUNCH_FP32(7); break;
+        case 8:  FSD_LAUNCH_FP32(8); break;
+        case 9:  FSD_LAUNCH_FP32(9); break;
+        default: FSD_LAUNCH_FP32(0); break;
+    }
+#undef FSD_LAUNCH_FP32
+}
+
+static void launch_fp32(const CudaMapParams& p, dim3 grid, dim3 block, float bail2, uint8_t* out) {
+    switch (p.metric_id) {
+        case 1:  launch_fp32_metric<1>(p, grid, block, bail2, out); break;
+        case 2:  launch_fp32_metric<2>(p, grid, block, bail2, out); break;
+        case 3:  launch_fp32_metric<3>(p, grid, block, bail2, out); break;
+        default: launch_fp32_metric<0>(p, grid, block, bail2, out); break;
+    }
+}
+
+template <int MetricId>
 static void launch_fp64_metric(const CudaMapParams& p, dim3 grid, dim3 block, double bail2, uint8_t* out) {
 #define FSD_LAUNCH_FP64(VID) \
     fractal_fp64<VID, MetricId><<<grid, block>>>( \
@@ -656,6 +823,9 @@ static void launch_fixed(const CudaMapParams& p, dim3 grid, dim3 block, uint8_t*
 CudaMapStats cuda_render_map(const CudaMapParams& p, cv::Mat& out) {
     if (!cuda_available()) throw std::runtime_error("CUDA not available");
 
+    const bool use_fp32 = (p.scalar_type == "fp32" ||
+                           p.scalar_type == "float32" ||
+                           p.scalar_type == "float");
     const bool use_q360 = (p.scalar_type == "q3.60" || p.scalar_type == "q360" ||
                            p.scalar_type == "fx60" || p.scalar_type == "fixed60");
     const bool use_q459 = (p.scalar_type == "q4.59" || p.scalar_type == "q459" ||
@@ -681,7 +851,9 @@ CudaMapStats cuda_render_map(const CudaMapParams& p, cv::Mat& out) {
     CUDA_CHECK(cudaEventCreate(&ev_stop));
     CUDA_CHECK(cudaEventRecord(ev_start));
 
-    if (use_q360) {
+    if (use_fp32) {
+        launch_fp32(p, grid, block, static_cast<float>(bail2), g_devbuf.d);
+    } else if (use_q360) {
         launch_fixed<60>(p, grid, block, g_devbuf.d);
     } else if (use_q459) {
         launch_fixed<59>(p, grid, block, g_devbuf.d);
@@ -707,7 +879,7 @@ CudaMapStats cuda_render_map(const CudaMapParams& p, cv::Mat& out) {
 
     CudaMapStats s;
     s.elapsed_ms  = static_cast<double>(ms);
-    s.scalar_used = use_q360 ? "q3.60" : (use_q459 ? "q4.59" : (use_fx ? "fx64" : "fp64"));
+    s.scalar_used = use_fp32 ? "fp32" : (use_q360 ? "q3.60" : (use_q459 ? "q4.59" : (use_fx ? "fx64" : "fp64")));
     s.engine_used = "cuda";
     return s;
 }

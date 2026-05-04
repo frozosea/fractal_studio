@@ -32,6 +32,9 @@ inline double scalar_abs(double x) noexcept { return std::fabs(x); }
 inline double scalar_sqrt(double x) noexcept { return std::sqrt(x); }
 inline double scalar_from_double(double x) noexcept { return x; }
 inline double scalar_to_double(double x) noexcept { return x; }
+inline float scalar_abs(float x) noexcept { return std::fabs(x); }
+inline float scalar_sqrt(float x) noexcept { return std::sqrt(x); }
+inline double scalar_to_double(float x) noexcept { return static_cast<double>(x); }
 
 // Template helper: scalar_from_double<S>(double) — converts a double to scalar
 // type S. Works for both double (identity) and Fx64 (via static method).
@@ -44,6 +47,10 @@ inline S scalar_from_double(double x) noexcept {
 // Specialisation for double (identity).
 template <>
 inline double scalar_from_double<double>(double x) noexcept { return x; }
+
+// Specialisation for float.
+template <>
+inline float scalar_from_double<float>(double x) noexcept { return static_cast<float>(x); }
 
 } // namespace fsd::compute
 

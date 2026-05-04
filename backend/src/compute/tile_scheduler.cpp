@@ -64,20 +64,25 @@ static bool supports_fx64_int_path(const MapParams& p) {
 }
 
 static bool requested_q459(const MapParams& p) {
-    return p.scalar_type == "q4.59" || p.scalar_type == "q459" ||
-           p.scalar_type == "fx59" || p.scalar_type == "fixed59";
+    const std::string scalar = map_effective_scalar_type(p);
+    return scalar == "q4.59" || scalar == "q459" ||
+           scalar == "fx59" || scalar == "fixed59";
 }
 
 static bool requested_q360(const MapParams& p) {
-    return p.scalar_type == "q3.60" || p.scalar_type == "q360" ||
-           p.scalar_type == "fx60" || p.scalar_type == "fixed60";
+    const std::string scalar = map_effective_scalar_type(p);
+    return scalar == "q3.60" || scalar == "q360" ||
+           scalar == "fx60" || scalar == "fixed60";
 }
 
 static bool requested_fixed(const MapParams& p) {
-    return requested_q360(p) || requested_q459(p) || p.scalar_type == "fx64" ||
-           p.scalar_type == "q6.57" || p.scalar_type == "q657" ||
-           p.scalar_type == "fixed57" ||
-           (p.scalar_type == "auto" && p.scale < 1e-13);
+    const std::string scalar = map_effective_scalar_type(p);
+    return scalar == "q3.60" || scalar == "q360" ||
+           scalar == "fx60" || scalar == "fixed60" ||
+           scalar == "q4.59" || scalar == "q459" ||
+           scalar == "fx59" || scalar == "fixed59" ||
+           scalar == "fx64" || scalar == "q6.57" ||
+           scalar == "q657" || scalar == "fixed57";
 }
 
 // ---- Worker EMA throughput tracker ----

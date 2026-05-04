@@ -1,7 +1,7 @@
 // compute/cuda/map_kernel.cuh
 //
 // Host-side interface to the CUDA map renderer.
-// Includes fp64 and fx64 variants for all 10 fractal variants,
+// Includes fp32, fp64, and fx64 variants for all 10 fractal variants,
 // Julia mode, and non-escape metrics (MinAbs, MaxAbs, Envelope).
 
 #pragma once
@@ -40,7 +40,7 @@ struct CudaMapParams {
     double bailout  = 2.0;  // radius, kept for metric normalization
     double bailout_sq = 4.0; // squared threshold used by escape tests
 
-    // "fp64", "fx64"/"q6.57", "q4.59", or experimental "q3.60"
+    // "fp32", "fp64", "fx64"/"q6.57", "q4.59", or experimental "q3.60"
     std::string scalar_type = "fp64";
 
     // Colormap ID — must match fsd::compute::Colormap enum values:

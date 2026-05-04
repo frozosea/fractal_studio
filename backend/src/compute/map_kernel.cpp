@@ -3,7 +3,8 @@
 // OpenMP-parallel map renderer. For each pixel, iterates the chosen variant
 // under the chosen metric and writes a BGR byte triple into the output Mat.
 //
-// Supports two scalar types:
+// Supports three scalar types:
+//   fp32  — std::float (fast shallow-depth interactive previews)
 //   fp64  — std::double (default, good to ~1e-13 zoom depth)
 //   fx64  — Fx64 fixed-point 1s·6i·57f (good to ~1e-17, ~4 extra magnitudes)
 //
@@ -280,7 +281,25 @@ void render_variant_metric_fixed_impl(const MapParams& p, cv::Mat& out) {
     throw_if_cancelled(p, cancelled);
 }
 
-// Variant dispatch helpers — one for fp64, one for fx64.
+// Variant dispatch helpers — fp32/fp64/fx64.
+template <Variant V>
+void render_variant_fp32(const MapParams& p, cv::Mat& out) {
+    switch (p.metric) {
+        case Metric::Escape:
+            if (p.smooth) render_variant_metric_impl<V, float, Metric::Escape, NeedEscapeSmooth>(p, out);
+            else          render_variant_metric_impl<V, float, Metric::Escape, NeedEscape>(p, out);
+            break;
+        case Metric::MinAbs:
+            render_variant_metric_impl<V, float, Metric::MinAbs, NeedMinAbs>(p, out); break;
+        case Metric::MaxAbs:
+            render_variant_metric_impl<V, float, Metric::MaxAbs, NeedMaxAbs>(p, out); break;
+        case Metric::Envelope:
+            render_variant_metric_impl<V, float, Metric::Envelope, NeedEnvelope>(p, out); break;
+        case Metric::MinPairwiseDist:
+            render_variant_metric_impl<V, float, Metric::MinPairwiseDist, IterResultField::Extra>(p, out); break;
+    }
+}
+
 template <Variant V>
 void render_variant(const MapParams& p, cv::Mat& out) {
     switch (p.metric) {
@@ -328,21 +347,20 @@ enum class FixedPrecision {
 };
 
 static FixedPrecision requested_fixed_precision(const MapParams& p) {
-    if (p.scalar_type == "q3.60" || p.scalar_type == "q360" ||
-        p.scalar_type == "fx60" || p.scalar_type == "fixed60") {
+    const std::string scalar = map_effective_scalar_type(p);
+    if (scalar == "q3.60" || scalar == "q360" ||
+        scalar == "fx60" || scalar == "fixed60") {
         return FixedPrecision::Q360;
     }
-    if (p.scalar_type == "q4.59" || p.scalar_type == "q459" ||
-        p.scalar_type == "fx59" || p.scalar_type == "fixed59") {
+    if (scalar == "q4.59" || scalar == "q459" ||
+        scalar == "fx59" || scalar == "fixed59") {
         return FixedPrecision::Q459;
     }
-    if (p.scalar_type == "fx64" || p.scalar_type == "q6.57" ||
-        p.scalar_type == "q657" || p.scalar_type == "fixed57") {
+    if (scalar == "fx64" || scalar == "q6.57" ||
+        scalar == "q657" || scalar == "fixed57") {
         return FixedPrecision::Q657;
     }
-    if (p.scalar_type == "fp64") return FixedPrecision::None;
-    // "auto": switch to Fx64 when scale < 1e-13 (fp64 loses too much precision).
-    return p.scale < 1e-13 ? FixedPrecision::Q657 : FixedPrecision::None;
+    return FixedPrecision::None;
 }
 
 static const char* fixed_precision_name(FixedPrecision precision) {
@@ -439,7 +457,29 @@ static FixedPrecision select_fixed_precision(const MapParams& p) {
     return FixedPrecision::None;
 }
 
-// Dispatch fp64 variants
+// Dispatch fp32/fp64 variants.
+static void dispatch_fp32(const MapParams& p, cv::Mat& out) {
+    switch (p.variant) {
+        case Variant::Mandelbrot: render_variant_fp32<Variant::Mandelbrot>(p, out); break;
+        case Variant::Tri:        render_variant_fp32<Variant::Tri>(p, out);        break;
+        case Variant::Boat:       render_variant_fp32<Variant::Boat>(p, out);       break;
+        case Variant::Duck:       render_variant_fp32<Variant::Duck>(p, out);       break;
+        case Variant::Bell:       render_variant_fp32<Variant::Bell>(p, out);       break;
+        case Variant::Fish:       render_variant_fp32<Variant::Fish>(p, out);       break;
+        case Variant::Vase:       render_variant_fp32<Variant::Vase>(p, out);       break;
+        case Variant::Bird:       render_variant_fp32<Variant::Bird>(p, out);       break;
+        case Variant::Mask:       render_variant_fp32<Variant::Mask>(p, out);       break;
+        case Variant::Ship:       render_variant_fp32<Variant::Ship>(p, out);       break;
+        case Variant::SinZ:       render_variant_fp32<Variant::SinZ>(p, out);       break;
+        case Variant::CosZ:       render_variant_fp32<Variant::CosZ>(p, out);       break;
+        case Variant::ExpZ:       render_variant_fp32<Variant::ExpZ>(p, out);       break;
+        case Variant::SinhZ:      render_variant_fp32<Variant::SinhZ>(p, out);      break;
+        case Variant::CoshZ:      render_variant_fp32<Variant::CoshZ>(p, out);      break;
+        case Variant::TanZ:       render_variant_fp32<Variant::TanZ>(p, out);       break;
+        default: break;
+    }
+}
+
 static void dispatch_fp64(const MapParams& p, cv::Mat& out) {
     switch (p.variant) {
         case Variant::Mandelbrot: render_variant<Variant::Mandelbrot>(p, out); break;
@@ -974,10 +1014,32 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
         return render_custom_openmp(p, out);
     }
 
+    const std::string effective_scalar = map_effective_scalar_type(p);
+    const bool fp32 = effective_scalar == "fp32";
     const FixedPrecision fixed_precision = select_fixed_precision(p);
     const bool fx = fixed_precision != FixedPrecision::None &&
                     supports_fixed_int_path(p, false);
-    const std::string selected_engine = select_map_engine(p, fx);
+    std::string selected_engine = select_map_engine(p, fx);
+    if (fp32 && p.engine == "auto") {
+        if (map_engine_supported(p, "cuda", false)) {
+            selected_engine = "cuda";
+        } else if (avx512_available() && map_engine_supported(p, "avx512", false)) {
+            selected_engine = "avx512";
+        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
+            selected_engine = "avx2";
+        } else {
+            selected_engine = "openmp";
+        }
+    }
+    if (fp32 && selected_engine == "hybrid") {
+        if (avx512_available() && map_engine_supported(p, "avx512", false)) {
+            selected_engine = "avx512";
+        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
+            selected_engine = "avx2";
+        } else {
+            selected_engine = "openmp";
+        }
+    }
 
     if (selected_engine == "hybrid") {
         MapParams hybrid_params = p;
@@ -993,7 +1055,7 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
 
     // Interactive CUDA renders use tiles so stale requests can stop between
     // small kernels instead of waiting for one full-frame kernel to return.
-    if (selected_engine == "cuda" && p.should_cancel) {
+    if (selected_engine == "cuda" && p.should_cancel && map_work_is_large(p)) {
         MapParams hybrid_params = p;
         hybrid_params.scalar_type = fx ? fixed_precision_name(fixed_precision) : "fp64";
         auto ts = render_map_hybrid(hybrid_params, out);
@@ -1031,7 +1093,7 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
         cp.iterations = p.iterations;
         cp.bailout    = p.bailout;
         cp.bailout_sq = p.bailout_sq;
-        cp.scalar_type  = fx ? fixed_precision_name(fixed_precision) : "fp64";
+        cp.scalar_type  = fx ? fixed_precision_name(fixed_precision) : (fp32 ? "fp32" : "fp64");
         cp.colormap_id  = static_cast<int>(p.colormap);
         cp.variant_id   = static_cast<int>(p.variant);
         cp.julia        = p.julia;
@@ -1111,7 +1173,15 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
                            && avx512_available();
     const bool can_avx = can_avx_base && !fx;
 
-    if (can_avx) {
+    if (can_avx && fp32) {
+        auto s = render_map_avx512_fp32(p, out);
+        s.pixel_count = p.width * p.height;
+        s.scalar_used = "fp32";
+        s.engine_used = "avx512";
+        return s;
+    }
+
+    if (can_avx && !fp32) {
         auto s = render_map_avx512_fp64(p, out);
         s.pixel_count = p.width * p.height;
         s.scalar_used = "fp64";
@@ -1127,7 +1197,14 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
                         && !fx
                         && avx2_available()
                         && fma_available();
-    if (can_avx2) {
+    if (can_avx2 && fp32) {
+        auto s = render_map_avx2_fp32(p, out);
+        s.pixel_count = p.width * p.height;
+        s.scalar_used = "fp32";
+        s.engine_used = "avx2";
+        return s;
+    }
+    if (can_avx2 && !fp32) {
         auto s = render_map_avx2_fp64(p, out);
         s.pixel_count = p.width * p.height;
         s.scalar_used = "fp64";
@@ -1143,6 +1220,8 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
         dispatch_fixed<59>(p, out);
     } else if (fx) {
         dispatch_fixed<57>(p, out);
+    } else if (fp32) {
+        dispatch_fp32(p, out);
     } else {
         dispatch_fp64(p, out);
     }
@@ -1151,7 +1230,7 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
     MapStats s;
     s.elapsed_ms   = std::chrono::duration<double, std::milli>(t1 - t0).count();
     s.pixel_count  = p.width * p.height;
-    s.scalar_used  = fx ? fixed_precision_name(fixed_precision) : "fp64";
+    s.scalar_used  = fx ? fixed_precision_name(fixed_precision) : (fp32 ? "fp32" : "fp64");
     s.engine_used  = "openmp";
     return s;
 }
