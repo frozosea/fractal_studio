@@ -194,6 +194,7 @@ struct MapRenderInput {
     std::string engine = "openmp";
     bool smooth = false;
     bool stillExport = false;
+    bool localExport = false;
 };
 
 struct MapRenderImage {
@@ -239,6 +240,7 @@ MapRenderInput parseMapRenderInput(const std::string& body) {
     in.engine = j.value("engine", std::string("openmp"));
     in.smooth = j.value("smooth", false);
     in.stillExport = j.value("taskType", std::string("")) == "still_export";
+    in.localExport = j.value("localExport", false);
 
     if (!(in.scale > 0.0) || !std::isfinite(in.scale)) throw std::runtime_error("invalid scale");
     if (in.width < 64 || in.width > 4096) throw std::runtime_error("invalid width");
@@ -465,11 +467,11 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
     runner.setStatus(run.id, "running");
 
     MapRenderImage rendered;
+    std::filesystem::path imagePath;
     try {
         rendered = renderMapImage(repoRoot, in, shouldCancel);
         throwIfMapRenderCancelled(shouldCancel);
-        const std::filesystem::path imagePath =
-            std::filesystem::path(run.outputDir) / rendered.artifactName;
+        imagePath = std::filesystem::path(run.outputDir) / rendered.artifactName;
         compute::write_png(imagePath.string(), rendered.image);
         runner.addArtifact(run.id, Artifact{"map", imagePath.string(), "image"});
         if (in.stillExport) {
@@ -503,6 +505,8 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
         {"status", "completed"},
         {"artifactId", artifactId},
         {"imagePath", "/api/artifacts/content?artifactId=" + artifactId},
+        {"localPath", imagePath.string()},
+        {"localExport", in.localExport},
         {"generatedMs", rendered.elapsed},
         {"width", in.width},
         {"height", in.height},

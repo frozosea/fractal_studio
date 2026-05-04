@@ -6,6 +6,11 @@ const BASE =
   (import.meta as any).env?.VITE_BACKEND_URL ??
   `http://${location.hostname}:18080`
 
+export function isLocalBrowserAccess(): boolean {
+  const host = location.hostname.toLowerCase()
+  return host === 'localhost' || host.startsWith('127.') || host === '::1'
+}
+
 async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(BASE + path, {
     method: 'POST',
@@ -102,6 +107,7 @@ export interface MapRenderRequest {
   preemptKey?: string
   preemptSeq?: number
   taskType?: string
+  localExport?: boolean
   centerRe: number
   centerIm: number
   scale: number          // height in complex units
@@ -129,6 +135,8 @@ export interface MapRenderResponse {
   status: string
   artifactId: string
   imagePath: string
+  localPath?: string
+  localExport?: boolean
   generatedMs: number
   width: number
   height: number
@@ -490,6 +498,7 @@ export interface VideoExportRequest {
   lnMapFastValidationMaxMeanColorDelta?: number
   cudaWarp?: boolean
   background?: boolean
+  localExport?: boolean
   width?: number
   height?: number
 }
@@ -500,18 +509,25 @@ export interface VideoExportResponse {
   videoArtifactId?: string
   videoUrl?: string
   videoDownloadUrl?: string
+  videoLocalPath?: string
   lnMapArtifactId?: string
   lnMapDownloadUrl?: string
+  lnMapLocalPath?: string
   finalFrameArtifactId?: string
   finalFrameDownloadUrl?: string
+  finalFrameLocalPath?: string
   startFrameArtifactId?: string
   startFrameUrl?: string
   startFrameDownloadUrl?: string
+  startFrameLocalPath?: string
   endFrameArtifactId?: string
   endFrameUrl?: string
   endFrameDownloadUrl?: string
+  endFrameLocalPath?: string
   reportArtifactId?: string
   reportDownloadUrl?: string
+  reportLocalPath?: string
+  localExport?: boolean
   frameCount: number
   fps: number
   durationSec: number
@@ -576,6 +592,7 @@ export interface RunArtifactStatus {
   kind: string
   downloadUrl: string
   contentUrl: string
+  localPath?: string
 }
 
 export interface RunStatusResponse {
@@ -645,6 +662,7 @@ export interface VideoPreviewResponse {
 
 export interface VideoZoomRequest {
   lnMapArtifactId: string
+  localExport?: boolean
   fps?: number
   durationSec?: number
   secondsPerOctave?: number
@@ -662,6 +680,8 @@ export interface VideoZoomResponse {
   artifactId: string
   videoUrl: string
   downloadUrl: string
+  localPath?: string
+  localExport?: boolean
   frameCount: number
   fps: number
   durationSec: number
@@ -702,6 +722,7 @@ export interface ArtifactRow {
   sizeBytes: number
   downloadPath: string
   contentPath: string
+  localPath?: string
 }
 
 export interface CustomVariant {
@@ -740,6 +761,7 @@ export interface VariantCompileResponse {
 
 export const api = {
   baseUrl: BASE,
+  isLocalBrowserAccess,
 
   systemCheck: () => getJson<{ openmp: boolean; cuda: boolean }>('/api/system/check'),
   hardware:    () => getJson<Hardware>('/api/system/hardware'),

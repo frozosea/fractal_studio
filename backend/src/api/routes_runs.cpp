@@ -57,6 +57,7 @@ std::string runStatusRoute(const std::filesystem::path& repoRoot, JobRunner& run
             {"kind", a.kind},
             {"downloadUrl", "/api/artifacts/download?artifactId=" + artifactId},
             {"contentUrl", "/api/artifacts/content?artifactId=" + artifactId},
+            {"localPath", a.path},
         });
     }
 

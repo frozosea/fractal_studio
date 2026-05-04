@@ -30,6 +30,8 @@ const COLORMAP_LABELS: Record<string, { en: string; zh: string }> = {
 }
 
 const status = inject<StatusState>('status')!
+const localExportMode = computed(() => api.isLocalBrowserAccess())
+const pngExportStatus = ref('')
 
 type ExportPreset = {
   key: string
@@ -430,9 +432,11 @@ const videoPreset = computed(() =>
 )
 
 async function exportPng() {
+  pngExportStatus.value = ''
   try {
     const resp = await api.mapRender({
       taskType:   'still_export',
+      localExport: localExportMode.value,
       centerRe:   centerRe.value,
       centerIm:   centerIm.value,
       scale:      scale.value,
@@ -451,8 +455,14 @@ async function exportPng() {
       transitionFrom:  transitionOn.value ? transitionFrom.value : undefined,
       transitionTo:    transitionOn.value ? transitionTo.value : undefined,
     }) as any
+    if (localExportMode.value && resp.localPath) {
+      pngExportStatus.value = `${lang.value === 'en' ? 'saved locally' : '已保存到本地'} · ${resp.localPath}`
+      status.message = pngExportStatus.value
+      return
+    }
     window.open(api.artifactDownloadUrl(resp.artifactId), '_blank')
   } catch (e: any) {
+    pngExportStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
     console.error('export PNG failed:', e?.data?.error ?? e)
   }
 }
@@ -599,6 +609,7 @@ function videoRequestBase() {
     lnMapMode:    exportLnMapMode.value,
     lnMapScalar:  exportLnMapScalar.value,
     background: true,
+    localExport:  localExportMode.value,
     width:        exportW.value,
     height:       exportH.value,
   }
@@ -674,25 +685,34 @@ async function pollVideoExport(initial: VideoExportResponse) {
     const finalFrame = artifactByName(status, 'final_frame.png')
     const startFrame = artifactByName(status, 'start_frame.png')
     const endFrame = artifactByName(status, 'end_frame.png')
+    const localExport = initial.localExport ?? localExportMode.value
     exportResult.value = {
       ...initial,
       status: 'completed',
+      localExport,
       videoArtifactId: video?.artifactId,
       videoUrl: video?.contentUrl,
       videoDownloadUrl: video?.downloadUrl,
+      videoLocalPath: video?.localPath,
       lnMapArtifactId: lnMap?.artifactId,
       lnMapDownloadUrl: lnMap?.downloadUrl,
+      lnMapLocalPath: lnMap?.localPath,
       finalFrameArtifactId: finalFrame?.artifactId,
       finalFrameDownloadUrl: finalFrame?.downloadUrl,
+      finalFrameLocalPath: finalFrame?.localPath,
       startFrameArtifactId: startFrame?.artifactId,
       startFrameUrl: startFrame?.contentUrl,
       startFrameDownloadUrl: startFrame?.downloadUrl,
+      startFrameLocalPath: startFrame?.localPath,
       endFrameArtifactId: endFrame?.artifactId,
       endFrameUrl: endFrame?.contentUrl,
       endFrameDownloadUrl: endFrame?.downloadUrl,
+      endFrameLocalPath: endFrame?.localPath,
       generatedMs: status.finishedAt && status.startedAt ? status.finishedAt - status.startedAt : undefined,
     }
-    exportStatus.value = `completed · ${initial.frameCount} frames`
+    exportStatus.value = localExport && video?.localPath
+      ? `completed · ${initial.frameCount} frames · ${video.localPath}`
+      : `completed · ${initial.frameCount} frames`
     return
   }
 }
@@ -817,6 +837,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
       </button>
       <button @click="exportPng">{{ t('export_png') }}</button>
       <button @click="openExportModal">{{ t('export_video') }}</button>
+      <span v-if="pngExportStatus" class="export-local-status mono">{{ pngExportStatus }}</span>
     </div>
 
     <!-- ── Custom formula editor ─────────────────────────────────────────── -->
@@ -986,6 +1007,10 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <label>{{ t('video_estimate') }}</label>
               <span class="mono">{{ exportEstimatedDuration.toFixed(2) }}s · {{ exportEstimatedFrames }} frames · {{ exportMemoryEstimateMiB.toFixed(0) }} MiB</span>
             </div>
+            <div v-if="localExportMode" class="mrow local-mode-row">
+              <label>{{ lang === 'en' ? 'Output' : '输出' }}</label>
+              <span class="mono">{{ lang === 'en' ? 'local mode: save to backend runtime/runs, no browser download by default' : '本地模式：默认写入后端 runtime/runs，不走浏览器下载' }}</span>
+            </div>
             <div class="mrow">
               <label>Quality</label>
               <select v-model="exportQualityPreset">
@@ -1070,9 +1095,17 @@ async function pollVideoExport(initial: VideoExportResponse) {
             </div>
           </div>
           <div v-if="exportResult" class="modal-body" style="gap:6px">
-            <a v-if="exportResult.videoDownloadUrl" :href="api.baseUrl + exportResult.videoDownloadUrl" class="dl-link" download>↓ {{ t('video_download') }}</a>
-            <a v-if="exportResult.lnMapDownloadUrl" :href="api.baseUrl + exportResult.lnMapDownloadUrl" class="dl-link" download>↓ ln-map PNG</a>
-            <a v-if="exportResult.finalFrameDownloadUrl" :href="api.baseUrl + exportResult.finalFrameDownloadUrl" class="dl-link" download>↓ {{ t('export_png') }}</a>
+            <div v-if="exportResult.localExport" class="local-path-list mono">
+              <div class="local-path-title">{{ lang === 'en' ? 'Saved locally' : '已保存到本地' }}</div>
+              <div v-if="exportResult.videoLocalPath">video: {{ exportResult.videoLocalPath }}</div>
+              <div v-if="exportResult.lnMapLocalPath">ln-map: {{ exportResult.lnMapLocalPath }}</div>
+              <div v-if="exportResult.finalFrameLocalPath">final: {{ exportResult.finalFrameLocalPath }}</div>
+            </div>
+            <template v-else>
+              <a v-if="exportResult.videoDownloadUrl" :href="api.baseUrl + exportResult.videoDownloadUrl" class="dl-link" download>↓ {{ t('video_download') }}</a>
+              <a v-if="exportResult.lnMapDownloadUrl" :href="api.baseUrl + exportResult.lnMapDownloadUrl" class="dl-link" download>↓ ln-map PNG</a>
+              <a v-if="exportResult.finalFrameDownloadUrl" :href="api.baseUrl + exportResult.finalFrameDownloadUrl" class="dl-link" download>↓ {{ t('export_png') }}</a>
+            </template>
           </div>
         </div>
       </div>
@@ -1109,6 +1142,14 @@ async function pollVideoExport(initial: VideoExportResponse) {
 
 .group.transition-group { min-width: 290px; }
 .group.export-preset-group { min-width: 190px; }
+.export-local-status {
+  max-width: min(620px, 100%);
+  color: var(--text-dim);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .theta-row {
   display: flex;
@@ -1347,6 +1388,10 @@ async function pollVideoExport(initial: VideoExportResponse) {
 .btn-go:disabled,
 .btn-preview:disabled { opacity: 0.5; cursor: default; }
 .modal-status { font-size: 10px; color: var(--text-dim); }
+.local-mode-row span {
+  color: var(--text-dim);
+  font-size: 10px;
+}
 .progress-stack {
   display: flex;
   flex-direction: column;
@@ -1398,6 +1443,20 @@ async function pollVideoExport(initial: VideoExportResponse) {
   text-decoration: none;
 }
 .dl-link:hover { text-decoration: underline; }
+.local-path-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--rule);
+  color: var(--text-dim);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.local-path-title {
+  color: var(--text);
+  font-weight: 700;
+}
 
 /* ── Custom formula panel ── */
 .custom-panel {

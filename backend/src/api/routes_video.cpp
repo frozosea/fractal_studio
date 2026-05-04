@@ -989,6 +989,7 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     const int    fps         = j.value("fps",    30);
     const int    W           = j.value("width",  720);
     const int    H           = j.value("height", 720);
+    const bool   localExport = j.value("localExport", false);
 
     if (fps < 1 || fps > 120) throw std::runtime_error("invalid fps (1..120)");
     validateVideoOutputSize(W, H);
@@ -1131,6 +1132,8 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
         {"artifactId",  artifactId},
         {"videoUrl",    "/api/artifacts/content?artifactId=" + artifactId},
         {"downloadUrl", "/api/artifacts/download?artifactId=" + artifactId},
+        {"localPath",   mp4Path},
+        {"localExport", localExport},
         {"frameCount",  frameCount},
         {"fps",         fps},
         {"durationSec", durationSec},
@@ -1303,6 +1306,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const int    fps        = j.value("fps",       30);
     const int    W          = j.value("width",     720);
     const int    H          = j.value("height",    720);
+    const bool   localExport = j.value("localExport", false);
     if (fps < 1 || fps > 120) throw std::runtime_error("invalid fps (1..120)");
     validateVideoOutputSize(W, H);
     const double kTop_start = kTopStartForFrame(W, H);
@@ -1565,18 +1569,25 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"videoArtifactId",    videoArtId},
             {"videoUrl",           "/api/artifacts/content?artifactId="  + videoArtId},
             {"videoDownloadUrl",   "/api/artifacts/download?artifactId=" + videoArtId},
+            {"videoLocalPath",     videoPath},
             {"lnMapArtifactId",    lnArtId},
             {"lnMapDownloadUrl",   "/api/artifacts/download?artifactId=" + lnArtId},
+            {"lnMapLocalPath",     stripPath.string()},
             {"finalFrameArtifactId", finalArtId},
             {"finalFrameDownloadUrl", "/api/artifacts/download?artifactId=" + finalArtId},
+            {"finalFrameLocalPath", finalPath.string()},
             {"startFrameArtifactId", startArtId},
             {"startFrameUrl",      "/api/artifacts/content?artifactId="  + startArtId},
             {"startFrameDownloadUrl", "/api/artifacts/download?artifactId=" + startArtId},
+            {"startFrameLocalPath", startPreviewPath.string()},
             {"endFrameArtifactId", endArtId},
             {"endFrameUrl",        "/api/artifacts/content?artifactId="  + endArtId},
             {"endFrameDownloadUrl", "/api/artifacts/download?artifactId=" + endArtId},
+            {"endFrameLocalPath",  endPreviewPath.string()},
             {"reportArtifactId",   reportArtId},
             {"reportDownloadUrl",  "/api/artifacts/download?artifactId=" + reportArtId},
+            {"reportLocalPath",    reportPath.string()},
+            {"localExport",        localExport},
             {"frameCount",         frameCount},
             {"fps",                fps},
             {"durationSec",        durSec},
@@ -1641,6 +1652,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         Json resp = {
             {"runId", run.id},
             {"status", "queued"},
+            {"localExport", localExport},
             {"frameCount", frameCount},
             {"fps", fps},
             {"durationSec", durSec},

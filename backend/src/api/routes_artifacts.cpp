@@ -138,6 +138,7 @@ std::string artifactsListRoute(const std::filesystem::path& repoRoot, const std:
             {"sizeBytes",   row.sizeBytes},
             {"downloadPath","/api/artifacts/download?artifactId=" + row.artifactId},
             {"contentPath", "/api/artifacts/content?artifactId="  + row.artifactId},
+            {"localPath",   row.path},
         });
     }
     Json resp = {{"items", items}};
