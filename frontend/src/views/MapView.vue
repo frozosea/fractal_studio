@@ -463,6 +463,8 @@ const exportDepth     = ref(20)
 const exportFps       = ref(30)
 const exportSecondsPerOctave = ref(0.4)
 const exportQualityPreset = ref<'draft' | 'balanced' | 'high' | 'full'>('balanced')
+const exportLnMapMode = ref<'standard' | 'fast'>('fast')
+const exportLnMapScalar = ref<'auto' | 'fp64' | 'fx64'>('auto')
 const exportW         = ref(1920)
 const exportH         = ref(1080)
 const exportBusy      = ref(false)
@@ -594,6 +596,8 @@ function videoRequestBase() {
     secondsPerOctave: exportSecondsPerOctave.value,
     targetScale:  !exportDepthDirty.value && exportDepth.value > 0.05 ? scale.value : undefined,
     qualityPreset: exportQualityPreset.value,
+    lnMapMode:    exportLnMapMode.value,
+    lnMapScalar:  exportLnMapScalar.value,
     background: true,
     width:        exportW.value,
     height:       exportH.value,
@@ -989,6 +993,21 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 <option value="balanced">balanced</option>
                 <option value="high">high</option>
                 <option value="full">full</option>
+              </select>
+            </div>
+            <div class="mrow">
+              <label>ln-map mode</label>
+              <select v-model="exportLnMapMode">
+                <option value="fast">fast · depth layered</option>
+                <option value="standard">standard · full precision</option>
+              </select>
+            </div>
+            <div class="mrow">
+              <label>ln-map scalar</label>
+              <select v-model="exportLnMapScalar">
+                <option value="auto">auto</option>
+                <option value="fp64">fp64</option>
+                <option value="fx64">fx64</option>
               </select>
             </div>
             <div class="mrow">

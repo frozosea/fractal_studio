@@ -331,6 +331,17 @@ export interface LnMapRequest {
   colorMap?: ColorMap
   iterations?: number
   engine?: string
+  precisionMode?: 'standard' | 'fast'
+  scalarType?: string
+  fastFp32DepthOctaves?: number
+  fastFp64DepthOctaves?: number
+  fastValidate?: boolean
+  fastValidationBandOctaves?: number
+  fastValidationSampleRows?: number
+  fastValidationSampleCols?: number
+  fastValidationMaxMismatchRatio?: number
+  fastValidationMaxP99IterDelta?: number
+  fastValidationMaxMeanColorDelta?: number
 }
 
 export interface LnMapResponse {
@@ -343,6 +354,9 @@ export interface LnMapResponse {
   depthOctaves: number
   engineUsed?: string
   scalarUsed?: string
+  precisionMode?: string
+  layerSummary?: string
+  validationSummary?: string
   generatedMs: number
 }
 
@@ -465,6 +479,15 @@ export interface VideoExportRequest {
   qualityPreset?: 'draft' | 'balanced' | 'high' | 'full' | 'custom'
   qualityScale?: number
   lnMapEngine?: string
+  lnMapMode?: 'standard' | 'fast'
+  lnMapScalar?: string
+  lnMapFastValidate?: boolean
+  lnMapFastValidationBandOctaves?: number
+  lnMapFastValidationSampleRows?: number
+  lnMapFastValidationSampleCols?: number
+  lnMapFastValidationMaxMismatchRatio?: number
+  lnMapFastValidationMaxP99IterDelta?: number
+  lnMapFastValidationMaxMeanColorDelta?: number
   cudaWarp?: boolean
   background?: boolean
   width?: number
@@ -505,6 +528,9 @@ export interface VideoExportResponse {
   finalFrameScalar?: string
   lnMapEngine?: string
   lnMapScalar?: string
+  lnMapMode?: string
+  lnMapLayerSummary?: string
+  lnMapValidationSummary?: string
   warpMethod?: string
   encoder?: string
   ffmpegStderr?: string
@@ -534,6 +560,9 @@ export interface RunProgress {
   finalFrameScalar?: string
   lnMapEngine?: string
   lnMapScalar?: string
+  lnMapMode?: string
+  lnMapLayerSummary?: string
+  lnMapValidationSummary?: string
   warpMethod?: string
   encoder?: string
   failedStage?: string

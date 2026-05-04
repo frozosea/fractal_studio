@@ -208,3 +208,54 @@ The final UI may expose presets such as `fast`, `balanced`, and `strict`.
    progress/report JSON.
 6. Preserve current `fp64` ln-map as the strict reference path.
 
+## Implemented Planner
+
+The first production implementation now exposes two modes:
+
+- `standard`: preserves the old full-strip precision policy. `fp64` remains the
+  default. `fx64` can be requested through `scalarType` / `lnMapScalar` for the
+  first 10 quadratic variants.
+- `fast`: uses depth bands. The default row-depth thresholds are:
+  `fp32 <= 18 octaves`, `fp64 <= 34 octaves`, then `fx64` for deeper rows when
+  CUDA is available or `fx64` is explicitly requested.
+
+Backend assignment:
+
+```text
+fast + CUDA:
+  shallow: cuda_fp32
+  middle:  CPU fp64, preferring AVX512 then AVX2
+  deep:    cuda_fx64 unless lnMapScalar=fp64
+
+fast + CPU only:
+  shallow: AVX512/AVX2 fp32 when available
+  middle/deep: CPU fp64
+  explicit fx64: CPU fx64 for rows beyond the fp64 threshold
+```
+
+`fast` now validates candidate bands before the full render. Rows are split into
+validation bands of 4 octaves by default. Each candidate band samples 5 rows by
+24 columns, compares the candidate precision against the standard reference, and
+promotes the band when any threshold fails:
+
+```text
+mismatch ratio <= 1%
+p99 abs iteration delta <= 16
+mean RGB L1 delta <= 8
+```
+
+Every render records the actual selected bands in `layerSummary`, for example:
+
+```text
+fp32[0,2034)@cuda;fp64[2034,3840)@avx512;fx64[3840,4518)@cuda
+```
+
+It also records validation metrics in `validationSummary`, for example:
+
+```text
+fp32[0,847):m=0/120,p99=0,max=0,rgbMean=0;fp32[847,1694)->fp64:m=9/120,p99=43,max=91,rgbMean=14
+```
+
+The fixed depth thresholds are now only the initial candidate plan. The sampled
+band result can still promote fp32 to fp64, and explicit `fx64` requests can use
+fx64 as the reference for further promotion.

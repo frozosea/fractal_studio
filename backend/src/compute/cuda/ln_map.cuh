@@ -3,6 +3,7 @@
 #pragma once
 
 #include <opencv2/core.hpp>
+#include <cstdint>
 
 namespace fsd_cuda {
 
@@ -28,5 +29,9 @@ struct CudaLnMapStats {
 bool cuda_ln_map_available() noexcept;
 CudaLnMapStats cuda_render_ln_map(const CudaLnMapParams& p, cv::Mat& out);
 CudaLnMapStats cuda_render_ln_map_rows(const CudaLnMapParams& p, cv::Mat& out, int row_start, int row_count);
+CudaLnMapStats cuda_render_ln_map_fp32(const CudaLnMapParams& p, cv::Mat& out);
+CudaLnMapStats cuda_render_ln_map_fp32_rows(const CudaLnMapParams& p, cv::Mat& out, int row_start, int row_count);
+CudaLnMapStats cuda_render_ln_map_fx64(const CudaLnMapParams& p, cv::Mat& out);
+CudaLnMapStats cuda_render_ln_map_fx64_rows(const CudaLnMapParams& p, cv::Mat& out, int row_start, int row_count);
 
 } // namespace fsd_cuda

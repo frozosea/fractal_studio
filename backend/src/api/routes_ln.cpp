@@ -101,11 +101,43 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const std::string variantStr  = j.value("variant",  std::string("mandelbrot"));
     const std::string colormapStr = j.value("colorMap", std::string("classic_cos"));
     const std::string engine      = j.value("engine",   std::string("auto"));
+    std::string precisionMode = j.value("precisionMode", std::string("standard"));
+    if (j.contains("lnMapMode") && !j["lnMapMode"].is_null()) {
+        precisionMode = j.value("lnMapMode", precisionMode);
+    }
+    std::string scalarType = j.value("scalarType", std::string("auto"));
+    if (j.contains("lnMapScalar") && !j["lnMapScalar"].is_null()) {
+        scalarType = j.value("lnMapScalar", scalarType);
+    }
+    const double fastFp32Depth = j.value("fastFp32DepthOctaves", 18.0);
+    const double fastFp64Depth = j.value("fastFp64DepthOctaves", 34.0);
+    const bool fastValidate = j.value("fastValidate", true);
+    const double fastValidationBandOctaves = j.value("fastValidationBandOctaves", 4.0);
+    const int fastValidationSampleRows = j.value("fastValidationSampleRows", 5);
+    const int fastValidationSampleCols = j.value("fastValidationSampleCols", 24);
+    const double fastValidationMaxMismatchRatio = j.value("fastValidationMaxMismatchRatio", 0.01);
+    const int fastValidationMaxP99IterDelta = j.value("fastValidationMaxP99IterDelta", 16);
+    const double fastValidationMaxMeanColorDelta = j.value("fastValidationMaxMeanColorDelta", 8.0);
     const int iters            = j.value("iterations", 4096);
 
     if (s < 128 || s > 65536)              throw std::runtime_error("invalid widthS (128..65536)");
     if (depthOctaves < 1.0 || depthOctaves > 80.0) throw std::runtime_error("invalid depthOctaves (1..80)");
     if (iters < 1 || iters > 10000000)     throw std::runtime_error("invalid iterations");
+    if (precisionMode != "standard" && precisionMode != "fast") {
+        throw std::runtime_error("invalid precisionMode (standard|fast)");
+    }
+    if (!(fastFp32Depth >= 0.0) || !(fastFp64Depth >= 0.0) ||
+        !std::isfinite(fastFp32Depth) || !std::isfinite(fastFp64Depth)) {
+        throw std::runtime_error("invalid fast depth thresholds");
+    }
+    if (!(fastValidationBandOctaves > 0.0) || !std::isfinite(fastValidationBandOctaves) ||
+        fastValidationSampleRows < 1 || fastValidationSampleRows > 32 ||
+        fastValidationSampleCols < 1 || fastValidationSampleCols > 256 ||
+        !(fastValidationMaxMismatchRatio >= 0.0) || fastValidationMaxMismatchRatio > 1.0 ||
+        fastValidationMaxP99IterDelta < 0 ||
+        !(fastValidationMaxMeanColorDelta >= 0.0) || !std::isfinite(fastValidationMaxMeanColorDelta)) {
+        throw std::runtime_error("invalid fast validation settings");
+    }
 
     // Same formula as big_png_ln.py:20 — 2 base octaves + requested depth.
     const double t_exact = (2.0 + depthOctaves) * LN_TWO / TAU * static_cast<double>(s);
@@ -153,6 +185,17 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         lp.variant = v;
         lp.colormap = cm;
         lp.engine = engine;
+        lp.precision_mode = precisionMode;
+        lp.scalar_type = scalarType;
+        lp.fast_fp32_depth_octaves = fastFp32Depth;
+        lp.fast_fp64_depth_octaves = fastFp64Depth;
+        lp.fast_validate = fastValidate;
+        lp.fast_validation_band_octaves = fastValidationBandOctaves;
+        lp.fast_validation_sample_rows = fastValidationSampleRows;
+        lp.fast_validation_sample_cols = fastValidationSampleCols;
+        lp.fast_validation_max_mismatch_ratio = fastValidationMaxMismatchRatio;
+        lp.fast_validation_max_p99_iter_delta = fastValidationMaxP99IterDelta;
+        lp.fast_validation_max_mean_color_delta = fastValidationMaxMeanColorDelta;
         stats = compute::render_ln_map(lp, strip);
 
         const std::filesystem::path stripPath =
@@ -184,6 +227,9 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"bailoutSq",    bailoutSq},
             {"engine",       stats.engine_used},
             {"scalar",       stats.scalar_used},
+            {"precisionMode", stats.precision_mode},
+            {"layerSummary", stats.layer_summary},
+            {"validationSummary", stats.validation_summary},
         };
         const std::filesystem::path sidecarPath =
             std::filesystem::path(run.outputDir) / "ln_map.json";
@@ -215,6 +261,9 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         {"estimatedPeakMemory", estimatedPeakMemory},
         {"engineUsed",  stats.engine_used},
         {"scalarUsed",  stats.scalar_used},
+        {"precisionMode", stats.precision_mode},
+        {"layerSummary", stats.layer_summary},
+        {"validationSummary", stats.validation_summary},
         {"generatedMs", stats.elapsed_ms},
     };
     return resp.dump();

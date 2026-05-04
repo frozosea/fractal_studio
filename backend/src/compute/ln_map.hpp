@@ -28,6 +28,17 @@ struct LnMapParams {
     Variant variant = Variant::Mandelbrot;
     Colormap colormap = Colormap::ClassicCos;
     std::string engine = "auto"; // auto, hybrid, cuda, avx512, avx2, openmp
+    std::string precision_mode = "standard"; // standard, fast
+    std::string scalar_type = "auto"; // auto, fp64, fx64
+    double fast_fp32_depth_octaves = 18.0;
+    double fast_fp64_depth_octaves = 34.0;
+    bool fast_validate = true;
+    double fast_validation_band_octaves = 4.0;
+    int fast_validation_sample_rows = 5;
+    int fast_validation_sample_cols = 24;
+    double fast_validation_max_mismatch_ratio = 0.01;
+    int fast_validation_max_p99_iter_delta = 16;
+    double fast_validation_max_mean_color_delta = 8.0;
 };
 
 struct LnMapStats {
@@ -35,6 +46,9 @@ struct LnMapStats {
     int pixel_count = 0;
     std::string engine_used = "openmp";
     std::string scalar_used = "fp64";
+    std::string precision_mode = "standard";
+    std::string layer_summary;
+    std::string validation_summary;
 };
 
 using LnMapProgress = std::function<void(int rowsDone)>;
@@ -45,8 +59,10 @@ LnMapStats render_ln_map_openmp(const LnMapParams& p, cv::Mat& out, const LnMapP
 LnMapStats render_ln_map_openmp_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx512(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx512_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
+LnMapStats render_ln_map_avx512_fp32_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx2(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx2_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
+LnMapStats render_ln_map_avx2_fp32_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done = nullptr);
 
 } // namespace fsd::compute

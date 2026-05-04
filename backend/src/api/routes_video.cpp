@@ -969,7 +969,7 @@ void setVideoProgress(
         {"errorMessage", errorMessage},
         {"details", details},
     };
-    for (const char* key : {"engine", "scalar", "finalFrameEngine", "finalFrameScalar", "lnMapEngine", "lnMapScalar", "warpMethod", "encoder", "currentFrame", "totalFrames", "currentLnMapRow", "totalLnMapRows", "warpTotalMs", "copyTotalMs", "writeTotalMs", "encodeCloseMs", "avgWarpMs", "avgCopyMs", "avgWriteMs", "rawVideoBytes", "stripWidth", "stripHeight", "opencvRemapSafe"}) {
+    for (const char* key : {"engine", "scalar", "finalFrameEngine", "finalFrameScalar", "lnMapEngine", "lnMapScalar", "lnMapMode", "lnMapLayerSummary", "lnMapValidationSummary", "warpMethod", "encoder", "currentFrame", "totalFrames", "currentLnMapRow", "totalLnMapRows", "warpTotalMs", "copyTotalMs", "writeTotalMs", "encodeCloseMs", "avgWarpMs", "avgCopyMs", "avgWriteMs", "rawVideoBytes", "stripWidth", "stripHeight", "opencvRemapSafe"}) {
         if (details.contains(key)) j[key] = details[key];
     }
     runner.setProgress(runId, j.dump());
@@ -1312,10 +1312,36 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const int frameCount = frameCountFromSpeed(depth, secondsPerOctave, fps, durSec);
     const StripPlan stripPlan = resolveStripPlan(j, W, H, depth);
     const int s = stripPlan.actualWidthS;
+    const std::string lnMapMode = j.value("lnMapMode", std::string("standard"));
+    const std::string lnMapScalar = j.value("lnMapScalar", std::string("auto"));
+    const double lnMapFastFp32Depth = j.value("lnMapFastFp32DepthOctaves", 18.0);
+    const double lnMapFastFp64Depth = j.value("lnMapFastFp64DepthOctaves", 34.0);
+    const bool lnMapFastValidate = j.value("lnMapFastValidate", true);
+    const double lnMapFastValidationBandOctaves = j.value("lnMapFastValidationBandOctaves", 4.0);
+    const int lnMapFastValidationSampleRows = j.value("lnMapFastValidationSampleRows", 5);
+    const int lnMapFastValidationSampleCols = j.value("lnMapFastValidationSampleCols", 24);
+    const double lnMapFastValidationMaxMismatchRatio = j.value("lnMapFastValidationMaxMismatchRatio", 0.01);
+    const int lnMapFastValidationMaxP99IterDelta = j.value("lnMapFastValidationMaxP99IterDelta", 16);
+    const double lnMapFastValidationMaxMeanColorDelta = j.value("lnMapFastValidationMaxMeanColorDelta", 8.0);
 
     if (s < 128 || s > 65536)               throw std::runtime_error("invalid widthS (128..65536)");
     if (depth < 0.05 || depth > 120.0)      throw std::runtime_error("invalid depthOctaves (0.05..120)");
     if (iters < 1 || iters > 10000000)      throw std::runtime_error("invalid iterations");
+    if (lnMapMode != "standard" && lnMapMode != "fast") {
+        throw std::runtime_error("invalid lnMapMode (standard|fast)");
+    }
+    if (!(lnMapFastFp32Depth >= 0.0) || !(lnMapFastFp64Depth >= 0.0) ||
+        !std::isfinite(lnMapFastFp32Depth) || !std::isfinite(lnMapFastFp64Depth)) {
+        throw std::runtime_error("invalid ln-map fast depth thresholds");
+    }
+    if (!(lnMapFastValidationBandOctaves > 0.0) || !std::isfinite(lnMapFastValidationBandOctaves) ||
+        lnMapFastValidationSampleRows < 1 || lnMapFastValidationSampleRows > 32 ||
+        lnMapFastValidationSampleCols < 1 || lnMapFastValidationSampleCols > 256 ||
+        !(lnMapFastValidationMaxMismatchRatio >= 0.0) || lnMapFastValidationMaxMismatchRatio > 1.0 ||
+        lnMapFastValidationMaxP99IterDelta < 0 ||
+        !(lnMapFastValidationMaxMeanColorDelta >= 0.0) || !std::isfinite(lnMapFastValidationMaxMeanColorDelta)) {
+        throw std::runtime_error("invalid ln-map fast validation settings");
+    }
 
     compute::Variant v;
     if (!compute::variant_from_name(variantStr.c_str(), v)) v = compute::Variant::Mandelbrot;
@@ -1404,6 +1430,17 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         lp.variant = v;
         lp.colormap = cm;
         lp.engine = j.value("lnMapEngine", std::string("auto"));
+        lp.precision_mode = lnMapMode;
+        lp.scalar_type = lnMapScalar;
+        lp.fast_fp32_depth_octaves = lnMapFastFp32Depth;
+        lp.fast_fp64_depth_octaves = lnMapFastFp64Depth;
+        lp.fast_validate = lnMapFastValidate;
+        lp.fast_validation_band_octaves = lnMapFastValidationBandOctaves;
+        lp.fast_validation_sample_rows = lnMapFastValidationSampleRows;
+        lp.fast_validation_sample_cols = lnMapFastValidationSampleCols;
+        lp.fast_validation_max_mismatch_ratio = lnMapFastValidationMaxMismatchRatio;
+        lp.fast_validation_max_p99_iter_delta = lnMapFastValidationMaxP99IterDelta;
+        lp.fast_validation_max_mean_color_delta = lnMapFastValidationMaxMeanColorDelta;
         setVideoProgress(runner, run.id, "ln_map", 0, t, 0.0, depth);
         throwIfCancelled(runner, run.id);
         const compute::LnMapStats lnStats = compute::render_ln_map(
@@ -1416,7 +1453,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             });
         throwIfCancelled(runner, run.id);
         setVideoProgress(runner, run.id, "ln_map", t, t, depth, depth,
-                         "", "", Json{{"engine", lnStats.engine_used}, {"scalar", lnStats.scalar_used}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"currentLnMapRow", t}, {"totalLnMapRows", t}});
+                         "", "", Json{{"engine", lnStats.engine_used}, {"scalar", lnStats.scalar_used}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"currentLnMapRow", t}, {"totalLnMapRows", t}});
 
         const std::filesystem::path stripPath = std::filesystem::path(run.outputDir) / "ln_map.png";
         compute::write_png(stripPath.string(), strip);
@@ -1438,6 +1475,9 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"bailoutSq", bailoutSq},
                 {"engine", lnStats.engine_used},
                 {"scalar", lnStats.scalar_used},
+                {"precisionMode", lnStats.precision_mode},
+                {"layerSummary", lnStats.layer_summary},
+                {"validationSummary", lnStats.validation_summary},
             };
             const std::filesystem::path scPath = std::filesystem::path(run.outputDir) / "ln_map.json";
             atomicWriteText(scPath, sc.dump(2));
@@ -1457,7 +1497,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
 
         // ── 4. Generate video ──────────────────────────────────────────────────
         setVideoProgress(runner, run.id, "video_warp_encode", 0, frameCount, depth, depth,
-                         "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+                         "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
         std::string ffmpegStderr;
         std::string encoderUsed;
         std::string warpMethod;
@@ -1468,7 +1508,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             std::filesystem::path(run.outputDir), "zoom",
             [&](int frameDone) {
                 setVideoProgress(runner, run.id, "video_warp_encode", frameDone, frameCount, depth, depth,
-                                 "", "", Json{{"currentFrame", frameDone}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+                                 "", "", Json{{"currentFrame", frameDone}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
             },
             &ffmpegStderr,
             &encoderUsed,
@@ -1478,7 +1518,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             [&]() { return runner.isCancelRequested(run.id); }
         );
         throwIfCancelled(runner, run.id);
-        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
+        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
         mergeVideoWarpStats(doneDetails, warpStats);
         setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, depth, depth,
                          "", "", doneDetails);
@@ -1490,6 +1530,9 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"finalFrameScalar", finalStats.scalar_used},
             {"lnMapEngine", lnStats.engine_used},
             {"lnMapScalar", lnStats.scalar_used},
+            {"lnMapMode", lnStats.precision_mode},
+            {"lnMapLayerSummary", lnStats.layer_summary},
+            {"lnMapValidationSummary", lnStats.validation_summary},
             {"warpMethod", warpMethod},
             {"encoder", encoderUsed},
             {"durationSec", durSec},
@@ -1553,6 +1596,9 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"finalFrameScalar",   finalStats.scalar_used},
             {"lnMapEngine",        lnStats.engine_used},
             {"lnMapScalar",        lnStats.scalar_used},
+            {"lnMapMode",          lnStats.precision_mode},
+            {"lnMapLayerSummary",  lnStats.layer_summary},
+            {"lnMapValidationSummary", lnStats.validation_summary},
             {"warpMethod",         warpMethod},
             {"encoder",            encoderUsed},
             {"ffmpegStderr",       ffmpegStderr},
@@ -1610,6 +1656,9 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"height", H},
             {"lnMapEngine", "openmp"},
             {"lnMapScalar", "fp64"},
+            {"lnMapMode", lnMapMode},
+            {"lnMapLayerSummary", ""},
+            {"lnMapValidationSummary", ""},
             {"warpMethod", queuedWarpMethod},
         };
         return resp.dump();
