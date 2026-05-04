@@ -126,6 +126,14 @@ The frontend engine selector defaults to `auto`.
 
 `scalarType: "auto"` 在 `scale < 1e-13` 且视窗可表示时启用定点数，否则使用 `fp64`。定点数主要用于前 10 个二次变体的深度缩放，不支持时会回退。
 
+### Precision Experiments / 精度实验
+
+The ln-map `fp32`/`fp64`/`fx64` precision and speed experiment notes are in
+[`docs/lnmap_precision_experiments.md`](docs/lnmap_precision_experiments.md).
+
+ln-map 的 `fp32` / `fp64` / `fx64` 精度与速度实验记录见
+[`docs/lnmap_precision_experiments.md`](docs/lnmap_precision_experiments.md)。
+
 ---
 
 ## Built-in Variants / 内置变体
