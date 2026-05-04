@@ -290,68 +290,104 @@ double bailoutSqFromJson(const Json& j, double radius, double defaultSq) {
     return defaultSq;
 }
 
+struct CpuWarpGeometry {
+    int width = 0;
+    int height = 0;
+    int strip_width = 0; // includes one wrap column
+    int strip_height = 0;
+    int strip_period = 0;
+    cv::Mat strip_x;        // CV_32FC1, theta mapped to strip column
+    cv::Mat strip_row_base; // CV_32FC1, (ln4 - ln(r)) * strip_period / tau
+};
+
+CpuWarpGeometry buildCpuWarpGeometry(int W, int H, int stripWrapW, int stripH) {
+    CpuWarpGeometry geom;
+    geom.width = W;
+    geom.height = H;
+    geom.strip_width = stripWrapW;
+    geom.strip_height = stripH;
+    geom.strip_period = stripWrapW - 1;
+    geom.strip_x.create(H, W, CV_32FC1);
+    geom.strip_row_base.create(H, W, CV_32FC1);
+
+    const double aspect = static_cast<double>(W) / static_cast<double>(H);
+    const double stripScale = static_cast<double>(geom.strip_period) / TAU;
+    const float invalidRow = std::numeric_limits<float>::lowest();
+
+    cv::parallel_for_(cv::Range(0, H), [&](const cv::Range& range) {
+        for (int y = range.start; y < range.end; ++y) {
+            const double vy = -(2.0 * (static_cast<double>(y) + 0.5) / static_cast<double>(H) - 1.0);
+            float* stripX = geom.strip_x.ptr<float>(y);
+            float* rowBase = geom.strip_row_base.ptr<float>(y);
+            for (int x = 0; x < W; ++x) {
+                const double ux = (2.0 * (static_cast<double>(x) + 0.5) / static_cast<double>(W) - 1.0) * aspect;
+                const double r2 = ux * ux + vy * vy;
+                double theta = std::atan2(vy, ux);
+                if (theta < 0.0) theta += TAU;
+
+                stripX[x] = static_cast<float>(theta * stripScale);
+                rowBase[x] = r2 > 1e-30
+                    ? static_cast<float>((LN_FOUR - 0.5 * std::log(r2)) * stripScale)
+                    : invalidRow;
+            }
+        }
+    });
+
+    return geom;
+}
+
+void ensureMat(cv::Mat& mat, int W, int H, int type) {
+    if (mat.empty() || mat.rows != H || mat.cols != W || mat.type() != type) {
+        mat.create(H, W, type);
+    }
+}
+
 void renderWarpFrameShared(
     const cv::Mat& stripWrap,
     const cv::Mat& finalImg,
-    int W, int H,
+    const CpuWarpGeometry& geom,
+    int W,
+    int H,
     double kTop, double kTop_end,
     cv::Mat& frame,
     cv::Mat& stripFrame,
     cv::Mat& finalFrame,
-    cv::Mat& mapX,
     cv::Mat& mapY,
     cv::Mat& fmapX,
-    cv::Mat& fmapY,
-    std::vector<float>& useStrip
+    cv::Mat& fmapY
 ) {
-    const double aspect = static_cast<double>(W) / static_cast<double>(H);
     const int stripH    = stripWrap.rows;
     const int s         = stripWrap.cols - 1;
+    const float stripLimit = static_cast<float>(stripH - 1);
+    const float kTopStripScale = static_cast<float>(kTop * static_cast<double>(s) / TAU);
     const double S      = std::exp(kTop - kTop_end);
 
     for (int y = 0; y < H; ++y) {
-        const double vy = -(2.0 * (y + 0.5) / H - 1.0);
+        const float* rowBase = geom.strip_row_base.ptr<float>(y);
+        float* rowMap = mapY.ptr<float>(y);
+        float* fx = fmapX.ptr<float>(y);
+        float* fy = fmapY.ptr<float>(y);
+        const float finalY = static_cast<float>((static_cast<double>(y) + 0.5 - 0.5 * static_cast<double>(H)) * S
+                                                + 0.5 * static_cast<double>(H));
         for (int x = 0; x < W; ++x) {
-            const double ux = (2.0 * (x + 0.5) / W - 1.0) * aspect;
-            const double r2 = ux * ux + vy * vy;
-            double th = std::atan2(vy, ux);
-            if (th < 0.0) th += TAU;
-
-            double row = -1.0;
-            if (r2 > 1e-30) {
-                const double lnR = 0.5 * std::log(r2);
-                row = (LN_FOUR - kTop - lnR) * s / TAU;
-            }
-            const double col = th / TAU * s;
-            const size_t idx = static_cast<size_t>(y) * W + x;
-
-            if (row >= 0.0 && row < static_cast<double>(stripH) - 1.0) {
-                mapX.at<float>(y, x) = static_cast<float>(col);
-                mapY.at<float>(y, x) = static_cast<float>(row);
-                useStrip[idx] = 1.0f;
-            } else {
-                mapX.at<float>(y, x) = -1.0f;
-                mapY.at<float>(y, x) = -1.0f;
-                useStrip[idx] = 0.0f;
-            }
-
-            const double fu = ux * S;
-            const double fv = vy * S;
-            fmapX.at<float>(y, x) = static_cast<float>((fu / aspect * 0.5 + 0.5) * W);
-            fmapY.at<float>(y, x) = static_cast<float>((-fv * 0.5 + 0.5) * H);
+            const float stripY = rowBase[x] - kTopStripScale;
+            rowMap[x] = (stripY >= 0.0f && stripY < stripLimit) ? stripY : -1.0f;
+            fx[x] = static_cast<float>((static_cast<double>(x) + 0.5 - 0.5 * static_cast<double>(W)) * S
+                                        + 0.5 * static_cast<double>(W));
+            fy[x] = finalY;
         }
     }
 
-    cv::remap(stripWrap, stripFrame, mapX,  mapY,  cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0,0,0));
+    cv::remap(stripWrap, stripFrame, geom.strip_x, mapY,  cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0,0,0));
     cv::remap(finalImg,  finalFrame, fmapX, fmapY, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0,0,0));
 
     for (int y = 0; y < H; ++y) {
         const uint8_t* sp = stripFrame.ptr<uint8_t>(y);
         const uint8_t* fp = finalFrame.ptr<uint8_t>(y);
+        const float* rowMap = mapY.ptr<float>(y);
         uint8_t* dp = frame.ptr<uint8_t>(y);
         for (int x = 0; x < W; ++x) {
-            const size_t idx = static_cast<size_t>(y) * W + x;
-            if (useStrip[idx] > 0.5f) {
+            if (rowMap[x] >= 0.0f) {
                 dp[3*x+0] = sp[3*x+0];
                 dp[3*x+1] = sp[3*x+1];
                 dp[3*x+2] = sp[3*x+2];
@@ -404,7 +440,9 @@ void sampleBgrBilinearBorder(const cv::Mat& img, double x, double y, uint8_t* ds
 void renderWarpFrameManualCpu(
     const cv::Mat& stripWrap,
     const cv::Mat& finalImg,
-    int W, int H,
+    const CpuWarpGeometry& geom,
+    int W,
+    int H,
     double kTop,
     double kTop_end,
     cv::Mat& frame
@@ -413,39 +451,28 @@ void renderWarpFrameManualCpu(
         frame.create(H, W, CV_8UC3);
     }
 
-    const double aspect = static_cast<double>(W) / static_cast<double>(H);
     const int stripH = stripWrap.rows;
     const int s = stripWrap.cols - 1;
-    const double stripScale = static_cast<double>(s) / TAU;
-    const double kTopStripScale = kTop * stripScale;
+    const float stripLimit = static_cast<float>(stripH - 1);
+    const float kTopStripScale = static_cast<float>(kTop * static_cast<double>(s) / TAU);
     const double S = std::exp(kTop - kTop_end);
 
     for (int y = 0; y < H; ++y) {
-        const double vy = -(2.0 * (static_cast<double>(y) + 0.5) / static_cast<double>(H) - 1.0);
+        const float* stripX = geom.strip_x.ptr<float>(y);
+        const float* rowBase = geom.strip_row_base.ptr<float>(y);
+        const double finalY = (static_cast<double>(y) + 0.5 - 0.5 * static_cast<double>(H)) * S
+                              + 0.5 * static_cast<double>(H);
         uint8_t* dp = frame.ptr<uint8_t>(y);
         for (int x = 0; x < W; ++x) {
-            const double ux = (2.0 * (static_cast<double>(x) + 0.5) / static_cast<double>(W) - 1.0) * aspect;
-            const double r2 = ux * ux + vy * vy;
-            double th = std::atan2(vy, ux);
-            if (th < 0.0) th += TAU;
-
-            bool useStrip = false;
-            double row = -1.0;
-            if (r2 > 1e-30) {
-                const double lnR = 0.5 * std::log(r2);
-                row = (LN_FOUR - lnR) * stripScale - kTopStripScale;
-                useStrip = row >= 0.0 && row < static_cast<double>(stripH) - 1.0;
-            }
+            const float row = rowBase[x] - kTopStripScale;
+            const bool useStrip = row >= 0.0f && row < stripLimit;
 
             uint8_t* out = dp + 3 * x;
             if (useStrip) {
-                const double col = th * stripScale;
-                sampleBgrBilinearBorder(stripWrap, col, row, out);
+                sampleBgrBilinearBorder(stripWrap, stripX[x], row, out);
             } else {
-                const double fu = ux * S;
-                const double fv = vy * S;
-                const double finalX = (fu / aspect * 0.5 + 0.5) * static_cast<double>(W);
-                const double finalY = (-fv * 0.5 + 0.5) * static_cast<double>(H);
+                const double finalX = (static_cast<double>(x) + 0.5 - 0.5 * static_cast<double>(W)) * S
+                                      + 0.5 * static_cast<double>(W);
                 sampleBgrBilinearBorder(finalImg, finalX, finalY, out);
             }
         }
@@ -484,18 +511,17 @@ cv::Mat renderZoomPreviewFrameSmart(
     (void)preferCudaWarp;
 #endif
 
+    const CpuWarpGeometry geom = buildCpuWarpGeometry(W, H, stripWrap.cols, stripWrap.rows);
     if (remapSafe) {
         cv::Mat stripFrame(H, W, CV_8UC3);
         cv::Mat finalFrame(H, W, CV_8UC3);
-        cv::Mat mapX(H, W, CV_32FC1);
         cv::Mat mapY(H, W, CV_32FC1);
         cv::Mat fmapX(H, W, CV_32FC1);
         cv::Mat fmapY(H, W, CV_32FC1);
-        std::vector<float> useStrip(static_cast<size_t>(W) * H, 0.0f);
-        renderWarpFrameShared(stripWrap, finalImg, W, H, kTop, kTop_end,
-                              frame, stripFrame, finalFrame, mapX, mapY, fmapX, fmapY, useStrip);
+        renderWarpFrameShared(stripWrap, finalImg, geom, W, H, kTop, kTop_end,
+                              frame, stripFrame, finalFrame, mapY, fmapX, fmapY);
     } else {
-        renderWarpFrameManualCpu(stripWrap, finalImg, W, H, kTop, kTop_end, frame);
+        renderWarpFrameManualCpu(stripWrap, finalImg, geom, W, H, kTop, kTop_end, frame);
     }
     return frame;
 }
@@ -550,7 +576,7 @@ static std::string generateZoomVideo(
     (void)prefer_cuda_warp;
 #endif
     if (selectedWarpMethod.empty()) {
-        selectedWarpMethod = remapSafe ? "opencv_cpu_remap" : "manual_cpu_bilinear";
+        selectedWarpMethod = remapSafe ? "opencv_cpu_remap_precomputed" : "manual_cpu_bilinear_precomputed";
     }
     baseStats.warpMethod = selectedWarpMethod;
     if (warp_method_out) *warp_method_out = selectedWarpMethod;
@@ -560,14 +586,20 @@ static std::string generateZoomVideo(
     const std::filesystem::path tmpMp4 = outDir / (baseName + ".tmp.mp4");
     const std::filesystem::path tmpAvi = outDir / (baseName + ".tmp.avi");
 
-    cv::Mat frame(H, W, CV_8UC3);
-    cv::Mat stripFrame(H, W, CV_8UC3);
-    cv::Mat finalFrame(H, W, CV_8UC3);
-    cv::Mat mapX(H, W, CV_32FC1);
-    cv::Mat mapY(H, W, CV_32FC1);
-    cv::Mat fmapX(H, W, CV_32FC1);
-    cv::Mat fmapY(H, W, CV_32FC1);
-    std::vector<float> useStrip(static_cast<size_t>(W) * H, 0.0f);
+    cv::Mat frame;
+    cv::Mat stripFrame;
+    cv::Mat finalFrame;
+    cv::Mat mapY;
+    cv::Mat fmapX;
+    cv::Mat fmapY;
+    std::unique_ptr<CpuWarpGeometry> cpuGeom;
+    auto getCpuGeom = [&]() -> const CpuWarpGeometry& {
+        if (!cpuGeom) {
+            cpuGeom = std::make_unique<CpuWarpGeometry>(
+                buildCpuWarpGeometry(W, H, stripWrap.cols, stripWrap.rows));
+        }
+        return *cpuGeom;
+    };
 
     auto renderCudaFramesAsync = [&](auto&& writeFrame, VideoWarpStats& stats) -> bool {
 #if USE_CUDA_VIDEO_WARP
@@ -660,10 +692,18 @@ static std::string generateZoomVideo(
 #endif
             {
                 const auto warpStart = std::chrono::steady_clock::now();
-                if (selectedWarpMethod == "opencv_cpu_remap") {
-                    renderWarpFrameShared(stripWrap, finalImg, W, H, kTop, kTop_end, frame, stripFrame, finalFrame, mapX, mapY, fmapX, fmapY, useStrip);
+                const CpuWarpGeometry& geom = getCpuGeom();
+                if (selectedWarpMethod == "opencv_cpu_remap_precomputed") {
+                    ensureMat(frame, W, H, CV_8UC3);
+                    ensureMat(stripFrame, W, H, CV_8UC3);
+                    ensureMat(finalFrame, W, H, CV_8UC3);
+                    ensureMat(mapY, W, H, CV_32FC1);
+                    ensureMat(fmapX, W, H, CV_32FC1);
+                    ensureMat(fmapY, W, H, CV_32FC1);
+                    renderWarpFrameShared(stripWrap, finalImg, geom, W, H, kTop, kTop_end,
+                                          frame, stripFrame, finalFrame, mapY, fmapX, fmapY);
                 } else {
-                    renderWarpFrameManualCpu(stripWrap, finalImg, W, H, kTop, kTop_end, frame);
+                    renderWarpFrameManualCpu(stripWrap, finalImg, geom, W, H, kTop, kTop_end, frame);
                 }
                 const auto warpEnd = std::chrono::steady_clock::now();
                 stats.warpTotalMs += std::chrono::duration<double, std::milli>(warpEnd - warpStart).count();
@@ -1545,7 +1585,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             && stripPlan.heightT < OPENCV_REMAP_DIM_LIMIT
             && W < OPENCV_REMAP_DIM_LIMIT
             && H < OPENCV_REMAP_DIM_LIMIT;
-        std::string queuedWarpMethod = queuedRemapSafe ? "opencv_cpu_remap" : "manual_cpu_bilinear";
+        std::string queuedWarpMethod = queuedRemapSafe ? "opencv_cpu_remap_precomputed" : "manual_cpu_bilinear_precomputed";
 #if USE_CUDA_VIDEO_WARP
         if (j.value("cudaWarp", true) && fsd_cuda::cuda_video_warp_available()) {
             queuedWarpMethod = "cuda_texture";
