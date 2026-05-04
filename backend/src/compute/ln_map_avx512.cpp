@@ -205,6 +205,19 @@ TrigColumns make_trig_columns(int s) {
     return cols;
 }
 
+const TrigColumns& cached_trig_columns(int s) {
+    struct Cache {
+        int width = 0;
+        TrigColumns cols;
+    };
+    thread_local Cache cache;
+    if (cache.width != s) {
+        cache.cols = make_trig_columns(s);
+        cache.width = s;
+    }
+    return cache.cols;
+}
+
 TrigColumnsF make_trig_columns_f(int s) {
     constexpr float tau = static_cast<float>(TAU);
     TrigColumnsF cols;
@@ -218,6 +231,19 @@ TrigColumnsF make_trig_columns_f(int s) {
     return cols;
 }
 
+const TrigColumnsF& cached_trig_columns_f(int s) {
+    struct Cache {
+        int width = 0;
+        TrigColumnsF cols;
+    };
+    thread_local Cache cache;
+    if (cache.width != s) {
+        cache.cols = make_trig_columns_f(s);
+        cache.width = s;
+    }
+    return cache.cols;
+}
+
 void render_rows_impl(
     const LnMapParams& p,
     cv::Mat& out,
@@ -227,7 +253,7 @@ void render_rows_impl(
     const LnMapProgress& on_row_done
 ) {
     const int s = p.width_s;
-    const TrigColumns cols = make_trig_columns(s);
+    const TrigColumns& cols = cached_trig_columns(s);
     const int variant = static_cast<int>(p.variant);
     const __m512d vbail2 = _mm512_set1_pd(p.bailout_sq);
     const __m512d vzero = _mm512_setzero_pd();
@@ -318,7 +344,7 @@ void render_rows_fp32_impl(
     const LnMapProgress& on_row_done
 ) {
     const int s = p.width_s;
-    const TrigColumnsF cols = make_trig_columns_f(s);
+    const TrigColumnsF& cols = cached_trig_columns_f(s);
     const int variant = static_cast<int>(p.variant);
     const float center_re = static_cast<float>(p.center_re);
     const float center_im = static_cast<float>(p.center_im);

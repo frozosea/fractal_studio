@@ -904,7 +904,7 @@ LnMapStats render_ln_map_hybrid(const LnMapParams& p, cv::Mat& out, const LnMapP
     gpu_available.store(false, std::memory_order_relaxed);
 #endif
 
-    const int cpu_threads = std::max(1, std::min(default_render_threads(), 8));
+    const int cpu_threads = default_render_threads();
     std::vector<std::thread> workers;
     workers.reserve(static_cast<size_t>(cpu_threads));
     for (int i = 0; i < cpu_threads; ++i) {

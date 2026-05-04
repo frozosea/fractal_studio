@@ -28,6 +28,46 @@ constexpr double TAU = 6.283185307179586;
 constexpr double LN_FOUR = 1.3862943611198906;
 
 std::mutex g_ln_mu;
+// Progress rendering calls CUDA by row chunks; cache those buffers without
+// retaining very large full-strip allocations after one-off renders.
+constexpr size_t CACHED_LN_DEVBUF_MAX_BYTES = 128ull * 1024ull * 1024ull;
+
+struct LnDevBuf {
+    size_t capacity = 0;
+    unsigned char* d = nullptr;
+
+    void ensure(size_t bytes) {
+        if (bytes <= capacity) return;
+        if (d) {
+            cudaFree(d);
+            d = nullptr;
+            capacity = 0;
+        }
+        CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&d), bytes));
+        capacity = bytes;
+    }
+};
+
+struct LnCudaEvents {
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop = nullptr;
+
+    void ensure() {
+        if (!start) CUDA_LN_CHECK(cudaEventCreate(&start));
+        if (!stop) CUDA_LN_CHECK(cudaEventCreate(&stop));
+    }
+};
+
+struct ScopedDevicePtr {
+    unsigned char* ptr = nullptr;
+
+    ~ScopedDevicePtr() {
+        if (ptr) cudaFree(ptr);
+    }
+};
+
+LnDevBuf g_ln_devbuf;
+LnCudaEvents g_ln_events;
 
 __device__ inline int d_clamp255(int v) {
     return v < 0 ? 0 : (v > 255 ? 255 : v);
@@ -504,19 +544,24 @@ CudaLnMapStats cuda_render_ln_map_rows_impl(
     const size_t row_bytes = static_cast<size_t>(p.width_s) * 3u;
     const size_t bytes = row_bytes * static_cast<size_t>(row_count);
     unsigned char* d_out = nullptr;
-    CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_out), bytes));
+    ScopedDevicePtr transient_out;
+    if (bytes <= CACHED_LN_DEVBUF_MAX_BYTES) {
+        g_ln_devbuf.ensure(bytes);
+        d_out = g_ln_devbuf.d;
+    } else {
+        CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&transient_out.ptr), bytes));
+        d_out = transient_out.ptr;
+    }
 
-    cudaEvent_t start, stop;
-    CUDA_LN_CHECK(cudaEventCreate(&start));
-    CUDA_LN_CHECK(cudaEventCreate(&stop));
-    CUDA_LN_CHECK(cudaEventRecord(start));
+    g_ln_events.ensure();
+    CUDA_LN_CHECK(cudaEventRecord(g_ln_events.start));
     launch(p, row_start, row_count, d_out);
     CUDA_LN_CHECK(cudaGetLastError());
-    CUDA_LN_CHECK(cudaEventRecord(stop));
-    CUDA_LN_CHECK(cudaEventSynchronize(stop));
+    CUDA_LN_CHECK(cudaEventRecord(g_ln_events.stop));
+    CUDA_LN_CHECK(cudaEventSynchronize(g_ln_events.stop));
 
     float ms = 0.0f;
-    CUDA_LN_CHECK(cudaEventElapsedTime(&ms, start, stop));
+    CUDA_LN_CHECK(cudaEventElapsedTime(&ms, g_ln_events.start, g_ln_events.stop));
     if (out.isContinuous() && out.step == row_bytes) {
         CUDA_LN_CHECK(cudaMemcpy(out.ptr<unsigned char>(row_start), d_out, bytes, cudaMemcpyDeviceToHost));
     } else {
@@ -526,9 +571,6 @@ CudaLnMapStats cuda_render_ln_map_rows_impl(
             std::memcpy(out.ptr<unsigned char>(row_start + r), tmp.data() + static_cast<size_t>(r) * row_bytes, row_bytes);
         }
     }
-    CUDA_LN_CHECK(cudaEventDestroy(start));
-    CUDA_LN_CHECK(cudaEventDestroy(stop));
-    cudaFree(d_out);
 
     CudaLnMapStats stats;
     stats.elapsed_ms = static_cast<double>(ms);
