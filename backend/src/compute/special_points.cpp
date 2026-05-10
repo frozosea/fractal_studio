@@ -265,6 +265,14 @@ std::string rejection_reason(
     return "wrong_period";
 }
 
+double newton_accept_eps(const SpecialPointEnumRequest& req) {
+    // For high-period equations z_p(c)=0, double precision often bottoms out
+    // above the requested Newton epsilon even when the orbit is well within the
+    // later classification tolerance. Accept the root once it is comfortably
+    // below that classifier threshold.
+    return std::max(req.newton_eps, req.classify_eps * 0.1);
+}
+
 SpecialPointResult make_base_result(SpecialPointKind kind, int preperiod, int period, Z c) {
     c = normalize_root(c, 1e-13);
     SpecialPointResult out;
@@ -573,6 +581,7 @@ std::vector<VariantExistence> classify_variant_existence(
 SpecialPointResult newton_solve_center(Z initial, int period, const SpecialPointEnumRequest& req) {
     SpecialPointResult out = make_base_result(SpecialPointKind::HyperbolicCenter, 0, period, initial);
     Z c = initial;
+    const double accept_eps = newton_accept_eps(req);
     for (int iter = 0; iter < req.max_newton_iter; ++iter) {
         if (!finite(c)) {
             out.reason = "non_finite";
@@ -585,7 +594,7 @@ SpecialPointResult newton_solve_center(Z initial, int period, const SpecialPoint
         const auto [f, df] = eval_center_f_df(c, period);
         out.residual = std::abs(f);
         out.newton_iterations = iter;
-        if (out.residual < req.newton_eps) {
+        if (out.residual < accept_eps) {
             out.converged = true;
             if (std::abs(df) < 1e-20) break;
             const Z step = f / df;
@@ -599,7 +608,7 @@ SpecialPointResult newton_solve_center(Z initial, int period, const SpecialPoint
         }
         const Z step = f / df;
         c -= step;
-        if (std::abs(step) < 1e-16 && out.residual >= req.newton_eps) {
+        if (std::abs(step) < 1e-16 && out.residual >= accept_eps) {
             out.reason = "stalled";
             return out;
         }
@@ -611,7 +620,7 @@ SpecialPointResult newton_solve_center(Z initial, int period, const SpecialPoint
     out = make_base_result(SpecialPointKind::HyperbolicCenter, 0, period, c);
     out.newton_iterations = iterations_used;
     out.residual = std::abs(f);
-    out.converged = out.residual < req.newton_eps;
+    out.converged = out.residual < accept_eps;
     if (!out.converged) {
         out.reason = "not_converged";
         return out;
@@ -633,6 +642,7 @@ SpecialPointResult find_hyperbolic_center_near(Z initial, int period, const Spec
 SpecialPointResult newton_solve_misiurewicz(Z initial, int preperiod, int period, const SpecialPointEnumRequest& req) {
     SpecialPointResult out = make_base_result(SpecialPointKind::Misiurewicz, preperiod, period, initial);
     Z c = initial;
+    const double accept_eps = newton_accept_eps(req);
     for (int iter = 0; iter < req.max_newton_iter; ++iter) {
         if (!finite(c)) {
             out.reason = "non_finite";
@@ -645,7 +655,7 @@ SpecialPointResult newton_solve_misiurewicz(Z initial, int preperiod, int period
         const auto [f, df] = eval_misiurewicz_f_df(c, preperiod, period);
         out.residual = std::abs(f);
         out.newton_iterations = iter;
-        if (out.residual < req.newton_eps) {
+        if (out.residual < accept_eps) {
             out.converged = true;
             if (std::abs(df) < 1e-20) break;
             const Z step = f / df;
@@ -659,7 +669,7 @@ SpecialPointResult newton_solve_misiurewicz(Z initial, int preperiod, int period
         }
         const Z step = f / df;
         c -= step;
-        if (std::abs(step) < 1e-16 && out.residual >= req.newton_eps) {
+        if (std::abs(step) < 1e-16 && out.residual >= accept_eps) {
             out.reason = "stalled";
             return out;
         }
@@ -671,7 +681,7 @@ SpecialPointResult newton_solve_misiurewicz(Z initial, int preperiod, int period
     out = make_base_result(SpecialPointKind::Misiurewicz, preperiod, period, c);
     out.newton_iterations = iterations_used;
     out.residual = std::abs(f);
-    out.converged = out.residual < req.newton_eps;
+    out.converged = out.residual < accept_eps;
     if (!out.converged) {
         out.reason = "not_converged";
         return out;

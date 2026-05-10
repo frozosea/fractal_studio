@@ -65,6 +65,20 @@ void expect_misiurewicz_2_1() {
             "misiurewicz m=2 p=1 root is not c=-2: " + std::to_string(p.re) + ", " + std::to_string(p.im));
 }
 
+void expect_high_period_local_center() {
+    SpecialPointEnumRequest req = base_request();
+    req.kind = SpecialPointKind::HyperbolicCenter;
+    const auto p = fsd::compute::newton_solve_center(
+        {-0.7601060136, 0.0803662122},
+        207,
+        req);
+    require(p.converged, "high-period local center did not converge");
+    require(p.accepted, "high-period local center was not accepted");
+    require(p.actual.is_center && p.actual.period == 207,
+            "high-period local center classified with wrong period");
+    require(p.residual < req.classify_eps, "high-period local center residual exceeds classifier tolerance");
+}
+
 SpecialPointSearchRequest base_search_request() {
     SpecialPointSearchRequest req;
     req.period_min = 1;
@@ -180,6 +194,7 @@ int main() {
         expect_center_period(4, 6);
         expect_misiurewicz_2_1();
         expect_local_center_search();
+        expect_high_period_local_center();
     } catch (const std::exception& e) {
         std::cerr << "special_points_smoke failed: " << e.what() << '\n';
         return 1;

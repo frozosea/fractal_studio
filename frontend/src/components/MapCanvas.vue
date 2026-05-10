@@ -3,8 +3,8 @@ import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { api, type MapRenderRequest, type Metric, type ColorMap, type SpecialPointEnumResult } from '../api'
 
 // MapCanvas renders the fractal by requesting a full frame from the backend at
-// the exact canvas pixel dimensions. Every param/pan/zoom change triggers a
-// debounced full re-render; the previous frame remains visible while loading.
+// the device-pixel backing-store dimensions. CSS pixels stay in charge of
+// interaction math; physical pixels keep HiDPI displays from looking blocky.
 
 const props = defineProps<{
   centerRe: number
@@ -46,13 +46,18 @@ const pending  = ref(false)
 const error    = ref('')
 const domW     = ref(0)
 const domH     = ref(0)
+const frameW   = ref(0)
+const frameH   = ref(0)
 const activeCanvas = ref(0)
 const hasFrame = ref(false)
 let   ro: ResizeObserver | null = null
+let   dprMedia: MediaQueryList | null = null
 let   renderTimer: ReturnType<typeof setTimeout> | null = null
 let   currentRender: AbortController | null = null
 let   renderSeq = 0
 const renderClientId = `map-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+const MIN_FRAME_DIM = 64
+const MAX_FRAME_DIM = 4096
 
 type ViewportSnapshot = {
   centerRe: number
@@ -74,19 +79,63 @@ function resizeCanvas(c: HTMLCanvasElement | null, w: number, h: number) {
   if (c.height !== h) c.height = h
 }
 
+function devicePixelRatioSafe(): number {
+  const dpr = window.devicePixelRatio
+  return Number.isFinite(dpr) && dpr > 0 ? dpr : 1
+}
+
+function clampFrameSize(cssW: number, cssH: number, targetScale: number): { width: number; height: number } {
+  if (cssW <= 0 || cssH <= 0) return { width: 0, height: 0 }
+  const desiredScale = Number.isFinite(targetScale) && targetScale > 0 ? targetScale : 1
+  const maxScale = Math.min(MAX_FRAME_DIM / cssW, MAX_FRAME_DIM / cssH)
+  const scale = Math.min(desiredScale, maxScale)
+  return {
+    width: Math.max(1, Math.round(cssW * scale)),
+    height: Math.max(1, Math.round(cssH * scale)),
+  }
+}
+
+function devicePixelBoxSize(entry: ResizeObserverEntry): { width: number; height: number } | null {
+  const box = entry.devicePixelContentBoxSize?.[0]
+  if (!box || box.inlineSize <= 0 || box.blockSize <= 0) return null
+  return {
+    width: Math.round(box.inlineSize),
+    height: Math.round(box.blockSize),
+  }
+}
+
+function renderableSize(): boolean {
+  return frameW.value >= MIN_FRAME_DIM && frameH.value >= MIN_FRAME_DIM
+}
+
 function notifyPreempt(seq: number) {
   api.mapPreempt({ preemptKey: renderClientId, preemptSeq: seq }).catch(() => {})
 }
 
-function setDomSize(w: number, h: number) {
-  if (w === domW.value && h === domH.value) return
-  domW.value = w
-  domH.value = h
-  emit('viewport-size', { width: w, height: h })
+function setViewportSize(cssW: number, cssH: number, physical?: { width: number; height: number } | null) {
+  const targetScale = physical && cssW > 0 && cssH > 0
+    ? Math.min(physical.width / cssW, physical.height / cssH)
+    : devicePixelRatioSafe()
+  const nextFrame = clampFrameSize(cssW, cssH, targetScale)
+  const cssChanged = cssW !== domW.value || cssH !== domH.value
+  const frameChanged = nextFrame.width !== frameW.value || nextFrame.height !== frameH.value
+  if (!cssChanged && !frameChanged) return
+
+  domW.value = cssW
+  domH.value = cssH
+  frameW.value = nextFrame.width
+  frameH.value = nextFrame.height
+  if (cssChanged) emit('viewport-size', { width: cssW, height: cssH })
   if (!hasFrame.value) {
-    resizeCanvas(canvasA.value, w, h)
-    resizeCanvas(canvasB.value, w, h)
+    resizeCanvas(canvasA.value, nextFrame.width, nextFrame.height)
+    resizeCanvas(canvasB.value, nextFrame.width, nextFrame.height)
   }
+}
+
+function updateViewportSizeFromWrapper() {
+  if (!wrapper.value) return
+  const rect = wrapper.value.getBoundingClientRect()
+  setViewportSize(Math.round(rect.width), Math.round(rect.height))
 }
 
 function invalidateCurrentRender() {
@@ -131,7 +180,7 @@ function drawRgbaFrame(data: ArrayBuffer, width: number, height: number): number
 }
 
 async function renderFrame() {
-  if (domW.value < 16 || domH.value < 16) return
+  if (!renderableSize()) return
   pending.value = true
   error.value   = ''
 
@@ -141,8 +190,8 @@ async function renderFrame() {
   currentRender = controller
   const seq = ++renderSeq
   const requestId = `${renderClientId}-${seq}`
-  const reqW = domW.value
-  const reqH = domH.value
+  const reqW = frameW.value
+  const reqH = frameH.value
 
   const req: MapRenderRequest = {
     requestId,
@@ -208,7 +257,7 @@ async function renderFrame() {
 
 function scheduleRender(delay = 200) {
   invalidateCurrentRender()
-  if (domW.value >= 16 && domH.value >= 16) {
+  if (renderableSize()) {
     pending.value = true
     error.value = ''
   }
@@ -224,7 +273,7 @@ watch(() => [
   props.iterations, props.julia, props.juliaRe, props.juliaIm,
   props.engine, props.scalarType, props.transitionTheta, props.transitionThetaMilliDeg,
   props.transitionFrom, props.transitionTo,
-  domW.value, domH.value,
+  frameW.value, frameH.value,
 ], () => scheduleRender())
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -235,23 +284,41 @@ onMounted(() => {
     for (const e of entries) {
       const w = Math.round(e.contentRect.width)
       const h = Math.round(e.contentRect.height)
-      setDomSize(w, h)
+      setViewportSize(w, h, devicePixelBoxSize(e))
     }
   })
   ro.observe(wrapper.value)
-  const w = Math.round(wrapper.value.clientWidth)
-  const h = Math.round(wrapper.value.clientHeight)
-  setDomSize(w, h)
-  resizeCanvas(canvasA.value, w, h)
-  resizeCanvas(canvasB.value, w, h)
+  updateViewportSizeFromWrapper()
+  resizeCanvas(canvasA.value, frameW.value, frameH.value)
+  resizeCanvas(canvasB.value, frameW.value, frameH.value)
+  window.addEventListener('resize', updateViewportSizeFromWrapper)
+  watchDevicePixelRatio()
   scheduleRender(0)
 })
 
 onBeforeUnmount(() => {
   ro?.disconnect()
+  window.removeEventListener('resize', updateViewportSizeFromWrapper)
+  unwatchDevicePixelRatio()
   if (renderTimer) clearTimeout(renderTimer)
   invalidateCurrentRender()
 })
+
+function onDevicePixelRatioChange() {
+  updateViewportSizeFromWrapper()
+  watchDevicePixelRatio()
+}
+
+function watchDevicePixelRatio() {
+  unwatchDevicePixelRatio()
+  dprMedia = window.matchMedia(`(resolution: ${devicePixelRatioSafe()}dppx)`)
+  dprMedia.addEventListener('change', onDevicePixelRatioChange, { once: true })
+}
+
+function unwatchDevicePixelRatio() {
+  dprMedia?.removeEventListener('change', onDevicePixelRatioChange)
+  dprMedia = null
+}
 
 // ── Interaction ───────────────────────────────────────────────────────────────
 
@@ -398,7 +465,7 @@ function onMouseUp(e: MouseEvent) {
   display: block;
   width: 100%;
   height: 100%;
-  image-rendering: pixelated;
+  image-rendering: auto;
   opacity: 0;
   transform-origin: 0 0;
   transition:
