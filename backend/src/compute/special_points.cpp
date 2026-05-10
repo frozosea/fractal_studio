@@ -466,6 +466,64 @@ std::vector<Task> build_tasks(const SpecialPointEnumRequest& req) {
     return tasks;
 }
 
+std::vector<int> estimated_center_period_candidates(
+    Z initial,
+    const SpecialPointSearchRequest& req
+) {
+    std::vector<int> candidates;
+    if (req.kind != SpecialPointKind::HyperbolicCenter ||
+        req.period_min > req.period_max ||
+        !finite(initial)) {
+        return candidates;
+    }
+
+    const int max_iter = std::max(
+        64,
+        std::min(200000, std::max(req.seed_budget, req.period_max * 8 + 32)));
+    const OrbitClassification orbit = classify_critical_orbit_mandelbrot(
+        initial, max_iter, req.classify_eps);
+    if (!orbit.found_repeat || orbit.period < req.period_min) {
+        return candidates;
+    }
+
+    if (orbit.period <= req.period_max) candidates.push_back(orbit.period);
+    for (int d = std::min(orbit.period / 2, req.period_max); d >= req.period_min; --d) {
+        if (orbit.period % d == 0) candidates.push_back(d);
+    }
+    return candidates;
+}
+
+std::vector<Task> prioritize_center_tasks(
+    std::vector<Task> tasks,
+    Z initial,
+    const SpecialPointSearchRequest& req
+) {
+    // Preserve the documented ascending scan unless visible filtering is active;
+    // then low-period roots outside the viewport are just wasted work.
+    if (req.kind != SpecialPointKind::HyperbolicCenter || !req.visible_only || tasks.size() < 2) {
+        return tasks;
+    }
+
+    const std::vector<int> candidates = estimated_center_period_candidates(initial, req);
+    if (candidates.empty()) return tasks;
+
+    std::vector<Task> reordered;
+    reordered.reserve(tasks.size());
+    std::vector<bool> used(tasks.size(), false);
+    for (int period : candidates) {
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            if (used[i] || tasks[i].period != period) continue;
+            reordered.push_back(tasks[i]);
+            used[i] = true;
+            break;
+        }
+    }
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        if (!used[i]) reordered.push_back(tasks[i]);
+    }
+    return reordered;
+}
+
 SpecialPointEnumRequest options_from_search(const SpecialPointSearchRequest& req) {
     SpecialPointEnumRequest out;
     out.kind = req.kind;
@@ -837,6 +895,7 @@ SpecialPointSearchResponse search_special_points(
     const double merge_eps = std::max(req.root_merge_eps, req.viewport.scale * 1e-9);
     const SpecialPointEnumRequest opt = options_from_search(req);
     const Z initial{req.viewport.center_re, req.viewport.center_im};
+    tasks = prioritize_center_tasks(std::move(tasks), initial, req);
     SpecialPointResult best_fallback;
     bool has_fallback = false;
 

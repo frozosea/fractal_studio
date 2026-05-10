@@ -77,6 +77,30 @@ void expect_high_period_local_center() {
     require(p.actual.is_center && p.actual.period == 207,
             "high-period local center classified with wrong period");
     require(p.residual < req.classify_eps, "high-period local center residual exceeds classifier tolerance");
+
+    SpecialPointSearchRequest search;
+    search.kind = SpecialPointKind::HyperbolicCenter;
+    search.period_min = 1;
+    search.period_max = 8192;
+    search.seed_budget = 2000;
+    search.max_newton_iter = 80;
+    search.newton_eps = 1e-13;
+    search.classify_eps = 1e-10;
+    search.root_merge_eps = 1e-10;
+    search.visible_only = true;
+    search.include_variant_compatibility = true;
+    search.viewport.enabled = true;
+    search.viewport.center_re = -0.7601060136;
+    search.viewport.center_im = 0.0803662122;
+    search.viewport.scale = 2.171e-8;
+    search.viewport.width = 1200;
+    search.viewport.height = 800;
+    const auto resp = fsd::compute::search_special_points(search);
+    require(resp.status == "completed", "high-period local center search did not complete");
+    require(resp.accepted_count == 1, "high-period local center search did not find one center");
+    require(resp.seed_count < 20, "high-period local center search did not prioritize the estimated period");
+    require(resp.points.front().actual.is_center && resp.points.front().actual.period == 207,
+            "high-period local center search returned the wrong period");
 }
 
 SpecialPointSearchRequest base_search_request() {
