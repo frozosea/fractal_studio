@@ -56,7 +56,9 @@ std::string encode_rgba8(const cv::Mat& bgr) {
     const std::size_t pixelCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     std::string rgba(pixelCount * 4, '\0');
     auto* dst = reinterpret_cast<unsigned char*>(rgba.data());
+    constexpr std::size_t parallelThreshold = 256u * 1024u;
 
+    #pragma omp parallel for if(pixelCount >= parallelThreshold) schedule(static)
     for (int y = 0; y < height; ++y) {
         const unsigned char* src = bgr.ptr<unsigned char>(y);
         unsigned char* row = dst + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) * 4;

@@ -139,10 +139,11 @@ function updateViewportSizeFromWrapper() {
 }
 
 function invalidateCurrentRender() {
+  const hadRender = currentRender !== null
   currentRender?.abort()
   currentRender = null
   renderSeq += 1
-  notifyPreempt(renderSeq)
+  if (hadRender) notifyPreempt(renderSeq)
 }
 
 function previewTransform(): string {
