@@ -191,7 +191,9 @@ compute::SpecialPointSearchRequest parseSearchRequest(const Json& j) {
     compute::SpecialPointSearchRequest req;
     req.kind = parseKind(j);
     req.period_min = j.value("periodMin", 1);
-    req.period_max = j.value("periodMax", 8);
+    req.period_max = j.value("periodMax", req.kind == compute::SpecialPointKind::HyperbolicCenter
+        ? kLocalCenterMaxAttempts
+        : 4);
     req.preperiod_min = j.value("preperiodMin", 1);
     req.preperiod_max = j.value("preperiodMax", 4);
     req.seed_budget = j.value("seedBudget", 2000);

@@ -19,6 +19,17 @@ const props = defineProps<{
 type PanelMode = 'search' | 'enumerate'
 type SpecialPointPanelResponse = SpecialPointEnumResponse | SpecialPointSearchResponse
 
+const LOCAL_CENTER_MAX_PERIOD = 16384
+const LOCAL_CENTER_MAX_ATTEMPTS = 8192
+const LOCAL_VIEWPORT_SEED_BUDGET = 160
+const LOCAL_MISI_MAX_PREPERIOD = 4096
+const LOCAL_MISI_MAX_PERIOD = 4096
+const LOCAL_MISI_MAX_SUM = 8192
+const LOCAL_MISI_MAX_PAIRS = 16384
+const DEFAULT_LOCAL_CENTER_PERIOD_MAX = LOCAL_CENTER_MAX_ATTEMPTS
+const DEFAULT_ENUM_CENTER_PERIOD_MAX = 8
+const DEFAULT_MISI_PERIOD_MAX = 4
+
 const emit = defineEmits<{
   (e: 'import-point', p: SpecialPointEnumResult): void
   (e: 'hover-point', id: string): void
@@ -31,7 +42,7 @@ const panelMode = ref<PanelMode>(props.viewport ? 'search' : 'enumerate')
 const autoSearch = ref(!!props.viewport)
 const kind = ref<SpecialPointKind>('center')
 const periodMin = ref(1)
-const periodMax = ref(8)
+const periodMax = ref(props.viewport ? DEFAULT_LOCAL_CENTER_PERIOD_MAX : DEFAULT_ENUM_CENTER_PERIOD_MAX)
 const preperiodMin = ref(1)
 const preperiodMax = ref(3)
 const includeVariantExistence = ref(true)
@@ -47,23 +58,17 @@ const currentRunId = ref('')
 let searchSeq = 0
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
-const LOCAL_CENTER_MAX_PERIOD = 16384
-const LOCAL_CENTER_MAX_ATTEMPTS = 8192
-const LOCAL_VIEWPORT_SEED_BUDGET = 160
-const LOCAL_MISI_MAX_PREPERIOD = 4096
-const LOCAL_MISI_MAX_PERIOD = 4096
-const LOCAL_MISI_MAX_SUM = 8192
-const LOCAL_MISI_MAX_PAIRS = 16384
-
 watch(kind, (next) => {
   if (next === 'misiurewicz') {
     preperiodMin.value = 1
-    preperiodMax.value = Math.min(preperiodMax.value, 4)
+    preperiodMax.value = Math.min(preperiodMax.value, DEFAULT_MISI_PERIOD_MAX)
     periodMin.value = 1
-    periodMax.value = Math.min(periodMax.value, 4)
+    periodMax.value = Math.min(periodMax.value, DEFAULT_MISI_PERIOD_MAX)
   } else {
     periodMin.value = 1
-    periodMax.value = Math.max(periodMax.value, 8)
+    periodMax.value = panelMode.value === 'search'
+      ? Math.max(periodMax.value, DEFAULT_LOCAL_CENTER_PERIOD_MAX)
+      : Math.min(periodMax.value, DEFAULT_ENUM_CENTER_PERIOD_MAX)
   }
 })
 
@@ -366,6 +371,9 @@ function selectPoint(p: SpecialPointEnumResult) {
 watch(panelMode, (mode) => {
   if (mode === 'search') {
     visibleOnly.value = true
+    if (kind.value === 'center') periodMax.value = Math.max(periodMax.value, DEFAULT_LOCAL_CENTER_PERIOD_MAX)
+  } else if (kind.value === 'center') {
+    periodMax.value = Math.min(periodMax.value, DEFAULT_ENUM_CENTER_PERIOD_MAX)
   }
 })
 
