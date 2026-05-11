@@ -273,6 +273,66 @@ double newton_accept_eps(const SpecialPointEnumRequest& req) {
     return std::max(req.newton_eps, req.classify_eps * 0.1);
 }
 
+void push_unique_period(std::vector<int>& periods, int period) {
+    if (period < 1) return;
+    if (std::find(periods.begin(), periods.end(), period) == periods.end()) {
+        periods.push_back(period);
+    }
+}
+
+std::vector<double> center_period_probe_epsilons(const SpecialPointSearchRequest& req) {
+    std::vector<double> epsilons;
+    const double base = std::max(req.classify_eps, std::numeric_limits<double>::epsilon());
+    epsilons.push_back(base);
+
+    // The viewport center can be a few visible pixels away from the actual
+    // nucleus. Use a looser probe only for task ordering; root acceptance still
+    // goes through the strict classifier later.
+    const double viewport_eps = req.viewport.enabled
+        ? std::min(1e-8, std::max(base, req.viewport.scale * 2.0))
+        : base;
+    const double targets[] = {
+        base * 10.0,
+        viewport_eps,
+    };
+    for (double eps : targets) {
+        if (!std::isfinite(eps) || eps <= base) continue;
+        eps = std::min(1e-8, eps);
+        bool duplicate = false;
+        for (double existing : epsilons) {
+            if (std::abs(existing - eps) <= existing * 0.01) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) epsilons.push_back(eps);
+    }
+    std::sort(epsilons.begin(), epsilons.end());
+    return epsilons;
+}
+
+void append_period_family(
+    std::vector<int>& candidates,
+    int period,
+    const SpecialPointSearchRequest& req,
+    bool include_multiples
+) {
+    if (period < req.period_min) return;
+    if (period <= req.period_max) push_unique_period(candidates, period);
+
+    if (include_multiples && period >= 16 && period < req.period_max) {
+        int added = 0;
+        for (int multiple = period * 2; multiple <= req.period_max; multiple += period) {
+            push_unique_period(candidates, multiple);
+            if (++added >= 12) break;
+        }
+    }
+
+    for (int d = std::min(period / 2, req.period_max); d >= req.period_min; --d) {
+        if (period % d == 0) push_unique_period(candidates, d);
+    }
+}
+
 SpecialPointResult make_base_result(SpecialPointKind kind, int preperiod, int period, Z c) {
     c = normalize_root(c, 1e-13);
     SpecialPointResult out;
@@ -480,15 +540,14 @@ std::vector<int> estimated_center_period_candidates(
     const int max_iter = std::max(
         64,
         std::min(200000, std::max(req.seed_budget, req.period_max * 8 + 32)));
-    const OrbitClassification orbit = classify_critical_orbit_mandelbrot(
-        initial, max_iter, req.classify_eps);
-    if (!orbit.found_repeat || orbit.period < req.period_min) {
-        return candidates;
-    }
+    const std::vector<double> probe_epsilons = center_period_probe_epsilons(req);
+    for (double eps : probe_epsilons) {
+        const OrbitClassification orbit = classify_critical_orbit_mandelbrot(initial, max_iter, eps);
+        if (!orbit.found_repeat || orbit.period < req.period_min) continue;
 
-    if (orbit.period <= req.period_max) candidates.push_back(orbit.period);
-    for (int d = std::min(orbit.period / 2, req.period_max); d >= req.period_min; --d) {
-        if (orbit.period % d == 0) candidates.push_back(d);
+        const bool relaxed_probe = eps > req.classify_eps * 1.5;
+        append_period_family(candidates, orbit.period, req, relaxed_probe);
+        if (!candidates.empty()) break;
     }
     return candidates;
 }
@@ -498,8 +557,8 @@ std::vector<Task> prioritize_center_tasks(
     Z initial,
     const SpecialPointSearchRequest& req
 ) {
-    // Preserve the documented ascending scan unless visible filtering is active;
-    // then low-period roots outside the viewport are just wasted work.
+    // Preserve the ascending scan unless visible filtering is active; then a
+    // local period hint can avoid thousands of invisible low-period attempts.
     if (req.kind != SpecialPointKind::HyperbolicCenter || !req.visible_only || tasks.size() < 2) {
         return tasks;
     }

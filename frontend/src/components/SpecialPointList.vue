@@ -152,7 +152,7 @@ const workflowHelp = computed(() => {
   }
   return [
     'Local solve uses the current map center as the only Newton initial value; it does not randomly scan the viewport.',
-    'Order: periodMin to periodMax in ascending order. Example 100..200 tries 100, 101, 102...',
+    'Order: first tries an estimated local period when the critical orbit gives a usable hint, then continues through the requested period range.',
     'Unconverged tasks are retried with higher Newton iteration limits before moving on.',
     `It stops at the first exact center. If none match, it shows the classified candidate with the largest actual period. Limits: periodMax <= ${LOCAL_CENTER_MAX_PERIOD}, selected span <= ${LOCAL_CENTER_MAX_ATTEMPTS} periods.`,
   ]

@@ -103,6 +103,34 @@ void expect_high_period_local_center() {
             "high-period local center search returned the wrong period");
 }
 
+void expect_deep_zoom_local_center_search() {
+    SpecialPointSearchRequest search;
+    search.kind = SpecialPointKind::HyperbolicCenter;
+    search.period_min = 1;
+    search.period_max = 8192;
+    search.seed_budget = 2000;
+    search.max_newton_iter = 60;
+    search.newton_eps = 1e-13;
+    search.classify_eps = 1e-10;
+    search.root_merge_eps = 1e-10;
+    search.visible_only = true;
+    search.include_variant_compatibility = true;
+    search.viewport.enabled = true;
+    search.viewport.center_re = -0.7520160599;
+    search.viewport.center_im = 0.0361977261;
+    search.viewport.scale = 9.549e-10;
+    search.viewport.width = 1200;
+    search.viewport.height = 800;
+
+    const auto resp = fsd::compute::search_special_points(search);
+    require(resp.status == "completed", "deep-zoom local center search did not complete");
+    require(resp.accepted_count == 1, "deep-zoom local center search did not find one center");
+    require(resp.seed_count < 20, "deep-zoom local center search did not prioritize the estimated period");
+    require(resp.points.front().visible, "deep-zoom local center search returned a non-visible point");
+    require(resp.points.front().actual.is_center && resp.points.front().actual.period == 2862,
+            "deep-zoom local center search returned the wrong period");
+}
+
 SpecialPointSearchRequest base_search_request() {
     SpecialPointSearchRequest req;
     req.period_min = 1;
@@ -219,6 +247,7 @@ int main() {
         expect_misiurewicz_2_1();
         expect_local_center_search();
         expect_high_period_local_center();
+        expect_deep_zoom_local_center_search();
     } catch (const std::exception& e) {
         std::cerr << "special_points_smoke failed: " << e.what() << '\n';
         return 1;
