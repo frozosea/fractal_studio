@@ -131,6 +131,34 @@ void expect_deep_zoom_local_center_search() {
             "deep-zoom local center search returned the wrong period");
 }
 
+void expect_viewport_sampled_center_search() {
+    SpecialPointSearchRequest search;
+    search.kind = SpecialPointKind::HyperbolicCenter;
+    search.period_min = 1;
+    search.period_max = 8192;
+    search.seed_budget = 160;
+    search.max_newton_iter = 60;
+    search.newton_eps = 1e-13;
+    search.classify_eps = 1e-10;
+    search.root_merge_eps = 1e-10;
+    search.visible_only = true;
+    search.include_variant_compatibility = false;
+    search.viewport.enabled = true;
+    search.viewport.center_re = -0.7511886968;
+    search.viewport.center_im = 0.0278611298;
+    search.viewport.scale = 2.002e-10;
+    search.viewport.width = 1920;
+    search.viewport.height = 1080;
+
+    const auto resp = fsd::compute::search_special_points(search);
+    require(resp.status == "completed", "viewport-sampled center search did not complete");
+    require(resp.sampled, "viewport-sampled center search did not sample the viewport");
+    require(resp.accepted_count == 1, "viewport-sampled center search did not find one center");
+    require(resp.points.front().visible, "viewport-sampled center search returned a non-visible point");
+    require(resp.points.front().actual.is_center && resp.points.front().actual.period == 2762,
+            "viewport-sampled center search returned the wrong period");
+}
+
 SpecialPointSearchRequest base_search_request() {
     SpecialPointSearchRequest req;
     req.period_min = 1;
@@ -248,6 +276,7 @@ int main() {
         expect_local_center_search();
         expect_high_period_local_center();
         expect_deep_zoom_local_center_search();
+        expect_viewport_sampled_center_search();
     } catch (const std::exception& e) {
         std::cerr << "special_points_smoke failed: " << e.what() << '\n';
         return 1;

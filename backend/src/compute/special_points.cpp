@@ -19,6 +19,7 @@ using Z = std::complex<double>;
 
 constexpr double PI = 3.14159265358979323846264338327950288;
 constexpr int LOCAL_ADAPTIVE_NEWTON_MAX_ITER = 240;
+constexpr int LOCAL_VIEWPORT_SEED_LIMIT = 160;
 
 struct Task {
     SpecialPointKind kind;
@@ -35,6 +36,11 @@ struct SeedSolveOutcome {
     std::vector<SpecialPointResult> rejected_debug;
     bool has_fallback_candidate = false;
     SpecialPointResult fallback_candidate;
+};
+
+struct SearchStepResult {
+    bool accepted = false;
+    bool cancelled = false;
 };
 
 struct OrbitCell {
@@ -115,13 +121,75 @@ double halton(unsigned long long index, int base) {
 
 Z seed_for(unsigned long long index) {
     // Deterministic low-discrepancy sampling directly inside |c| <= 2.
-    // Full enumeration uses this global disk; viewport exploration is a
-    // separate local Newton solve from the current center.
+    // Full enumeration uses this global disk; viewport-local search has its
+    // own sampler around the current view.
     const double u = halton(index + 1, 2);
     const double v = halton(index + 1, 3);
     const double r = 2.0 * std::sqrt(u);
     const double theta = 2.0 * PI * v;
     return {r * std::cos(theta), r * std::sin(theta)};
+}
+
+double viewport_half_height(const SpecialPointSearchRequest& req) {
+    return std::max(req.viewport.scale * 0.5, std::numeric_limits<double>::min());
+}
+
+double viewport_half_width(const SpecialPointSearchRequest& req) {
+    const double aspect = static_cast<double>(std::max(1, req.viewport.width)) /
+        static_cast<double>(std::max(1, req.viewport.height));
+    return viewport_half_height(req) * aspect;
+}
+
+Z viewport_seed_at(const SpecialPointSearchRequest& req, double u, double v) {
+    const double half_w = viewport_half_width(req);
+    const double half_h = viewport_half_height(req);
+    return {
+        req.viewport.center_re + (u - 0.5) * 2.0 * half_w,
+        req.viewport.center_im + (v - 0.5) * 2.0 * half_h,
+    };
+}
+
+void push_unique_seed(std::vector<Z>& seeds, Z seed, double eps) {
+    if (!finite(seed)) return;
+    for (Z existing : seeds) {
+        if (std::abs(existing - seed) <= eps) return;
+    }
+    seeds.push_back(seed);
+}
+
+int viewport_search_seed_limit(const SpecialPointSearchRequest& req) {
+    const int budget = req.seed_budget > 0 ? req.seed_budget : 1;
+    return std::max(1, std::min(budget, LOCAL_VIEWPORT_SEED_LIMIT));
+}
+
+std::vector<Z> viewport_search_seeds(const SpecialPointSearchRequest& req) {
+    std::vector<Z> seeds;
+    const int limit = viewport_search_seed_limit(req);
+    seeds.reserve(static_cast<size_t>(limit));
+    const double duplicate_eps = std::max(req.viewport.scale * 1e-9, 1e-16);
+
+    push_unique_seed(seeds, {req.viewport.center_re, req.viewport.center_im}, duplicate_eps);
+
+    static constexpr double fixed[][2] = {
+        {0.50, 0.35}, {0.50, 0.65}, {0.35, 0.50}, {0.65, 0.50},
+        {0.35, 0.35}, {0.65, 0.35}, {0.35, 0.65}, {0.65, 0.65},
+        {0.50, 0.20}, {0.50, 0.80}, {0.20, 0.50}, {0.80, 0.50},
+        {0.20, 0.20}, {0.80, 0.20}, {0.20, 0.80}, {0.80, 0.80},
+        {0.12, 0.35}, {0.88, 0.35}, {0.12, 0.65}, {0.88, 0.65},
+        {0.35, 0.12}, {0.65, 0.12}, {0.35, 0.88}, {0.65, 0.88},
+    };
+    for (const auto& uv : fixed) {
+        if (static_cast<int>(seeds.size()) >= limit) break;
+        push_unique_seed(seeds, viewport_seed_at(req, uv[0], uv[1]), duplicate_eps);
+    }
+
+    for (unsigned long long i = 0; static_cast<int>(seeds.size()) < limit; ++i) {
+        const double u = halton(i + 1, 2);
+        const double v = halton(i + 1, 3);
+        push_unique_seed(seeds, viewport_seed_at(req, u, v), duplicate_eps);
+    }
+
+    return seeds;
 }
 
 bool same_root(const SpecialPointResult& a, const SpecialPointResult& b, double eps) {
@@ -583,6 +651,22 @@ std::vector<Task> prioritize_center_tasks(
     return reordered;
 }
 
+std::vector<Task> tasks_for_period_candidates(
+    const std::vector<Task>& tasks,
+    const std::vector<int>& periods
+) {
+    std::vector<Task> selected;
+    selected.reserve(periods.size());
+    for (int period : periods) {
+        for (const Task& task : tasks) {
+            if (task.period != period) continue;
+            selected.push_back(task);
+            break;
+        }
+    }
+    return selected;
+}
+
 SpecialPointEnumRequest options_from_search(const SpecialPointSearchRequest& req) {
     SpecialPointEnumRequest out;
     out.kind = req.kind;
@@ -951,33 +1035,76 @@ SpecialPointSearchResponse search_special_points(
         }
     }
     const int task_count = std::max(1, static_cast<int>(tasks.size()));
+    const int progress_total_hint = req.kind == SpecialPointKind::HyperbolicCenter
+        ? task_count + std::max(0, viewport_search_seed_limit(req) - 1)
+        : task_count;
     const double merge_eps = std::max(req.root_merge_eps, req.viewport.scale * 1e-9);
     const SpecialPointEnumRequest opt = options_from_search(req);
     const Z initial{req.viewport.center_re, req.viewport.center_im};
-    tasks = prioritize_center_tasks(std::move(tasks), initial, req);
     SpecialPointResult best_fallback;
     bool has_fallback = false;
+    int progress_index = 0;
 
-    for (int task_i = 0; task_i < static_cast<int>(tasks.size()); ++task_i) {
-        const Task& task = tasks[static_cast<size_t>(task_i)];
+    auto run_task = [&](Z seed, const Task& task) -> SearchStepResult {
         if (progress) {
+            const int period_index = ++progress_index;
             const bool proceed = progress(
-                task.period, task_i + 1, task_count,
+                task.period, period_index, std::max(progress_total_hint, period_index),
                 static_cast<int>(resp.points.size()), resp.seed_count);
             if (!proceed) {
                 resp.status = "cancelled";
-                return resp;
+                return {false, true};
             }
         }
 
-        const SeedSolveOutcome outcome = solve_search_seed(initial, task, opt, req);
+        const SeedSolveOutcome outcome = solve_search_seed(seed, task, opt, req);
         merge_search_outcome(resp, outcome, merge_eps);
         if (outcome.has_fallback_candidate &&
             better_local_fallback_candidate(outcome.fallback_candidate, best_fallback, has_fallback)) {
             best_fallback = outcome.fallback_candidate;
             has_fallback = true;
         }
-        if (!outcome.accepted.empty()) break;
+        return {!outcome.accepted.empty(), false};
+    };
+
+    auto run_tasks_for_seed = [&](Z seed, const std::vector<Task>& selected) -> SearchStepResult {
+        for (const Task& task : selected) {
+            const SearchStepResult step = run_task(seed, task);
+            if (step.accepted || step.cancelled) return step;
+        }
+        return {};
+    };
+
+    bool done = false;
+    if (req.kind == SpecialPointKind::HyperbolicCenter) {
+        const std::vector<Task> center_hints = tasks_for_period_candidates(
+            tasks, estimated_center_period_candidates(initial, req));
+        SearchStepResult step = run_tasks_for_seed(initial, center_hints);
+        if (step.cancelled) return resp;
+        done = step.accepted;
+
+        if (!done) {
+            const std::vector<Z> seeds = viewport_search_seeds(req);
+            for (size_t seed_i = 1; seed_i < seeds.size(); ++seed_i) {
+                resp.sampled = true;
+                const std::vector<Task> seed_tasks = tasks_for_period_candidates(
+                    tasks, estimated_center_period_candidates(seeds[seed_i], req));
+                step = run_tasks_for_seed(seeds[seed_i], seed_tasks);
+                if (step.cancelled) return resp;
+                if (step.accepted) {
+                    done = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!done) {
+        const std::vector<Task> center_tasks = req.kind == SpecialPointKind::HyperbolicCenter
+            ? prioritize_center_tasks(tasks, initial, req)
+            : tasks;
+        const SearchStepResult step = run_tasks_for_seed(initial, center_tasks);
+        if (step.cancelled) return resp;
     }
 
     std::sort(resp.points.begin(), resp.points.end(), [](const auto& a, const auto& b) {
@@ -1003,15 +1130,19 @@ SpecialPointSearchResponse search_special_points(
     if (resp.fallback_count > 0) {
         resp.warning = req.kind == SpecialPointKind::Misiurewicz
             ? "no exact local Misiurewicz match found; showing the highest-period classified fallback candidate"
-            : "no exact local hyperbolic center match found; showing the highest-period classified fallback candidate";
+            : "no exact viewport hyperbolic center match found; showing the highest-period classified fallback candidate";
     } else if (resp.accepted_count == 0) {
         resp.warning = req.kind == SpecialPointKind::Misiurewicz
             ? "no matching local Misiurewicz point found from the current center"
-            : "no matching local hyperbolic center found from the current center";
+            : (resp.sampled
+                ? "no matching local hyperbolic center found in the current viewport samples"
+                : "no matching local hyperbolic center found from the current center");
     } else {
         resp.warning = req.kind == SpecialPointKind::Misiurewicz
             ? "local Misiurewicz solve from current center; stops after the first matching point"
-            : "local hyperbolic center solve from current center; stops after the first matching point";
+            : (resp.sampled
+                ? "viewport hyperbolic center solve; sampled the current view and stopped after the first matching point"
+                : "local hyperbolic center solve from current center; stops after the first matching point");
     }
     return resp;
 }

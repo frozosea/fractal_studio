@@ -530,7 +530,7 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
         {"newtonSuccessCount", 0},
         {"rejectedCount", 0},
         {"points", Json::array()},
-        {"warning", "local Newton solve running"},
+        {"warning", "viewport local solve running"},
     }.dump();
 }
 
@@ -565,7 +565,7 @@ std::string specialPointsResultsRoute(const std::filesystem::path&, JobRunner& r
                 {"rejectedCount", 0},
                 {"points", Json::array()},
                 {"progress", progress},
-                {"warning", "local Newton solve running"},
+                {"warning", "viewport local solve running"},
             }.dump();
         }
     }

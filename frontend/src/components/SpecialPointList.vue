@@ -49,6 +49,7 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 const LOCAL_CENTER_MAX_PERIOD = 16384
 const LOCAL_CENTER_MAX_ATTEMPTS = 8192
+const LOCAL_VIEWPORT_SEED_BUDGET = 160
 const LOCAL_MISI_MAX_PREPERIOD = 4096
 const LOCAL_MISI_MAX_PERIOD = 4096
 const LOCAL_MISI_MAX_SUM = 8192
@@ -131,7 +132,12 @@ const searchInfo = computed(() => {
   const attempts = kind.value === 'misiurewicz'
     ? (preperiodMax.value - preperiodMin.value + 1) * (periodMax.value - periodMin.value + 1)
     : (periodMax.value - periodMin.value + 1)
-  return { ok: true, text: kind.value === 'misiurewicz' ? `local Newton · ${attempts} pairs · first match` : `local Newton · ${attempts} periods · first match` }
+  return {
+    ok: true,
+    text: kind.value === 'misiurewicz'
+      ? `center Newton · ${attempts} pairs · first match`
+      : `viewport Newton · ${attempts} periods · up to ${LOCAL_VIEWPORT_SEED_BUDGET} view samples`,
+  }
 })
 const activeInfo = computed(() => panelMode.value === 'search' ? searchInfo.value : expectedInfo.value)
 const workflowHelpTitle = computed(() => panelMode.value === 'search' ? 'How local solve scans' : 'How full enumerate works')
@@ -151,10 +157,11 @@ const workflowHelp = computed(() => {
     ]
   }
   return [
-    'Local solve uses the current map center as the only Newton initial value; it does not randomly scan the viewport.',
-    'Order: first tries an estimated local period when the critical orbit gives a usable hint, then continues through the requested period range.',
+    'Viewport solve first tries the current center, then samples deterministic points across the visible viewport.',
+    'Each sampled point is used only when its critical orbit gives a period hint, so wide ranges like p=1..8192 stay interactive.',
+    'If viewport samples do not hit a matching visible center, it falls back to the original current-center period sweep.',
     'Unconverged tasks are retried with higher Newton iteration limits before moving on.',
-    `It stops at the first exact center. If none match, it shows the classified candidate with the largest actual period. Limits: periodMax <= ${LOCAL_CENTER_MAX_PERIOD}, selected span <= ${LOCAL_CENTER_MAX_ATTEMPTS} periods.`,
+    `It stops at the first exact center. If none match, it shows the classified candidate with the largest actual period. Limits: periodMax <= ${LOCAL_CENTER_MAX_PERIOD}, selected span <= ${LOCAL_CENTER_MAX_ATTEMPTS} periods, viewport samples <= ${LOCAL_VIEWPORT_SEED_BUDGET}.`,
   ]
 })
 const periodInputMax = computed(() => {
@@ -199,11 +206,14 @@ const searchNoPoint = computed(() =>
   !!result.value.noPoint
 )
 const emptyText = computed(() => {
-  if (running.value) return panelMode.value === 'search' ? 'Solving from current center...' : 'Enumerating roots...'
+  if (running.value) {
+    if (panelMode.value !== 'search') return 'Enumerating roots...'
+    return kind.value === 'misiurewicz' ? 'Solving from current center...' : 'Sampling current viewport...'
+  }
   if (searchNoPoint.value) {
     return kind.value === 'misiurewicz'
       ? 'No matching local Misiurewicz point found from the current center.'
-      : 'No matching local hyperbolic center found from the current center.'
+      : 'No matching local hyperbolic center found in the current viewport.'
   }
   return panelMode.value === 'search'
     ? 'No local solve results yet.'
@@ -245,7 +255,7 @@ async function searchViewport(manual = false) {
   const seq = ++searchSeq
   cancelCurrentSearch()
   running.value = true
-  message.value = 'solving from current center...'
+  message.value = kind.value === 'misiurewicz' ? 'solving from current center...' : 'sampling current viewport...'
   result.value = null
   emit('results-updated', [])
   try {
@@ -255,6 +265,7 @@ async function searchViewport(manual = false) {
       periodMax: periodMax.value,
       preperiodMin: preperiodMin.value,
       preperiodMax: preperiodMax.value,
+      seedBudget: kind.value === 'center' ? LOCAL_VIEWPORT_SEED_BUDGET : undefined,
       includeVariantCompatibility: includeVariantExistence.value,
       visibleOnly: visibleOnly.value,
       viewport: props.viewport,
@@ -282,7 +293,7 @@ async function searchViewport(manual = false) {
       }
       result.value = resp
       emit('results-updated', resp.points)
-      const label = kind.value === 'misiurewicz' ? 'local Misiurewicz point' : 'local hyperbolic center'
+      const label = kind.value === 'misiurewicz' ? 'local Misiurewicz point' : 'viewport hyperbolic center'
       const fallback = resp.points.find(p => isFallbackPoint(p))
       message.value = fallback
         ? `${manual ? 'solve' : 'auto solve'}: no exact ${label}; showing fallback ${actualPointLabel(fallback)} · ${resp.seedCount} attempts`
@@ -401,7 +412,7 @@ defineExpose({ enumerate, refresh: runActive, points })
     <div class="controls-grid">
       <label>workflow</label>
       <select v-model="panelMode">
-        <option value="search">Local solve at center</option>
+        <option value="search">Viewport local solve</option>
         <option value="enumerate">Full enumerate</option>
       </select>
       <label>mode</label>
