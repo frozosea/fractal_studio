@@ -96,7 +96,9 @@ make verify-immutable   # checks legacy directories are unchanged
 ## Runtime Data / 运行时数据
 
 - Backend build output: `runtime/build/`
-- Run artifacts: `runtime/runs/<runId>/`
+- Run artifacts: `runtime/runs/<runId>/`, where new run IDs use
+  `yymmdd-hhmmss` with a short numeric suffix when multiple runs start in the
+  same second.
 - Persistent run DB: `runtime/db/fractal_studio.sqlite3`
 - Custom variant registry and shared libraries: currently stored relative to
   the parent repo root as `../fractal_studio.db` and `../runs/custom_variants/`

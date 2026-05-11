@@ -3,11 +3,12 @@
 
 #include <chrono>
 #include <algorithm>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <stdexcept>
-#include <atomic>
 #include <sstream>
 
 namespace fs = std::filesystem;
@@ -21,10 +22,22 @@ JobRunner::JobRunner(fs::path runtimeRoot, Db* db)
 
 RunRecord JobRunner::createRun(const std::string& module, const std::string& paramsJson) {
     RunRecord run;
-    run.id = makeRunId();
     run.status = "queued";
-    run.outputDir = (runtimeRoot_ / "runs" / run.id).string();
-    fs::create_directories(run.outputDir);
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+        run.id = makeRunId();
+        const fs::path outputDir = runtimeRoot_ / "runs" / run.id;
+        std::error_code ec;
+        if (fs::create_directory(outputDir, ec)) {
+            run.outputDir = outputDir.string();
+            break;
+        }
+        if (ec) {
+            throw std::runtime_error("failed to create run output directory: " + outputDir.string());
+        }
+    }
+    if (run.outputDir.empty()) {
+        throw std::runtime_error("failed to allocate unique run output directory");
+    }
 
     const long long started = nowUnixMs();
     {
@@ -199,12 +212,36 @@ std::string JobRunner::resolveOutputDir(const std::string& runId) const {
 }
 
 std::string JobRunner::makeRunId() {
-    static std::atomic<unsigned long long> counter{0};
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-    std::ostringstream ss;
-    ss << ns << "-" << counter.fetch_add(1, std::memory_order_relaxed);
-    return ss.str();
+    static std::mutex idMu;
+    static std::string lastStamp;
+    static unsigned int sequence = 0;
+
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t rawTime = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+#if defined(_WIN32)
+    localtime_s(&localTime, &rawTime);
+#else
+    localtime_r(&rawTime, &localTime);
+#endif
+
+    std::ostringstream stampStream;
+    stampStream << std::put_time(&localTime, "%y%m%d-%H%M%S");
+    const std::string stamp = stampStream.str();
+
+    std::lock_guard<std::mutex> lk(idMu);
+    if (stamp == lastStamp) {
+        ++sequence;
+    } else {
+        lastStamp = stamp;
+        sequence = 0;
+    }
+
+    if (sequence == 0) return stamp;
+
+    std::ostringstream id;
+    id << stamp << "-" << std::setw(3) << std::setfill('0') << sequence;
+    return id.str();
 }
 
 } // namespace fsd
