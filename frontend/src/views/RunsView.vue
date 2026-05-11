@@ -139,26 +139,32 @@ onMounted(refresh)
 .artifacts li { padding: 3px 0; font-size: var(--fs-mono); }
 .artifacts a:hover { color: var(--accent); }
 
-:global(html[data-device='mobile']) .wrap {
-  padding: 12px;
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+  .wrap {
+    padding: 12px;
+  }
+
+  .head {
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .runs {
+    min-width: 680px;
+  }
+
+  .runs th,
+  .runs td {
+    padding: 7px 8px;
+  }
+
+  .artifacts {
+    padding: 12px;
+    overflow-wrap: anywhere;
+  }
 }
 
-:global(html[data-device='mobile']) .head {
-  gap: 10px;
-  align-items: stretch;
-}
 
-:global(html[data-device='mobile']) .runs {
-  min-width: 680px;
-}
 
-:global(html[data-device='mobile']) .runs th,
-:global(html[data-device='mobile']) .runs td {
-  padding: 7px 8px;
-}
 
-:global(html[data-device='mobile']) .artifacts {
-  padding: 12px;
-  overflow-wrap: anywhere;
-}
 </style>

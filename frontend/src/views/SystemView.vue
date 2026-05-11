@@ -305,57 +305,70 @@ function speedBar(mpps: number): string {
   transition: width 0.3s ease;
 }
 
-:global(html[data-device='mobile']) .wrap {
-  padding: 12px;
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+  .wrap {
+    padding: 12px;
+  }
+
+  .head {
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
+  .row {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .v {
+    overflow-wrap: anywhere;
+  }
+
+  .bench-controls {
+    width: 100%;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+
+  .ctrl {
+    flex: 1 1 120px;
+  }
+
+  .ctrl input {
+    width: 100%;
+  }
+
+  .bench-controls button {
+    flex: 1 1 160px;
+  }
+
+  .bench-table {
+    overflow-x: auto;
+  }
+
+  .bench-row {
+    min-width: 520px;
+    grid-template-columns: 82px 58px 60px 72px 1fr;
+    padding: 7px 8px;
+  }
 }
 
-:global(html[data-device='mobile']) .head {
-  gap: 10px;
-  align-items: stretch;
-}
 
-:global(html[data-device='mobile']) .grid {
-  grid-template-columns: 1fr;
-  gap: 10px;
-}
 
-:global(html[data-device='mobile']) .panel {
-  padding: 12px;
-}
 
-:global(html[data-device='mobile']) .row {
-  grid-template-columns: 72px minmax(0, 1fr);
-}
 
-:global(html[data-device='mobile']) .v {
-  overflow-wrap: anywhere;
-}
 
-:global(html[data-device='mobile']) .bench-controls {
-  width: 100%;
-  flex-wrap: wrap;
-  align-items: flex-end;
-}
 
-:global(html[data-device='mobile']) .ctrl {
-  flex: 1 1 120px;
-}
 
-:global(html[data-device='mobile']) .ctrl input {
-  width: 100%;
-}
 
-:global(html[data-device='mobile']) .bench-controls button {
-  flex: 1 1 160px;
-}
 
-:global(html[data-device='mobile']) .bench-table {
-  overflow-x: auto;
-}
 
-:global(html[data-device='mobile']) .bench-row {
-  min-width: 520px;
-  grid-template-columns: 82px 58px 60px 72px 1fr;
-  padding: 7px 8px;
-}
 </style>

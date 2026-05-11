@@ -121,3 +121,28 @@ html[data-device="mobile"] textarea {
 html[data-device="mobile"] .panel {
   padding: 12px;
 }
+
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+  html,
+  body,
+  #app {
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  button {
+    min-height: 36px;
+    padding: 8px 10px;
+  }
+
+  input,
+  select,
+  textarea {
+    min-height: 36px;
+    padding: 7px 9px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+}

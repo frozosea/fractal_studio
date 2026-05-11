@@ -516,31 +516,36 @@ function onHsZoom(factor: number) {
   height: 100%;
 }
 
-:global(html[data-device='mobile']) .three-view {
-  grid-template-columns: 1fr;
-  grid-template-rows: minmax(220px, 40dvh) minmax(0, 1fr);
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+  .three-view {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 40dvh) minmax(0, 1fr);
+  }
+
+  .controls {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+    display: grid;
+    grid-template-columns: 1fr;
+    align-content: start;
+    padding: 10px;
+  }
+
+  .mode-row,
+  .rule,
+  .compute-btn,
+  .stl-btn,
+  .stl-link,
+  .info,
+  .err {
+    grid-column: 1 / -1;
+  }
+
+  .viewer {
+    min-height: 280px;
+  }
 }
 
-:global(html[data-device='mobile']) .controls {
-  border-right: none;
-  border-bottom: 1px solid var(--rule);
-  display: grid;
-  grid-template-columns: 1fr;
-  align-content: start;
-  padding: 10px;
-}
 
-:global(html[data-device='mobile']) .mode-row,
-:global(html[data-device='mobile']) .rule,
-:global(html[data-device='mobile']) .compute-btn,
-:global(html[data-device='mobile']) .stl-btn,
-:global(html[data-device='mobile']) .stl-link,
-:global(html[data-device='mobile']) .info,
-:global(html[data-device='mobile']) .err {
-  grid-column: 1 / -1;
-}
 
-:global(html[data-device='mobile']) .viewer {
-  min-height: 280px;
-}
 </style>

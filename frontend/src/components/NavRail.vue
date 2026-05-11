@@ -161,39 +161,47 @@ const items = [
 
 .nav-item:hover .tip { opacity: 1; }
 
-:global(html[data-device='mobile']) .navrail {
-  flex-direction: row;
-  align-items: center;
-  height: 48px;
-  padding: 0 8px;
-  gap: 4px;
-  border-bottom: 1px solid var(--rule);
-  overflow-x: auto;
-  overflow-y: hidden;
-}
 
-:global(html[data-device='mobile']) .rail-toggle {
-  display: none;
-}
 
-:global(html[data-device='mobile']) .brand {
-  width: 34px;
-  flex: 0 0 34px;
-  margin: 0 4px 0 0;
-  text-align: center;
-}
 
-:global(html[data-device='mobile']) .nav-item {
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-}
 
-:global(html[data-device='mobile']) .spacer {
-  flex: 1 0 12px;
-}
 
-:global(html[data-device='mobile']) .tip {
-  display: none;
+
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+  .navrail {
+    flex-direction: row;
+    align-items: center;
+    height: 48px;
+    padding: 0 8px;
+    gap: 4px;
+    border-bottom: 1px solid var(--rule);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .rail-toggle {
+    display: none;
+  }
+
+  .brand {
+    width: 34px;
+    flex: 0 0 34px;
+    margin: 0 4px 0 0;
+    text-align: center;
+  }
+
+  .nav-item {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+  }
+
+  .spacer {
+    flex: 1 0 12px;
+  }
+
+  .tip {
+    display: none;
+  }
 }
 </style>

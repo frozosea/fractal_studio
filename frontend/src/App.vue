@@ -70,23 +70,29 @@ const statusCollapsed = ref(isMobileDevice)
   overflow: auto;
 }
 
-:global(html[data-device='mobile']) .shell {
-  grid-template-columns: 1fr;
-  grid-template-rows: 48px minmax(0, 1fr) auto;
-  height: 100dvh;
-}
 
-:global(html[data-device='mobile']) .main {
-  border-left: none;
-  border-right: none;
-  min-height: 0;
-}
 
-:global(html[data-device='mobile']) .shell.nav-collapsed {
-  --nav-current-w: var(--nav-w);
-}
 
-:global(html[data-device='mobile']) .shell.status-collapsed {
-  --rail-current-w: var(--rail-w);
+
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: 48px minmax(0, 1fr) auto;
+    height: 100dvh;
+  }
+
+  .main {
+    border-left: none;
+    border-right: none;
+    min-height: 0;
+  }
+
+  .shell.nav-collapsed {
+    --nav-current-w: var(--nav-w);
+  }
+
+  .shell.status-collapsed {
+    --rail-current-w: var(--rail-w);
+  }
 }
 </style>

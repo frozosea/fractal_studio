@@ -40,7 +40,9 @@ function onImportPoint(pt: SpecialPointEnumResult) {
 
 .col.wide { background: var(--bg-raised); height: 100%; }
 
-:global(html[data-device='mobile']) .col {
-  padding: 12px;
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+  .col {
+    padding: 12px;
+  }
 }
 </style>
