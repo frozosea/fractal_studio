@@ -97,10 +97,13 @@ void expect_high_period_local_center() {
     search.viewport.height = 800;
     const auto resp = fsd::compute::search_special_points(search);
     require(resp.status == "completed", "high-period local center search did not complete");
-    require(resp.accepted_count == 1, "high-period local center search did not find one center");
-    require(resp.seed_count < 20, "high-period local center search did not prioritize the estimated period");
-    require(resp.points.front().actual.is_center && resp.points.front().actual.period == 207,
-            "high-period local center search returned the wrong period");
+    require(resp.accepted_count >= 1, "high-period local center search did not find any center");
+    require(resp.seed_count >= 207, "high-period local center search skipped lower-period equations");
+    bool found_period_207 = false;
+    for (const auto& point : resp.points) {
+        if (point.actual.is_center && point.actual.period == 207) found_period_207 = true;
+    }
+    require(found_period_207, "high-period local center search did not mark the expected period");
 }
 
 void expect_deep_zoom_local_center_search() {
@@ -124,11 +127,48 @@ void expect_deep_zoom_local_center_search() {
 
     const auto resp = fsd::compute::search_special_points(search);
     require(resp.status == "completed", "deep-zoom local center search did not complete");
-    require(resp.accepted_count == 1, "deep-zoom local center search did not find one center");
-    require(resp.seed_count < 20, "deep-zoom local center search did not prioritize the estimated period");
-    require(resp.points.front().visible, "deep-zoom local center search returned a non-visible point");
-    require(resp.points.front().actual.is_center && resp.points.front().actual.period == 2862,
-            "deep-zoom local center search returned the wrong period");
+    require(resp.accepted_count >= 1, "deep-zoom local center search did not find any center");
+    require(resp.seed_count >= 2862, "deep-zoom local center search skipped lower-period equations");
+    bool found_period_2862 = false;
+    for (const auto& point : resp.points) {
+        require(point.visible, "deep-zoom local center search returned a non-visible point");
+        if (point.actual.is_center && point.actual.period == 2862) found_period_2862 = true;
+    }
+    require(found_period_2862, "deep-zoom local center search did not mark the expected period");
+}
+
+void expect_overview_period_ordered_center_search() {
+    SpecialPointSearchRequest search;
+    search.kind = SpecialPointKind::HyperbolicCenter;
+    search.period_min = 1;
+    search.period_max = 8192;
+    search.seed_budget = 160;
+    search.max_newton_iter = 60;
+    search.newton_eps = 1e-13;
+    search.classify_eps = 1e-10;
+    search.root_merge_eps = 1e-10;
+    search.visible_only = true;
+    search.include_variant_compatibility = false;
+    search.viewport.enabled = true;
+    search.viewport.center_re = -0.75;
+    search.viewport.center_im = 0.0;
+    search.viewport.scale = 3.0;
+    search.viewport.width = 1920;
+    search.viewport.height = 1080;
+
+    const auto resp = fsd::compute::search_special_points(search);
+    require(resp.status == "completed", "overview period-ordered center search did not complete");
+    require(resp.accepted_count >= 1, "overview period-ordered center search did not find any center");
+    require(resp.seed_count <= 128, "overview period-ordered center search should stop after the first wave");
+    bool found_period_1 = false;
+    for (const auto& p : resp.points) {
+        require(p.visible, "overview period-ordered center search returned a non-visible point");
+        if (p.actual.is_center && p.actual.period == 1 &&
+            std::abs(p.re) < 1e-12 && std::abs(p.im) < 1e-12) {
+            found_period_1 = true;
+        }
+    }
+    require(found_period_1, "overview period-ordered center search did not mark c=0");
 }
 
 void expect_viewport_sampled_center_search() {
@@ -153,10 +193,13 @@ void expect_viewport_sampled_center_search() {
     const auto resp = fsd::compute::search_special_points(search);
     require(resp.status == "completed", "viewport-sampled center search did not complete");
     require(resp.sampled, "viewport-sampled center search did not sample the viewport");
-    require(resp.accepted_count == 1, "viewport-sampled center search did not find one center");
-    require(resp.points.front().visible, "viewport-sampled center search returned a non-visible point");
-    require(resp.points.front().actual.is_center && resp.points.front().actual.period == 2762,
-            "viewport-sampled center search returned the wrong period");
+    require(resp.accepted_count >= 1, "viewport-sampled center search did not find any center");
+    bool found_period_2762 = false;
+    for (const auto& point : resp.points) {
+        require(point.visible, "viewport-sampled center search returned a non-visible point");
+        if (point.actual.is_center && point.actual.period == 2762) found_period_2762 = true;
+    }
+    require(found_period_2762, "viewport-sampled center search did not mark the expected period");
 }
 
 SpecialPointSearchRequest base_search_request() {
@@ -274,6 +317,7 @@ int main() {
         expect_center_period(4, 6);
         expect_misiurewicz_2_1();
         expect_local_center_search();
+        expect_overview_period_ordered_center_search();
         expect_high_period_local_center();
         expect_deep_zoom_local_center_search();
         expect_viewport_sampled_center_search();

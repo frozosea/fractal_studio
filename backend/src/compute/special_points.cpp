@@ -1,11 +1,20 @@
 #include "special_points.hpp"
 
+#include "parallel.hpp"
 #include "variants.hpp"
+
+#if defined(HAS_CUDA_KERNEL)
+#  include "cuda/special_points.cuh"
+#  define USE_CUDA_SPECIAL_POINTS 1
+#else
+#  define USE_CUDA_SPECIAL_POINTS 0
+#endif
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <complex>
+#include <cstdlib>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -20,6 +29,9 @@ using Z = std::complex<double>;
 constexpr double PI = 3.14159265358979323846264338327950288;
 constexpr int LOCAL_ADAPTIVE_NEWTON_MAX_ITER = 240;
 constexpr int LOCAL_VIEWPORT_SEED_LIMIT = 160;
+constexpr int LOCAL_PERIOD_BLOCK_MIN = 8;
+constexpr int LOCAL_PERIOD_BLOCK_MAX = 128;
+constexpr int LOCAL_CUDA_SEED_BATCH_MIN = 32;
 
 struct Task {
     SpecialPointKind kind;
@@ -63,6 +75,38 @@ struct OrbitCellHash {
 bool finite(Z z) {
     return std::isfinite(z.real()) && std::isfinite(z.imag());
 }
+
+int env_int(const char* name, int min_value, int max_value) {
+    const char* raw = std::getenv(name);
+    if (!raw || *raw == '\0') return 0;
+    char* end = nullptr;
+    const long parsed = std::strtol(raw, &end, 10);
+    if (end == raw || parsed < min_value || parsed > max_value) return 0;
+    return static_cast<int>(parsed);
+}
+
+int local_period_wave_size() {
+    const int env_wave = env_int("FSD_SPECIAL_POINT_WAVE", 1, 4096);
+    if (env_wave > 0) return env_wave;
+    return std::clamp(
+        default_render_threads(),
+        LOCAL_PERIOD_BLOCK_MIN,
+        LOCAL_PERIOD_BLOCK_MAX);
+}
+
+#if USE_CUDA_SPECIAL_POINTS
+bool special_point_cuda_enabled() {
+    const char* raw = std::getenv("FSD_SPECIAL_POINT_CUDA");
+    if (!raw || *raw == '\0') return true;
+    return !(raw[0] == '0' || raw[0] == 'f' || raw[0] == 'F' ||
+             raw[0] == 'n' || raw[0] == 'N');
+}
+
+int special_point_cuda_seed_batch_min() {
+    const int env_min = env_int("FSD_SPECIAL_POINT_CUDA_MIN", 1, 4096);
+    return env_min > 0 ? env_min : LOCAL_CUDA_SEED_BATCH_MIN;
+}
+#endif
 
 long long orbit_cell_coord(double value, double cell_size) {
     const double q = std::floor(value / cell_size);
@@ -348,6 +392,28 @@ void push_unique_period(std::vector<int>& periods, int period) {
     }
 }
 
+void append_period_family(
+    std::vector<int>& candidates,
+    int period,
+    const SpecialPointSearchRequest& req,
+    bool include_multiples
+) {
+    if (period < req.period_min) return;
+    if (period <= req.period_max) push_unique_period(candidates, period);
+
+    if (include_multiples && period >= 16 && period < req.period_max) {
+        int added = 0;
+        for (int multiple = period * 2; multiple <= req.period_max; multiple += period) {
+            push_unique_period(candidates, multiple);
+            if (++added >= 12) break;
+        }
+    }
+
+    for (int d = std::min(period / 2, req.period_max); d >= req.period_min; --d) {
+        if (period % d == 0) push_unique_period(candidates, d);
+    }
+}
+
 std::vector<double> center_period_probe_epsilons(const SpecialPointSearchRequest& req) {
     std::vector<double> epsilons;
     const double base = std::max(req.classify_eps, std::numeric_limits<double>::epsilon());
@@ -377,28 +443,6 @@ std::vector<double> center_period_probe_epsilons(const SpecialPointSearchRequest
     }
     std::sort(epsilons.begin(), epsilons.end());
     return epsilons;
-}
-
-void append_period_family(
-    std::vector<int>& candidates,
-    int period,
-    const SpecialPointSearchRequest& req,
-    bool include_multiples
-) {
-    if (period < req.period_min) return;
-    if (period <= req.period_max) push_unique_period(candidates, period);
-
-    if (include_multiples && period >= 16 && period < req.period_max) {
-        int added = 0;
-        for (int multiple = period * 2; multiple <= req.period_max; multiple += period) {
-            push_unique_period(candidates, multiple);
-            if (++added >= 12) break;
-        }
-    }
-
-    for (int d = std::min(period / 2, req.period_max); d >= req.period_min; --d) {
-        if (period % d == 0) push_unique_period(candidates, d);
-    }
 }
 
 SpecialPointResult make_base_result(SpecialPointKind kind, int preperiod, int period, Z c) {
@@ -620,51 +664,8 @@ std::vector<int> estimated_center_period_candidates(
     return candidates;
 }
 
-std::vector<Task> prioritize_center_tasks(
-    std::vector<Task> tasks,
-    Z initial,
-    const SpecialPointSearchRequest& req
-) {
-    // Preserve the ascending scan unless visible filtering is active; then a
-    // local period hint can avoid thousands of invisible low-period attempts.
-    if (req.kind != SpecialPointKind::HyperbolicCenter || !req.visible_only || tasks.size() < 2) {
-        return tasks;
-    }
-
-    const std::vector<int> candidates = estimated_center_period_candidates(initial, req);
-    if (candidates.empty()) return tasks;
-
-    std::vector<Task> reordered;
-    reordered.reserve(tasks.size());
-    std::vector<bool> used(tasks.size(), false);
-    for (int period : candidates) {
-        for (size_t i = 0; i < tasks.size(); ++i) {
-            if (used[i] || tasks[i].period != period) continue;
-            reordered.push_back(tasks[i]);
-            used[i] = true;
-            break;
-        }
-    }
-    for (size_t i = 0; i < tasks.size(); ++i) {
-        if (!used[i]) reordered.push_back(tasks[i]);
-    }
-    return reordered;
-}
-
-std::vector<Task> tasks_for_period_candidates(
-    const std::vector<Task>& tasks,
-    const std::vector<int>& periods
-) {
-    std::vector<Task> selected;
-    selected.reserve(periods.size());
-    for (int period : periods) {
-        for (const Task& task : tasks) {
-            if (task.period != period) continue;
-            selected.push_back(task);
-            break;
-        }
-    }
-    return selected;
+bool contains_period_candidate(const std::vector<int>& periods, int period) {
+    return std::find(periods.begin(), periods.end(), period) != periods.end();
 }
 
 SpecialPointEnumRequest options_from_search(const SpecialPointSearchRequest& req) {
@@ -1045,7 +1046,7 @@ SpecialPointSearchResponse search_special_points(
     bool has_fallback = false;
     int progress_index = 0;
 
-    auto run_task = [&](Z seed, const Task& task) -> SearchStepResult {
+    auto report_progress = [&](const Task& task) -> bool {
         if (progress) {
             const int period_index = ++progress_index;
             const bool proceed = progress(
@@ -1053,18 +1054,25 @@ SpecialPointSearchResponse search_special_points(
                 static_cast<int>(resp.points.size()), resp.seed_count);
             if (!proceed) {
                 resp.status = "cancelled";
-                return {false, true};
+                return false;
             }
         }
+        return true;
+    };
 
-        const SeedSolveOutcome outcome = solve_search_seed(seed, task, opt, req);
+    auto merge_outcome = [&](const SeedSolveOutcome& outcome) -> bool {
         merge_search_outcome(resp, outcome, merge_eps);
         if (outcome.has_fallback_candidate &&
             better_local_fallback_candidate(outcome.fallback_candidate, best_fallback, has_fallback)) {
             best_fallback = outcome.fallback_candidate;
             has_fallback = true;
         }
-        return {!outcome.accepted.empty(), false};
+        return !outcome.accepted.empty();
+    };
+
+    auto run_task = [&](Z seed, const Task& task) -> SearchStepResult {
+        if (!report_progress(task)) return {false, true};
+        return {merge_outcome(solve_search_seed(seed, task, opt, req)), false};
     };
 
     auto run_tasks_for_seed = [&](Z seed, const std::vector<Task>& selected) -> SearchStepResult {
@@ -1075,21 +1083,167 @@ SpecialPointSearchResponse search_special_points(
         return {};
     };
 
+    auto solve_seed_batch = [&](const std::vector<Z>& seeds, const std::vector<size_t>& seed_indices, const Task& task) -> SearchStepResult {
+        if (seed_indices.empty()) return {};
+        if (!report_progress(task)) return {false, true};
+
+        std::vector<SeedSolveOutcome> outcomes(seed_indices.size());
+        bool used_cuda_batch = false;
+
+#if USE_CUDA_SPECIAL_POINTS
+        if (task.kind == SpecialPointKind::HyperbolicCenter &&
+            special_point_cuda_enabled() &&
+            static_cast<int>(seed_indices.size()) >= special_point_cuda_seed_batch_min() &&
+            fsd_cuda::cuda_special_points_available()) {
+            try {
+                std::vector<fsd_cuda::CudaCenterSeed> cuda_seeds;
+                cuda_seeds.reserve(seed_indices.size());
+                for (size_t seed_index : seed_indices) {
+                    const Z seed = seeds[seed_index];
+                    cuda_seeds.push_back({seed.real(), seed.imag()});
+                }
+
+                const std::vector<fsd_cuda::CudaCenterNewtonResult> cuda_results =
+                    fsd_cuda::cuda_solve_center_batch(
+                        cuda_seeds,
+                        task.period,
+                        std::max(opt.max_newton_iter, LOCAL_ADAPTIVE_NEWTON_MAX_ITER),
+                        newton_accept_eps(opt));
+
+                for (size_t i = 0; i < cuda_results.size(); ++i) {
+                    const auto& cuda_root = cuda_results[i];
+                    SeedSolveOutcome out;
+                    out.seed_count = 1;
+                    if (cuda_root.converged) {
+                        SpecialPointEnumRequest polish_opt = opt;
+                        polish_opt.max_newton_iter = std::max(opt.max_newton_iter, LOCAL_ADAPTIVE_NEWTON_MAX_ITER);
+                        SpecialPointResult root = newton_solve_center(
+                            {cuda_root.re, cuda_root.im},
+                            task.period,
+                            polish_opt);
+                        if (!root.accepted && !root.converged) {
+                            root = make_base_result(
+                                SpecialPointKind::HyperbolicCenter,
+                                0,
+                                task.period,
+                                {cuda_root.re, cuda_root.im});
+                            root.converged = true;
+                            root.residual = cuda_root.residual;
+                            root.newton_iterations = cuda_root.iterations;
+                            root.actual = classify_critical_orbit_mandelbrot(
+                                {cuda_root.re, cuda_root.im},
+                                std::max(16, task.period * 3 + 8),
+                                req.classify_eps);
+                            root.accepted = matches_request(root.actual, root.kind, 0, task.period);
+                            root.reason = root.accepted ? "ok" : rejection_reason(root.actual, root.kind, 0, task.period);
+                            if (req.include_variant_compatibility && root.accepted) {
+                                root.variants = classify_variant_existence(
+                                    {cuda_root.re, cuda_root.im},
+                                    root.kind,
+                                    0,
+                                    task.period,
+                                    req.classify_eps);
+                            }
+                        }
+                        ++out.newton_success_count;
+                        if (root.accepted) {
+                            root.visible = point_in_viewport(req.viewport, {root.re, root.im});
+                            if (!req.visible_only || root.visible) out.accepted.push_back(std::move(root));
+                        } else {
+                            ++out.rejected_count;
+                        }
+                    } else {
+                        ++out.rejected_count;
+                    }
+                    outcomes[i] = std::move(out);
+                }
+                used_cuda_batch = true;
+            } catch (...) {
+                used_cuda_batch = false;
+            }
+        }
+#endif
+
+        if (used_cuda_batch &&
+            std::none_of(outcomes.begin(), outcomes.end(), [](const SeedSolveOutcome& outcome) {
+                return !outcome.accepted.empty();
+            })) {
+            #pragma omp parallel for schedule(dynamic, 1)
+            for (int i = 0; i < static_cast<int>(seed_indices.size()); ++i) {
+                const size_t seed_index = seed_indices[static_cast<size_t>(i)];
+                outcomes[static_cast<size_t>(i)] = solve_search_seed(seeds[seed_index], task, opt, req);
+            }
+        }
+
+        if (!used_cuda_batch) {
+            #pragma omp parallel for schedule(dynamic, 1)
+            for (int i = 0; i < static_cast<int>(seed_indices.size()); ++i) {
+                const size_t seed_index = seed_indices[static_cast<size_t>(i)];
+                outcomes[static_cast<size_t>(i)] = solve_search_seed(seeds[seed_index], task, opt, req);
+            }
+        }
+
+        bool accepted = false;
+        for (const auto& outcome : outcomes) {
+            if (merge_outcome(outcome)) accepted = true;
+        }
+        return {accepted, false};
+    };
+
     bool done = false;
     if (req.kind == SpecialPointKind::HyperbolicCenter) {
-        const std::vector<Task> center_hints = tasks_for_period_candidates(
-            tasks, estimated_center_period_candidates(initial, req));
-        SearchStepResult step = run_tasks_for_seed(initial, center_hints);
-        if (step.cancelled) return resp;
-        done = step.accepted;
+        const std::vector<Z> seeds = viewport_search_seeds(req);
+        std::vector<std::vector<int>> seed_period_hints(seeds.size());
+        bool seed_period_hints_ready = false;
 
-        if (!done) {
-            const std::vector<Z> seeds = viewport_search_seeds(req);
-            for (size_t seed_i = 1; seed_i < seeds.size(); ++seed_i) {
+        auto ensure_seed_period_hints = [&]() {
+            if (seed_period_hints_ready) return;
+            #pragma omp parallel for schedule(dynamic, 1)
+            for (int i = 1; i < static_cast<int>(seeds.size()); ++i) {
+                seed_period_hints[static_cast<size_t>(i)] =
+                    estimated_center_period_candidates(seeds[static_cast<size_t>(i)], req);
+            }
+            seed_period_hints_ready = true;
+        };
+
+        const int period_wave_size = local_period_wave_size();
+        for (size_t block_start = 0; block_start < tasks.size() && !done; block_start += static_cast<size_t>(period_wave_size)) {
+            const size_t block_end = std::min(tasks.size(), block_start + static_cast<size_t>(period_wave_size));
+
+            std::vector<SeedSolveOutcome> center_outcomes(block_end - block_start);
+            #pragma omp parallel for schedule(dynamic, 1)
+            for (int i = 0; i < static_cast<int>(center_outcomes.size()); ++i) {
+                const Task& task = tasks[block_start + static_cast<size_t>(i)];
+                center_outcomes[static_cast<size_t>(i)] = solve_search_seed(initial, task, opt, req);
+            }
+
+            bool center_wave_accepted = false;
+            for (size_t task_i = block_start; task_i < block_end; ++task_i) {
+                const Task& task = tasks[task_i];
+                if (!report_progress(task)) return resp;
+                if (merge_outcome(center_outcomes[task_i - block_start])) {
+                    center_wave_accepted = true;
+                }
+            }
+            if (center_wave_accepted) {
+                done = true;
+                break;
+            }
+
+            for (size_t task_i = block_start; task_i < block_end; ++task_i) {
+                const Task& task = tasks[task_i];
+                ensure_seed_period_hints();
+                std::vector<size_t> seed_indices;
+                seed_indices.reserve(seeds.size());
+                for (size_t seed_i = 1; seed_i < seeds.size(); ++seed_i) {
+                    if (contains_period_candidate(seed_period_hints[seed_i], task.period)) {
+                        seed_indices.push_back(seed_i);
+                    }
+                }
+                if (seed_indices.empty()) continue;
+
                 resp.sampled = true;
-                const std::vector<Task> seed_tasks = tasks_for_period_candidates(
-                    tasks, estimated_center_period_candidates(seeds[seed_i], req));
-                step = run_tasks_for_seed(seeds[seed_i], seed_tasks);
+                const SearchStepResult step = solve_seed_batch(seeds, seed_indices, task);
                 if (step.cancelled) return resp;
                 if (step.accepted) {
                     done = true;
@@ -1097,13 +1251,8 @@ SpecialPointSearchResponse search_special_points(
                 }
             }
         }
-    }
-
-    if (!done) {
-        const std::vector<Task> center_tasks = req.kind == SpecialPointKind::HyperbolicCenter
-            ? prioritize_center_tasks(tasks, initial, req)
-            : tasks;
-        const SearchStepResult step = run_tasks_for_seed(initial, center_tasks);
+    } else {
+        const SearchStepResult step = run_tasks_for_seed(initial, tasks);
         if (step.cancelled) return resp;
     }
 
@@ -1113,9 +1262,6 @@ SpecialPointSearchResponse search_special_points(
         if (a.re != b.re) return a.re < b.re;
         return a.im < b.im;
     });
-    if (resp.points.size() > 1) {
-        resp.points.resize(1);
-    }
     if (resp.points.empty() && has_fallback) {
         resp.points.push_back(best_fallback);
     }
@@ -1141,8 +1287,8 @@ SpecialPointSearchResponse search_special_points(
         resp.warning = req.kind == SpecialPointKind::Misiurewicz
             ? "local Misiurewicz solve from current center; stops after the first matching point"
             : (resp.sampled
-                ? "viewport hyperbolic center solve; sampled the current view and stopped after the first matching point"
-                : "local hyperbolic center solve from current center; stops after the first matching point");
+                ? "viewport hyperbolic center solve; stopped after the first matching wave and marked all computed matches"
+                : "local hyperbolic center solve; stopped after the first matching wave and marked all computed matches");
     }
     return resp;
 }

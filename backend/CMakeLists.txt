@@ -95,6 +95,7 @@ if(HAS_CUDA)
         src/compute/cuda/ln_map.cu
         src/compute/cuda/video_warp.cu
         src/compute/cuda/transition_volume.cu
+        src/compute/cuda/special_points.cu
     )
     target_include_directories(fractal_cuda PRIVATE
         src

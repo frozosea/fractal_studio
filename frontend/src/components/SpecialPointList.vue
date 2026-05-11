@@ -162,11 +162,11 @@ const workflowHelp = computed(() => {
     ]
   }
   return [
-    'Viewport solve first tries the current center, then samples deterministic points across the visible viewport.',
-    'Each sampled point is used only when its critical orbit gives a period hint, so wide ranges like p=1..8192 stay interactive.',
-    'If viewport samples do not hit a matching visible center, it falls back to the original current-center period sweep.',
+    'Viewport solve evaluates center equations in ascending period waves; the first wave with visible matches stops the search.',
+    'All matches already computed in that stopping wave are returned and marked on the viewport.',
+    'Within each wave, deterministic viewport samples are only tried for the same hinted period, so higher-period hints never skip lower-period waves.',
     'Unconverged tasks are retried with higher Newton iteration limits before moving on.',
-    `It stops at the first exact center. If none match, it shows the classified candidate with the largest actual period. Limits: periodMax <= ${LOCAL_CENTER_MAX_PERIOD}, selected span <= ${LOCAL_CENTER_MAX_ATTEMPTS} periods, viewport samples <= ${LOCAL_VIEWPORT_SEED_BUDGET}.`,
+    `It stops at the first matching wave. If none match, it shows the classified candidate with the largest actual period. Limits: periodMax <= ${LOCAL_CENTER_MAX_PERIOD}, selected span <= ${LOCAL_CENTER_MAX_ATTEMPTS} periods, viewport samples <= ${LOCAL_VIEWPORT_SEED_BUDGET}.`,
   ]
 })
 const periodInputMax = computed(() => {
