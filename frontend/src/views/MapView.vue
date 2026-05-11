@@ -1553,4 +1553,188 @@ async function pollVideoExport(initial: VideoExportResponse) {
 }
 .cv-use:hover { color: var(--accent); border-color: var(--accent); }
 .cv-del:hover { color: var(--bad);    border-color: var(--bad); }
+
+:global(html[data-device='mobile']) .controls {
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+:global(html[data-device='mobile']) .group {
+  flex: 0 0 132px;
+  min-width: 132px;
+}
+
+:global(html[data-device='mobile']) .group.transition-group {
+  flex-basis: min(330px, calc(100vw - 24px));
+  min-width: min(330px, calc(100vw - 24px));
+}
+
+:global(html[data-device='mobile']) .group.export-preset-group {
+  flex-basis: 190px;
+  min-width: 190px;
+}
+
+:global(html[data-device='mobile']) .controls > button {
+  flex: 0 0 auto;
+  align-self: flex-end;
+  white-space: nowrap;
+}
+
+:global(html[data-device='mobile']) .controls .spacer {
+  display: none;
+}
+
+:global(html[data-device='mobile']) .export-local-status {
+  flex: 0 0 180px;
+  align-self: center;
+}
+
+:global(html[data-device='mobile']) .theta-row {
+  gap: 6px;
+}
+
+:global(html[data-device='mobile']) .julia-strip {
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 6px 10px;
+}
+
+:global(html[data-device='mobile']) .julia-hint {
+  width: 100%;
+  margin-left: 0;
+}
+
+:global(html[data-device='mobile']) .stage,
+:global(html[data-device='mobile']) .stage.points-collapsed {
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(260px, 1fr) auto;
+}
+
+:global(html[data-device='mobile']) .points {
+  border-left: none;
+  border-top: 1px solid var(--rule);
+  height: min(46dvh, 360px);
+  padding: 12px 12px 12px 34px;
+}
+
+:global(html[data-device='mobile']) .points.collapsed {
+  height: 32px;
+  padding: 4px 0;
+}
+
+:global(html[data-device='mobile']) .points-toggle {
+  top: 6px;
+  left: 6px;
+}
+
+:global(html[data-device='mobile']) .points.collapsed .points-toggle {
+  margin: 0 6px;
+}
+
+:global(html[data-device='mobile']) .dual-pane {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+:global(html[data-device='mobile']) .pane {
+  border-right: none;
+  border-bottom: 1px solid var(--rule);
+}
+
+:global(html[data-device='mobile']) .pane:last-child {
+  border-bottom: none;
+}
+
+:global(html[data-device='mobile']) .pane-header {
+  padding: 5px 8px;
+}
+
+:global(html[data-device='mobile']) .pane-meta {
+  white-space: normal;
+  line-height: 1.35;
+}
+
+:global(html[data-device='mobile']) .modal-backdrop {
+  align-items: stretch;
+  padding: 10px;
+}
+
+:global(html[data-device='mobile']) .modal {
+  width: 100%;
+  max-height: calc(100dvh - 20px);
+  overflow: auto;
+  padding: 16px;
+}
+
+:global(html[data-device='mobile']) .mrow {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 5px;
+}
+
+:global(html[data-device='mobile']) .mrow label {
+  min-width: 0;
+}
+
+:global(html[data-device='mobile']) .mrow input[type="number"] {
+  width: 100%;
+}
+
+:global(html[data-device='mobile']) .mrow.estimate span {
+  white-space: normal;
+}
+
+:global(html[data-device='mobile']) .modal-footer {
+  justify-content: stretch;
+  flex-wrap: wrap;
+}
+
+:global(html[data-device='mobile']) .modal-footer button {
+  flex: 1 1 120px;
+}
+
+:global(html[data-device='mobile']) .preview-grid {
+  grid-template-columns: 1fr;
+}
+
+:global(html[data-device='mobile']) .custom-panel {
+  padding: 10px;
+  max-height: 42dvh;
+  overflow: auto;
+}
+
+:global(html[data-device='mobile']) .custom-row {
+  align-items: stretch;
+}
+
+:global(html[data-device='mobile']) .custom-row label {
+  width: 100%;
+}
+
+:global(html[data-device='mobile']) .formula-input,
+:global(html[data-device='mobile']) .custom-row input,
+:global(html[data-device='mobile']) .btn-compile {
+  flex: 1 1 100%;
+  width: 100% !important;
+  min-width: 0;
+}
+
+:global(html[data-device='mobile']) .custom-item {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+:global(html[data-device='mobile']) .cv-name {
+  min-width: 0;
+}
+
+:global(html[data-device='mobile']) .cv-formula {
+  flex-basis: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 </style>

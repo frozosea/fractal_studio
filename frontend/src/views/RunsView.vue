@@ -138,4 +138,27 @@ onMounted(refresh)
 .artifacts ul { list-style: none; }
 .artifacts li { padding: 3px 0; font-size: var(--fs-mono); }
 .artifacts a:hover { color: var(--accent); }
+
+:global(html[data-device='mobile']) .wrap {
+  padding: 12px;
+}
+
+:global(html[data-device='mobile']) .head {
+  gap: 10px;
+  align-items: stretch;
+}
+
+:global(html[data-device='mobile']) .runs {
+  min-width: 680px;
+}
+
+:global(html[data-device='mobile']) .runs th,
+:global(html[data-device='mobile']) .runs td {
+  padding: 7px 8px;
+}
+
+:global(html[data-device='mobile']) .artifacts {
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
 </style>

@@ -98,3 +98,26 @@ label {
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--rule-hi); }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
+
+html[data-device="mobile"],
+html[data-device="mobile"] body,
+html[data-device="mobile"] #app {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+html[data-device="mobile"] button {
+  min-height: 34px;
+  padding: 7px 9px;
+}
+
+html[data-device="mobile"] input,
+html[data-device="mobile"] select,
+html[data-device="mobile"] textarea {
+  min-height: 34px;
+  padding: 6px 8px;
+}
+
+html[data-device="mobile"] .panel {
+  padding: 12px;
+}

@@ -564,4 +564,48 @@ defineExpose({ enumerate, refresh: runActive, points })
 .empty { color: var(--text-faint); font-size: 10px; padding: 8px 0; }
 .empty.warn { color: #d5ad45; }
 .num { font-variant-numeric: tabular-nums; }
+
+:global(html[data-device='mobile']) .head {
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+:global(html[data-device='mobile']) .head .panel-title {
+  flex: 1 1 100%;
+}
+
+:global(html[data-device='mobile']) .head button {
+  flex: 1 1 104px;
+}
+
+:global(html[data-device='mobile']) .controls-grid {
+  grid-template-columns: 1fr;
+  gap: 5px;
+}
+
+:global(html[data-device='mobile']) .controls-grid label {
+  margin-bottom: 0;
+}
+
+:global(html[data-device='mobile']) .opts {
+  gap: 6px;
+}
+
+:global(html[data-device='mobile']) .opts label {
+  flex: 1 1 110px;
+}
+
+:global(html[data-device='mobile']) .coord {
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+:global(html[data-device='mobile']) .actions {
+  flex-wrap: wrap;
+}
+
+:global(html[data-device='mobile']) .actions button {
+  flex: 1 1 92px;
+  min-height: 30px;
+}
 </style>

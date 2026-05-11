@@ -377,4 +377,52 @@ function taskEta(task: ActiveTask): string {
   height: 100%;
   background: var(--accent);
 }
+
+:global(html[data-device='mobile']) .rail {
+  max-height: min(42dvh, 320px);
+  border-top: 1px solid var(--rule);
+}
+
+:global(html[data-device='mobile']) .rail.collapsed {
+  min-height: 30px;
+  max-height: 30px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 8px;
+  overflow: hidden;
+}
+
+:global(html[data-device='mobile']) .rail-toggle,
+:global(html[data-device='mobile']) .rail.collapsed .rail-toggle {
+  margin: 0 6px 0 0;
+  flex: 0 0 24px;
+  width: 24px;
+  min-width: 24px;
+}
+
+:global(html[data-device='mobile']) .collapsed-summary {
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  margin-top: 0;
+  min-width: 0;
+  flex: 1;
+}
+
+:global(html[data-device='mobile']) .live {
+  padding: 8px 10px;
+}
+
+:global(html[data-device='mobile']) .panel {
+  padding: 10px 12px;
+}
+
+:global(html[data-device='mobile']) .row {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+:global(html[data-device='mobile']) .v {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 </style>

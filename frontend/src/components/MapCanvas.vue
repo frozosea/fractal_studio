@@ -340,20 +340,88 @@ function onWheel(e: WheelEvent) {
   })
 }
 
+type PointerPoint = { x: number; y: number }
+type PinchStart = {
+  distance: number
+  scale: number
+  worldRe: number
+  worldIm: number
+}
+
+const activePointers = new Map<number, PointerPoint>()
 let dragging  = false
 let dragMoved = false
 let dragStart = { x: 0, y: 0, cx: 0, cy: 0, sc: 0 }
+let pinchStart: PinchStart | null = null
 
-function screenToWorld(e: MouseEvent): { re: number; im: number } | null {
+function screenToWorld(clientX: number, clientY: number): { re: number; im: number } | null {
   if (!wrapper.value) return null
   const rect   = wrapper.value.getBoundingClientRect()
   const aspect = rect.width / rect.height
-  const px     = (e.clientX - rect.left) / rect.width
-  const py     = (e.clientY - rect.top)  / rect.height
+  const px     = (clientX - rect.left) / rect.width
+  const py     = (clientY - rect.top)  / rect.height
   return {
     re: props.centerRe + (px - 0.5) * props.scale * aspect,
     im: props.centerIm - (py - 0.5) * props.scale,
   }
+}
+
+function pointerValues(): PointerPoint[] {
+  return [...activePointers.values()]
+}
+
+function pointerDistance(points: PointerPoint[]): number {
+  if (points.length < 2) return 0
+  return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)
+}
+
+function pointerMidpoint(points: PointerPoint[]): PointerPoint {
+  if (points.length < 2) return points[0] ?? { x: 0, y: 0 }
+  return {
+    x: (points[0].x + points[1].x) * 0.5,
+    y: (points[0].y + points[1].y) * 0.5,
+  }
+}
+
+function startPinch() {
+  const points = pointerValues()
+  if (points.length < 2) {
+    pinchStart = null
+    return
+  }
+  const midpoint = pointerMidpoint(points)
+  const world = screenToWorld(midpoint.x, midpoint.y)
+  const distance = pointerDistance(points)
+  if (!world || distance <= 0) {
+    pinchStart = null
+    return
+  }
+  pinchStart = {
+    distance,
+    scale: props.scale,
+    worldRe: world.re,
+    worldIm: world.im,
+  }
+}
+
+function updatePinch() {
+  if (!wrapper.value || !pinchStart) return
+  const points = pointerValues()
+  if (points.length < 2) return
+  const distance = pointerDistance(points)
+  if (distance <= 0) return
+
+  const rect = wrapper.value.getBoundingClientRect()
+  const midpoint = pointerMidpoint(points)
+  const px = (midpoint.x - rect.left) / rect.width
+  const py = (midpoint.y - rect.top) / rect.height
+  const aspect = rect.width / rect.height
+  const newScale = Math.max(1e-300, pinchStart.scale * (pinchStart.distance / distance))
+  emit('viewport-change', {
+    centerRe: pinchStart.worldRe - (px - 0.5) * newScale * aspect,
+    centerIm: pinchStart.worldIm + (py - 0.5) * newScale,
+    scale: newScale,
+  })
 }
 
 function worldToScreen(re: number, im: number): { x: number; y: number; visible: boolean } {
@@ -378,13 +446,28 @@ function markerTitle(p: SpecialPointEnumResult) {
   return `${prefix}${p.kind} p${p.period} ${p.re.toPrecision(8)} ${p.im.toPrecision(8)}i`
 }
 
-function onMouseDown(e: MouseEvent) {
+function onPointerDown(e: PointerEvent) {
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  if (activePointers.size >= 2) {
+    dragging = false
+    dragMoved = true
+    startPinch()
+    return
+  }
   dragging  = true
   dragMoved = false
   dragStart = { x: e.clientX, y: e.clientY, cx: props.centerRe, cy: props.centerIm, sc: props.scale }
 }
 
-function onMouseMove(e: MouseEvent) {
+function onPointerMove(e: PointerEvent) {
+  if (!activePointers.has(e.pointerId)) return
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  if (activePointers.size >= 2) {
+    dragMoved = true
+    updatePinch()
+    return
+  }
   if (!dragging || !wrapper.value) return
   const dx = e.clientX - dragStart.x
   const dy = e.clientY - dragStart.y
@@ -399,12 +482,31 @@ function onMouseMove(e: MouseEvent) {
   })
 }
 
-function onMouseUp(e: MouseEvent) {
-  if (dragging && !dragMoved) {
-    const w = screenToWorld(e)
+function onPointerUp(e: PointerEvent) {
+  const wasTap = dragging && !dragMoved && activePointers.size === 1 && activePointers.has(e.pointerId)
+  if (wasTap) {
+    const w = screenToWorld(e.clientX, e.clientY)
     if (w) emit('click-world', w)
   }
-  dragging = false
+  activePointers.delete(e.pointerId)
+  const target = e.currentTarget as HTMLElement
+  if (target.hasPointerCapture?.(e.pointerId)) target.releasePointerCapture(e.pointerId)
+
+  if (activePointers.size === 1) {
+    const next = pointerValues()[0]
+    dragging = true
+    dragMoved = false
+    dragStart = { x: next.x, y: next.y, cx: props.centerRe, cy: props.centerIm, sc: props.scale }
+  } else {
+    dragging = false
+    pinchStart = null
+  }
+}
+
+function onPointerCancel(e: PointerEvent) {
+  activePointers.delete(e.pointerId)
+  if (activePointers.size < 2) pinchStart = null
+  if (activePointers.size === 0) dragging = false
 }
 </script>
 
@@ -412,10 +514,11 @@ function onMouseUp(e: MouseEvent) {
   <div class="map-wrap"
        ref="wrapper"
        @wheel.prevent="onWheel"
-       @mousedown="onMouseDown"
-       @mousemove="onMouseMove"
-       @mouseup="onMouseUp"
-       @mouseleave="onMouseUp">
+       @pointerdown="onPointerDown"
+       @pointermove="onPointerMove"
+       @pointerup="onPointerUp"
+       @pointercancel="onPointerCancel"
+       @lostpointercapture="onPointerCancel">
     <canvas
       ref="canvasA"
       class="frame"
@@ -437,7 +540,7 @@ function onMouseUp(e: MouseEvent) {
         :class="{ hover: hoveredSpecialPointId === p.id, selected: selectedSpecialPointId === p.id, misi: p.kind === 'misiurewicz', fallback: p.fallback || !p.accepted }"
         :style="markerStyle(p)"
         :title="markerTitle(p)"
-        @mousedown.stop
+        @pointerdown.stop
         @mouseenter="$emit('hover-special-point', p.id)"
         @mouseleave="$emit('hover-special-point', '')"
         @click.stop="$emit('select-special-point', p)">
@@ -455,6 +558,7 @@ function onMouseUp(e: MouseEvent) {
   background: var(--bg, #0a0b0d);
   cursor: grab;
   user-select: none;
+  touch-action: none;
   overflow: hidden;
 }
 

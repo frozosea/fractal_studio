@@ -3,6 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        try {
+          var nav = navigator;
+          var mobile = false;
+          if (nav.userAgentData && typeof nav.userAgentData.mobile === 'boolean') {
+            mobile = nav.userAgentData.mobile;
+          } else {
+            var ua = nav.userAgent || '';
+            mobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobi/i.test(ua) ||
+              (/Macintosh/i.test(ua) && nav.maxTouchPoints > 1);
+          }
+          document.documentElement.setAttribute('data-device', mobile ? 'mobile' : 'desktop');
+        } catch (err) {}
+      })();
+    </script>
     <title>Fractal Studio</title>
   </head>
   <body>
