@@ -1591,7 +1591,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
 
 
 
-@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)), ((min-width: 761px) and (max-width: 1200px) and (orientation: landscape)) {
   .map-view {
     height: 100%;
     min-height: 0;
@@ -1785,6 +1785,120 @@ async function pollVideoExport(initial: VideoExportResponse) {
     flex-basis: 100%;
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1200px) and (orientation: landscape) {
+  .controls {
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px 10px;
+    padding: 8px 10px;
+    max-height: 174px;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .controls::-webkit-scrollbar {
+    display: none;
+  }
+
+  .group {
+    flex: 0 1 132px;
+    min-width: 112px;
+  }
+
+  .group.transition-group {
+    flex: 1 1 360px;
+    min-width: 300px;
+  }
+
+  .group.export-preset-group {
+    flex: 0 1 210px;
+    min-width: 190px;
+  }
+
+  .controls > button {
+    flex: 0 0 auto;
+  }
+
+  .stage {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 32vw);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .stage.points-collapsed {
+    grid-template-columns: minmax(0, 1fr) 32px;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .points {
+    border-left: 1px solid var(--rule);
+    border-top: none;
+    height: auto;
+    min-height: 0;
+    padding: 12px 12px 12px 18px;
+  }
+
+  .points.collapsed {
+    height: auto;
+    padding: 8px 0;
+  }
+
+  .points-toggle {
+    top: 8px;
+    left: 4px;
+  }
+
+  .points.collapsed .points-toggle {
+    margin: 0 auto;
+  }
+
+  .dual-pane {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .pane {
+    border-right: 1px solid var(--rule);
+    border-bottom: none;
+  }
+
+  .pane:last-child {
+    border-right: none;
+  }
+
+  .pane-meta {
+    white-space: nowrap;
+  }
+
+  .modal {
+    width: min(720px, calc(100vw - 32px));
+  }
+
+  .modal-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .mrow,
+  .mrow.source,
+  .mrow.estimate,
+  .local-mode-row {
+    grid-column: auto;
+  }
+
+  .mrow.estimate,
+  .local-mode-row,
+  .progress-stack,
+  .modal-status,
+  .preview-grid,
+  .local-path-list {
+    grid-column: 1 / -1;
+  }
+
+  .preview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

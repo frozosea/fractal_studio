@@ -139,7 +139,7 @@ onMounted(refresh)
 .artifacts li { padding: 3px 0; font-size: var(--fs-mono); }
 .artifacts a:hover { color: var(--accent); }
 
-@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)), ((min-width: 761px) and (max-width: 1200px) and (orientation: landscape)) {
   .wrap {
     padding: 12px;
   }

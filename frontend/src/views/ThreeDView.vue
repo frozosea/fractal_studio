@@ -516,7 +516,7 @@ function onHsZoom(factor: number) {
   height: 100%;
 }
 
-@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)), ((min-width: 761px) and (max-width: 1200px) and (orientation: landscape)) {
   .three-view {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(220px, 40dvh) minmax(0, 1fr);
@@ -543,6 +543,25 @@ function onHsZoom(factor: number) {
 
   .viewer {
     min-height: 280px;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1200px) and (orientation: landscape) {
+  .three-view {
+    grid-template-columns: minmax(240px, 28vw) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .controls {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--rule);
+    border-bottom: none;
+    padding: 12px;
+  }
+
+  .viewer {
+    min-height: 0;
   }
 }
 

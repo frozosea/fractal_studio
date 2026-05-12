@@ -9,6 +9,13 @@ function detectNarrowViewport(): boolean {
     window.matchMedia?.(`(max-width: ${MOBILE_VIEWPORT_WIDTH}px)`).matches === true
 }
 
+function detectTabletLandscapeViewport(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.innerWidth > MOBILE_VIEWPORT_WIDTH &&
+    window.innerWidth <= TOUCH_VIEWPORT_WIDTH &&
+    window.innerWidth > window.innerHeight
+}
+
 function detectTouchViewport(): boolean {
   if (typeof window === 'undefined') return false
   const coarsePointer =
@@ -45,7 +52,12 @@ function detectMobileHardware(): boolean {
 }
 
 function detectDeviceMode(): DeviceMode {
-  return detectNarrowViewport() || detectTouchViewport() || detectMobileHardware() ? 'mobile' : 'desktop'
+  return detectNarrowViewport() ||
+    detectTabletLandscapeViewport() ||
+    detectTouchViewport() ||
+    detectMobileHardware()
+    ? 'mobile'
+    : 'desktop'
 }
 
 export let deviceMode: DeviceMode = detectDeviceMode()
@@ -77,6 +89,7 @@ if (typeof window !== 'undefined') {
     }
   }
   watchQuery(`(max-width: ${MOBILE_VIEWPORT_WIDTH}px)`)
+  watchQuery(`(min-width: ${MOBILE_VIEWPORT_WIDTH + 1}px) and (max-width: ${TOUCH_VIEWPORT_WIDTH}px) and (orientation: landscape)`)
   watchQuery('(pointer: coarse)')
   watchQuery('(any-pointer: coarse)')
 }

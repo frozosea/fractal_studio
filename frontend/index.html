@@ -8,6 +8,9 @@
         try {
           var nav = navigator;
           var narrow = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
+          var tabletLandscape =
+            window.matchMedia &&
+            window.matchMedia('(min-width: 761px) and (max-width: 1200px) and (orientation: landscape)').matches;
           var touchViewport =
             window.matchMedia &&
             (
@@ -16,7 +19,7 @@
               nav.maxTouchPoints > 0
             ) &&
             window.innerWidth <= 1200;
-          var mobile = narrow || window.innerWidth <= 760 || touchViewport;
+          var mobile = narrow || tabletLandscape || window.innerWidth <= 760 || touchViewport;
           if (nav.userAgentData && typeof nav.userAgentData.mobile === 'boolean') {
             mobile = mobile || nav.userAgentData.mobile;
           } else {

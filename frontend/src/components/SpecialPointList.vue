@@ -584,7 +584,7 @@ defineExpose({ enumerate, refresh: runActive, points })
 .empty.warn { color: #d5ad45; }
 .num { font-variant-numeric: tabular-nums; }
 
-@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)), ((min-width: 761px) and (max-width: 1200px) and (orientation: landscape)) {
   .head {
     flex-wrap: wrap;
     align-items: stretch;

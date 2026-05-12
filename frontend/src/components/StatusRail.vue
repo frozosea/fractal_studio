@@ -386,7 +386,7 @@ function taskEta(task: ActiveTask): string {
 
 
 
-@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)) {
+@media (max-width: 760px), ((pointer: coarse) and (max-width: 1200px)), ((any-pointer: coarse) and (max-width: 1200px)), ((min-width: 761px) and (max-width: 1200px) and (orientation: landscape)) {
   .rail {
     max-height: min(42dvh, 320px);
     border-top: 1px solid var(--rule);
