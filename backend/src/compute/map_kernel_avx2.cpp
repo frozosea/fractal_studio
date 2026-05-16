@@ -57,14 +57,46 @@ inline __m256 avx2_lane_mask_ps(int mask) {
     return _mm256_castsi256_ps(bits);
 }
 
-inline double norm2_to_01(double v, double bail2) {
+inline double raw_abs_from_norm2(double v) {
     if (!std::isfinite(v) || v <= 0.0) return 0.0;
-    return std::min(1.0, std::sqrt(v) / std::sqrt(bail2));
+    return std::sqrt(v);
 }
 
-inline double norm2_to_01(float v, float bail2) {
-    if (!std::isfinite(v) || v <= 0.0f) return 0.0;
-    return std::min(1.0, static_cast<double>(std::sqrt(v) / std::sqrt(bail2)));
+inline void colorize_metric_field_from_norm2(
+    double mn2,
+    double mx2,
+    double bail2,
+    Metric metric,
+    Colormap cmap,
+    uint8_t& b,
+    uint8_t& g,
+    uint8_t& r
+) {
+    const double bailout = std::sqrt(bail2);
+    const double mn_abs = raw_abs_from_norm2(mn2);
+    const double mx_abs = raw_abs_from_norm2(mx2);
+    if (cmap == Colormap::HsRainbow) {
+        double raw = 0.0;
+        if (metric == Metric::MinAbs) {
+            raw = std::isfinite(mn2) ? mn_abs : 0.0;
+        } else if (metric == Metric::MaxAbs) {
+            raw = mx_abs;
+        } else {
+            raw = std::isfinite(mn2) ? 0.5 * (mn_abs + mx_abs) : 0.0;
+        }
+        colorize_field_hs_bgr(raw, b, g, r);
+        return;
+    }
+
+    double v01 = 0.0;
+    if (metric == Metric::MinAbs) {
+        v01 = std::isfinite(mn2) ? std::min(1.0, mn_abs / bailout) : 1.0;
+    } else if (metric == Metric::MaxAbs) {
+        v01 = mx_abs > 0.0 ? std::min(1.0, mx_abs / bailout) : 0.0;
+    } else {
+        v01 = std::isfinite(mn2) ? std::min(1.0, 0.5 * (mn_abs + mx_abs) / bailout) : 1.0;
+    }
+    colorize_field_bgr(v01, cmap, b, g, r);
 }
 
 template <int VariantId>
@@ -281,13 +313,11 @@ void avx2_fp64_row(
                 const int it = escaped_k ? iter_arr[k] : max_iter;
                 colorize_escape_bgr(it, max_iter, cmap, 0.0, false, px[0], px[1], px[2]);
             } else if (metric == Metric::MinAbs) {
-                colorize_field_bgr(norm2_to_01(mn_arr[k], bail2), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(mn_arr[k], 0.0, bail2, metric, cmap, px[0], px[1], px[2]);
             } else if (metric == Metric::MaxAbs) {
-                colorize_field_bgr(norm2_to_01(mx_arr[k], bail2), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(0.0, mx_arr[k], bail2, metric, cmap, px[0], px[1], px[2]);
             } else {
-                const double mn_v = norm2_to_01(mn_arr[k], bail2);
-                const double mx_v = norm2_to_01(mx_arr[k], bail2);
-                colorize_field_bgr(0.5 * (mn_v + mx_v), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(mn_arr[k], mx_arr[k], bail2, metric, cmap, px[0], px[1], px[2]);
             }
         }
     }
@@ -387,13 +417,11 @@ void avx2_fp32_row(
                 const int it = escaped_k ? iter_arr[k] : max_iter;
                 colorize_escape_bgr(it, max_iter, cmap, 0.0, false, px[0], px[1], px[2]);
             } else if (metric == Metric::MinAbs) {
-                colorize_field_bgr(norm2_to_01(mn_arr[k], bail2), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(mn_arr[k], 0.0, bail2, metric, cmap, px[0], px[1], px[2]);
             } else if (metric == Metric::MaxAbs) {
-                colorize_field_bgr(norm2_to_01(mx_arr[k], bail2), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(0.0, mx_arr[k], bail2, metric, cmap, px[0], px[1], px[2]);
             } else {
-                const double mn_v = norm2_to_01(mn_arr[k], bail2);
-                const double mx_v = norm2_to_01(mx_arr[k], bail2);
-                colorize_field_bgr(0.5 * (mn_v + mx_v), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(mn_arr[k], mx_arr[k], bail2, metric, cmap, px[0], px[1], px[2]);
             }
         }
     }

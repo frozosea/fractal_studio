@@ -48,10 +48,31 @@ ctest --test-dir runtime/build --output-on-failure
 默认 quick 套件覆盖：
 
 - Mandelbrot escape
-- Burning Ship `min_abs`
+- Tricorn / Burning Ship / Buffalo / Perp Buffalo / Celtic Ship 等多 variant 场景
+- 10 个 quadratic Mandelbrot-family variant 的完整 map 对拍矩阵
+- 同一批 variant 的 Julia 模式对拍矩阵
 - Julia escape
+- HS-style colorized output: `min_abs`、`max_abs`、`envelope`
+- HS rainbow raw-metric coloring (`hs_rainbow`)
+- Escape + `hs_rainbow` fallback consistency across CPU/AVX/CUDA
+- Transition renderer direct slice: `theta=0` 对拍普通 map 的 `from_variant`，`theta=90°` 对拍普通 map 的 `to_variant`
+- Transition renderer 非 cardinal slice: milli-degree 输入和 radians 输入对拍，覆盖 escape、HS envelope、pairwise、smooth field
+- OpenMP-only HS/scalar fallback smoke: `min_pairwise_dist`、smooth field coloring、transcendental variant
 - `fp64`、`fp32`、`fx64`
 - AVX2 / AVX512 / CUDA 可用时自动对拍；不可用时记录 `SKIP`
+
+同精度不同算法的默认对拍策略：
+
+- `openmp/fp64` 对 `avx2/fp64`、`avx512/fp64`、`cuda/fp64`
+- `openmp/fp32` 对 `avx2/fp32`、`avx512/fp32`、`cuda/fp32`
+- `openmp/fx64` 对 `cuda/fx64`，仅在该场景支持固定点整数路径时启用
+- `min_pairwise_dist`、smooth coloring、transcendental variant 目前是 OpenMP-only 分支，quick 套件会渲染并标记 `INFO`，但不会把 fallback 当成失败
+
+Transition 对拍策略：
+
+- Cardinal transition slices 是严格数学等价测试：`theta=0` 必须等于普通 map `from_variant`，`theta=90°` 必须等于普通 map `to_variant`。
+- 上述 direct slice 会分别跑 `fp64`、`fp32`、`fx64`，要求逐像素完全一致。
+- 非 cardinal transition 目前只有 OpenMP fp64 实现，因此使用 milli-degree 参数和 radians 参数互相对拍，防止角度归一化和 HS 着色路径漂移。
 
 跨 scalar 只跑专门构造的 fp32-equivalent 场景：
 
@@ -59,6 +80,12 @@ ctest --test-dir runtime/build --output-on-failure
 - iteration 很小，避免不同精度的合法舍入差异扩散。
 - colormap 使用只依赖整数 iteration 的 `mod17`。
 - 基准是 `openmp/fp32`；`openmp/fp64` 和 `openmp/fx64` 必须与它逐像素完全一致。
+
+`fp64` 和 `fx64` 另有直接等值对拍：
+
+- 低迭代 dyadic escape 场景要求 BGR 完全一致。
+- 低迭代 dyadic HS 场景覆盖 `min_abs`、`max_abs`、`envelope`，同时比较 colorized BGR 和 `render_map_field` raw field。
+- 这些场景以 `openmp/fp64` 为基准，`openmp/fx64` 必须完全一致。
 
 直接运行：
 

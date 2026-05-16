@@ -84,16 +84,46 @@ bool avx512ifma_available() noexcept {
 
 // ---- fp64 AVX-512 kernel — all 10 variants, Julia mode, metrics 0-3 ----
 
-// Helper: normalize min|z|² or max|z|² to [0,1] for field coloring.
-// bail2 = bailout².
-static inline double norm2_to_01(double v, double bail2) {
+static inline double raw_abs_from_norm2(double v) {
     if (!std::isfinite(v) || v <= 0.0) return 0.0;
-    return std::min(1.0, std::sqrt(v) / std::sqrt(bail2));
+    return std::sqrt(v);
 }
 
-static inline double norm2_to_01(float v, float bail2) {
-    if (!std::isfinite(v) || v <= 0.0f) return 0.0;
-    return std::min(1.0, static_cast<double>(std::sqrt(v) / std::sqrt(bail2)));
+static inline void colorize_metric_field_from_norm2(
+    double mn2,
+    double mx2,
+    double bail2,
+    Metric metric,
+    Colormap cmap,
+    uint8_t& b,
+    uint8_t& g,
+    uint8_t& r
+) {
+    const double bailout = std::sqrt(bail2);
+    const double mn_abs = raw_abs_from_norm2(mn2);
+    const double mx_abs = raw_abs_from_norm2(mx2);
+    if (cmap == Colormap::HsRainbow) {
+        double raw = 0.0;
+        if (metric == Metric::MinAbs) {
+            raw = std::isfinite(mn2) ? mn_abs : 0.0;
+        } else if (metric == Metric::MaxAbs) {
+            raw = mx_abs;
+        } else {
+            raw = std::isfinite(mn2) ? 0.5 * (mn_abs + mx_abs) : 0.0;
+        }
+        colorize_field_hs_bgr(raw, b, g, r);
+        return;
+    }
+
+    double v01 = 0.0;
+    if (metric == Metric::MinAbs) {
+        v01 = std::isfinite(mn2) ? std::min(1.0, mn_abs / bailout) : 1.0;
+    } else if (metric == Metric::MaxAbs) {
+        v01 = mx_abs > 0.0 ? std::min(1.0, mx_abs / bailout) : 0.0;
+    } else {
+        v01 = std::isfinite(mn2) ? std::min(1.0, 0.5 * (mn_abs + mx_abs) / bailout) : 1.0;
+    }
+    colorize_field_bgr(v01, cmap, b, g, r);
 }
 
 static inline __m512 avx512_abs_ps(__m512 v) {
@@ -397,16 +427,11 @@ static void avx512_fp64_row(
                 // norm not tracked in AVX-512 path; smooth mode excluded at dispatch.
                 colorize_escape_bgr(it, max_iter, cmap, 0.0, false, px[0], px[1], px[2]);
             } else if (metric == Metric::MinAbs) {
-                const double v01 = norm2_to_01(mn_arr[k], bail2);
-                colorize_field_bgr(v01, cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(mn_arr[k], 0.0, bail2, metric, cmap, px[0], px[1], px[2]);
             } else if (metric == Metric::MaxAbs) {
-                const double v01 = norm2_to_01(mx_arr[k], bail2);
-                colorize_field_bgr(v01, cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(0.0, mx_arr[k], bail2, metric, cmap, px[0], px[1], px[2]);
             } else {
-                // Envelope: combine min+max.
-                const double mn_v = norm2_to_01(mn_arr[k], bail2);
-                const double mx_v = norm2_to_01(mx_arr[k], bail2);
-                colorize_field_bgr(0.5 * (mn_v + mx_v), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(mn_arr[k], mx_arr[k], bail2, metric, cmap, px[0], px[1], px[2]);
             }
         }
     }
@@ -499,13 +524,11 @@ static void avx512_fp32_row(
                 const int it = escaped_k ? iter_arr[k] : max_iter;
                 colorize_escape_bgr(it, max_iter, cmap, 0.0, false, px[0], px[1], px[2]);
             } else if (metric == Metric::MinAbs) {
-                colorize_field_bgr(norm2_to_01(mn_arr[k], bail2), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(mn_arr[k], 0.0, bail2, metric, cmap, px[0], px[1], px[2]);
             } else if (metric == Metric::MaxAbs) {
-                colorize_field_bgr(norm2_to_01(mx_arr[k], bail2), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(0.0, mx_arr[k], bail2, metric, cmap, px[0], px[1], px[2]);
             } else {
-                const double mn_v = norm2_to_01(mn_arr[k], bail2);
-                const double mx_v = norm2_to_01(mx_arr[k], bail2);
-                colorize_field_bgr(0.5 * (mn_v + mx_v), cmap, px[0], px[1], px[2]);
+                colorize_metric_field_from_norm2(mn_arr[k], mx_arr[k], bail2, metric, cmap, px[0], px[1], px[2]);
             }
         }
     }

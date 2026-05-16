@@ -110,20 +110,7 @@ __device__ inline void colorize_escape_bgr(int iter, int max_iter,
             px[0] = px[1] = px[2] = v;
             return;
         }
-        case 5: {  // HsRainbow — for escape, use iter as index cyclically in [0,1785]
-            const int idx = iter % 1786;
-            int a0 = idx, a1 = 0, a2 = 0;
-            if      (255 < a0 && a0 < 510)  { a1 = a0 - 255; a0 = 510 - a0; }
-            else if (509 < a0 && a0 < 765)  { a1 = 255; a0 = a0 - 510; }
-            else if (764 < a0 && a0 < 1020) { a2 = a0 - 765; a1 = 1020 - a0; a0 = a1; }
-            else if (1019 < a0 && a0 < 1275){ a2 = 255; a0 = a0 - 1020; }
-            else if (1274 < a0 && a0 < 1530){ a2 = 255; a1 = a0 - 1275; a0 = 1530 - a0; }
-            else if (a0 > 1529)              { a2 = 255; a1 = 255; a0 = a0 - 1530; }
-            px[2] = static_cast<uint8_t>(d_clamp255(a1));  // R = a1
-            px[1] = static_cast<uint8_t>(d_clamp255(a2));  // G = a2
-            px[0] = static_cast<uint8_t>(d_clamp255(a0));  // B = a0
-            return;
-        }
+        case 5:    // HsRainbow is HS raw-field only; escape matches CPU ClassicCos fallback.
         default:  // 0 = ClassicCos (and any unknown id)
             px[2] = static_cast<uint8_t>(d_clamp255(static_cast<int>(d_cos_color(n,  53.0f))));
             px[1] = static_cast<uint8_t>(d_clamp255(static_cast<int>(d_cos_color(n,  27.0f))));
@@ -132,13 +119,121 @@ __device__ inline void colorize_escape_bgr(int iter, int max_iter,
     }
 }
 
-// Colorize a field value in [0,1] using ClassicCos-style formula (colormap_id ignored
-// for now; all field metrics use the smooth cosine gradient for visual clarity).
+__device__ inline void d_hsv_to_rgb_d(double h, double s, double v,
+                                      int& r, int& g, int& b) {
+    const double c  = v * s;
+    const double hh = h / 60.0;
+    const double x  = c * (1.0 - fabs(fmod(hh, 2.0) - 1.0));
+
+    double rr = 0.0, gg = 0.0, bb = 0.0;
+    if      (hh < 1.0) { rr = c; gg = x; }
+    else if (hh < 2.0) { rr = x; gg = c; }
+    else if (hh < 3.0) { gg = c; bb = x; }
+    else if (hh < 4.0) { gg = x; bb = c; }
+    else if (hh < 5.0) { rr = x; bb = c; }
+    else               { rr = c; bb = x; }
+
+    const double m = v - c;
+    r = d_clamp255(static_cast<int>((rr + m) * 255.0));
+    g = d_clamp255(static_cast<int>((gg + m) * 255.0));
+    b = d_clamp255(static_cast<int>((bb + m) * 255.0));
+}
+
+__device__ inline void d_rainbow_from_index(int idx, uint8_t* px) {
+    if (idx <= 0) {
+        px[0] = px[1] = px[2] = 0;
+        return;
+    }
+    if (idx >= 1785) {
+        px[0] = px[1] = px[2] = 255;
+        return;
+    }
+
+    int a0 = idx, a1 = 0, a2 = 0;
+    if      (255 < a0 && a0 < 510)  { a1 = a0 - 255; a0 = 510 - a0; }
+    else if (509 < a0 && a0 < 765)  { a1 = 255; a0 = a0 - 510; }
+    else if (764 < a0 && a0 < 1020) { a2 = a0 - 765; a1 = 1020 - a0; a0 = a1; }
+    else if (1019 < a0 && a0 < 1275){ a2 = 255; a0 = a0 - 1020; }
+    else if (1274 < a0 && a0 < 1530){ a2 = 255; a1 = a0 - 1275; a0 = 1530 - a0; }
+    else if (a0 > 1529)             { a2 = 255; a1 = 255; a0 = a0 - 1530; }
+
+    px[2] = static_cast<uint8_t>(d_clamp255(a1));
+    px[1] = static_cast<uint8_t>(d_clamp255(a2));
+    px[0] = static_cast<uint8_t>(d_clamp255(a0));
+}
+
+__device__ inline void colorize_field_hs_bgr(double x, uint8_t* px) {
+    if (x <= 0.0 || !isfinite(x)) {
+        px[0] = px[1] = px[2] = 255;
+        return;
+    }
+    const double raw = (36.0 / 35.0 - log2(x)) * 35.0;
+    int idx = static_cast<int>(raw);
+    if (idx < 0) idx = 0;
+    if (idx > 1785) idx = 1785;
+    d_rainbow_from_index(idx, px);
+}
+
 __device__ inline void colorize_field_bgr(double v01, int colormap_id, uint8_t* px) {
-    const float n = (float)v01;
-    px[2] = (uint8_t)d_clamp255((int)d_cos_color(n, 53.0f));
-    px[1] = (uint8_t)d_clamp255((int)d_cos_color(n, 27.0f));
-    px[0] = (uint8_t)d_clamp255((int)d_cos_color(n, 139.0f));
+    if (v01 < 0.0) v01 = 0.0;
+    if (v01 > 1.0) v01 = 1.0;
+    constexpr double PI = 3.141592653589793;
+
+    switch (colormap_id) {
+        case 4: {
+            const uint8_t v = static_cast<uint8_t>(d_clamp255(static_cast<int>(v01 * 255.0)));
+            px[0] = px[1] = px[2] = v;
+            return;
+        }
+        case 2: {
+            int r = 0, g = 0, b = 0;
+            d_hsv_to_rgb_d(v01 * 360.0, 1.0, 1.0, r, g, b);
+            px[2] = static_cast<uint8_t>(r);
+            px[1] = static_cast<uint8_t>(g);
+            px[0] = static_cast<uint8_t>(b);
+            return;
+        }
+        case 3: {
+            const int m    = static_cast<int>(v01 * 765.0);
+            const int band = (m / 255) % 3;
+            const int d    = m % 255;
+            int rr = 255, gg = 255, bb = 255;
+            if      (band == 0) { rr = 255 - d; gg = d;       bb = 255;     }
+            else if (band == 1) { rr = d;       gg = 255;     bb = 255 - d; }
+            else                { rr = 255;     gg = 255 - d; bb = d;       }
+            px[2] = static_cast<uint8_t>(d_clamp255(rr));
+            px[1] = static_cast<uint8_t>(d_clamp255(gg));
+            px[0] = static_cast<uint8_t>(d_clamp255(bb));
+            return;
+        }
+        case 1: {
+            int idx = static_cast<int>(v01 * 17.0);
+            if (idx > 16) idx = 16;
+            const uint8_t v = static_cast<uint8_t>(idx * 15);
+            px[0] = px[1] = px[2] = v;
+            return;
+        }
+        case 5: {
+            int idx = static_cast<int>(v01 * 1785.0);
+            if (idx > 1785) idx = 1785;
+            d_rainbow_from_index(idx, px);
+            return;
+        }
+        case 0:
+        default:
+            px[2] = static_cast<uint8_t>(d_clamp255(static_cast<int>(128.0 - 128.0 * cos(v01 * 2.0 * PI))));
+            px[1] = static_cast<uint8_t>(d_clamp255(static_cast<int>(128.0 - 128.0 * cos(v01 * 2.0 * PI + 2.094395))));
+            px[0] = static_cast<uint8_t>(d_clamp255(static_cast<int>(128.0 - 128.0 * cos(v01 * 2.0 * PI + 4.188790))));
+            return;
+    }
+}
+
+__device__ inline void colorize_metric_field_bgr(double raw, double v01, int colormap_id, uint8_t* px) {
+    if (colormap_id == 5) {
+        colorize_field_hs_bgr(raw, px);
+        return;
+    }
+    colorize_field_bgr(v01, colormap_id, px);
 }
 
 template <int VariantId>
@@ -315,17 +410,20 @@ __global__ void fractal_fp32(
     uint8_t* px = out + (static_cast<size_t>(px_y) * W + px_x) * 3;
 
     if constexpr (MetricId == 1) {
-        const float bailout = sqrtf(bail2);
-        const float v01 = fminf(1.0f, sqrtf(mn) / bailout);
-        colorize_field_bgr(v01, colormap_id, px);
+        const double bailout = sqrt(static_cast<double>(bail2));
+        const double raw = sqrt(static_cast<double>(mn));
+        const double v01 = fmin(1.0, raw / bailout);
+        colorize_metric_field_bgr(raw, v01, colormap_id, px);
     } else if constexpr (MetricId == 2) {
-        const float bailout = sqrtf(bail2);
-        const float v01 = fminf(1.0f, sqrtf(mx) / bailout);
-        colorize_field_bgr(v01, colormap_id, px);
+        const double bailout = sqrt(static_cast<double>(bail2));
+        const double raw = sqrt(static_cast<double>(mx));
+        const double v01 = fmin(1.0, raw / bailout);
+        colorize_metric_field_bgr(raw, v01, colormap_id, px);
     } else if constexpr (MetricId == 3) {
-        const float bailout = sqrtf(bail2);
-        const float v01 = fminf(1.0f, 0.5f * (sqrtf(mn) + sqrtf(mx)) / bailout);
-        colorize_field_bgr(v01, colormap_id, px);
+        const double bailout = sqrt(static_cast<double>(bail2));
+        const double raw = 0.5 * (sqrt(static_cast<double>(mn)) + sqrt(static_cast<double>(mx)));
+        const double v01 = fmin(1.0, raw / bailout);
+        colorize_metric_field_bgr(raw, v01, colormap_id, px);
     } else {
         colorize_escape_bgr(i, max_iter, colormap_id, px);
     }
@@ -397,16 +495,19 @@ __global__ void fractal_fp64(
 
     if constexpr (MetricId == 1) {
         const double bailout = sqrt(bail2);
-        const double v01 = fmin(1.0, sqrt(mn) / bailout);
-        colorize_field_bgr(v01, colormap_id, px);
+        const double raw = sqrt(mn);
+        const double v01 = fmin(1.0, raw / bailout);
+        colorize_metric_field_bgr(raw, v01, colormap_id, px);
     } else if constexpr (MetricId == 2) {
         const double bailout = sqrt(bail2);
-        const double v01 = fmin(1.0, sqrt(mx) / bailout);
-        colorize_field_bgr(v01, colormap_id, px);
+        const double raw = sqrt(mx);
+        const double v01 = fmin(1.0, raw / bailout);
+        colorize_metric_field_bgr(raw, v01, colormap_id, px);
     } else if constexpr (MetricId == 3) {
         const double bailout = sqrt(bail2);
-        const double v01 = fmin(1.0, 0.5 * (sqrt(mn) + sqrt(mx)) / bailout);
-        colorize_field_bgr(v01, colormap_id, px);
+        const double raw = 0.5 * (sqrt(mn) + sqrt(mx));
+        const double v01 = fmin(1.0, raw / bailout);
+        colorize_metric_field_bgr(raw, v01, colormap_id, px);
     } else {
         colorize_escape_bgr(i, max_iter, colormap_id, px);
     }
@@ -647,18 +748,19 @@ __global__ void fractal_fx64_int_kernel(
 
     if constexpr (MetricId == 1) {
         const double bailout = fixed_raw_to_double_u<FRAC>(vp.bailout_raw);
-        const double v01 = bailout > 0.0 ? fmin(1.0, fixed_mag2_to_abs_double<FRAC>(mn) / bailout) : 0.0;
-        colorize_field_bgr(v01, colormap_id, px);
+        const double raw = fixed_mag2_to_abs_double<FRAC>(mn);
+        const double v01 = bailout > 0.0 ? fmin(1.0, raw / bailout) : 0.0;
+        colorize_metric_field_bgr(raw, v01, colormap_id, px);
     } else if constexpr (MetricId == 2) {
         const double bailout = fixed_raw_to_double_u<FRAC>(vp.bailout_raw);
-        const double v01 = bailout > 0.0 ? fmin(1.0, fixed_mag2_to_abs_double<FRAC>(mx) / bailout) : 0.0;
-        colorize_field_bgr(v01, colormap_id, px);
+        const double raw = fixed_mag2_to_abs_double<FRAC>(mx);
+        const double v01 = bailout > 0.0 ? fmin(1.0, raw / bailout) : 0.0;
+        colorize_metric_field_bgr(raw, v01, colormap_id, px);
     } else if constexpr (MetricId == 3) {
         const double bailout = fixed_raw_to_double_u<FRAC>(vp.bailout_raw);
-        const double v01 = bailout > 0.0
-            ? fmin(1.0, 0.5 * (fixed_mag2_to_abs_double<FRAC>(mn) + fixed_mag2_to_abs_double<FRAC>(mx)) / bailout)
-            : 0.0;
-        colorize_field_bgr(v01, colormap_id, px);
+        const double raw = 0.5 * (fixed_mag2_to_abs_double<FRAC>(mn) + fixed_mag2_to_abs_double<FRAC>(mx));
+        const double v01 = bailout > 0.0 ? fmin(1.0, raw / bailout) : 0.0;
+        colorize_metric_field_bgr(raw, v01, colormap_id, px);
     } else {
         colorize_escape_bgr(i, max_iter, colormap_id, px);
     }

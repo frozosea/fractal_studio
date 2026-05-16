@@ -158,6 +158,7 @@ add_executable(compute_path_diff
     src/compute/engine_select.cpp
     src/compute/map_kernel_avx2.cpp
     src/compute/map_kernel_avx512.cpp
+    src/compute/transition_kernel.cpp
     src/compute/tile_scheduler.cpp
 )
 target_include_directories(compute_path_diff PRIVATE
