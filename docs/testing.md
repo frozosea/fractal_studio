@@ -26,10 +26,12 @@ ctest --test-dir runtime/build --output-on-failure
 当前 CMake 注册的测试：
 
 - `special_points_smoke`
+- `compute_path_diff`
 
 测试源文件：
 
 - `backend/src/tests/special_points_smoke.cpp`
+- `backend/src/tests/compute_path_diff.cpp`
 
 覆盖重点：
 
@@ -38,6 +40,63 @@ ctest --test-dir runtime/build --output-on-failure
 - 高周期 local center Newton 收敛
 - 深 zoom local center search
 - viewport sampled search
+
+## Compute Path Differential Tester / 计算路径对拍器
+
+`compute_path_diff` 会用同一 scalar 的 OpenMP 路径作为基准，对 AVX2、AVX512、CUDA 等可用 map render 路径做 BGR 图像差分。不同 scalar 不直接拿深 zoom 互相比，因为 `fp32`、`fp64`、`fx64` 的舍入模型不同，深度大时结果本来就可能不同。
+
+默认 quick 套件覆盖：
+
+- Mandelbrot escape
+- Burning Ship `min_abs`
+- Julia escape
+- `fp64`、`fp32`、`fx64`
+- AVX2 / AVX512 / CUDA 可用时自动对拍；不可用时记录 `SKIP`
+
+跨 scalar 只跑专门构造的 fp32-equivalent 场景：
+
+- 坐标、scale、Julia 参数都是二进制可精确表示的 dyadic 值。
+- iteration 很小，避免不同精度的合法舍入差异扩散。
+- colormap 使用只依赖整数 iteration 的 `mod17`。
+- 基准是 `openmp/fp32`；`openmp/fp64` 和 `openmp/fx64` 必须与它逐像素完全一致。
+
+直接运行：
+
+```bash
+./runtime/build/compute_path_diff
+```
+
+通过 CTest 运行：
+
+```bash
+ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
+```
+
+测评机可以打开硬件覆盖要求。对应路径没有实际跑到时，测试会失败：
+
+```bash
+FSD_DIFF_EXPECT_AVX2=1 \
+FSD_DIFF_EXPECT_AVX512=1 \
+FSD_DIFF_EXPECT_CUDA=1 \
+ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
+```
+
+Hybrid 需要足够大的 workload 才会进入真实 CPU+GPU tile scheduler，默认 quick 套件不跑。测评机可开启慢测：
+
+```bash
+FSD_DIFF_INCLUDE_SLOW=1 \
+FSD_DIFF_EXPECT_HYBRID=1 \
+ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
+```
+
+输出字段：
+
+- `actual=<engine>/<scalar>`: 后端实际走到的路径。
+- `max`: 单通道最大像素差。
+- `mean`: 所有 BGR 通道平均绝对差。
+- `bad`: 超过阈值的像素比例。
+- `SKIP`: 请求路径不可用或回退。
+- `FAIL`: 差异超过阈值，或测评机要求的路径未覆盖。
 
 ## Frontend Build Check / 前端构建检查
 

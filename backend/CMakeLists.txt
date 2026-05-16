@@ -151,6 +151,35 @@ if(OpenMP_CXX_FOUND)
 endif()
 add_test(NAME special_points_smoke COMMAND special_points_smoke)
 
+add_executable(compute_path_diff
+    src/tests/compute_path_diff.cpp
+    src/compute/cpu_features.cpp
+    src/compute/map_kernel.cpp
+    src/compute/engine_select.cpp
+    src/compute/map_kernel_avx2.cpp
+    src/compute/map_kernel_avx512.cpp
+    src/compute/tile_scheduler.cpp
+)
+target_include_directories(compute_path_diff PRIVATE
+    src
+    src/include
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_compile_options(compute_path_diff PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -O3
+)
+target_link_libraries(compute_path_diff PRIVATE
+    ${OpenCV_LIBS}
+)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(compute_path_diff PRIVATE OpenMP::OpenMP_CXX)
+endif()
+if(HAS_CUDA)
+    target_link_libraries(compute_path_diff PRIVATE fractal_cuda cuda)
+    target_compile_definitions(compute_path_diff PRIVATE HAS_CUDA_KERNEL=1)
+endif()
+add_test(NAME compute_path_diff COMMAND compute_path_diff)
+
 # AVX-512 kernel: compile with AVX-512F + IFMA52 intrinsics enabled when the
 # compiler supports them. avx512_available() does a runtime CPUID check so the
 # binary falls back to OpenMP on CPUs without AVX-512. On compilers/arches that
@@ -167,6 +196,7 @@ if(COMPILER_HAS_AVX2 AND COMPILER_HAS_FMA)
         src/compute/transition_volume_avx2.cpp
         PROPERTIES COMPILE_FLAGS "-mavx2 -mfma")
     target_compile_definitions(fractal_studio_backend PRIVATE HAS_AVX2_KERNEL=1)
+    target_compile_definitions(compute_path_diff PRIVATE HAS_AVX2_KERNEL=1)
     message(STATUS "AVX2/FMA compile flags enabled")
 else()
     message(STATUS "Compiler lacks AVX2/FMA support — AVX2 paths disabled at compile time")
@@ -180,6 +210,7 @@ if(COMPILER_HAS_AVX512F)
         PROPERTIES
         COMPILE_FLAGS "-mavx512f -mavx512dq -mavx512ifma")
     target_compile_definitions(fractal_studio_backend PRIVATE HAS_AVX512_KERNEL=1)
+    target_compile_definitions(compute_path_diff PRIVATE HAS_AVX512_KERNEL=1)
     message(STATUS "AVX-512 compile flags enabled")
 else()
     message(STATUS "Compiler lacks AVX-512 support — AVX-512 path disabled at compile time")
