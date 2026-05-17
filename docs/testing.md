@@ -43,7 +43,7 @@ ctest --test-dir runtime/build --output-on-failure
 
 ## Compute Path Differential Tester / 计算路径对拍器
 
-`compute_path_diff` 会用同一 scalar 的 OpenMP 路径作为基准，对 AVX2、AVX512、CUDA 等可用 map render 路径做 BGR 图像差分。不同 scalar 不直接拿深 zoom 互相比，因为 `fp32`、`fp64`、`fx64` 的舍入模型不同，深度大时结果本来就可能不同。
+`compute_path_diff` 会用同一 scalar 的 OpenMP 路径作为基准，对 AVX2、AVX512、CUDA 等可用 map render 路径做 BGR 图像差分。不同 scalar 不直接拿深 zoom 互相比，因为 `fp32`、`fp64`、`fp80`、`fp128`、`fx64` 的舍入模型不同，深度大时结果本来就可能不同。
 
 默认 quick 套件覆盖：
 
@@ -58,7 +58,7 @@ ctest --test-dir runtime/build --output-on-failure
 - Transition renderer direct slice: `theta=0` 对拍普通 map 的 `from_variant`，`theta=90°` 对拍普通 map 的 `to_variant`
 - Transition renderer 非 cardinal slice: milli-degree 输入和 radians 输入对拍，覆盖 escape、HS envelope、pairwise、smooth field
 - OpenMP-only HS/scalar fallback smoke: `min_pairwise_dist`、smooth field coloring、transcendental variant
-- `fp64`、`fp32`、`fx64`
+- `fp64`、`fp32`、`fx64`，以及 OpenMP-only 的 `fp80` / 可选 `fp128`
 - AVX2 / AVX512 / CUDA 可用时自动对拍；不可用时记录 `SKIP`
 
 同精度不同算法的默认对拍策略：
@@ -79,13 +79,13 @@ Transition 对拍策略：
 - 坐标、scale、Julia 参数都是二进制可精确表示的 dyadic 值。
 - iteration 很小，避免不同精度的合法舍入差异扩散。
 - colormap 使用只依赖整数 iteration 的 `mod17`。
-- 基准是 `openmp/fp32`；`openmp/fp64` 和 `openmp/fx64` 必须与它逐像素完全一致。
+- 基准是 `openmp/fp32`；`openmp/fp64`、`openmp/fp80`、`openmp/fp128`（若编译可用）和 `openmp/fx64` 必须与它逐像素完全一致。
 
-`fp64` 和 `fx64` 另有直接等值对拍：
+`fp64`、`fp80`、`fp128` 和 `fx64` 另有直接等值对拍：
 
 - 低迭代 dyadic escape 场景要求 BGR 完全一致。
 - 低迭代 dyadic HS 场景覆盖 `min_abs`、`max_abs`、`envelope`，同时比较 colorized BGR 和 `render_map_field` raw field。
-- 这些场景以 `openmp/fp64` 为基准，`openmp/fx64` 必须完全一致。
+- 这些场景以 `openmp/fp64` 为基准，`openmp/fp80`、`openmp/fp128`（若编译可用）和 `openmp/fx64` 必须完全一致。
 
 直接运行：
 

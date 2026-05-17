@@ -115,7 +115,7 @@ c = juliaRe + juliaIm * i
 | `cuda` | 前 10 个二次变体，Julia，metric 0..3 | 不支持 `min_pairwise_dist`。 |
 | `hybrid` | 大任务的 CPU + CUDA tile 调度 | 实际返回可能是 `hybrid`、`cuda`、`avx2`、`avx512` 或 `openmp`。 |
 
-`scalarType: "auto"` 会根据 viewport 深度选择 `fp32`、`fp64` 或 fixed-point。`scale < 1e-13` 时优先进入 fixed-point 路径；不支持的变体、metric 或 engine 会回退。
+`scalarType: "auto"` 会根据 viewport 深度选择 `fp32`、`fp64` 或 fixed-point。`scale < 1e-13` 时优先进入 fixed-point 路径；不支持的变体、metric 或 engine 会回退。也可以显式请求 OpenMP-only 的 `fp80`，以及编译器支持 libquadmath 时的 `fp128`。
 
 `min_pairwise_dist` 是 O(N^2) orbit-buffer metric，固定点、SIMD、CUDA 都会受限，详见 [recurrence_metric.md](recurrence_metric.md)。
 

@@ -105,6 +105,10 @@ function speedBar(mpps: number): string {
             <span class="v mono good">enabled (auto &lt;1e-13)</span>
           </div>
           <div class="row">
+            <span class="k">fp80/fp128</span>
+            <span class="v mono good">fp80 + optional fp128</span>
+          </div>
+          <div class="row">
             <span class="k">hybrid</span>
             <span class="v mono good">cpu+gpu scheduler</span>
           </div>

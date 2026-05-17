@@ -20,6 +20,10 @@
 #include <cmath>
 #include <cstdint>
 
+#if defined(FSD_HAS_FLOAT128)
+#  include <quadmath.h>
+#endif
+
 namespace fsd::compute {
 
 // Default scalar for Phase 1. All kernels take `template<typename Scalar>` and
@@ -35,6 +39,15 @@ inline double scalar_to_double(double x) noexcept { return x; }
 inline float scalar_abs(float x) noexcept { return std::fabs(x); }
 inline float scalar_sqrt(float x) noexcept { return std::sqrt(x); }
 inline double scalar_to_double(float x) noexcept { return static_cast<double>(x); }
+inline long double scalar_abs(long double x) noexcept { return std::fabs(x); }
+inline long double scalar_sqrt(long double x) noexcept { return std::sqrt(x); }
+inline double scalar_to_double(long double x) noexcept { return static_cast<double>(x); }
+
+#if defined(FSD_HAS_FLOAT128)
+inline __float128 scalar_abs(__float128 x) noexcept { return fabsq(x); }
+inline __float128 scalar_sqrt(__float128 x) noexcept { return sqrtq(x); }
+inline double scalar_to_double(__float128 x) noexcept { return static_cast<double>(x); }
+#endif
 
 // Template helper: scalar_from_double<S>(double) — converts a double to scalar
 // type S. Works for both double (identity) and Fx64 (via static method).
@@ -51,6 +64,16 @@ inline double scalar_from_double<double>(double x) noexcept { return x; }
 // Specialisation for float.
 template <>
 inline float scalar_from_double<float>(double x) noexcept { return static_cast<float>(x); }
+
+// Specialisation for long double.
+template <>
+inline long double scalar_from_double<long double>(double x) noexcept { return static_cast<long double>(x); }
+
+#if defined(FSD_HAS_FLOAT128)
+// Specialisation for GCC/libquadmath binary128.
+template <>
+inline __float128 scalar_from_double<__float128>(double x) noexcept { return static_cast<__float128>(x); }
+#endif
 
 } // namespace fsd::compute
 

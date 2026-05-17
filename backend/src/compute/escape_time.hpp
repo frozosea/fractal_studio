@@ -326,6 +326,7 @@ inline IterResult iterate_quadratic_cached_masked(
     S y = z.im;
     S x2 = x * x;
     S y2 = y * y;
+    const S bailout_sq_s = scalar_from_double<S>(bailout_sq);
 
     for (int i = 0; i < max_iter; i++) {
         S nx{};
@@ -336,11 +337,13 @@ inline IterResult iterate_quadratic_cached_masked(
             std::isfinite(scalar_to_double(nx)) && std::isfinite(scalar_to_double(ny));
         S nx2{};
         S ny2{};
+        S n2_s{};
         double n2 = std::numeric_limits<double>::infinity();
         if (finite_z) {
             nx2 = nx * nx;
             ny2 = ny * ny;
-            n2 = scalar_to_double(nx2 + ny2);
+            n2_s = nx2 + ny2;
+            n2 = scalar_to_double(n2_s);
         }
 
         if constexpr (iter_result_wants(NeedMask, IterResultField::MinAbs)) {
@@ -350,7 +353,7 @@ inline IterResult iterate_quadratic_cached_masked(
             if (n2 > r.max_abs) r.max_abs = n2;
         }
 
-        const bool escaped_now = !finite_z || n2 > bailout_sq;
+        const bool escaped_now = !finite_z || n2_s > bailout_sq_s;
         if (escaped_now) {
             if constexpr (iter_result_wants(NeedMask, IterResultField::Iter))    r.iter = i;
             if constexpr (iter_result_wants(NeedMask, IterResultField::Norm))    r.norm = n2;

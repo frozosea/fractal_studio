@@ -84,6 +84,9 @@ bool env_enabled(const char* name) {
 std::string expected_scalar_name(const std::string& requested) {
     if (requested == "double" || requested == "float64") return "fp64";
     if (requested == "float" || requested == "float32") return "fp32";
+    if (requested == "long_double" || requested == "longdouble" || requested == "ldouble") return "fp80";
+    if (requested == "float128" || requested == "__float128" ||
+        requested == "quad" || requested == "binary128") return "fp128";
     if (requested == "q6.57" || requested == "q657" || requested == "fixed57") return "fx64";
     if (requested == "q459" || requested == "fx59" || requested == "fixed59") return "q4.59";
     if (requested == "q360" || requested == "fx60" || requested == "fixed60") return "q3.60";
@@ -1054,12 +1057,24 @@ int main() {
 
         compare_scalar_to_fp32(runner, scene, fp32_baseline, "fp64", exact_scalar_limits);
         compare_scalar_to_fp32(runner, scene, fp32_baseline, "fx64", exact_scalar_limits);
+        compare_scalar_to_fp32(runner, scene, fp32_baseline, "fp80", exact_scalar_limits);
+#if defined(FSD_HAS_FLOAT128)
+        compare_scalar_to_fp32(runner, scene, fp32_baseline, "fp128", exact_scalar_limits);
+#endif
     }
 
     for (const RenderScene& scene : fp64_fx64_equivalence_scenes()) {
         compare_scalar_pair(runner, scene, "fp64", "fx64", exact_scalar_limits);
+        compare_scalar_pair(runner, scene, "fp64", "fp80", exact_scalar_limits);
+#if defined(FSD_HAS_FLOAT128)
+        compare_scalar_pair(runner, scene, "fp64", "fp128", exact_scalar_limits);
+#endif
         if (scene.params.metric != Metric::Escape) {
             compare_field_scalar_pair(runner, scene, "fp64", "fx64", exact_scalar_limits);
+            compare_field_scalar_pair(runner, scene, "fp64", "fp80", exact_scalar_limits);
+#if defined(FSD_HAS_FLOAT128)
+            compare_field_scalar_pair(runner, scene, "fp64", "fp128", exact_scalar_limits);
+#endif
         }
     }
 
@@ -1085,6 +1100,8 @@ int main() {
     require_seen(runner, runner.seen_engines, "avx512", "FSD_DIFF_EXPECT_AVX512");
     require_seen(runner, runner.seen_engines, "cuda", "FSD_DIFF_EXPECT_CUDA");
     require_seen(runner, runner.seen_engines, "hybrid", "FSD_DIFF_EXPECT_HYBRID");
+    require_seen(runner, runner.seen_scalars, "fp80", "FSD_DIFF_EXPECT_FP80");
+    require_seen(runner, runner.seen_scalars, "fp128", "FSD_DIFF_EXPECT_FP128");
 
     std::cout << "[summary] compared=" << runner.compared
               << " skipped=" << runner.skipped

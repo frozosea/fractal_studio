@@ -98,13 +98,7 @@ Cx<S> apply_trig(Cx<S> z, Cx<S> c, Cx<double>(*fn)(Cx<double>)) {
     Cx<double> rd = fn(zd);
     rd.re += cd.re;
     rd.im += cd.im;
-    if constexpr (std::is_same_v<S, double>) {
-        return { rd.re, rd.im };
-    } else if constexpr (std::is_same_v<S, float>) {
-        return { static_cast<float>(rd.re), static_cast<float>(rd.im) };
-    } else {
-        return { S::from_double(rd.re), S::from_double(rd.im) };
-    }
+    return { scalar_from_double<S>(rd.re), scalar_from_double<S>(rd.im) };
 }
 
 inline const char* variant_name(Variant v) {

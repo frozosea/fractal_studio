@@ -125,6 +125,8 @@ bool map_engine_supported(const MapParams& p, const std::string& engine, bool fx
     if (p.variant == Variant::Custom || p.custom_step_fn) return engine == "openmp";
     if (p.smooth) return engine == "openmp";
     if (variant_needs_scalar_fallback(p.variant)) return engine == "openmp";
+    const std::string scalar = map_effective_scalar_type(p);
+    if (map_scalar_type_is_fp80(scalar) || map_scalar_type_is_fp128(scalar)) return engine == "openmp";
     if (fx && p.metric == Metric::MinPairwiseDist) return engine == "openmp";
 
     const RuntimeCapabilities c = runtime_capabilities();

@@ -56,7 +56,8 @@ struct MapParams {
     // callers with outer parallelism can force 1 to avoid nested oversubscribe.
     int render_threads = 0;
 
-    // Scalar type: "fp32", "fp64", "fx64"/"q6.57", "q4.59",
+    // Scalar type: "fp32", "fp64", "fp80"/"long_double",
+    // "fp128"/"__float128", "fx64"/"q6.57", "q4.59",
     // experimental "q3.60", or "auto" (fp32/fp64/fx64 by viewport depth).
     std::string scalar_type = "auto";
 
@@ -82,6 +83,16 @@ inline bool map_scalar_type_is_fp32(const std::string& scalar) noexcept {
 
 inline bool map_scalar_type_is_fp64(const std::string& scalar) noexcept {
     return scalar == "fp64" || scalar == "double" || scalar == "float64";
+}
+
+inline bool map_scalar_type_is_fp80(const std::string& scalar) noexcept {
+    return scalar == "fp80" || scalar == "long_double" || scalar == "longdouble" ||
+           scalar == "ldouble";
+}
+
+inline bool map_scalar_type_is_fp128(const std::string& scalar) noexcept {
+    return scalar == "fp128" || scalar == "float128" || scalar == "__float128" ||
+           scalar == "quad" || scalar == "binary128";
 }
 
 inline bool map_scalar_type_is_auto(const std::string& scalar) noexcept {
@@ -113,6 +124,8 @@ inline bool map_auto_fp32_is_adequate(const MapParams& p) noexcept {
 inline std::string map_effective_scalar_type(const MapParams& p) {
     if (map_scalar_type_is_fp32(p.scalar_type)) return "fp32";
     if (map_scalar_type_is_fp64(p.scalar_type)) return "fp64";
+    if (map_scalar_type_is_fp80(p.scalar_type)) return "fp80";
+    if (map_scalar_type_is_fp128(p.scalar_type)) return "fp128";
     if (!map_scalar_type_is_auto(p.scalar_type)) return p.scalar_type;
     if (p.scale < 1e-13) return "fx64";
     return map_auto_fp32_is_adequate(p) ? "fp32" : "fp64";
@@ -121,7 +134,7 @@ inline std::string map_effective_scalar_type(const MapParams& p) {
 struct MapStats {
     double elapsed_ms   = 0.0;
     int    pixel_count  = 0;
-    std::string scalar_used;  // "fp32", "fp64", or "fx64"
+    std::string scalar_used;  // "fp32", "fp64", "fp80", "fp128", "fx64", etc.
     std::string engine_used;  // "openmp", "avx512", etc.
 };
 

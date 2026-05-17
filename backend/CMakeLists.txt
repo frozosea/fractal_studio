@@ -181,6 +181,26 @@ if(HAS_CUDA)
 endif()
 add_test(NAME compute_path_diff COMMAND compute_path_diff)
 
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_LIBRARIES quadmath)
+check_cxx_source_compiles("
+#include <quadmath.h>
+int main() {
+    __float128 x = static_cast<__float128>(1.0);
+    return sqrtq(x) > 0 ? 0 : 1;
+}
+" COMPILER_HAS_FLOAT128)
+unset(CMAKE_REQUIRED_LIBRARIES)
+if(COMPILER_HAS_FLOAT128)
+    target_compile_definitions(fractal_studio_backend PRIVATE FSD_HAS_FLOAT128=1)
+    target_compile_definitions(compute_path_diff PRIVATE FSD_HAS_FLOAT128=1)
+    target_link_libraries(fractal_studio_backend PRIVATE quadmath)
+    target_link_libraries(compute_path_diff PRIVATE quadmath)
+    message(STATUS "__float128/libquadmath enabled")
+else()
+    message(STATUS "__float128/libquadmath unavailable — fp128 scalar path disabled")
+endif()
+
 # AVX-512 kernel: compile with AVX-512F + IFMA52 intrinsics enabled when the
 # compiler supports them. avx512_available() does a runtime CPUID check so the
 # binary falls back to OpenMP on CPUs without AVX-512. On compilers/arches that

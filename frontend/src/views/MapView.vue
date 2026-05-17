@@ -288,7 +288,7 @@ function onJuliaViewport(v: { centerRe: number; centerIm: number; scale: number 
 
 // ── Engine / scalar ───────────────────────────────────────────────────────────
 const engineMode = ref<'auto' | 'openmp' | 'avx2' | 'avx512' | 'cuda' | 'hybrid'>('auto')
-const scalarMode = ref<'auto' | 'fp32' | 'fp64' | 'fx64'>('auto')
+const scalarMode = ref<'auto' | 'fp32' | 'fp64' | 'fp80' | 'fp128' | 'fx64'>('auto')
 
 // ── Status rail sync ─────────────────────────────────────────────────────────
 const lastMs         = ref<number | null>(null)
@@ -821,6 +821,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
           <option value="auto">auto</option>
           <option value="fp32">fp32</option>
           <option value="fp64">fp64</option>
+          <option value="fp80">fp80</option>
+          <option value="fp128">fp128</option>
           <option value="fx64">fx64</option>
         </select>
       </div>

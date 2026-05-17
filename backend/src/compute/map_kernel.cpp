@@ -3,9 +3,11 @@
 // OpenMP-parallel map renderer. For each pixel, iterates the chosen variant
 // under the chosen metric and writes a BGR byte triple into the output Mat.
 //
-// Supports three scalar types:
+// Supports scalar types:
 //   fp32  — std::float (fast shallow-depth interactive previews)
 //   fp64  — std::double (default, good to ~1e-13 zoom depth)
+//   fp80  — long double (OpenMP scalar path)
+//   fp128 — __float128/libquadmath when available (OpenMP scalar path)
 //   fx64  — Fx64 fixed-point 1s·6i·57f (good to ~1e-17, ~4 extra magnitudes)
 //
 // The variant is dispatched at compile time via `variant_step<V,S>`.
@@ -281,42 +283,46 @@ void render_variant_metric_fixed_impl(const MapParams& p, cv::Mat& out) {
     throw_if_cancelled(p, cancelled);
 }
 
-// Variant dispatch helpers — fp32/fp64/fx64.
-template <Variant V>
-void render_variant_fp32(const MapParams& p, cv::Mat& out) {
+// Variant dispatch helpers — scalar OpenMP plus fixed-point integer paths.
+template <Variant V, typename S>
+void render_variant_scalar(const MapParams& p, cv::Mat& out) {
     switch (p.metric) {
         case Metric::Escape:
-            if (p.smooth) render_variant_metric_impl<V, float, Metric::Escape, NeedEscapeSmooth>(p, out);
-            else          render_variant_metric_impl<V, float, Metric::Escape, NeedEscape>(p, out);
+            if (p.smooth) render_variant_metric_impl<V, S, Metric::Escape, NeedEscapeSmooth>(p, out);
+            else          render_variant_metric_impl<V, S, Metric::Escape, NeedEscape>(p, out);
             break;
         case Metric::MinAbs:
-            render_variant_metric_impl<V, float, Metric::MinAbs, NeedMinAbs>(p, out); break;
+            render_variant_metric_impl<V, S, Metric::MinAbs, NeedMinAbs>(p, out); break;
         case Metric::MaxAbs:
-            render_variant_metric_impl<V, float, Metric::MaxAbs, NeedMaxAbs>(p, out); break;
+            render_variant_metric_impl<V, S, Metric::MaxAbs, NeedMaxAbs>(p, out); break;
         case Metric::Envelope:
-            render_variant_metric_impl<V, float, Metric::Envelope, NeedEnvelope>(p, out); break;
+            render_variant_metric_impl<V, S, Metric::Envelope, NeedEnvelope>(p, out); break;
         case Metric::MinPairwiseDist:
-            render_variant_metric_impl<V, float, Metric::MinPairwiseDist, IterResultField::Extra>(p, out); break;
+            render_variant_metric_impl<V, S, Metric::MinPairwiseDist, IterResultField::Extra>(p, out); break;
     }
 }
 
 template <Variant V>
-void render_variant(const MapParams& p, cv::Mat& out) {
-    switch (p.metric) {
-        case Metric::Escape:
-            if (p.smooth) render_variant_metric_impl<V, double, Metric::Escape, NeedEscapeSmooth>(p, out);
-            else          render_variant_metric_impl<V, double, Metric::Escape, NeedEscape>(p, out);
-            break;
-        case Metric::MinAbs:
-            render_variant_metric_impl<V, double, Metric::MinAbs, NeedMinAbs>(p, out); break;
-        case Metric::MaxAbs:
-            render_variant_metric_impl<V, double, Metric::MaxAbs, NeedMaxAbs>(p, out); break;
-        case Metric::Envelope:
-            render_variant_metric_impl<V, double, Metric::Envelope, NeedEnvelope>(p, out); break;
-        case Metric::MinPairwiseDist:
-            render_variant_metric_impl<V, double, Metric::MinPairwiseDist, IterResultField::Extra>(p, out); break;
-    }
+void render_variant_fp32(const MapParams& p, cv::Mat& out) {
+    render_variant_scalar<V, float>(p, out);
 }
+
+template <Variant V>
+void render_variant(const MapParams& p, cv::Mat& out) {
+    render_variant_scalar<V, double>(p, out);
+}
+
+template <Variant V>
+void render_variant_fp80(const MapParams& p, cv::Mat& out) {
+    render_variant_scalar<V, long double>(p, out);
+}
+
+#if defined(FSD_HAS_FLOAT128)
+template <Variant V>
+void render_variant_fp128(const MapParams& p, cv::Mat& out) {
+    render_variant_scalar<V, __float128>(p, out);
+}
+#endif
 
 template <int FRAC, Variant V>
 void render_variant_fixed(const MapParams& p, cv::Mat& out) {
@@ -501,6 +507,52 @@ static void dispatch_fp64(const MapParams& p, cv::Mat& out) {
         default: break;  // Variant::Custom is intercepted before this dispatch
     }
 }
+
+static void dispatch_fp80(const MapParams& p, cv::Mat& out) {
+    switch (p.variant) {
+        case Variant::Mandelbrot: render_variant_fp80<Variant::Mandelbrot>(p, out); break;
+        case Variant::Tri:        render_variant_fp80<Variant::Tri>(p, out);        break;
+        case Variant::Boat:       render_variant_fp80<Variant::Boat>(p, out);       break;
+        case Variant::Duck:       render_variant_fp80<Variant::Duck>(p, out);       break;
+        case Variant::Bell:       render_variant_fp80<Variant::Bell>(p, out);       break;
+        case Variant::Fish:       render_variant_fp80<Variant::Fish>(p, out);       break;
+        case Variant::Vase:       render_variant_fp80<Variant::Vase>(p, out);       break;
+        case Variant::Bird:       render_variant_fp80<Variant::Bird>(p, out);       break;
+        case Variant::Mask:       render_variant_fp80<Variant::Mask>(p, out);       break;
+        case Variant::Ship:       render_variant_fp80<Variant::Ship>(p, out);       break;
+        case Variant::SinZ:       render_variant_fp80<Variant::SinZ>(p, out);       break;
+        case Variant::CosZ:       render_variant_fp80<Variant::CosZ>(p, out);       break;
+        case Variant::ExpZ:       render_variant_fp80<Variant::ExpZ>(p, out);       break;
+        case Variant::SinhZ:      render_variant_fp80<Variant::SinhZ>(p, out);      break;
+        case Variant::CoshZ:      render_variant_fp80<Variant::CoshZ>(p, out);      break;
+        case Variant::TanZ:       render_variant_fp80<Variant::TanZ>(p, out);       break;
+        default: break;  // Variant::Custom is intercepted before this dispatch
+    }
+}
+
+#if defined(FSD_HAS_FLOAT128)
+static void dispatch_fp128(const MapParams& p, cv::Mat& out) {
+    switch (p.variant) {
+        case Variant::Mandelbrot: render_variant_fp128<Variant::Mandelbrot>(p, out); break;
+        case Variant::Tri:        render_variant_fp128<Variant::Tri>(p, out);        break;
+        case Variant::Boat:       render_variant_fp128<Variant::Boat>(p, out);       break;
+        case Variant::Duck:       render_variant_fp128<Variant::Duck>(p, out);       break;
+        case Variant::Bell:       render_variant_fp128<Variant::Bell>(p, out);       break;
+        case Variant::Fish:       render_variant_fp128<Variant::Fish>(p, out);       break;
+        case Variant::Vase:       render_variant_fp128<Variant::Vase>(p, out);       break;
+        case Variant::Bird:       render_variant_fp128<Variant::Bird>(p, out);       break;
+        case Variant::Mask:       render_variant_fp128<Variant::Mask>(p, out);       break;
+        case Variant::Ship:       render_variant_fp128<Variant::Ship>(p, out);       break;
+        case Variant::SinZ:       render_variant_fp128<Variant::SinZ>(p, out);       break;
+        case Variant::CosZ:       render_variant_fp128<Variant::CosZ>(p, out);       break;
+        case Variant::ExpZ:       render_variant_fp128<Variant::ExpZ>(p, out);       break;
+        case Variant::SinhZ:      render_variant_fp128<Variant::SinhZ>(p, out);      break;
+        case Variant::CoshZ:      render_variant_fp128<Variant::CoshZ>(p, out);      break;
+        case Variant::TanZ:       render_variant_fp128<Variant::TanZ>(p, out);       break;
+        default: break;  // Variant::Custom is intercepted before this dispatch
+    }
+}
+#endif
 
 // Dispatch fixed-point variants (trig variants fall back to fp64).
 template <int FRAC>
@@ -883,21 +935,38 @@ void field_variant_fixed_impl(const MapParams& p, FieldOutput& out) {
     }
 }
 
-template <Variant V>
-void field_variant_fp64(const MapParams& p, FieldOutput& out) {
+template <Variant V, typename S>
+void field_variant_scalar(const MapParams& p, FieldOutput& out) {
     switch (p.metric) {
         case Metric::Escape:
-            field_variant_impl<V, double, Metric::Escape, NeedEscapeSmooth>(p, out); break;
+            field_variant_impl<V, S, Metric::Escape, NeedEscapeSmooth>(p, out); break;
         case Metric::MinAbs:
-            field_variant_impl<V, double, Metric::MinAbs, NeedMinAbs>(p, out); break;
+            field_variant_impl<V, S, Metric::MinAbs, NeedMinAbs>(p, out); break;
         case Metric::MaxAbs:
-            field_variant_impl<V, double, Metric::MaxAbs, NeedMaxAbs>(p, out); break;
+            field_variant_impl<V, S, Metric::MaxAbs, NeedMaxAbs>(p, out); break;
         case Metric::Envelope:
-            field_variant_impl<V, double, Metric::Envelope, NeedEnvelope>(p, out); break;
+            field_variant_impl<V, S, Metric::Envelope, NeedEnvelope>(p, out); break;
         case Metric::MinPairwiseDist:
-            field_variant_impl<V, double, Metric::MinPairwiseDist, IterResultField::Extra>(p, out); break;
+            field_variant_impl<V, S, Metric::MinPairwiseDist, IterResultField::Extra>(p, out); break;
     }
 }
+
+template <Variant V>
+void field_variant_fp64(const MapParams& p, FieldOutput& out) {
+    field_variant_scalar<V, double>(p, out);
+}
+
+template <Variant V>
+void field_variant_fp80(const MapParams& p, FieldOutput& out) {
+    field_variant_scalar<V, long double>(p, out);
+}
+
+#if defined(FSD_HAS_FLOAT128)
+template <Variant V>
+void field_variant_fp128(const MapParams& p, FieldOutput& out) {
+    field_variant_scalar<V, __float128>(p, out);
+}
+#endif
 
 template <int FRAC, Variant V>
 void field_variant_fixed(const MapParams& p, FieldOutput& out) {
@@ -939,6 +1008,52 @@ void dispatch_field_fp64(const MapParams& p, FieldOutput& out) {
     }
 }
 
+void dispatch_field_fp80(const MapParams& p, FieldOutput& out) {
+    switch (p.variant) {
+        case Variant::Mandelbrot: field_variant_fp80<Variant::Mandelbrot>(p, out); break;
+        case Variant::Tri:        field_variant_fp80<Variant::Tri>       (p, out); break;
+        case Variant::Boat:       field_variant_fp80<Variant::Boat>      (p, out); break;
+        case Variant::Duck:       field_variant_fp80<Variant::Duck>      (p, out); break;
+        case Variant::Bell:       field_variant_fp80<Variant::Bell>      (p, out); break;
+        case Variant::Fish:       field_variant_fp80<Variant::Fish>      (p, out); break;
+        case Variant::Vase:       field_variant_fp80<Variant::Vase>      (p, out); break;
+        case Variant::Bird:       field_variant_fp80<Variant::Bird>      (p, out); break;
+        case Variant::Mask:       field_variant_fp80<Variant::Mask>      (p, out); break;
+        case Variant::Ship:       field_variant_fp80<Variant::Ship>      (p, out); break;
+        case Variant::SinZ:       field_variant_fp80<Variant::SinZ>      (p, out); break;
+        case Variant::CosZ:       field_variant_fp80<Variant::CosZ>      (p, out); break;
+        case Variant::ExpZ:       field_variant_fp80<Variant::ExpZ>      (p, out); break;
+        case Variant::SinhZ:      field_variant_fp80<Variant::SinhZ>     (p, out); break;
+        case Variant::CoshZ:      field_variant_fp80<Variant::CoshZ>     (p, out); break;
+        case Variant::TanZ:       field_variant_fp80<Variant::TanZ>      (p, out); break;
+        default: break;  // Variant::Custom intercepted before this dispatch
+    }
+}
+
+#if defined(FSD_HAS_FLOAT128)
+void dispatch_field_fp128(const MapParams& p, FieldOutput& out) {
+    switch (p.variant) {
+        case Variant::Mandelbrot: field_variant_fp128<Variant::Mandelbrot>(p, out); break;
+        case Variant::Tri:        field_variant_fp128<Variant::Tri>       (p, out); break;
+        case Variant::Boat:       field_variant_fp128<Variant::Boat>      (p, out); break;
+        case Variant::Duck:       field_variant_fp128<Variant::Duck>      (p, out); break;
+        case Variant::Bell:       field_variant_fp128<Variant::Bell>      (p, out); break;
+        case Variant::Fish:       field_variant_fp128<Variant::Fish>      (p, out); break;
+        case Variant::Vase:       field_variant_fp128<Variant::Vase>      (p, out); break;
+        case Variant::Bird:       field_variant_fp128<Variant::Bird>      (p, out); break;
+        case Variant::Mask:       field_variant_fp128<Variant::Mask>      (p, out); break;
+        case Variant::Ship:       field_variant_fp128<Variant::Ship>      (p, out); break;
+        case Variant::SinZ:       field_variant_fp128<Variant::SinZ>      (p, out); break;
+        case Variant::CosZ:       field_variant_fp128<Variant::CosZ>      (p, out); break;
+        case Variant::ExpZ:       field_variant_fp128<Variant::ExpZ>      (p, out); break;
+        case Variant::SinhZ:      field_variant_fp128<Variant::SinhZ>     (p, out); break;
+        case Variant::CoshZ:      field_variant_fp128<Variant::CoshZ>     (p, out); break;
+        case Variant::TanZ:       field_variant_fp128<Variant::TanZ>      (p, out); break;
+        default: break;  // Variant::Custom intercepted before this dispatch
+    }
+}
+#endif
+
 template <int FRAC>
 void dispatch_field_fixed(const MapParams& p, FieldOutput& out) {
     switch (p.variant) {
@@ -976,6 +1091,9 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
     fo.height = p.height;
     fo.metric = p.metric;
 
+    const std::string effective_scalar = map_effective_scalar_type(p);
+    const bool fp80 = effective_scalar == "fp80";
+    const bool fp128 = effective_scalar == "fp128";
     const FixedPrecision fixed_precision = select_fixed_precision(p);
     const bool fx = fixed_precision != FixedPrecision::None &&
                     supports_fixed_int_path(p, true);
@@ -987,6 +1105,14 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
         dispatch_field_fixed<59>(p, fo);
     } else if (fx) {
         dispatch_field_fixed<57>(p, fo);
+    } else if (fp80) {
+        dispatch_field_fp80(p, fo);
+    } else if (fp128) {
+#if defined(FSD_HAS_FLOAT128)
+        dispatch_field_fp128(p, fo);
+#else
+        throw std::runtime_error("fp128 scalar path requires __float128/libquadmath support");
+#endif
     } else {
         dispatch_field_fp64(p, fo);
     }
@@ -995,9 +1121,11 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
     MapStats s;
     s.elapsed_ms  = std::chrono::duration<double, std::milli>(t1 - t0).count();
     s.pixel_count = p.width * p.height;
-    s.scalar_used = fx ? fixed_precision_name(fixed_precision) : "fp64";
+    s.scalar_used = fx ? fixed_precision_name(fixed_precision)
+                  : (fp80 ? "fp80" : (fp128 ? "fp128" : "fp64"));
     s.engine_used = "openmp";
     fo.scalar_used = s.scalar_used;
+    fo.engine_used = s.engine_used;
     return s;
 }
 
@@ -1016,6 +1144,8 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
 
     const std::string effective_scalar = map_effective_scalar_type(p);
     const bool fp32 = effective_scalar == "fp32";
+    const bool fp80 = effective_scalar == "fp80";
+    const bool fp128 = effective_scalar == "fp128";
     const FixedPrecision fixed_precision = select_fixed_precision(p);
     const bool fx = fixed_precision != FixedPrecision::None &&
                     supports_fixed_int_path(p, false);
@@ -1222,6 +1352,14 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
         dispatch_fixed<57>(p, out);
     } else if (fp32) {
         dispatch_fp32(p, out);
+    } else if (fp80) {
+        dispatch_fp80(p, out);
+    } else if (fp128) {
+#if defined(FSD_HAS_FLOAT128)
+        dispatch_fp128(p, out);
+#else
+        throw std::runtime_error("fp128 scalar path requires __float128/libquadmath support");
+#endif
     } else {
         dispatch_fp64(p, out);
     }
@@ -1230,7 +1368,8 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
     MapStats s;
     s.elapsed_ms   = std::chrono::duration<double, std::milli>(t1 - t0).count();
     s.pixel_count  = p.width * p.height;
-    s.scalar_used  = fx ? fixed_precision_name(fixed_precision) : (fp32 ? "fp32" : "fp64");
+    s.scalar_used  = fx ? fixed_precision_name(fixed_precision)
+                   : (fp32 ? "fp32" : (fp80 ? "fp80" : (fp128 ? "fp128" : "fp64")));
     s.engine_used  = "openmp";
     return s;
 }
