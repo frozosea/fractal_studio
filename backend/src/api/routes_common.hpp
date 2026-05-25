@@ -18,6 +18,8 @@
 
 namespace fsd {
 
+constexpr int MAX_MAP_DIM = 8192;
+
 using Json = nlohmann::json;
 
 inline Json parseJsonBody(const std::string& body) {

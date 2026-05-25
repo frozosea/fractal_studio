@@ -243,8 +243,8 @@ MapRenderInput parseMapRenderInput(const std::string& body) {
     in.localExport = j.value("localExport", false);
 
     if (!(in.scale > 0.0) || !std::isfinite(in.scale)) throw std::runtime_error("invalid scale");
-    if (in.width < 64 || in.width > 8192) throw std::runtime_error("invalid width");
-    if (in.height < 64 || in.height > 8192) throw std::runtime_error("invalid height");
+    if (in.width < 64 || in.width > MAX_MAP_DIM) throw std::runtime_error("invalid width");
+    if (in.height < 64 || in.height > MAX_MAP_DIM) throw std::runtime_error("invalid height");
     if (in.iters < 1 || in.iters > 1000000) throw std::runtime_error("invalid iterations");
     if (!std::isfinite(in.cRe) || !std::isfinite(in.cIm)) throw std::runtime_error("invalid center");
 
@@ -600,8 +600,8 @@ std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::stri
     const std::string engine      = j.value("engine",     std::string("auto"));
 
     if (!(scale > 0.0) || !std::isfinite(scale))   throw std::runtime_error("invalid scale");
-    if (width  < 1 || width  > 8192)               throw std::runtime_error("invalid width");
-    if (height < 1 || height > 8192)               throw std::runtime_error("invalid height");
+    if (width  < 1 || width  > MAX_MAP_DIM)               throw std::runtime_error("invalid width");
+    if (height < 1 || height > MAX_MAP_DIM)               throw std::runtime_error("invalid height");
     if (iters  < 1 || iters  > 1000000)            throw std::runtime_error("invalid iterations");
     if (!std::isfinite(cRe) || !std::isfinite(cIm)) throw std::runtime_error("invalid center");
 
