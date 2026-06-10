@@ -13,6 +13,7 @@ const hsMetric  = ref<HsStage>('min_abs')
 const hsVariant = ref<Variant>('mandelbrot')
 const hsRes     = ref(256)
 const hsIter    = ref(512)
+const hsPairwiseCap = ref(64)
 const hsCenterRe = ref(-0.75)
 const hsCenterIm = ref(0.0)
 const hsScale    = ref(3.0)
@@ -41,6 +42,7 @@ const loading      = ref(false)
 const stlLoading   = ref(false)
 const info         = ref('')
 const error        = ref('')
+let slowHsWarnKey = ''
 
 const HS_METRICS: HsStage[] = ['min_abs', 'max_abs', 'envelope', 'min_pairwise_dist']
 const AXIS_TRANSITION_VARIANTS = VARIANTS.slice(0, 10)
@@ -58,6 +60,21 @@ function transitionStlDownloadUrl(r: TransitionVoxelResponse): string | null {
   return new URL(r.stlUrl, api.baseUrl).toString()
 }
 
+function maybeWarnSlowHs(generatedMs: number, kind: string) {
+  if (!(generatedMs > 1000)) return
+  const key = [
+    kind,
+    hsMetric.value,
+    hsVariant.value,
+    hsRes.value,
+    hsIter.value,
+    hsPairwiseCap.value,
+  ].join(':')
+  if (slowHsWarnKey === key) return
+  slowHsWarnKey = key
+  window.alert(`HS ${kind} took ${(generatedMs / 1000).toFixed(2)}s. For heavier recurrence detail this is expected; lower resolution/iterations/pairwise cap for faster interactive passes.`)
+}
+
 // ── HS field auto-compute (debounced) ─────────────────────────────────────────
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -67,7 +84,7 @@ function scheduleHsCompute() {
   debounceTimer = setTimeout(computeHsField, 500)
 }
 
-watch([hsMetric, hsVariant, hsRes, hsIter, hsCenterRe, hsCenterIm, hsScale], scheduleHsCompute)
+watch([hsMetric, hsVariant, hsRes, hsIter, hsPairwiseCap, hsCenterRe, hsCenterIm, hsScale], scheduleHsCompute)
 
 // ── HS field fetch ────────────────────────────────────────────────────────────
 
@@ -86,9 +103,11 @@ async function computeHsField() {
       metric:     hsMetric.value,
       variant:    hsVariant.value,
       iterations: hsIter.value,
+      pairwiseCap: hsPairwiseCap.value,
     })
     hsFieldData.value = r
     info.value = `${r.width}×${r.height} field · range [${r.fieldMin.toFixed(3)}, ${r.fieldMax.toFixed(3)}] · ${r.generatedMs.toFixed(0)}ms`
+    maybeWarnSlowHs(r.generatedMs, 'field')
   } catch (e: any) {
     error.value = e?.data?.error ?? e?.message ?? String(e)
     info.value  = ''
@@ -113,8 +132,10 @@ async function exportHsStl() {
       variant:     hsVariant.value,
       iterations:  hsIter.value,
       heightScale: Math.abs(hsZScale.value),
+      pairwiseCap: hsPairwiseCap.value,
     })
     stlUrl.value = api.artifactDownloadUrl(r.stlArtifactId)
+    if (r.generatedMs !== undefined) maybeWarnSlowHs(r.generatedMs, 'mesh')
   } catch (e: any) {
     error.value = e?.data?.error ?? e?.message ?? String(e)
   } finally {
@@ -247,6 +268,11 @@ function onHsZoom(factor: number) {
         <div class="group">
           <label>{{ t('iterations') }}</label>
           <input type="number" v-model.number="hsIter" min="64" max="10000" step="128" />
+        </div>
+        <div v-if="hsMetric === 'min_pairwise_dist'" class="group">
+          <label>PAIRWISE CAP</label>
+          <input type="number" v-model.number="hsPairwiseCap" min="1" max="1000000" step="64" />
+          <span class="num dim">O({{ Math.min(hsIter, hsPairwiseCap) }}²) / px</span>
         </div>
         <div class="group">
           <label>{{ t('three_center_re') }}</label>

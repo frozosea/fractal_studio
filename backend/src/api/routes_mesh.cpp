@@ -142,6 +142,7 @@ std::string hsMeshRoute(const std::filesystem::path&, JobRunner& runner, const s
     p.iterations = j.value("iterations", 512);
     p.heightScale = j.value("heightScale", 0.6);
     p.heightClamp = j.value("heightClamp", 2.0);
+    p.pairwise_cap = j.value("pairwiseCap", 64);
     p.variant = parseVariant(j.value("variant", std::string("mandelbrot")));
     p.bailout = j.contains("bailout") && !j["bailout"].is_null()
         ? j.value("bailout", 2.0)
@@ -155,6 +156,7 @@ std::string hsMeshRoute(const std::filesystem::path&, JobRunner& runner, const s
 
     if (p.resolution < 8 || p.resolution > 4096) throw std::runtime_error("invalid resolution");
     if (p.iterations < 1 || p.iterations > 1000000) throw std::runtime_error("invalid iterations");
+    if (p.pairwise_cap < 1 || p.pairwise_cap > 1000000) throw std::runtime_error("invalid pairwiseCap");
     if (!(p.bailout > 0.0) || !std::isfinite(p.bailout)) throw std::runtime_error("invalid bailout");
     if (!(p.bailout_sq > 0.0) || !std::isfinite(p.bailout_sq)) throw std::runtime_error("invalid bailoutSq");
 
@@ -218,6 +220,7 @@ std::string hsFieldRoute(const std::filesystem::path&, JobRunner& runner, const 
     p.resolution  = j.value("resolution",   192);
     p.iterations  = j.value("iterations",   512);
     p.heightClamp = j.value("heightClamp",   2.0);
+    p.pairwise_cap = j.value("pairwiseCap", 64);
     p.variant = parseVariant(j.value("variant", std::string("mandelbrot")));
     p.bailout = j.contains("bailout") && !j["bailout"].is_null()
         ? j.value("bailout", 2.0)
@@ -231,6 +234,7 @@ std::string hsFieldRoute(const std::filesystem::path&, JobRunner& runner, const 
 
     if (p.resolution < 8 || p.resolution > 4096) throw std::runtime_error("invalid resolution");
     if (p.iterations < 1 || p.iterations > 1000000) throw std::runtime_error("invalid iterations");
+    if (p.pairwise_cap < 1 || p.pairwise_cap > 1000000) throw std::runtime_error("invalid pairwiseCap");
     if (!(p.bailout > 0.0) || !std::isfinite(p.bailout)) throw std::runtime_error("invalid bailout");
     if (!(p.bailout_sq > 0.0) || !std::isfinite(p.bailout_sq)) throw std::runtime_error("invalid bailoutSq");
 

@@ -27,6 +27,7 @@ struct LnMapParams {
     double bailout_sq = 4.0;
     Variant variant = Variant::Mandelbrot;
     Colormap colormap = Colormap::ClassicCos;
+    std::string color_mode = "escape"; // escape, hist_eq
     std::string engine = "auto"; // auto, hybrid, cuda, avx512, avx2, openmp
     std::string precision_mode = "standard"; // standard, fast
     std::string scalar_type = "auto"; // auto, fp64, fx64

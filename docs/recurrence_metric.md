@@ -58,7 +58,7 @@ P = min(iterations, pairwiseCap)
 
 默认 `pairwiseCap = 64`。这是为了避免 `iterations` 很大时直接变成不可交互的 O(iterations^2)。
 
-在 HS heightfield 中，当前实现固定使用 64 作为 pairwise cap。二维 map 和 transition slice 通过 `pairwiseCap` 参数传入。
+二维 map、transition slice、HS field 和 HS mesh 都可以通过 `pairwiseCap` 参数传入更高上限。HS 前端在选择 `min_pairwise_dist` 时会显示这个控制；本地重任务可以按需拉高。
 
 ## Supported Paths / 支持路径
 
@@ -95,7 +95,7 @@ HS pipeline 中：
 
 ## Practical Guidance / 使用建议
 
-- 交互预览不要把 `pairwiseCap` 拉太高。64 已经是比较贵的默认值。
+- 交互预览不要把 `pairwiseCap` 拉太高。64 是比较温和的默认值；本地离线生成可以提高到 128、256、512 或更高。
 - 如果画面噪声很强，先降低 iterations 或 resolution，再增加 pairwiseCap。
 - 做 3D HS mesh 时优先调 `resolution` 和 `heightClamp`，再动 iterations。
 - 如果用户选了 CUDA/AVX 但响应显示 OpenMP，这是正常回退，不是 bug。

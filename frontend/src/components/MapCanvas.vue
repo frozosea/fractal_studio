@@ -15,6 +15,7 @@ const props = defineProps<{
   metric: Metric
   colorMap: ColorMap
   smooth?: boolean
+  pairwiseCap?: number
   transitionTheta: number | null
   transitionThetaMilliDeg?: number | null
   transitionFrom?: string
@@ -55,6 +56,7 @@ let   dprMedia: MediaQueryList | null = null
 let   renderTimer: ReturnType<typeof setTimeout> | null = null
 let   currentRender: AbortController | null = null
 let   renderSeq = 0
+let   slowRenderWarnKey = ''
 const renderClientId = `map-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 const MIN_FRAME_DIM = 64
 const MAX_FRAME_DIM = 4096
@@ -110,6 +112,22 @@ function renderableSize(): boolean {
 
 function notifyPreempt(seq: number) {
   api.mapPreempt({ preemptKey: renderClientId, preemptSeq: seq }).catch(() => {})
+}
+
+function maybeWarnSlowRender(generatedMs: number) {
+  if (!(generatedMs > 1000)) return
+  const key = [
+    props.metric,
+    props.iterations,
+    props.pairwiseCap ?? 64,
+    frameW.value,
+    frameH.value,
+    props.engine ?? 'auto',
+    props.scalarType ?? 'auto',
+  ].join(':')
+  if (slowRenderWarnKey === key) return
+  slowRenderWarnKey = key
+  window.alert(`Render took ${(generatedMs / 1000).toFixed(2)}s. Consider lowering resolution/iterations/pairwise cap, or keep it for an offline-quality pass.`)
 }
 
 function setViewportSize(cssW: number, cssH: number, physical?: { width: number; height: number } | null) {
@@ -208,6 +226,7 @@ async function renderFrame() {
     metric:     props.metric,
     colorMap:   props.colorMap,
     smooth:     props.smooth,
+    pairwiseCap: props.pairwiseCap,
     julia:      props.julia,
     juliaRe:    props.juliaRe ?? 0,
     juliaIm:    props.juliaIm ?? 0,
@@ -242,6 +261,7 @@ async function renderFrame() {
     }
     hasFrame.value = true
     activeCanvas.value = next
+    maybeWarnSlowRender(resp.generatedMs)
     emit('rendered', {
       generatedMs: resp.generatedMs,
       artifactId:  '',
@@ -271,7 +291,7 @@ function scheduleRender(delay = 200) {
 watch(() => [
   props.centerRe, props.centerIm, props.scale,
   props.variant, props.metric, props.colorMap, props.smooth,
-  props.iterations, props.julia, props.juliaRe, props.juliaIm,
+  props.iterations, props.pairwiseCap, props.julia, props.juliaRe, props.juliaIm,
   props.engine, props.scalarType, props.transitionTheta, props.transitionThetaMilliDeg,
   props.transitionFrom, props.transitionTo,
   frameW.value, frameH.value,

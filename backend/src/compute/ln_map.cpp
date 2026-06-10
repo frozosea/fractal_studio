@@ -702,6 +702,164 @@ int sample_ln_iter(const LnMapParams& p, int row, int col, LnPlanScalar scalar) 
     }
 }
 
+template <Variant V>
+void compute_ln_iters_fp64_variant(
+    const LnMapParams& p,
+    std::vector<int>& iters,
+    const TrigColumns& cols,
+    const LnMapProgress& on_row_done
+) {
+    const Cx<double> c_julia{p.julia_re, p.julia_im};
+    const int s = p.width_s;
+    const int h = p.height_t;
+    std::atomic<int> rows_done{0};
+
+    auto compute_row = [&](int row) {
+        const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
+        const double r_mag = std::exp(k);
+        const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
+        for (int x = 0; x < s; x++) {
+            const double pre = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
+            const double pim = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
+            Cx<double> z0, c;
+            if (p.julia) {
+                z0 = {pre, pim};
+                c = c_julia;
+            } else {
+                z0 = {0.0, 0.0};
+                c = {pre, pim};
+            }
+            const IterResult ir = iterate_masked<
+                IterResultField::Iter | IterResultField::Escaped,
+                V, double>(z0, c, p.iterations, p.bailout, p.bailout_sq);
+            iters[row_offset + static_cast<size_t>(x)] = ir.escaped ? ir.iter : p.iterations;
+        }
+        if (on_row_done) {
+            const int done = rows_done.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (done == h || (done % 16) == 0) on_row_done(done);
+        }
+    };
+
+    const int thread_count = default_render_threads();
+    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 4)
+    for (int row = 0; row < h; row++) {
+        compute_row(row);
+    }
+}
+
+void compute_ln_iters_fp64(
+    const LnMapParams& p,
+    std::vector<int>& iters,
+    const TrigColumns& cols,
+    const LnMapProgress& on_row_done
+) {
+    switch (p.variant) {
+        case Variant::Mandelbrot: compute_ln_iters_fp64_variant<Variant::Mandelbrot>(p, iters, cols, on_row_done); break;
+        case Variant::Tri:        compute_ln_iters_fp64_variant<Variant::Tri>       (p, iters, cols, on_row_done); break;
+        case Variant::Boat:       compute_ln_iters_fp64_variant<Variant::Boat>      (p, iters, cols, on_row_done); break;
+        case Variant::Duck:       compute_ln_iters_fp64_variant<Variant::Duck>      (p, iters, cols, on_row_done); break;
+        case Variant::Bell:       compute_ln_iters_fp64_variant<Variant::Bell>      (p, iters, cols, on_row_done); break;
+        case Variant::Fish:       compute_ln_iters_fp64_variant<Variant::Fish>      (p, iters, cols, on_row_done); break;
+        case Variant::Vase:       compute_ln_iters_fp64_variant<Variant::Vase>      (p, iters, cols, on_row_done); break;
+        case Variant::Bird:       compute_ln_iters_fp64_variant<Variant::Bird>      (p, iters, cols, on_row_done); break;
+        case Variant::Mask:       compute_ln_iters_fp64_variant<Variant::Mask>      (p, iters, cols, on_row_done); break;
+        case Variant::Ship:       compute_ln_iters_fp64_variant<Variant::Ship>      (p, iters, cols, on_row_done); break;
+        case Variant::SinZ:       compute_ln_iters_fp64_variant<Variant::SinZ>      (p, iters, cols, on_row_done); break;
+        case Variant::CosZ:       compute_ln_iters_fp64_variant<Variant::CosZ>      (p, iters, cols, on_row_done); break;
+        case Variant::ExpZ:       compute_ln_iters_fp64_variant<Variant::ExpZ>      (p, iters, cols, on_row_done); break;
+        case Variant::SinhZ:      compute_ln_iters_fp64_variant<Variant::SinhZ>     (p, iters, cols, on_row_done); break;
+        case Variant::CoshZ:      compute_ln_iters_fp64_variant<Variant::CoshZ>     (p, iters, cols, on_row_done); break;
+        case Variant::TanZ:       compute_ln_iters_fp64_variant<Variant::TanZ>      (p, iters, cols, on_row_done); break;
+        case Variant::Custom:     throw std::runtime_error("ln-map custom variants are not supported");
+    }
+}
+
+LnMapStats render_ln_map_hist_equalized(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {
+    ensure_ln_out(p, out);
+    const auto t0 = std::chrono::steady_clock::now();
+    const int s = p.width_s;
+    const int h = p.height_t;
+    const size_t pixel_count = static_cast<size_t>(s) * static_cast<size_t>(h);
+    const TrigColumns cols = make_trig_columns(s);
+    std::vector<int> iters(pixel_count, p.iterations);
+
+    compute_ln_iters_fp64(p, iters, cols, on_row_done);
+
+    const int radius_two_row = std::clamp(
+        static_cast<int>(std::ceil((LN_FOUR - LN_TWO) * static_cast<double>(s) / TAU)),
+        0,
+        h);
+    std::vector<unsigned long long> hist(static_cast<size_t>(p.iterations), 0ULL);
+    unsigned long long total = 0;
+    auto accumulate_hist = [&](int row_start) {
+        for (int row = row_start; row < h; ++row) {
+            const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
+            for (int x = 0; x < s; ++x) {
+                const int it = iters[row_offset + static_cast<size_t>(x)];
+                if (it >= 0 && it < p.iterations) {
+                    hist[static_cast<size_t>(it)] += 1ULL;
+                    total += 1ULL;
+                }
+            }
+        }
+    };
+    accumulate_hist(radius_two_row);
+    if (total == 0 && radius_two_row > 0) {
+        accumulate_hist(0);
+    }
+
+    unsigned long long cumulative = 0;
+    for (auto& count : hist) {
+        cumulative += count;
+        count = cumulative;
+    }
+
+    const int depth_den = std::max(1, h - radius_two_row - 1);
+    const int thread_count = default_render_threads();
+    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
+    for (int row = 0; row < h; ++row) {
+        uint8_t* rowp = out.ptr<uint8_t>(row);
+        const double depth01 = std::clamp(
+            static_cast<double>(row - radius_two_row) / static_cast<double>(depth_den),
+            0.0,
+            1.0);
+        const double palette_window = 0.58 + 0.42 * depth01;
+        const double phase_shift = 0.22 * depth01;
+        const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
+        for (int x = 0; x < s; ++x) {
+            uint8_t* px = rowp + 3 * x;
+            const int it = iters[row_offset + static_cast<size_t>(x)];
+            if (it >= p.iterations) {
+                px[0] = px[1] = px[2] = 255;
+                continue;
+            }
+
+            double q = (total > 0 && it >= 0)
+                ? static_cast<double>(hist[static_cast<size_t>(it)]) / static_cast<double>(total)
+                : (static_cast<double>(it) + 1.0) / (static_cast<double>(p.iterations) + 1.0);
+            q = std::clamp(q, 0.0, 1.0);
+
+            double mapped = q * palette_window;
+            if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
+                mapped = std::fmod(mapped + phase_shift, 1.0);
+            }
+            colorize_field_bgr(mapped, p.colormap, px[0], px[1], px[2]);
+        }
+    }
+
+    const auto t1 = std::chrono::steady_clock::now();
+    LnMapStats stats;
+    stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    stats.pixel_count = p.width_s * p.height_t;
+    stats.engine_used = "openmp_hist_eq";
+    stats.scalar_used = "fp64";
+    stats.precision_mode = p.precision_mode;
+    std::ostringstream layer;
+    layer << "color=hist_eq,radius<=2,row>=" << radius_two_row << ",histPixels=" << total;
+    stats.layer_summary = layer.str();
+    return stats;
+}
+
 LnValidationResult validate_ln_band(
     const LnMapParams& p,
     int row_start,
@@ -1209,6 +1367,9 @@ LnMapStats render_ln_map_openmp(const LnMapParams& p, cv::Mat& out, const LnMapP
 }
 
 LnMapStats render_ln_map(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {
+    if (p.color_mode == "hist_eq") {
+        return render_ln_map_hist_equalized(p, out, on_row_done);
+    }
     if (ln_map_fast_mode(p)) {
         return render_ln_map_fast(p, out, on_row_done);
     }

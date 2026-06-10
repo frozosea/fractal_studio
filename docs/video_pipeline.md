@@ -44,6 +44,11 @@ t = ceil((2 + depthOctaves) * ln(2) / (2*pi) * widthS)
 
 `2` 个额外 octave 是为了覆盖视频首帧边缘和采样安全区。
 
+Ln-map coloring:
+
+- `lnMapColorMode="escape"` 保持原来的逐像素 escape-time 映射。
+- `lnMapColorMode="hist_eq"` 先统计整张 strip 中 `radius <= 2` 且已逃逸像素的迭代次数直方图，再用 CDF 做类似直方图均衡化的映射。最终颜色仍使用 `colorMap` 指定的调色板，并按 ln-map 深度轻微调整 palette window/phase，让深层区域保留更多色彩分离。
+
 ## Preview Flow / 预览流程
 
 `/api/video/preview` 不建 ln-map。它直接渲染两个 cartesian frame：

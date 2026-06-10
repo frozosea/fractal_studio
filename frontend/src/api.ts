@@ -102,6 +102,8 @@ export type ColorMap = 'classic_cos' | 'mod17' | 'hsv_wheel' | 'tri765' | 'grays
 
 export const COLORMAPS: ColorMap[] = ['classic_cos', 'mod17', 'hsv_wheel', 'tri765', 'grayscale', 'hs_rainbow']
 
+export type LnMapColorMode = 'escape' | 'hist_eq'
+
 export interface MapRenderRequest {
   requestId?: string
   preemptKey?: string
@@ -120,6 +122,7 @@ export interface MapRenderRequest {
   smooth?: boolean           // ln-smooth continuous coloring (μ = iter + 1 − log₂(log₂(|z|²)))
   bailout?: number
   bailoutSq?: number
+  pairwiseCap?: number
   julia?: boolean
   juliaRe?: number
   juliaIm?: number
@@ -302,6 +305,7 @@ export interface MapFieldRequest {
   metric?: Metric
   bailout?: number
   bailoutSq?: number
+  pairwiseCap?: number
   julia?: boolean
   juliaRe?: number
   juliaIm?: number
@@ -339,6 +343,7 @@ export interface LnMapRequest {
   depthOctaves: number
   variant?: Variant
   colorMap?: ColorMap
+  lnMapColorMode?: LnMapColorMode
   iterations?: number
   engine?: string
   precisionMode?: 'standard' | 'fast'
@@ -365,6 +370,7 @@ export interface LnMapResponse {
   engineUsed?: string
   scalarUsed?: string
   precisionMode?: string
+  lnMapColorMode?: LnMapColorMode
   layerSummary?: string
   validationSummary?: string
   generatedMs: number
@@ -383,6 +389,7 @@ export interface HsMeshRequest {
   variant?: Variant
   iterations?: number
   heightScale?: number
+  pairwiseCap?: number
 }
 
 export interface HsFieldRequest {
@@ -396,6 +403,7 @@ export interface HsFieldRequest {
   bailout?: number
   bailoutSq?: number
   heightClamp?: number
+  pairwiseCap?: number
 }
 
 export interface HsFieldResponse {
@@ -491,6 +499,7 @@ export interface VideoExportRequest {
   lnMapEngine?: string
   lnMapMode?: 'standard' | 'fast'
   lnMapScalar?: string
+  lnMapColorMode?: LnMapColorMode
   lnMapFastValidate?: boolean
   lnMapFastValidationBandOctaves?: number
   lnMapFastValidationSampleRows?: number
@@ -547,6 +556,7 @@ export interface VideoExportResponse {
   lnMapEngine?: string
   lnMapScalar?: string
   lnMapMode?: string
+  lnMapColorMode?: LnMapColorMode
   lnMapLayerSummary?: string
   lnMapValidationSummary?: string
   warpMethod?: string
@@ -579,6 +589,7 @@ export interface RunProgress {
   lnMapEngine?: string
   lnMapScalar?: string
   lnMapMode?: string
+  lnMapColorMode?: LnMapColorMode
   lnMapLayerSummary?: string
   lnMapValidationSummary?: string
   warpMethod?: string

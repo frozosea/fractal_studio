@@ -30,6 +30,10 @@ struct HsMeshParams {
     Variant variant   = Variant::Mandelbrot;
     Metric  metric    = Metric::MinAbs;
 
+    // Orbit length cap for MinPairwiseDist. The metric is O(cap^2) per pixel,
+    // so the default stays interactive while callers can opt into deeper runs.
+    int pairwise_cap = 64;
+
     // Z-axis scaling applied to the field values. Larger = taller geometry.
     double heightScale = 0.6;
     // Clamp to prevent spikes from the escape-time metric (which can go to

@@ -100,6 +100,10 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     s = roundUpToMultiple(std::max(128, s), 8);
     const std::string variantStr  = j.value("variant",  std::string("mandelbrot"));
     const std::string colormapStr = j.value("colorMap", std::string("classic_cos"));
+    std::string colorMode = j.value("lnMapColorMode", std::string("escape"));
+    if (!j.contains("lnMapColorMode") && j.contains("colorMode") && !j["colorMode"].is_null()) {
+        colorMode = j.value("colorMode", colorMode);
+    }
     const std::string engine      = j.value("engine",   std::string("auto"));
     std::string precisionMode = j.value("precisionMode", std::string("standard"));
     if (j.contains("lnMapMode") && !j["lnMapMode"].is_null()) {
@@ -125,6 +129,9 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     if (iters < 1 || iters > 10000000)     throw std::runtime_error("invalid iterations");
     if (precisionMode != "standard" && precisionMode != "fast") {
         throw std::runtime_error("invalid precisionMode (standard|fast)");
+    }
+    if (colorMode != "escape" && colorMode != "hist_eq") {
+        throw std::runtime_error("invalid lnMapColorMode (escape|hist_eq)");
     }
     if (!(fastFp32Depth >= 0.0) || !(fastFp64Depth >= 0.0) ||
         !std::isfinite(fastFp32Depth) || !std::isfinite(fastFp64Depth)) {
@@ -184,6 +191,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         lp.bailout_sq = bailoutSq;
         lp.variant = v;
         lp.colormap = cm;
+        lp.color_mode = colorMode;
         lp.engine = engine;
         lp.precision_mode = precisionMode;
         lp.scalar_type = scalarType;
@@ -222,6 +230,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnRadiusTop",  LN_FOUR},
             {"variant",      variantStr},
             {"colorMap",     colormapStr},
+            {"lnMapColorMode", colorMode},
             {"iterations",   iters},
             {"bailout",      bailout},
             {"bailoutSq",    bailoutSq},
@@ -262,6 +271,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         {"engineUsed",  stats.engine_used},
         {"scalarUsed",  stats.scalar_used},
         {"precisionMode", stats.precision_mode},
+        {"lnMapColorMode", colorMode},
         {"layerSummary", stats.layer_summary},
         {"validationSummary", stats.validation_summary},
         {"generatedMs", stats.elapsed_ms},

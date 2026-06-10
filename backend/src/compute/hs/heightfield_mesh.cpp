@@ -45,6 +45,7 @@ void computeFieldMetricImpl(const HsMeshParams& p, std::vector<double>& field) {
     const double im_max = p.center_im + span * 0.5;
     const double bail2 = p.bailout_sq;
     const int thread_count = resolve_render_threads(p.render_threads);
+    const int pairwise_cap = std::max(1, std::min(p.iterations, p.pairwise_cap));
     constexpr int tile_size = 32;
     const int tiles = (N + tile_size - 1) / tile_size;
     const int tile_count = tiles * tiles;
@@ -53,7 +54,7 @@ void computeFieldMetricImpl(const HsMeshParams& p, std::vector<double>& field) {
     {
         std::vector<Cx<double>> orbit_scratch;
         if constexpr (M == Metric::MinPairwiseDist) {
-            orbit_scratch.reserve(64);
+            orbit_scratch.reserve(static_cast<size_t>(pairwise_cap));
         }
 
         #pragma omp for schedule(dynamic, 1)
@@ -74,7 +75,7 @@ void computeFieldMetricImpl(const HsMeshParams& p, std::vector<double>& field) {
                     IterResult r;
                     if constexpr (M == Metric::MinPairwiseDist) {
                         r = iterate_pairwise<V, double>(
-                            z0, c, p.iterations, p.bailout, bail2, 64, orbit_scratch);
+                            z0, c, p.iterations, p.bailout, bail2, pairwise_cap, orbit_scratch);
                     } else {
                         r = iterate_masked<NeedMask, V, double>(
                             z0, c, p.iterations, p.bailout, bail2);

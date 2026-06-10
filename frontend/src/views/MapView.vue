@@ -7,6 +7,7 @@ import {
   type Metric, type ColorMap, type SpecialPoint,
   type SpecialPointEnumResult,
   type VideoExportResponse, type VideoPreviewResponse, type RunProgress, type RunStatusResponse, type CustomVariant,
+  type LnMapColorMode,
 } from '../api'
 import type { StatusState } from '../types'
 import { t, lang } from '../i18n'
@@ -63,6 +64,7 @@ const variant  = ref<string>('mandelbrot')  // Variant literal or "custom:HASH"
 const metric   = ref<Metric>('escape')
 const colorMap = ref<ColorMap>('classic_cos')
 const smooth   = ref(false)
+const pairwiseCap = ref(64)
 
 // ── Custom variants ───────────────────────────────────────────────────────────
 const customVariants     = ref<CustomVariant[]>([])
@@ -448,6 +450,7 @@ async function exportPng() {
       metric:     metric.value,
       colorMap:   colorMap.value,
       smooth:     smooth.value,
+      pairwiseCap: pairwiseCap.value,
       engine:     engineMode.value,
       scalarType: scalarMode.value,
       julia:      juliaOn.value,
@@ -478,6 +481,7 @@ const exportSecondsPerOctave = ref(0.4)
 const exportQualityPreset = ref<'draft' | 'balanced' | 'high' | 'full'>('balanced')
 const exportLnMapMode = ref<'standard' | 'fast'>('fast')
 const exportLnMapScalar = ref<'auto' | 'fp64' | 'fx64'>('auto')
+const exportLnMapColorMode = ref<LnMapColorMode>('escape')
 const exportW         = ref(1920)
 const exportH         = ref(1080)
 const exportBusy      = ref(false)
@@ -519,7 +523,8 @@ const exportProgressDetail = computed(() => {
   const p = exportProgress.value
   if (!p.stage) return ''
   if (p.stage === 'ln_map') {
-    return `ln-map ${p.current || 0}/${p.total || 0} rows · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
+    const colorMode = p.lnMapColorMode ? ` · ${p.lnMapColorMode}` : ''
+    return `ln-map ${p.current || 0}/${p.total || 0} rows${colorMode} · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
   }
   if (p.stage === 'video_warp_encode') {
     return `encode ${p.current || 0}/${p.total || 0} frames${etaSuffix(p.estimatedRemainingMs)}`
@@ -603,6 +608,7 @@ function videoRequestBase() {
     juliaIm:      juliaIm.value,
     variant:      variant.value,
     colorMap:     colorMap.value,
+    lnMapColorMode: exportLnMapColorMode.value,
     iterations:   Math.max(iterations.value, 2048),
     depthOctaves: exportDepth.value,
     fps:          exportFps.value,
@@ -766,6 +772,11 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <input type="number" v-model.number="iterations" min="16" max="1000000" step="128" />
       </div>
 
+      <div v-if="metric === 'min_pairwise_dist'" class="group">
+        <label>Pairwise cap</label>
+        <input type="number" v-model.number="pairwiseCap" min="1" max="1000000" step="64" />
+      </div>
+
       <div class="group transition-group">
         <label>
           <input type="checkbox" v-model="transitionOn" style="width:auto;margin-right:6px" />
@@ -891,6 +902,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
           :centerRe="centerRe" :centerIm="centerIm" :scale="scale"
           :iterations="iterations" :variant="variant" :metric="metric"
           :colorMap="colorMap" :smooth="smooth"
+          :pairwise-cap="pairwiseCap"
           :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
           :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
           :transitionFrom="transitionFrom" :transitionTo="transitionTo"
@@ -943,6 +955,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :centerRe="centerRe" :centerIm="centerIm" :scale="scale"
                 :iterations="iterations" :variant="variant" :metric="metric"
                 :colorMap="colorMap" :smooth="smooth"
+                :pairwise-cap="pairwiseCap"
                 :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
                 :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
                 :transitionFrom="transitionFrom" :transitionTo="transitionTo"
@@ -975,6 +988,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :centerRe="jCenterRe" :centerIm="jCenterIm" :scale="jScale"
                 :iterations="iterations" :variant="variant" :metric="metric"
                 :colorMap="colorMap" :smooth="smooth"
+                :pairwise-cap="pairwiseCap"
                 :transition-theta="null"
                 :julia="true" :juliaRe="juliaRe" :juliaIm="juliaIm"
                 :engine="engineMode" :scalarType="scalarMode"
@@ -1031,6 +1045,13 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <select v-model="exportLnMapMode">
                 <option value="fast">fast · depth layered</option>
                 <option value="standard">standard · full precision</option>
+              </select>
+            </div>
+            <div class="mrow">
+              <label>ln-map color</label>
+              <select v-model="exportLnMapColorMode">
+                <option value="escape">escape · original</option>
+                <option value="hist_eq">hist-eq · depth weighted</option>
               </select>
             </div>
             <div class="mrow">

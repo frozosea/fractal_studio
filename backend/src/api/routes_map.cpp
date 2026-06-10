@@ -339,6 +339,7 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
         p.colormap = parseColormap(in.colormapStr);
         p.smooth = in.smooth;
         p.pairwise_cap = j.value("pairwiseCap", 64);
+        if (p.pairwise_cap < 1 || p.pairwise_cap > 1000000) throw std::runtime_error("invalid pairwiseCap");
         p.from_variant = fromVariant;
         p.to_variant = toVariant;
         p.scalar_type = in.scalarType;
@@ -381,6 +382,8 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
     p.custom_step_fn = vr.fn;
     p.metric = parseMetric(in.metricStr);
     p.colormap = parseColormap(in.colormapStr);
+    p.pairwise_cap = j.value("pairwiseCap", 64);
+    if (p.pairwise_cap < 1 || p.pairwise_cap > 1000000) throw std::runtime_error("invalid pairwiseCap");
     p.julia = in.julia;
     p.julia_re = in.juliaRe;
     p.julia_im = in.juliaIm;
@@ -628,6 +631,8 @@ std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::stri
     p.variant    = vr2.var;
     p.custom_step_fn = vr2.fn;
     p.metric     = parseMetric(metricStr);
+    p.pairwise_cap = j.value("pairwiseCap", 64);
+    if (p.pairwise_cap < 1 || p.pairwise_cap > 1000000) throw std::runtime_error("invalid pairwiseCap");
     p.julia      = julia;
     p.julia_re   = juliaRe;
     p.julia_im   = juliaIm;
