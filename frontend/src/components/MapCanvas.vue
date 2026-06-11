@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { api, type MapRenderRequest, type Metric, type ColorMap, type SpecialPointEnumResult } from '../api'
+import { promptSlowRenderWarning, slowRenderWarningsDisabled } from '../slowWarnings'
 
 // MapCanvas renders the fractal by requesting a full frame from the backend at
 // the device-pixel backing-store dimensions. CSS pixels stay in charge of
@@ -116,6 +117,7 @@ function notifyPreempt(seq: number) {
 
 function maybeWarnSlowRender(generatedMs: number) {
   if (!(generatedMs > 1000)) return
+  if (slowRenderWarningsDisabled()) return
   const key = [
     props.metric,
     props.iterations,
@@ -127,7 +129,7 @@ function maybeWarnSlowRender(generatedMs: number) {
   ].join(':')
   if (slowRenderWarnKey === key) return
   slowRenderWarnKey = key
-  window.alert(`Render took ${(generatedMs / 1000).toFixed(2)}s. Consider lowering resolution/iterations/pairwise cap, or keep it for an offline-quality pass.`)
+  promptSlowRenderWarning(`Render took ${(generatedMs / 1000).toFixed(2)}s. Consider lowering resolution/iterations/pairwise cap, or keep it for an offline-quality pass.`)
 }
 
 function setViewportSize(cssW: number, cssH: number, physical?: { width: number; height: number } | null) {

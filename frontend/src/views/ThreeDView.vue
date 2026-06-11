@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import ThreeDViewer from '../components/ThreeDViewer.vue'
 import { api, VARIANTS, VARIANT_LABELS, type Variant, type HsStage, type TransitionVoxelResponse, type HsFieldResponse, type MeshResponse } from '../api'
 import { t, lang } from '../i18n'
+import { promptSlowRenderWarning, slowRenderWarningsDisabled } from '../slowWarnings'
 
 type Mode = 'hs' | 'transition'
 
@@ -62,6 +63,7 @@ function transitionStlDownloadUrl(r: TransitionVoxelResponse): string | null {
 
 function maybeWarnSlowHs(generatedMs: number, kind: string) {
   if (!(generatedMs > 1000)) return
+  if (slowRenderWarningsDisabled()) return
   const key = [
     kind,
     hsMetric.value,
@@ -72,7 +74,7 @@ function maybeWarnSlowHs(generatedMs: number, kind: string) {
   ].join(':')
   if (slowHsWarnKey === key) return
   slowHsWarnKey = key
-  window.alert(`HS ${kind} took ${(generatedMs / 1000).toFixed(2)}s. For heavier recurrence detail this is expected; lower resolution/iterations/pairwise cap for faster interactive passes.`)
+  promptSlowRenderWarning(`HS ${kind} took ${(generatedMs / 1000).toFixed(2)}s. For heavier recurrence detail this is expected; lower resolution/iterations/pairwise cap for faster interactive passes.`)
 }
 
 // ── HS field auto-compute (debounced) ─────────────────────────────────────────
