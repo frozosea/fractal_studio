@@ -29,15 +29,163 @@ const COLORMAP_LABELS: Record<string, { en: string; zh: string }> = {
   tri765:      { en: 'Tri-765',     zh: 'Tri-765' },
   grayscale:   { en: 'Grayscale',   zh: '灰度' },
   hs_rainbow:  { en: 'HS Rainbow',  zh: '隐结构彩虹' },
+  inferno:     { en: 'Inferno',     zh: 'Inferno 热阶' },
+  viridis:     { en: 'Viridis',     zh: 'Viridis 感知' },
+  twilight:    { en: 'Twilight',    zh: 'Twilight 循环' },
+  ember_blue:  { en: 'Ember Blue',  zh: '蓝焰' },
 }
 
 type LocalizedText = { en: string; zh: string }
+type ColorMapInfo = {
+  key: ColorMap
+  label: LocalizedText
+  summary: LocalizedText
+  bestFor: LocalizedText
+  cost: LocalizedText
+}
 type LnMapColorModeInfo = {
   key: LnMapColorMode
   label: LocalizedText
   summary: LocalizedText
   bestFor: LocalizedText
   cost: LocalizedText
+}
+
+const COLORMAP_OPTIONS: ColorMapInfo[] = [
+  {
+    key: 'classic_cos',
+    label: COLORMAP_LABELS.classic_cos,
+    summary: {
+      en: 'Legacy three-channel cosine with many rapid color cycles across escape time.',
+      zh: '旧版三通道余弦染色，在逃逸时间上有很多快速色彩周期。',
+    },
+    bestFor: {
+      en: 'Finding fine escape bands quickly and matching older renders.',
+      zh: '适合快速看细密逃逸层，也适合和旧图保持一致。',
+    },
+    cost: { en: 'Fast; highly saturated and intentionally busy.', zh: '很快；高饱和、纹理会比较密。' },
+  },
+  {
+    key: 'mod17',
+    label: COLORMAP_LABELS.mod17,
+    summary: {
+      en: 'Discrete modulo coloring that exposes integer iteration steps.',
+      zh: '离散取模染色，直接暴露整数迭代层级。',
+    },
+    bestFor: {
+      en: 'Debugging iteration counts and spotting periodic plateaus.',
+      zh: '适合调试迭代次数、观察周期平台和断层。',
+    },
+    cost: { en: 'Fast; deliberately banded.', zh: '很快；会故意呈现硬分层。' },
+  },
+  {
+    key: 'hsv_wheel',
+    label: COLORMAP_LABELS.hsv_wheel,
+    summary: {
+      en: 'Full hue wheel cycling through escape time.',
+      zh: '沿逃逸时间循环完整 HSV 色轮。',
+    },
+    bestFor: {
+      en: 'Separating neighboring bands with strong hue contrast.',
+      zh: '适合用强色相差异分开相邻逃逸层。',
+    },
+    cost: { en: 'Fast; vivid but not perceptually uniform.', zh: '很快；鲜艳但感知亮度不均匀。' },
+  },
+  {
+    key: 'tri765',
+    label: COLORMAP_LABELS.tri765,
+    summary: {
+      en: 'Three-leg RGB ramp with crisp transitions.',
+      zh: '三段 RGB 斜坡，颜色转折比较利落。',
+    },
+    bestFor: {
+      en: 'High-contrast exploratory renders where hard contours are useful.',
+      zh: '适合需要硬轮廓、高对比的探索性渲染。',
+    },
+    cost: { en: 'Fast; can look synthetic.', zh: '很快；视觉上会偏工程感。' },
+  },
+  {
+    key: 'grayscale',
+    label: COLORMAP_LABELS.grayscale,
+    summary: {
+      en: 'Single-channel brightness map from escape value.',
+      zh: '把逃逸值映射成单通道亮度。',
+    },
+    bestFor: {
+      en: 'Reading structure without hue distraction or preparing masks.',
+      zh: '适合不想被色相干扰地看结构，或准备 mask。',
+    },
+    cost: { en: 'Fast; fewer visual channels.', zh: '很快；可用视觉通道较少。' },
+  },
+  {
+    key: 'hs_rainbow',
+    label: COLORMAP_LABELS.hs_rainbow,
+    summary: {
+      en: 'Legacy hidden-structure rainbow for HS metrics; escape falls back to classic cosine.',
+      zh: '为隐结构指标准备的旧版彩虹；逃逸时间下会退回经典余弦。',
+    },
+    bestFor: {
+      en: 'Min/max/envelope and pairwise metrics rather than escape-time views.',
+      zh: '更适合 min/max/envelope 和 pairwise 指标，不适合普通逃逸时间。',
+    },
+    cost: { en: 'Fast; metric-oriented.', zh: '很快；偏指标视图。' },
+  },
+  {
+    key: 'inferno',
+    label: COLORMAP_LABELS.inferno,
+    summary: {
+      en: 'Dark-to-hot perceptual ramp from near-black purple through ember orange to pale yellow.',
+      zh: '从近黑紫色到橙红再到浅黄的感知热阶。',
+    },
+    bestFor: {
+      en: 'Final stills and videos where depth should read as heat or exposure.',
+      zh: '适合最终截图和视频，让深浅关系像热度/曝光一样读出来。',
+    },
+    cost: { en: 'Fast gradient; smoother and less noisy than cyclic palettes.', zh: '快速渐变；比循环色表更平滑、不那么躁。' },
+  },
+  {
+    key: 'viridis',
+    label: COLORMAP_LABELS.viridis,
+    summary: {
+      en: 'Perceptual purple-blue-green-yellow ramp with stable brightness ordering.',
+      zh: '紫蓝到绿黄的感知均匀色表，亮度排序稳定。',
+    },
+    bestFor: {
+      en: 'Analysis screenshots where small numeric differences should remain legible.',
+      zh: '适合分析截图，让细小数值差异更容易读。',
+    },
+    cost: { en: 'Fast gradient; intentionally restrained.', zh: '快速渐变；颜色克制。' },
+  },
+  {
+    key: 'twilight',
+    label: COLORMAP_LABELS.twilight,
+    summary: {
+      en: 'Cyclic dusk palette that returns to its starting color, useful for wrapped phase-like bands.',
+      zh: '循环暮光色表，末端回到起点，适合周期/相位感的层纹。',
+    },
+    bestFor: {
+      en: 'Smooth coloring, cyclic ln-map mappings, and contours that should not have a hard endpoint.',
+      zh: '适合 smooth coloring、循环 ln-map 映射，或不希望色表端点突兀的轮廓。',
+    },
+    cost: { en: 'Fast gradient; subtler than HSV wheel.', zh: '快速渐变；比 HSV 色轮更柔和。' },
+  },
+  {
+    key: 'ember_blue',
+    label: COLORMAP_LABELS.ember_blue,
+    summary: {
+      en: 'Blue shadow to cyan edge to ember highlight, tuned for boundary contrast.',
+      zh: '从蓝色暗部到青色边缘再到暖色高光，偏边界对比。',
+    },
+    bestFor: {
+      en: 'Fractal edges, frontier-style ln-map modes, and dramatic local exports.',
+      zh: '适合边界、frontier 类 ln-map 模式，以及更有戏剧性的本地导出。',
+    },
+    cost: { en: 'Fast gradient; deliberately stylized.', zh: '快速渐变；风格化更明显。' },
+  },
+]
+
+function colorMapInfo(mode: ColorMap): ColorMapInfo {
+  return COLORMAP_OPTIONS.find(m => m.key === mode) ?? COLORMAP_OPTIONS[0]
 }
 
 const LN_MAP_COLOR_MODE_OPTIONS: LnMapColorModeInfo[] = [
@@ -595,6 +743,7 @@ const exportEstimatedFrames = computed(() =>
   Math.max(2, Math.round(exportEstimatedDuration.value * Math.max(1, exportFps.value)))
 )
 const visiblePreview = computed(() => exportPreviewResult.value ?? exportResult.value)
+const selectedColorMapInfo = computed(() => colorMapInfo(colorMap.value))
 const selectedLnMapColorModeInfo = computed(() => lnMapColorModeInfo(exportLnMapColorMode.value))
 
 function fmtDurationMs(ms?: number | null): string {
@@ -850,9 +999,32 @@ async function pollVideoExport(initial: VideoExportResponse) {
 
       <div class="group">
         <label>{{ t('colormap') }}</label>
-        <select v-model="colorMap">
-          <option v-for="c in COLORMAPS" :key="c" :value="c">{{ COLORMAP_LABELS[c]?.[lang] ?? c }}</option>
-        </select>
+        <div class="select-help-control">
+          <select
+            v-model="colorMap"
+            :title="`${selectedColorMapInfo.summary[lang]} ${selectedColorMapInfo.bestFor[lang]}`"
+            aria-describedby="colormap-tip">
+            <option
+              v-for="c in COLORMAPS"
+              :key="c"
+              :value="c"
+              :title="`${colorMapInfo(c).summary[lang]} ${colorMapInfo(c).bestFor[lang]} ${colorMapInfo(c).cost[lang]}`">
+              {{ COLORMAP_LABELS[c]?.[lang] ?? c }}
+            </option>
+          </select>
+          <div id="colormap-tip" class="select-help-detail" role="tooltip">
+            <div class="select-help-title">{{ selectedColorMapInfo.label[lang] }}</div>
+            <p>{{ selectedColorMapInfo.summary[lang] }}</p>
+            <div>
+              <span>{{ lang === 'en' ? 'Best for' : '适合' }}</span>
+              {{ selectedColorMapInfo.bestFor[lang] }}
+            </div>
+            <div>
+              <span>{{ lang === 'en' ? 'Cost' : '代价' }}</span>
+              {{ selectedColorMapInfo.cost[lang] }}
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="group">
@@ -1491,15 +1663,18 @@ async function pollVideoExport(initial: VideoExportResponse) {
 .mrow.color-mode-row {
   align-items: center;
 }
-.color-mode-control {
+.color-mode-control,
+.select-help-control {
   flex: 1;
   min-width: 0;
   position: relative;
 }
-.color-mode-control select {
+.color-mode-control select,
+.select-help-control select {
   width: 100%;
 }
-.color-mode-detail {
+.color-mode-detail,
+.select-help-detail {
   position: absolute;
   top: calc(100% + 7px);
   right: 0;
@@ -1519,12 +1694,19 @@ async function pollVideoExport(initial: VideoExportResponse) {
   line-height: 1.45;
   color: var(--text-dim);
 }
+.select-help-detail {
+  width: min(300px, calc(100vw - 48px));
+  max-width: none;
+}
 .color-mode-control:hover .color-mode-detail,
-.color-mode-control:focus-within .color-mode-detail {
+.color-mode-control:focus-within .color-mode-detail,
+.select-help-control:hover .select-help-detail,
+.select-help-control:focus-within .select-help-detail {
   opacity: 1;
   transform: translateY(0);
 }
-.color-mode-title {
+.color-mode-title,
+.select-help-title {
   color: var(--accent);
   font-family: var(--mono);
   font-size: 10px;
@@ -1532,13 +1714,16 @@ async function pollVideoExport(initial: VideoExportResponse) {
   letter-spacing: 0.05em;
   margin-bottom: 3px;
 }
-.color-mode-detail p {
+.color-mode-detail p,
+.select-help-detail p {
   margin: 0 0 5px;
 }
-.color-mode-detail div {
+.color-mode-detail div,
+.select-help-detail div {
   margin-top: 3px;
 }
-.color-mode-detail span {
+.color-mode-detail span,
+.select-help-detail span {
   color: var(--text);
   margin-right: 6px;
 }

@@ -44,7 +44,7 @@ __device__ inline float d_cos_color(float n, float freq) {
 }
 
 __device__ inline void d_hsv_to_rgb(float h, float s, float v,
-                                     int& r, int& g, int& b) {
+                                    int& r, int& g, int& b) {
     const float c  = v * s;
     const float hh = h / 60.0f;
     const float x  = c * (1.0f - fabsf(fmodf(hh, 2.0f) - 1.0f));
@@ -63,6 +63,58 @@ __device__ inline void d_hsv_to_rgb(float h, float s, float v,
     b = d_clamp255(static_cast<int>((bb + m) * 255.0f));
 }
 
+__device__ inline void d_gradient_set(double t, double a, double z,
+                                      int r0, int g0, int b0,
+                                      int r1, int g1, int b1,
+                                      uint8_t* px) {
+    double u = (z > a) ? (t - a) / (z - a) : 0.0;
+    if (u < 0.0) u = 0.0;
+    if (u > 1.0) u = 1.0;
+    const double v = 1.0 - u;
+    px[2] = static_cast<uint8_t>(d_clamp255(static_cast<int>(r0 * v + r1 * u + 0.5)));
+    px[1] = static_cast<uint8_t>(d_clamp255(static_cast<int>(g0 * v + g1 * u + 0.5)));
+    px[0] = static_cast<uint8_t>(d_clamp255(static_cast<int>(b0 * v + b1 * u + 0.5)));
+}
+
+__device__ inline bool d_gradient_palette_bgr(double t, int colormap_id, uint8_t* px) {
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    switch (colormap_id) {
+        case 6: { // Inferno
+            if (t <= 0.14) { d_gradient_set(t, 0.00, 0.14,   0,   0,   4,  31,  12,  72, px); return true; }
+            if (t <= 0.28) { d_gradient_set(t, 0.14, 0.28,  31,  12,  72,  85,  15, 109, px); return true; }
+            if (t <= 0.42) { d_gradient_set(t, 0.28, 0.42,  85,  15, 109, 136,  34, 106, px); return true; }
+            if (t <= 0.56) { d_gradient_set(t, 0.42, 0.56, 136,  34, 106, 186,  54,  85, px); return true; }
+            if (t <= 0.70) { d_gradient_set(t, 0.56, 0.70, 186,  54,  85, 227,  89,  51, px); return true; }
+            if (t <= 0.84) { d_gradient_set(t, 0.70, 0.84, 227,  89,  51, 249, 140,  10, px); return true; }
+            if (t <= 0.94) { d_gradient_set(t, 0.84, 0.94, 249, 140,  10, 252, 195,  55, px); return true; }
+            d_gradient_set(t, 0.94, 1.00, 252, 195,  55, 252, 255, 164, px); return true;
+        }
+        case 7: { // Viridis
+            if (t <= 0.25) { d_gradient_set(t, 0.00, 0.25,  68,   1,  84,  59,  82, 139, px); return true; }
+            if (t <= 0.50) { d_gradient_set(t, 0.25, 0.50,  59,  82, 139,  33, 145, 140, px); return true; }
+            if (t <= 0.75) { d_gradient_set(t, 0.50, 0.75,  33, 145, 140,  94, 201,  98, px); return true; }
+            d_gradient_set(t, 0.75, 1.00,  94, 201,  98, 253, 231,  37, px); return true;
+        }
+        case 8: { // Twilight
+            if (t <= 0.18) { d_gradient_set(t, 0.00, 0.18,  32,  24,  70,  63,  92, 180, px); return true; }
+            if (t <= 0.36) { d_gradient_set(t, 0.18, 0.36,  63,  92, 180,  58, 150, 165, px); return true; }
+            if (t <= 0.54) { d_gradient_set(t, 0.36, 0.54,  58, 150, 165, 240, 210, 120, px); return true; }
+            if (t <= 0.72) { d_gradient_set(t, 0.54, 0.72, 240, 210, 120, 210,  90,  90, px); return true; }
+            if (t <= 0.88) { d_gradient_set(t, 0.72, 0.88, 210,  90,  90,  90,  50, 110, px); return true; }
+            d_gradient_set(t, 0.88, 1.00,  90,  50, 110,  32,  24,  70, px); return true;
+        }
+        case 9: { // EmberBlue
+            if (t <= 0.22) { d_gradient_set(t, 0.00, 0.22,   5,   8,  32,  10,  70, 120, px); return true; }
+            if (t <= 0.48) { d_gradient_set(t, 0.22, 0.48,  10,  70, 120,  55, 190, 185, px); return true; }
+            if (t <= 0.72) { d_gradient_set(t, 0.48, 0.72,  55, 190, 185, 245, 172,  75, px); return true; }
+            d_gradient_set(t, 0.72, 1.00, 245, 172,  75, 255, 246, 210, px); return true;
+        }
+        default:
+            return false;
+    }
+}
+
 // Colorize one escaped pixel.  Matches colormap.hpp pixel-exact.
 // colormap_id: 0=ClassicCos, 1=Mod17, 2=HsvWheel, 3=Tri765, 4=Grayscale
 // Writes BGR into px[0..2].
@@ -75,6 +127,7 @@ __device__ inline void colorize_escape_bgr(int iter, int max_iter,
     // n matches CPU: (iter+1)/(max_iter+2)
     const float n = (static_cast<float>(iter) + 1.0f) /
                     (static_cast<float>(max_iter) + 2.0f);
+    if (d_gradient_palette_bgr(static_cast<double>(n), colormap_id, px)) return;
 
     switch (colormap_id) {
         case 1: {  // Mod17
@@ -178,6 +231,7 @@ __device__ inline void colorize_field_bgr(double v01, int colormap_id, uint8_t* 
     if (v01 < 0.0) v01 = 0.0;
     if (v01 > 1.0) v01 = 1.0;
     constexpr double PI = 3.141592653589793;
+    if (d_gradient_palette_bgr(v01, colormap_id, px)) return;
 
     switch (colormap_id) {
         case 4: {

@@ -9,7 +9,9 @@
 
 #include "escape_time.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace fsd::compute {
@@ -21,6 +23,10 @@ enum class Colormap {
     Tri765     = 3,
     Grayscale  = 4,
     HsRainbow  = 5,   // 6-band rainbow with log-scale index (matches legacy boat_3D6_2D_enlarge.c)
+    Inferno    = 6,
+    Viridis    = 7,
+    Twilight   = 8,
+    EmberBlue  = 9,
 };
 
 inline bool colormap_from_name(const char* name, Colormap& out) {
@@ -32,6 +38,10 @@ inline bool colormap_from_name(const char* name, Colormap& out) {
         {"tri765",      Colormap::Tri765},
         {"grayscale",   Colormap::Grayscale},
         {"hs_rainbow",  Colormap::HsRainbow},
+        {"inferno",     Colormap::Inferno},
+        {"viridis",     Colormap::Viridis},
+        {"twilight",    Colormap::Twilight},
+        {"ember_blue",  Colormap::EmberBlue},
     };
     for (const auto& e : table) {
         const char* a = e.n;
@@ -63,6 +73,86 @@ inline int clamp255(int v) {
 inline double cos_color(double n, double freq) {
     constexpr double PI = 3.141592653589793;
     return 128.0 - 128.0 * std::cos(freq * n * PI);
+}
+
+struct ColorStop {
+    double t;
+    int r;
+    int g;
+    int b;
+};
+
+template <size_t N>
+inline void gradient_stops_bgr(double t, const ColorStop (&stops)[N], uint8_t& b, uint8_t& g, uint8_t& r) {
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    if (t <= stops[0].t) {
+        r = static_cast<uint8_t>(clamp255(stops[0].r));
+        g = static_cast<uint8_t>(clamp255(stops[0].g));
+        b = static_cast<uint8_t>(clamp255(stops[0].b));
+        return;
+    }
+    for (size_t i = 1; i < N; ++i) {
+        if (t <= stops[i].t) {
+            const double span = std::max(1e-12, stops[i].t - stops[i - 1].t);
+            const double u = (t - stops[i - 1].t) / span;
+            const auto mix = [u](int a, int z) {
+                return clamp255(static_cast<int>(std::lround(static_cast<double>(a) * (1.0 - u) + static_cast<double>(z) * u)));
+            };
+            r = static_cast<uint8_t>(mix(stops[i - 1].r, stops[i].r));
+            g = static_cast<uint8_t>(mix(stops[i - 1].g, stops[i].g));
+            b = static_cast<uint8_t>(mix(stops[i - 1].b, stops[i].b));
+            return;
+        }
+    }
+    r = static_cast<uint8_t>(clamp255(stops[N - 1].r));
+    g = static_cast<uint8_t>(clamp255(stops[N - 1].g));
+    b = static_cast<uint8_t>(clamp255(stops[N - 1].b));
+}
+
+inline bool colorize_gradient_palette_bgr(double t, Colormap palette, uint8_t& b, uint8_t& g, uint8_t& r) {
+    static constexpr ColorStop inferno[] = {
+        {0.00,   0,   0,   4},
+        {0.14,  31,  12,  72},
+        {0.28,  85,  15, 109},
+        {0.42, 136,  34, 106},
+        {0.56, 186,  54,  85},
+        {0.70, 227,  89,  51},
+        {0.84, 249, 140,  10},
+        {0.94, 252, 195,  55},
+        {1.00, 252, 255, 164},
+    };
+    static constexpr ColorStop viridis[] = {
+        {0.00,  68,   1,  84},
+        {0.25,  59,  82, 139},
+        {0.50,  33, 145, 140},
+        {0.75,  94, 201,  98},
+        {1.00, 253, 231,  37},
+    };
+    static constexpr ColorStop twilight[] = {
+        {0.00,  32,  24,  70},
+        {0.18,  63,  92, 180},
+        {0.36,  58, 150, 165},
+        {0.54, 240, 210, 120},
+        {0.72, 210,  90,  90},
+        {0.88,  90,  50, 110},
+        {1.00,  32,  24,  70},
+    };
+    static constexpr ColorStop ember_blue[] = {
+        {0.00,   5,   8,  32},
+        {0.22,  10,  70, 120},
+        {0.48,  55, 190, 185},
+        {0.72, 245, 172,  75},
+        {1.00, 255, 246, 210},
+    };
+
+    switch (palette) {
+        case Colormap::Inferno:   gradient_stops_bgr(t, inferno, b, g, r); return true;
+        case Colormap::Viridis:   gradient_stops_bgr(t, viridis, b, g, r); return true;
+        case Colormap::Twilight:  gradient_stops_bgr(t, twilight, b, g, r); return true;
+        case Colormap::EmberBlue: gradient_stops_bgr(t, ember_blue, b, g, r); return true;
+        default: return false;
+    }
 }
 
 inline void hsv_to_rgb(double h, double s, double v, int& r, int& g, int& b) {
@@ -143,6 +233,7 @@ inline void colorize_escape_bgr(
         // Compute continuous μ; cycle every 32 smooth-iters (arbitrary period).
         const double mu = smooth_mu(iter, norm);
         const double t  = std::fmod(mu / 32.0, 1.0);   // [0, 1)
+        if (colorize_gradient_palette_bgr(t, palette, b, g, r)) return;
 
         switch (palette) {
             case Colormap::HsvWheel: {
@@ -192,6 +283,7 @@ inline void colorize_escape_bgr(
 
     // Non-smooth path (original palette formulas).
     const double n = (static_cast<double>(iter) + 1.0) / (static_cast<double>(max_iter) + 2.0);
+    if (colorize_gradient_palette_bgr(n, palette, b, g, r)) return;
 
     switch (palette) {
         case Colormap::Mod17: {
@@ -249,6 +341,9 @@ inline void colorize_field_smooth_bgr(
     if (x <= 0.0) { r = g = b = 255; return; }   // white for zero / invalid
 
     const double base_val = 2.0 - std::log2(x);  // = 2 - log2(x)
+    double cycle = std::fmod(base_val / 8.0, 1.0);
+    if (cycle < 0.0) cycle += 1.0;
+    if (colorize_gradient_palette_bgr(cycle, palette, b, g, r)) return;
 
     switch (palette) {
         case Colormap::HsvWheel: {
@@ -305,6 +400,7 @@ inline void colorize_field_bgr(
     if (v01 < 0.0) v01 = 0.0;
     if (v01 > 1.0) v01 = 1.0;
     constexpr double PI = 3.141592653589793;
+    if (colorize_gradient_palette_bgr(v01, palette, b, g, r)) return;
 
     switch (palette) {
         case Colormap::Grayscale: {

@@ -98,9 +98,30 @@ export type Metric = 'escape' | 'min_abs' | 'max_abs' | 'envelope' | 'min_pairwi
 
 export const METRICS: Metric[] = ['escape', 'min_abs', 'max_abs', 'envelope', 'min_pairwise_dist']
 
-export type ColorMap = 'classic_cos' | 'mod17' | 'hsv_wheel' | 'tri765' | 'grayscale' | 'hs_rainbow'
+export type ColorMap =
+  | 'classic_cos'
+  | 'mod17'
+  | 'hsv_wheel'
+  | 'tri765'
+  | 'grayscale'
+  | 'hs_rainbow'
+  | 'inferno'
+  | 'viridis'
+  | 'twilight'
+  | 'ember_blue'
 
-export const COLORMAPS: ColorMap[] = ['classic_cos', 'mod17', 'hsv_wheel', 'tri765', 'grayscale', 'hs_rainbow']
+export const COLORMAPS: ColorMap[] = [
+  'classic_cos',
+  'mod17',
+  'hsv_wheel',
+  'tri765',
+  'grayscale',
+  'hs_rainbow',
+  'inferno',
+  'viridis',
+  'twilight',
+  'ember_blue',
+]
 
 export type LnMapColorMode = 'escape' | 'hist_eq' | 'row_eq' | 'log_lift' | 'bands' | 'frontier'
 

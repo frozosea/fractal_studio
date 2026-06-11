@@ -105,6 +105,16 @@ c = juliaRe + juliaIm * i
 
 核心迭代在 `backend/src/compute/escape_time.hpp`。Map kernel 根据 metric 选择不同的 `IterResult` 字段，避免为不需要的字段付费。
 
+## Colormaps / 染色表
+
+`colorMap` 是实际调色板，影响主画布、PNG 导出、ln-map strip 和视频导出。可选项：
+
+- `classic_cos`、`mod17`、`hsv_wheel`、`tri765`、`grayscale`、`hs_rainbow` 为旧有色表。
+- `inferno` 是暗紫到橙黄的热阶感知色表。
+- `viridis` 是亮度排序稳定的紫蓝-绿黄色表，适合分析截图。
+- `twilight` 是端点闭合的循环暮光色表，适合 smooth 或相位感轮廓。
+- `ember_blue` 是蓝色暗部、青色边缘、暖色高光的风格化边界色表。
+
 ## Engine And Scalar / 引擎与标量
 
 | Engine | Scope | Notes |

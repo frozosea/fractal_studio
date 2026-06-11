@@ -46,6 +46,8 @@ t = ceil((2 + depthOctaves) * ln(2) / (2*pi) * widthS)
 
 Ln-map coloring:
 
+`colorMap` 选择实际调色板；`lnMapColorMode` 选择 escape iteration 到调色板坐标的映射方式。
+
 - `lnMapColorMode="escape"` 保持原来的逐像素 escape-time 映射。
 - `lnMapColorMode="hist_eq"` 先统计整张 strip 中 `radius <= 2` 且已逃逸像素的迭代次数直方图，再用 CDF 做类似直方图均衡化的映射。最终颜色仍使用 `colorMap` 指定的调色板，并按 ln-map 深度轻微调整 palette window/phase，让深层区域保留更多色彩分离。
 - `lnMapColorMode="row_eq"` 对每个 ln-radius 行单独做 escape iteration 秩映射。它强化每个深度切片内部的角向细节，代价是弱化全局 escape-time 尺度。
