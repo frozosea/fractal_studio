@@ -1338,8 +1338,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     if (lnMapMode != "standard" && lnMapMode != "fast") {
         throw std::runtime_error("invalid lnMapMode (standard|fast)");
     }
-    if (lnMapColorMode != "escape" && lnMapColorMode != "hist_eq") {
-        throw std::runtime_error("invalid lnMapColorMode (escape|hist_eq)");
+    if (!compute::ln_map_color_mode_supported(lnMapColorMode)) {
+        throw std::runtime_error("invalid lnMapColorMode (escape|hist_eq|row_eq|log_lift|bands|frontier)");
     }
     if (!(lnMapFastFp32Depth >= 0.0) || !(lnMapFastFp64Depth >= 0.0) ||
         !std::isfinite(lnMapFastFp32Depth) || !std::isfinite(lnMapFastFp64Depth)) {

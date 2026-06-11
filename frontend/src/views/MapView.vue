@@ -31,6 +31,100 @@ const COLORMAP_LABELS: Record<string, { en: string; zh: string }> = {
   hs_rainbow:  { en: 'HS Rainbow',  zh: '隐结构彩虹' },
 }
 
+type LocalizedText = { en: string; zh: string }
+type LnMapColorModeInfo = {
+  key: LnMapColorMode
+  label: LocalizedText
+  summary: LocalizedText
+  bestFor: LocalizedText
+  cost: LocalizedText
+}
+
+const LN_MAP_COLOR_MODE_OPTIONS: LnMapColorModeInfo[] = [
+  {
+    key: 'escape',
+    label: { en: 'Escape · original', zh: 'Escape · 原始' },
+    summary: {
+      en: 'Uses the raw escape iteration directly, preserving the traditional band structure and the fastest SIMD/CUDA paths.',
+      zh: '直接使用原始逃逸迭代数，保留传统分层纹理，也保留最快的 SIMD/CUDA 路径。',
+    },
+    bestFor: {
+      en: 'Baseline renders, speed tests, and cases where exact legacy color behavior matters.',
+      zh: '适合做基准、速度测试，或需要和旧版逃逸时间染色保持一致的时候。',
+    },
+    cost: { en: 'Fastest; no whole-strip statistics.', zh: '最快；不需要整张 strip 统计。' },
+  },
+  {
+    key: 'hist_eq',
+    label: { en: 'Global CDF · depth weighted', zh: '全局 CDF · 深度加权' },
+    summary: {
+      en: 'Builds one histogram from escaped pixels with radius <= 2, maps iteration ranks through its CDF, then lets depth shift the palette window.',
+      zh: '统计半径 <= 2 且已发散像素的迭代直方图，用 CDF 做全局秩映射，再让 ln-map 深度轻微推动色带窗口。',
+    },
+    bestFor: {
+      en: 'Long zoom videos where early and late regions should keep comparable contrast.',
+      zh: '适合长 zoom 视频，让浅层和深层都有接近的对比度，不至于某段全糊成一片。',
+    },
+    cost: { en: 'OpenMP fp64 plus one global histogram.', zh: 'OpenMP fp64，加一次全局直方图。' },
+  },
+  {
+    key: 'row_eq',
+    label: { en: 'Row CDF · local contrast', zh: '逐行 CDF · 局部对比' },
+    summary: {
+      en: 'Equalizes each ln-radius row independently, so every depth slice spends the full palette on its local escape distribution.',
+      zh: '每个 ln 半径行单独做均衡化，让每个深度切片都把完整色带用在本层的逃逸分布上。',
+    },
+    bestFor: {
+      en: 'Revealing faint angular filaments in deep strips; less faithful to global escape-time scale.',
+      zh: '适合挖出深层 strip 中很淡的角向丝状结构；但它会弱化全局逃逸时间尺度。',
+    },
+    cost: { en: 'OpenMP fp64 plus per-row sorting.', zh: 'OpenMP fp64，每行额外排序。' },
+  },
+  {
+    key: 'log_lift',
+    label: { en: 'Log lift · soft early detail', zh: '对数拉伸 · 柔和浅层' },
+    summary: {
+      en: 'Applies a log curve to normalized escape time, expanding low iteration differences and compressing late escapes without using statistics.',
+      zh: '对归一化逃逸时间做对数曲线，放大低迭代差异、压缩高迭代区域，不依赖直方图统计。',
+    },
+    bestFor: {
+      en: 'Smooth explanatory renders and previews where histogram flicker would be distracting.',
+      zh: '适合比较柔和的说明性渲染，或者不希望统计均衡化带来跳动感的预览。',
+    },
+    cost: { en: 'OpenMP fp64; no histogram memory.', zh: 'OpenMP fp64；不需要直方图内存。' },
+  },
+  {
+    key: 'bands',
+    label: { en: 'Iso bands · contour readable', zh: '等值色带 · 轮廓可读' },
+    summary: {
+      en: 'Blends global CDF color with broad and fine periodic bands, turning escape-time changes into visible contour lines.',
+      zh: '把全局 CDF 颜色和粗/细周期色带混合，把逃逸时间变化转成更可读的等值轮廓。',
+    },
+    bestFor: {
+      en: 'Studying shells, wakes, and repeated structures where contour separation matters more than smoothness.',
+      zh: '适合观察壳层、尾迹、重复结构；更强调轮廓分离，不追求完全平滑。',
+    },
+    cost: { en: 'OpenMP fp64 plus one global histogram.', zh: 'OpenMP fp64，加一次全局直方图。' },
+  },
+  {
+    key: 'frontier',
+    label: { en: 'Frontier glow · edge enhanced', zh: '边界辉光 · 梯度增强' },
+    summary: {
+      en: 'Uses the global CDF as a base, then brightens places where neighboring escape ranks change quickly.',
+      zh: '以全局 CDF 为底，再把邻域逃逸秩变化快的位置提亮，突出边界和脉络。',
+    },
+    bestFor: {
+      en: 'Final videos and stills that need crisp boundaries around filaments and minibrot edges.',
+      zh: '适合最终视频或截图，尤其是想让细丝、边界、小 Mandelbrot 轮廓更锋利的时候。',
+    },
+    cost: { en: 'OpenMP fp64, global histogram, and a small neighbor-gradient pass.', zh: 'OpenMP fp64、全局直方图，以及一次邻域梯度增强。' },
+  },
+]
+
+function lnMapColorModeInfo(mode: LnMapColorMode): LnMapColorModeInfo {
+  return LN_MAP_COLOR_MODE_OPTIONS.find(m => m.key === mode) ?? LN_MAP_COLOR_MODE_OPTIONS[0]
+}
+
 const status = inject<StatusState>('status')!
 const localExportMode = computed(() => api.isLocalBrowserAccess())
 const pngExportStatus = ref('')
@@ -501,6 +595,7 @@ const exportEstimatedFrames = computed(() =>
   Math.max(2, Math.round(exportEstimatedDuration.value * Math.max(1, exportFps.value)))
 )
 const visiblePreview = computed(() => exportPreviewResult.value ?? exportResult.value)
+const selectedLnMapColorModeInfo = computed(() => lnMapColorModeInfo(exportLnMapColorMode.value))
 
 function fmtDurationMs(ms?: number | null): string {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return ''
@@ -1047,12 +1142,27 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 <option value="standard">standard · full precision</option>
               </select>
             </div>
-            <div class="mrow">
+            <div class="mrow color-mode-row">
               <label>ln-map color</label>
-              <select v-model="exportLnMapColorMode">
-                <option value="escape">escape · original</option>
-                <option value="hist_eq">hist-eq · depth weighted</option>
-              </select>
+              <div class="color-mode-control">
+                <select v-model="exportLnMapColorMode">
+                  <option v-for="m in LN_MAP_COLOR_MODE_OPTIONS" :key="m.key" :value="m.key">
+                    {{ m.label[lang] }}
+                  </option>
+                </select>
+                <div class="color-mode-detail">
+                  <div class="color-mode-title">{{ selectedLnMapColorModeInfo.label[lang] }}</div>
+                  <p>{{ selectedLnMapColorModeInfo.summary[lang] }}</p>
+                  <div>
+                    <span>{{ lang === 'en' ? 'Best for' : '适合' }}</span>
+                    {{ selectedLnMapColorModeInfo.bestFor[lang] }}
+                  </div>
+                  <div>
+                    <span>{{ lang === 'en' ? 'Cost' : '代价' }}</span>
+                    {{ selectedLnMapColorModeInfo.cost[lang] }}
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="mrow">
               <label>ln-map scalar</label>
@@ -1343,7 +1453,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
 .modal {
   background: var(--panel);
   border: 1px solid var(--rule);
-  width: min(420px, calc(100vw - 32px));
+  width: min(520px, calc(100vw - 32px));
   padding: 24px 28px;
   display: flex;
   flex-direction: column;
@@ -1371,6 +1481,44 @@ async function pollVideoExport(initial: VideoExportResponse) {
   min-width: 90px;
 }
 .mrow input[type="number"] { width: 100px; }
+.mrow.color-mode-row {
+  align-items: flex-start;
+}
+.color-mode-control {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.color-mode-control select {
+  width: 100%;
+}
+.color-mode-detail {
+  border-left: 2px solid var(--accent-edge);
+  padding-left: 9px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.color-mode-title {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 3px;
+}
+.color-mode-detail p {
+  margin: 0 0 5px;
+}
+.color-mode-detail div {
+  margin-top: 3px;
+}
+.color-mode-detail span {
+  color: var(--text);
+  margin-right: 6px;
+}
 .mrow.estimate span {
   font-size: 10px;
   color: var(--text-dim);
@@ -1912,6 +2060,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
   }
 
   .mrow.estimate,
+  .mrow.color-mode-row,
   .local-mode-row,
   .progress-stack,
   .modal-status,

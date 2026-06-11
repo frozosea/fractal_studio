@@ -130,8 +130,8 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     if (precisionMode != "standard" && precisionMode != "fast") {
         throw std::runtime_error("invalid precisionMode (standard|fast)");
     }
-    if (colorMode != "escape" && colorMode != "hist_eq") {
-        throw std::runtime_error("invalid lnMapColorMode (escape|hist_eq)");
+    if (!compute::ln_map_color_mode_supported(colorMode)) {
+        throw std::runtime_error("invalid lnMapColorMode (escape|hist_eq|row_eq|log_lift|bands|frontier)");
     }
     if (!(fastFp32Depth >= 0.0) || !(fastFp64Depth >= 0.0) ||
         !std::isfinite(fastFp32Depth) || !std::isfinite(fastFp64Depth)) {

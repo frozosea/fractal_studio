@@ -774,12 +774,13 @@ void compute_ln_iters_fp64(
     }
 }
 
-LnMapStats render_ln_map_hist_equalized(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {
+LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {
     ensure_ln_out(p, out);
     const auto t0 = std::chrono::steady_clock::now();
     const int s = p.width_s;
     const int h = p.height_t;
     const size_t pixel_count = static_cast<size_t>(s) * static_cast<size_t>(h);
+    const std::string mode = p.color_mode;
     const TrigColumns cols = make_trig_columns(s);
     std::vector<int> iters(pixel_count, p.iterations);
 
@@ -789,30 +790,49 @@ LnMapStats render_ln_map_hist_equalized(const LnMapParams& p, cv::Mat& out, cons
         static_cast<int>(std::ceil((LN_FOUR - LN_TWO) * static_cast<double>(s) / TAU)),
         0,
         h);
-    std::vector<unsigned long long> hist(static_cast<size_t>(p.iterations), 0ULL);
+    const bool needs_global_cdf = mode == "hist_eq" || mode == "bands" || mode == "frontier";
+    std::vector<unsigned long long> hist;
     unsigned long long total = 0;
-    auto accumulate_hist = [&](int row_start) {
-        for (int row = row_start; row < h; ++row) {
-            const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
-            for (int x = 0; x < s; ++x) {
-                const int it = iters[row_offset + static_cast<size_t>(x)];
-                if (it >= 0 && it < p.iterations) {
-                    hist[static_cast<size_t>(it)] += 1ULL;
-                    total += 1ULL;
+    if (needs_global_cdf) {
+        hist.assign(static_cast<size_t>(p.iterations), 0ULL);
+        auto accumulate_hist = [&](int row_start) {
+            for (int row = row_start; row < h; ++row) {
+                const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
+                for (int x = 0; x < s; ++x) {
+                    const int it = iters[row_offset + static_cast<size_t>(x)];
+                    if (it >= 0 && it < p.iterations) {
+                        hist[static_cast<size_t>(it)] += 1ULL;
+                        total += 1ULL;
+                    }
                 }
             }
+        };
+        accumulate_hist(radius_two_row);
+        if (total == 0 && radius_two_row > 0) {
+            accumulate_hist(0);
         }
-    };
-    accumulate_hist(radius_two_row);
-    if (total == 0 && radius_two_row > 0) {
-        accumulate_hist(0);
+
+        unsigned long long cumulative = 0;
+        for (auto& count : hist) {
+            cumulative += count;
+            count = cumulative;
+        }
     }
 
-    unsigned long long cumulative = 0;
-    for (auto& count : hist) {
-        cumulative += count;
-        count = cumulative;
-    }
+    auto raw_q_for_iter = [&](int it) {
+        const double q = (static_cast<double>(it) + 1.0) / (static_cast<double>(p.iterations) + 1.0);
+        return std::clamp(q, 0.0, 1.0);
+    };
+
+    auto global_q_for_iter = [&](int it) {
+        if (total > 0 && it >= 0 && it < p.iterations && !hist.empty()) {
+            return std::clamp(
+                static_cast<double>(hist[static_cast<size_t>(it)]) / static_cast<double>(total),
+                0.0,
+                1.0);
+        }
+        return raw_q_for_iter(it);
+    };
 
     const int depth_den = std::max(1, h - radius_two_row - 1);
     const int thread_count = default_render_threads();
@@ -823,9 +843,37 @@ LnMapStats render_ln_map_hist_equalized(const LnMapParams& p, cv::Mat& out, cons
             static_cast<double>(row - radius_two_row) / static_cast<double>(depth_den),
             0.0,
             1.0);
-        const double palette_window = 0.58 + 0.42 * depth01;
-        const double phase_shift = 0.22 * depth01;
         const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
+        std::vector<int> row_iters;
+        if (mode == "row_eq") {
+            row_iters.reserve(static_cast<size_t>(s));
+            for (int x = 0; x < s; ++x) {
+                const int it = iters[row_offset + static_cast<size_t>(x)];
+                if (it >= 0 && it < p.iterations) row_iters.push_back(it);
+            }
+            std::sort(row_iters.begin(), row_iters.end());
+        }
+
+        auto row_q_for_iter = [&](int it) {
+            if (!row_iters.empty() && it >= 0 && it < p.iterations) {
+                const auto hi = std::upper_bound(row_iters.begin(), row_iters.end(), it);
+                return std::clamp(
+                    static_cast<double>(hi - row_iters.begin()) / static_cast<double>(row_iters.size()),
+                    0.0,
+                    1.0);
+            }
+            return raw_q_for_iter(it);
+        };
+
+        auto q_at = [&](int rr, int xx) {
+            rr = std::clamp(rr, 0, h - 1);
+            if (xx < 0) xx += s;
+            else if (xx >= s) xx -= s;
+            const int nit = iters[static_cast<size_t>(rr) * static_cast<size_t>(s) + static_cast<size_t>(xx)];
+            if (nit >= p.iterations) return 1.0;
+            return global_q_for_iter(nit);
+        };
+
         for (int x = 0; x < s; ++x) {
             uint8_t* px = rowp + 3 * x;
             const int it = iters[row_offset + static_cast<size_t>(x)];
@@ -834,14 +882,51 @@ LnMapStats render_ln_map_hist_equalized(const LnMapParams& p, cv::Mat& out, cons
                 continue;
             }
 
-            double q = (total > 0 && it >= 0)
-                ? static_cast<double>(hist[static_cast<size_t>(it)]) / static_cast<double>(total)
-                : (static_cast<double>(it) + 1.0) / (static_cast<double>(p.iterations) + 1.0);
-            q = std::clamp(q, 0.0, 1.0);
-
-            double mapped = q * palette_window;
-            if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
-                mapped = std::fmod(mapped + phase_shift, 1.0);
+            double mapped = 0.0;
+            if (mode == "log_lift") {
+                const double raw = raw_q_for_iter(it);
+                const double q = std::log1p(64.0 * raw) / std::log1p(64.0);
+                mapped = q * (0.82 + 0.18 * depth01);
+                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
+                    mapped = std::fmod(mapped + 0.15 * depth01, 1.0);
+                }
+            } else if (mode == "row_eq") {
+                const double q = row_q_for_iter(it);
+                mapped = q * (0.86 + 0.14 * depth01);
+                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
+                    mapped = std::fmod(mapped + 0.12 * depth01, 1.0);
+                }
+            } else if (mode == "bands") {
+                const double base = global_q_for_iter(it);
+                const double raw = raw_q_for_iter(it);
+                const double broad = 0.5 + 0.5 * std::sin(TAU * (base * 18.0 + depth01 * 0.72));
+                const double fine = 0.5 + 0.5 * std::sin(TAU * (std::sqrt(raw) * 72.0 + depth01 * 0.19));
+                mapped = std::clamp(0.70 * base + 0.22 * broad + 0.08 * fine, 0.0, 1.0);
+                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
+                    mapped = std::fmod(mapped + 0.08 * depth01, 1.0);
+                }
+            } else if (mode == "frontier") {
+                const double base = global_q_for_iter(it);
+                const double dx = q_at(row, x + 1) - q_at(row, x - 1);
+                const double dy = q_at(row + 1, x) - q_at(row - 1, x);
+                const double edge = std::clamp(std::sqrt(dx * dx + dy * dy) * 5.0, 0.0, 1.0);
+                mapped = std::clamp(0.76 * base + 0.24 * edge, 0.0, 1.0);
+                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
+                    mapped = std::fmod(mapped + 0.10 * depth01, 1.0);
+                }
+                colorize_field_bgr(mapped, p.colormap, px[0], px[1], px[2]);
+                const double lift = 0.34 * edge;
+                px[0] = static_cast<uint8_t>(clamp255(static_cast<int>(static_cast<double>(px[0]) * (1.0 - lift) + 255.0 * lift)));
+                px[1] = static_cast<uint8_t>(clamp255(static_cast<int>(static_cast<double>(px[1]) * (1.0 - lift) + 255.0 * lift)));
+                px[2] = static_cast<uint8_t>(clamp255(static_cast<int>(static_cast<double>(px[2]) * (1.0 - lift) + 255.0 * lift)));
+                continue;
+            } else {
+                const double q = global_q_for_iter(it);
+                const double palette_window = 0.58 + 0.42 * depth01;
+                mapped = q * palette_window;
+                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
+                    mapped = std::fmod(mapped + 0.22 * depth01, 1.0);
+                }
             }
             colorize_field_bgr(mapped, p.colormap, px[0], px[1], px[2]);
         }
@@ -851,11 +936,16 @@ LnMapStats render_ln_map_hist_equalized(const LnMapParams& p, cv::Mat& out, cons
     LnMapStats stats;
     stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     stats.pixel_count = p.width_s * p.height_t;
-    stats.engine_used = "openmp_hist_eq";
+    stats.engine_used = mode == "hist_eq" ? "openmp_hist_eq" : "openmp_" + mode;
     stats.scalar_used = "fp64";
     stats.precision_mode = p.precision_mode;
     std::ostringstream layer;
-    layer << "color=hist_eq,radius<=2,row>=" << radius_two_row << ",histPixels=" << total;
+    layer << "color=" << mode << ",radius<=2,row>=" << radius_two_row;
+    if (needs_global_cdf) layer << ",histPixels=" << total;
+    if (mode == "row_eq") layer << ",rowLocal=1";
+    if (mode == "log_lift") layer << ",curve=log1p64";
+    if (mode == "bands") layer << ",bands=18+72";
+    if (mode == "frontier") layer << ",edge=gradient";
     stats.layer_summary = layer.str();
     return stats;
 }
@@ -1346,6 +1436,15 @@ bool ln_map_variant_supported_by_simd(Variant v) {
     return id >= 0 && id <= 9;
 }
 
+bool ln_map_color_mode_supported(const std::string& mode) noexcept {
+    return mode == "escape" ||
+           mode == "hist_eq" ||
+           mode == "row_eq" ||
+           mode == "log_lift" ||
+           mode == "bands" ||
+           mode == "frontier";
+}
+
 LnMapStats render_ln_map_openmp_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done) {
     ensure_ln_out(p, out);
     const auto [start, end] = clamp_rows(p, row_start, row_count);
@@ -1367,8 +1466,11 @@ LnMapStats render_ln_map_openmp(const LnMapParams& p, cv::Mat& out, const LnMapP
 }
 
 LnMapStats render_ln_map(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {
-    if (p.color_mode == "hist_eq") {
-        return render_ln_map_hist_equalized(p, out, on_row_done);
+    if (!ln_map_color_mode_supported(p.color_mode)) {
+        throw std::runtime_error("invalid ln-map color mode");
+    }
+    if (p.color_mode != "escape") {
+        return render_ln_map_mapped(p, out, on_row_done);
     }
     if (ln_map_fast_mode(p)) {
         return render_ln_map_fast(p, out, on_row_done);

@@ -102,7 +102,7 @@ export type ColorMap = 'classic_cos' | 'mod17' | 'hsv_wheel' | 'tri765' | 'grays
 
 export const COLORMAPS: ColorMap[] = ['classic_cos', 'mod17', 'hsv_wheel', 'tri765', 'grayscale', 'hs_rainbow']
 
-export type LnMapColorMode = 'escape' | 'hist_eq'
+export type LnMapColorMode = 'escape' | 'hist_eq' | 'row_eq' | 'log_lift' | 'bands' | 'frontier'
 
 export interface MapRenderRequest {
   requestId?: string

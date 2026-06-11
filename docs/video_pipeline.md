@@ -48,6 +48,12 @@ Ln-map coloring:
 
 - `lnMapColorMode="escape"` 保持原来的逐像素 escape-time 映射。
 - `lnMapColorMode="hist_eq"` 先统计整张 strip 中 `radius <= 2` 且已逃逸像素的迭代次数直方图，再用 CDF 做类似直方图均衡化的映射。最终颜色仍使用 `colorMap` 指定的调色板，并按 ln-map 深度轻微调整 palette window/phase，让深层区域保留更多色彩分离。
+- `lnMapColorMode="row_eq"` 对每个 ln-radius 行单独做 escape iteration 秩映射。它强化每个深度切片内部的角向细节，代价是弱化全局 escape-time 尺度。
+- `lnMapColorMode="log_lift"` 对归一化 escape iteration 做 `log1p` 拉伸，不依赖直方图。低迭代差异会更明显，高迭代区域会被压缩，适合柔和预览或避免统计闪动。
+- `lnMapColorMode="bands"` 混合全局 CDF 与粗/细周期色带，把逃逸时间变化转成更可读的等值轮廓。
+- `lnMapColorMode="frontier"` 以全局 CDF 为基础，再根据邻域 escape-rank 梯度提亮边界，适合突出细丝、小轮廓和分界脉络。
+
+除 `escape` 外，这些映射都需要先计算整张 ln-map iteration field，目前走 OpenMP fp64 路径。
 
 ## Preview Flow / 预览流程
 

@@ -27,7 +27,7 @@ struct LnMapParams {
     double bailout_sq = 4.0;
     Variant variant = Variant::Mandelbrot;
     Colormap colormap = Colormap::ClassicCos;
-    std::string color_mode = "escape"; // escape, hist_eq
+    std::string color_mode = "escape"; // escape, hist_eq, row_eq, log_lift, bands, frontier
     std::string engine = "auto"; // auto, hybrid, cuda, avx512, avx2, openmp
     std::string precision_mode = "standard"; // standard, fast
     std::string scalar_type = "auto"; // auto, fp64, fx64
@@ -55,6 +55,7 @@ struct LnMapStats {
 using LnMapProgress = std::function<void(int rowsDone)>;
 
 bool ln_map_variant_supported_by_simd(Variant v);
+bool ln_map_color_mode_supported(const std::string& mode) noexcept;
 bool ln_map_avx2_available() noexcept;
 LnMapStats render_ln_map_openmp(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_openmp_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
