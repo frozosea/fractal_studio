@@ -301,6 +301,10 @@ const centerRe   = ref(-0.75)
 const centerIm   = ref( 0.0)
 const scale      = ref( 3.0)
 const iterations = ref(1024)
+const viewportReInput = ref('')
+const viewportImInput = ref('')
+const viewportZoomInput = ref('')
+const activeViewportInput = ref<'' | 're' | 'im' | 'zoom'>('')
 
 const variant  = ref<string>('mandelbrot')  // Variant literal or "custom:HASH"
 const metric   = ref<Metric>('escape')
@@ -516,6 +520,51 @@ const juliaLabel = computed(() => {
   return `${juliaRe.value.toPrecision(10)} ${sign}${juliaIm.value.toPrecision(10)}i`
 })
 
+function formatViewportNumber(value: number, kind: 're' | 'im' | 'zoom'): string {
+  if (!Number.isFinite(value)) return ''
+  if (kind === 'zoom') {
+    const av = Math.abs(value)
+    return av >= 1e-4 && av < 1e6 ? value.toPrecision(12) : value.toExponential(12)
+  }
+  return value.toPrecision(17)
+}
+
+function syncViewportInputs(force = false) {
+  if (force || activeViewportInput.value !== 're') {
+    viewportReInput.value = formatViewportNumber(centerRe.value, 're')
+  }
+  if (force || activeViewportInput.value !== 'im') {
+    viewportImInput.value = formatViewportNumber(centerIm.value, 'im')
+  }
+  if (force || activeViewportInput.value !== 'zoom') {
+    viewportZoomInput.value = formatViewportNumber(scale.value, 'zoom')
+  }
+}
+
+function commitViewportInput(kind: 're' | 'im' | 'zoom') {
+  const raw = (kind === 're' ? viewportReInput.value : kind === 'im' ? viewportImInput.value : viewportZoomInput.value).trim()
+  const next = Number(raw)
+  const valid = Number.isFinite(next) && (kind !== 'zoom' || next > 0)
+  if (!valid) {
+    syncViewportInputs(true)
+    return
+  }
+  if (kind === 're') centerRe.value = next
+  else if (kind === 'im') centerIm.value = next
+  else scale.value = Math.max(1e-300, next)
+  syncViewportInputs(true)
+}
+
+function finishViewportInput(kind: 're' | 'im' | 'zoom') {
+  commitViewportInput(kind)
+  activeViewportInput.value = ''
+}
+
+function commitViewportInputOnEnter(event: KeyboardEvent, kind: 're' | 'im' | 'zoom') {
+  commitViewportInput(kind)
+  ;(event.target as HTMLInputElement | null)?.blur()
+}
+
 // Left-canvas click: pick julia c AND recenter left map
 function onPickJulia(pos: { re: number; im: number }) {
   juliaRe.value = pos.re
@@ -554,6 +603,7 @@ function syncStatus() {
 }
 
 watch([centerRe, centerIm, scale, iterations, variant, metric, lastMs], syncStatus, { immediate: true })
+watch([centerRe, centerIm, scale], () => syncViewportInputs(), { immediate: true })
 
 onMounted(() => {
   loadCustomVariants()
@@ -1039,6 +1089,51 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <input type="number" v-model.number="iterations" min="16" max="1000000" step="128" />
       </div>
 
+      <div class="group viewport-edit-group">
+        <label>viewport</label>
+        <div class="viewport-edit-row">
+          <label class="viewport-field">
+            <span>c.re</span>
+            <input
+              v-model="viewportReInput"
+              class="viewport-input mono"
+              type="text"
+              inputmode="decimal"
+              spellcheck="false"
+              title="center real"
+              @focus="activeViewportInput = 're'"
+              @blur="finishViewportInput('re')"
+              @keydown.enter="commitViewportInputOnEnter($event, 're')" />
+          </label>
+          <label class="viewport-field">
+            <span>c.im</span>
+            <input
+              v-model="viewportImInput"
+              class="viewport-input mono"
+              type="text"
+              inputmode="decimal"
+              spellcheck="false"
+              title="center imaginary"
+              @focus="activeViewportInput = 'im'"
+              @blur="finishViewportInput('im')"
+              @keydown.enter="commitViewportInputOnEnter($event, 'im')" />
+          </label>
+          <label class="viewport-field">
+            <span>zoom</span>
+            <input
+              v-model="viewportZoomInput"
+              class="viewport-input mono"
+              type="text"
+              inputmode="decimal"
+              spellcheck="false"
+              title="viewport vertical span"
+              @focus="activeViewportInput = 'zoom'"
+              @blur="finishViewportInput('zoom')"
+              @keydown.enter="commitViewportInputOnEnter($event, 'zoom')" />
+          </label>
+        </div>
+      </div>
+
       <div v-if="metric === 'min_pairwise_dist'" class="group">
         <label>Pairwise cap</label>
         <input type="number" v-model.number="pairwiseCap" min="1" max="1000000" step="64" />
@@ -1458,6 +1553,30 @@ async function pollVideoExport(initial: VideoExportResponse) {
 
 .group.transition-group { min-width: 290px; }
 .group.export-preset-group { min-width: 190px; }
+.group.viewport-edit-group {
+  min-width: 392px;
+}
+.viewport-edit-row {
+  display: grid;
+  grid-template-columns: repeat(3, 124px);
+  gap: 6px;
+}
+.viewport-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.viewport-field span {
+  color: var(--text-dim);
+  font-size: 9px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.viewport-input {
+  width: 124px;
+  font-size: 11px;
+}
 .export-local-status {
   max-width: min(620px, 100%);
   color: var(--text-dim);
@@ -2004,6 +2123,11 @@ async function pollVideoExport(initial: VideoExportResponse) {
   .group.export-preset-group {
     flex-basis: 190px;
     min-width: 190px;
+  }
+
+  .group.viewport-edit-group {
+    flex-basis: 392px;
+    min-width: 392px;
   }
 
   .controls > button {
