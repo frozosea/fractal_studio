@@ -1145,12 +1145,19 @@ async function pollVideoExport(initial: VideoExportResponse) {
             <div class="mrow color-mode-row">
               <label>ln-map color</label>
               <div class="color-mode-control">
-                <select v-model="exportLnMapColorMode">
-                  <option v-for="m in LN_MAP_COLOR_MODE_OPTIONS" :key="m.key" :value="m.key">
+                <select
+                  v-model="exportLnMapColorMode"
+                  :title="`${selectedLnMapColorModeInfo.summary[lang]} ${selectedLnMapColorModeInfo.bestFor[lang]}`"
+                  aria-describedby="ln-map-color-mode-tip">
+                  <option
+                    v-for="m in LN_MAP_COLOR_MODE_OPTIONS"
+                    :key="m.key"
+                    :value="m.key"
+                    :title="`${m.summary[lang]} ${m.bestFor[lang]} ${m.cost[lang]}`">
                     {{ m.label[lang] }}
                   </option>
                 </select>
-                <div class="color-mode-detail">
+                <div id="ln-map-color-mode-tip" class="color-mode-detail" role="tooltip">
                   <div class="color-mode-title">{{ selectedLnMapColorModeInfo.label[lang] }}</div>
                   <p>{{ selectedLnMapColorModeInfo.summary[lang] }}</p>
                   <div>
@@ -1482,24 +1489,40 @@ async function pollVideoExport(initial: VideoExportResponse) {
 }
 .mrow input[type="number"] { width: 100px; }
 .mrow.color-mode-row {
-  align-items: flex-start;
+  align-items: center;
 }
 .color-mode-control {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+  position: relative;
 }
 .color-mode-control select {
   width: 100%;
 }
 .color-mode-detail {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 20;
+  width: min(360px, calc(100vw - 48px));
+  max-width: 100%;
+  opacity: 0;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+  background: var(--panel);
+  border: 1px solid var(--rule);
   border-left: 2px solid var(--accent-edge);
-  padding-left: 9px;
+  padding: 9px 10px 9px 11px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
   font-size: 10px;
   line-height: 1.45;
   color: var(--text-dim);
+}
+.color-mode-control:hover .color-mode-detail,
+.color-mode-control:focus-within .color-mode-detail {
+  opacity: 1;
+  transform: translateY(0);
 }
 .color-mode-title {
   color: var(--accent);
