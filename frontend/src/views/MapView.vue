@@ -206,8 +206,8 @@ const LN_MAP_COLOR_MODE_OPTIONS: LnMapColorModeInfo[] = [
     key: 'hist_eq',
     label: { en: 'Global CDF · depth weighted', zh: '全局 CDF · 深度加权' },
     summary: {
-      en: 'Builds one histogram from escaped pixels with radius <= 2, maps iteration ranks through its CDF, then lets depth shift the palette window.',
-      zh: '统计半径 <= 2 且已发散像素的迭代直方图，用 CDF 做全局秩映射，再让 ln-map 深度轻微推动色带窗口。',
+      en: 'Builds one histogram from escaped pixels inside the origin-centered |c| <= 2 disk, maps iteration ranks through its CDF, then lets depth shift the palette window.',
+      zh: '统计以原点为中心的 |c| <= 2 圆盘内、且已发散像素的迭代直方图，用 CDF 做全局秩映射，再让 ln-map 深度轻微推动色带窗口。',
     },
     bestFor: {
       en: 'Long zoom videos where early and late regions should keep comparable contrast.',

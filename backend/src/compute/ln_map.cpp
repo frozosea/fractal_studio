@@ -804,31 +804,26 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
 
     compute_ln_iters_fp64(p, iters, cols, on_row_done);
 
-    const int radius_two_row = std::clamp(
-        static_cast<int>(std::ceil((LN_FOUR - LN_TWO) * static_cast<double>(s) / TAU)),
-        0,
-        h);
     const bool needs_global_cdf = mode == "hist_eq" || mode == "bands" || mode == "frontier";
     std::vector<unsigned long long> hist;
     unsigned long long total = 0;
     int first_hist_iter = p.iterations;
     if (needs_global_cdf) {
         hist.assign(static_cast<size_t>(p.iterations), 0ULL);
-        auto accumulate_hist = [&](int row_start) {
-            for (int row = row_start; row < h; ++row) {
-                const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
-                for (int x = 0; x < s; ++x) {
-                    const int it = iters[row_offset + static_cast<size_t>(x)];
-                    if (it >= 0 && it < p.iterations) {
-                        hist[static_cast<size_t>(it)] += 1ULL;
-                        total += 1ULL;
-                    }
+        for (int row = 0; row < h; ++row) {
+            const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
+            const double r_mag = std::exp(k);
+            const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
+            for (int x = 0; x < s; ++x) {
+                const double re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
+                const double im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
+                if (re * re + im * im > 4.0) continue;
+                const int it = iters[row_offset + static_cast<size_t>(x)];
+                if (it >= 0 && it < p.iterations) {
+                    hist[static_cast<size_t>(it)] += 1ULL;
+                    total += 1ULL;
                 }
             }
-        };
-        accumulate_hist(radius_two_row);
-        if (total == 0 && radius_two_row > 0) {
-            accumulate_hist(0);
         }
 
         for (int i = 0; i < p.iterations; ++i) {
@@ -850,11 +845,6 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
         return std::clamp(q, 0.0, 1.0);
     };
 
-    auto context_q_for_iter = [&](int it) {
-        const double raw = raw_q_for_iter(it);
-        return std::log1p(48.0 * raw) / std::log1p(48.0);
-    };
-
     auto global_q_for_iter = [&](int it) {
         if (total > 0 && it >= 0 && it < p.iterations && !hist.empty()) {
             const double q = std::clamp(
@@ -871,20 +861,13 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
         return raw_q_for_iter(it);
     };
 
-    const int depth_den = std::max(1, h - radius_two_row - 1);
-    const int cdf_blend_rows = std::max(8, s / 64);
-    auto cdf_domain_blend = [&](int row) {
-        const double edge0 = static_cast<double>(radius_two_row - cdf_blend_rows);
-        const double edge1 = static_cast<double>(radius_two_row + cdf_blend_rows);
-        const double t = std::clamp((static_cast<double>(row) - edge0) / std::max(1.0, edge1 - edge0), 0.0, 1.0);
-        return t * t * (3.0 - 2.0 * t);
-    };
+    const int depth_den = std::max(1, h - 1);
     const int thread_count = default_render_threads();
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
     for (int row = 0; row < h; ++row) {
         uint8_t* rowp = out.ptr<uint8_t>(row);
         const double depth01 = std::clamp(
-            static_cast<double>(row - radius_two_row) / static_cast<double>(depth_den),
+            static_cast<double>(row) / static_cast<double>(depth_den),
             0.0,
             1.0);
         const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
@@ -909,11 +892,8 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
             return raw_q_for_iter(it);
         };
 
-        const double cdf_blend = cdf_domain_blend(row);
         auto blended_global_q_for_iter = [&](int it) {
-            const double context = context_q_for_iter(it);
-            const double global = global_q_for_iter(it);
-            return std::clamp(context * (1.0 - cdf_blend) + global * cdf_blend, 0.0, 1.0);
+            return global_q_for_iter(it);
         };
 
         auto q_at = [&](int rr, int xx) {
@@ -922,11 +902,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
             else if (xx >= s) xx -= s;
             const int nit = iters[static_cast<size_t>(rr) * static_cast<size_t>(s) + static_cast<size_t>(xx)];
             if (nit >= p.iterations) return 1.0;
-            const double blend = cdf_domain_blend(rr);
-            return std::clamp(
-                context_q_for_iter(nit) * (1.0 - blend) + global_q_for_iter(nit) * blend,
-                0.0,
-                1.0);
+            return global_q_for_iter(nit);
         };
 
         for (int x = 0; x < s; ++x) {
@@ -986,9 +962,9 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     stats.scalar_used = "fp64";
     stats.precision_mode = p.precision_mode;
     std::ostringstream layer;
-    layer << "color=" << mode << ",radius<=2,row>=" << radius_two_row;
+    layer << "color=" << mode << ",histDomain=|c|<=2";
     if (needs_global_cdf) layer << ",histPixels=" << total;
-    if (needs_global_cdf) layer << ",outerContext=log";
+    if (needs_global_cdf) layer << ",underflowTail=raw";
     if (mode == "row_eq") layer << ",rowLocal=1";
     if (mode == "log_lift") layer << ",curve=log1p64";
     if (mode == "bands") layer << ",bands=18+72";

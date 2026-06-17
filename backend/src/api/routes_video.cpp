@@ -479,6 +479,17 @@ double applyVideoDepthPhase(double mapped, double phase, compute::Colormap color
     return std::clamp(mapped + phase * (1.0 - mapped), 0.0, 1.0);
 }
 
+double finalFrameAbs2At(const compute::MapParams& p, int x, int y) {
+    const double aspect = static_cast<double>(p.width) / static_cast<double>(p.height);
+    const double spanIm = p.scale;
+    const double spanRe = p.scale * aspect;
+    const double reMin = p.center_re - spanRe * 0.5;
+    const double imMax = p.center_im + spanIm * 0.5;
+    const double re = reMin + (static_cast<double>(x) + 0.5) / static_cast<double>(p.width) * spanRe;
+    const double im = imMax - (static_cast<double>(y) + 0.5) / static_cast<double>(p.height) * spanIm;
+    return re * re + im * im;
+}
+
 void colorizeFinalFrameWithLnMapMode(
     const compute::MapParams& p,
     const compute::FieldOutput& field,
@@ -500,11 +511,15 @@ void colorizeFinalFrameWithLnMapMode(
     int firstHistIter = p.iterations;
     if (needsGlobalCdf) {
         hist.assign(static_cast<size_t>(p.iterations), 0ULL);
-        for (uint32_t uit : field.iter_u32) {
-            const int it = static_cast<int>(uit);
-            if (it >= 0 && it < p.iterations) {
-                hist[static_cast<size_t>(it)] += 1ULL;
-                total += 1ULL;
+        for (int y = 0; y < p.height; ++y) {
+            const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(p.width);
+            for (int x = 0; x < p.width; ++x) {
+                if (finalFrameAbs2At(p, x, y) > 4.0) continue;
+                const int it = static_cast<int>(field.iter_u32[rowOffset + static_cast<size_t>(x)]);
+                if (it >= 0 && it < p.iterations) {
+                    hist[static_cast<size_t>(it)] += 1ULL;
+                    total += 1ULL;
+                }
             }
         }
         for (int i = 0; i < p.iterations; ++i) {
