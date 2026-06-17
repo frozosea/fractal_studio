@@ -78,6 +78,24 @@ bool engine_allows_cuda(const LnMapParams& p) {
     return p.engine == "auto" || p.engine == "cuda" || p.engine == "hybrid";
 }
 
+bool ln_map_colormap_wraps_phase(Colormap colormap) {
+    return colormap == Colormap::ClassicCos ||
+           colormap == Colormap::HsvWheel ||
+           colormap == Colormap::Tri765 ||
+           colormap == Colormap::Twilight;
+}
+
+double apply_ln_map_depth_phase(double mapped, double phase, Colormap colormap) {
+    mapped = std::clamp(mapped, 0.0, 1.0);
+    if (colormap == Colormap::Grayscale || colormap == Colormap::Mod17) {
+        return mapped;
+    }
+    if (ln_map_colormap_wraps_phase(colormap)) {
+        return std::fmod(mapped + phase, 1.0);
+    }
+    return std::clamp(mapped + phase * (1.0 - mapped), 0.0, 1.0);
+}
+
 int rows_for_depth_octaves(const LnMapParams& p, double depth_octaves) {
     if (!(depth_octaves > 0.0) || !std::isfinite(depth_octaves)) return 0;
     const double rows = depth_octaves * LN_TWO / TAU * static_cast<double>(p.width_s);
@@ -924,33 +942,25 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
                 const double raw = raw_q_for_iter(it);
                 const double q = std::log1p(64.0 * raw) / std::log1p(64.0);
                 mapped = q * (0.82 + 0.18 * depth01);
-                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
-                    mapped = std::fmod(mapped + 0.15 * depth01, 1.0);
-                }
+                mapped = apply_ln_map_depth_phase(mapped, 0.15 * depth01, p.colormap);
             } else if (mode == "row_eq") {
                 const double q = row_q_for_iter(it);
                 mapped = q * (0.86 + 0.14 * depth01);
-                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
-                    mapped = std::fmod(mapped + 0.12 * depth01, 1.0);
-                }
+                mapped = apply_ln_map_depth_phase(mapped, 0.12 * depth01, p.colormap);
             } else if (mode == "bands") {
                 const double base = blended_global_q_for_iter(it);
                 const double raw = raw_q_for_iter(it);
                 const double broad = 0.5 + 0.5 * std::sin(TAU * (base * 18.0 + depth01 * 0.72));
                 const double fine = 0.5 + 0.5 * std::sin(TAU * (std::sqrt(raw) * 72.0 + depth01 * 0.19));
                 mapped = std::clamp(0.70 * base + 0.22 * broad + 0.08 * fine, 0.0, 1.0);
-                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
-                    mapped = std::fmod(mapped + 0.08 * depth01, 1.0);
-                }
+                mapped = apply_ln_map_depth_phase(mapped, 0.08 * depth01, p.colormap);
             } else if (mode == "frontier") {
                 const double base = blended_global_q_for_iter(it);
                 const double dx = q_at(row, x + 1) - q_at(row, x - 1);
                 const double dy = q_at(row + 1, x) - q_at(row - 1, x);
                 const double edge = std::clamp(std::sqrt(dx * dx + dy * dy) * 5.0, 0.0, 1.0);
                 mapped = std::clamp(0.76 * base + 0.24 * edge, 0.0, 1.0);
-                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
-                    mapped = std::fmod(mapped + 0.10 * depth01, 1.0);
-                }
+                mapped = apply_ln_map_depth_phase(mapped, 0.10 * depth01, p.colormap);
                 colorize_field_bgr(mapped, p.colormap, px[0], px[1], px[2]);
                 const double lift = 0.34 * edge;
                 px[0] = static_cast<uint8_t>(clamp255(static_cast<int>(static_cast<double>(px[0]) * (1.0 - lift) + 255.0 * lift)));
@@ -962,9 +972,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
                 const double palette_window = 0.58 + 0.42 * depth01;
                 const double palette_floor = 0.10 + 0.04 * (1.0 - depth01);
                 mapped = palette_floor + q * std::max(0.0, palette_window - palette_floor);
-                if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
-                    mapped = std::fmod(mapped + 0.22 * depth01, 1.0);
-                }
+                mapped = apply_ln_map_depth_phase(mapped, 0.22 * depth01, p.colormap);
             }
             colorize_field_bgr(mapped, p.colormap, px[0], px[1], px[2]);
         }
