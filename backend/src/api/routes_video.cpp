@@ -461,6 +461,165 @@ void sampleBgrBilinearBorder(const cv::Mat& img, double x, double y, uint8_t* ds
     dst[2] = clampByte(r);
 }
 
+bool videoColormapWrapsPhase(compute::Colormap colormap) {
+    return colormap == compute::Colormap::ClassicCos ||
+           colormap == compute::Colormap::HsvWheel ||
+           colormap == compute::Colormap::Tri765 ||
+           colormap == compute::Colormap::Twilight;
+}
+
+double applyVideoDepthPhase(double mapped, double phase, compute::Colormap colormap) {
+    mapped = std::clamp(mapped, 0.0, 1.0);
+    if (colormap == compute::Colormap::Grayscale || colormap == compute::Colormap::Mod17) {
+        return mapped;
+    }
+    if (videoColormapWrapsPhase(colormap)) {
+        return std::fmod(mapped + phase, 1.0);
+    }
+    return std::clamp(mapped + phase * (1.0 - mapped), 0.0, 1.0);
+}
+
+void colorizeFinalFrameWithLnMapMode(
+    const compute::MapParams& p,
+    const compute::FieldOutput& field,
+    const std::string& mode,
+    cv::Mat& out
+) {
+    if (field.metric != compute::Metric::Escape ||
+        field.width != p.width || field.height != p.height ||
+        field.iter_u32.size() != static_cast<size_t>(p.width) * static_cast<size_t>(p.height)) {
+        throw std::runtime_error("invalid final-frame escape field");
+    }
+    if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
+        out.create(p.height, p.width, CV_8UC3);
+    }
+
+    const bool needsGlobalCdf = mode == "hist_eq" || mode == "bands" || mode == "frontier";
+    std::vector<unsigned long long> hist;
+    unsigned long long total = 0;
+    int firstHistIter = p.iterations;
+    if (needsGlobalCdf) {
+        hist.assign(static_cast<size_t>(p.iterations), 0ULL);
+        for (uint32_t uit : field.iter_u32) {
+            const int it = static_cast<int>(uit);
+            if (it >= 0 && it < p.iterations) {
+                hist[static_cast<size_t>(it)] += 1ULL;
+                total += 1ULL;
+            }
+        }
+        for (int i = 0; i < p.iterations; ++i) {
+            if (hist[static_cast<size_t>(i)] > 0ULL) {
+                firstHistIter = i;
+                break;
+            }
+        }
+        unsigned long long cumulative = 0;
+        for (auto& count : hist) {
+            cumulative += count;
+            count = cumulative;
+        }
+    }
+
+    auto rawQ = [&](int it) {
+        const double q = (static_cast<double>(it) + 1.0) / (static_cast<double>(p.iterations) + 1.0);
+        return std::clamp(q, 0.0, 1.0);
+    };
+    auto contextQ = [&](int it) {
+        const double raw = rawQ(it);
+        return std::log1p(48.0 * raw) / std::log1p(48.0);
+    };
+    auto globalQ = [&](int it) {
+        if (total > 0 && it >= 0 && it < p.iterations && !hist.empty()) {
+            const double q = std::clamp(
+                static_cast<double>(hist[static_cast<size_t>(it)]) / static_cast<double>(total),
+                0.0,
+                1.0);
+            if (q <= 0.0 && firstHistIter < p.iterations && it < firstHistIter) {
+                const double denom = std::max(1.0e-12, rawQ(firstHistIter));
+                return 0.10 * std::clamp(rawQ(it) / denom, 0.0, 1.0);
+            }
+            return 0.10 + 0.90 * q;
+        }
+        return rawQ(it);
+    };
+    auto qAt = [&](int y, int x) {
+        y = std::clamp(y, 0, p.height - 1);
+        x = std::clamp(x, 0, p.width - 1);
+        const int it = static_cast<int>(field.iter_u32[static_cast<size_t>(y) * static_cast<size_t>(p.width) + static_cast<size_t>(x)]);
+        if (it >= p.iterations) return 1.0;
+        return globalQ(it);
+    };
+
+    constexpr double depth01 = 1.0;
+    for (int y = 0; y < p.height; ++y) {
+        uint8_t* row = out.ptr<uint8_t>(y);
+        std::vector<int> rowIters;
+        if (mode == "row_eq") {
+            rowIters.reserve(static_cast<size_t>(p.width));
+            const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(p.width);
+            for (int x = 0; x < p.width; ++x) {
+                const int it = static_cast<int>(field.iter_u32[rowOffset + static_cast<size_t>(x)]);
+                if (it >= 0 && it < p.iterations) rowIters.push_back(it);
+            }
+            std::sort(rowIters.begin(), rowIters.end());
+        }
+        auto rowQ = [&](int it) {
+            if (!rowIters.empty() && it >= 0 && it < p.iterations) {
+                const auto hi = std::upper_bound(rowIters.begin(), rowIters.end(), it);
+                return std::clamp(
+                    static_cast<double>(hi - rowIters.begin()) / static_cast<double>(rowIters.size()),
+                    0.0,
+                    1.0);
+            }
+            return rawQ(it);
+        };
+
+        const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(p.width);
+        for (int x = 0; x < p.width; ++x) {
+            const int it = static_cast<int>(field.iter_u32[rowOffset + static_cast<size_t>(x)]);
+            uint8_t* px = row + 3 * x;
+            if (it >= p.iterations) {
+                px[0] = px[1] = px[2] = 255;
+                continue;
+            }
+
+            double mapped = 0.0;
+            if (mode == "log_lift") {
+                mapped = contextQ(it) * (0.82 + 0.18 * depth01);
+                mapped = applyVideoDepthPhase(mapped, 0.15 * depth01, p.colormap);
+            } else if (mode == "row_eq") {
+                mapped = rowQ(it) * (0.86 + 0.14 * depth01);
+                mapped = applyVideoDepthPhase(mapped, 0.12 * depth01, p.colormap);
+            } else if (mode == "bands") {
+                const double base = globalQ(it);
+                const double raw = rawQ(it);
+                const double broad = 0.5 + 0.5 * std::sin(TAU * (base * 18.0 + depth01 * 0.72));
+                const double fine = 0.5 + 0.5 * std::sin(TAU * (std::sqrt(raw) * 72.0 + depth01 * 0.19));
+                mapped = std::clamp(0.70 * base + 0.22 * broad + 0.08 * fine, 0.0, 1.0);
+                mapped = applyVideoDepthPhase(mapped, 0.08 * depth01, p.colormap);
+            } else if (mode == "frontier") {
+                const double base = globalQ(it);
+                const double dx = qAt(y, x + 1) - qAt(y, x - 1);
+                const double dy = qAt(y + 1, x) - qAt(y - 1, x);
+                const double edge = std::clamp(std::sqrt(dx * dx + dy * dy) * 5.0, 0.0, 1.0);
+                mapped = std::clamp(0.76 * base + 0.24 * edge, 0.0, 1.0);
+                mapped = applyVideoDepthPhase(mapped, 0.10 * depth01, p.colormap);
+                compute::colorize_field_bgr(mapped, p.colormap, px[0], px[1], px[2]);
+                const double lift = 0.34 * edge;
+                px[0] = static_cast<uint8_t>(compute::clamp255(static_cast<int>(static_cast<double>(px[0]) * (1.0 - lift) + 255.0 * lift)));
+                px[1] = static_cast<uint8_t>(compute::clamp255(static_cast<int>(static_cast<double>(px[1]) * (1.0 - lift) + 255.0 * lift)));
+                px[2] = static_cast<uint8_t>(compute::clamp255(static_cast<int>(static_cast<double>(px[2]) * (1.0 - lift) + 255.0 * lift)));
+                continue;
+            } else {
+                const double q = globalQ(it);
+                mapped = 0.10 + q * 0.90;
+                mapped = applyVideoDepthPhase(mapped, 0.22 * depth01, p.colormap);
+            }
+            compute::colorize_field_bgr(mapped, p.colormap, px[0], px[1], px[2]);
+        }
+    }
+}
+
 void renderWarpFrameManualCpu(
     const cv::Mat& stripWrap,
     const cv::Mat& finalImg,
@@ -1452,7 +1611,15 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         mp.scalar_type = "auto";
 
         cv::Mat finalImg(H, W, CV_8UC3);
-        const compute::MapStats finalStats = compute::render_map(mp, finalImg);
+        compute::MapStats finalStats;
+        if (lnMapColorMode == "escape") {
+            finalStats = compute::render_map(mp, finalImg);
+        } else {
+            compute::FieldOutput finalField;
+            finalStats = compute::render_map_field(mp, finalField);
+            colorizeFinalFrameWithLnMapMode(mp, finalField, lnMapColorMode, finalImg);
+            finalStats.engine_used += "_ln_" + lnMapColorMode;
+        }
         throwIfCancelled(runner, run.id);
 
         const std::filesystem::path finalPath = std::filesystem::path(run.outputDir) / "final_frame.png";
