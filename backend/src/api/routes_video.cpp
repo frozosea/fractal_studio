@@ -98,6 +98,7 @@ struct StripPlan {
     int fullWidthS = 0;
     int actualWidthS = 0;
     int heightT = 0;
+    double extraOctaves = 2.0;
     double qualityScale = 1.0;
     std::string qualityPreset = "full";
     uint64_t estimatedPeakMemory = 0;
@@ -178,7 +179,7 @@ bool opencv_remap_size_safe(const cv::Mat& src, int dstW, int dstH) {
         && dstH < OPENCV_REMAP_DIM_LIMIT;
 }
 
-StripPlan resolveStripPlan(const Json& j, int W, int H, double depthOctaves) {
+StripPlan resolveStripPlan(const Json& j, int W, int H, double depthOctaves, const std::string& colorMode) {
     StripPlan plan;
     plan.fullWidthS = derivedMinStripWidth(W, H);
     plan.qualityPreset = j.value("qualityPreset", defaultQualityPresetForSize(W, H));
@@ -196,7 +197,12 @@ StripPlan resolveStripPlan(const Json& j, int W, int H, double depthOctaves) {
         requested = static_cast<int>(std::ceil(static_cast<double>(plan.fullWidthS) * plan.qualityScale));
     }
     plan.actualWidthS = roundUpToMultiple(std::max(128, requested), 8);
-    const double t_exact = (2.0 + depthOctaves) * LN_TWO / TAU * static_cast<double>(plan.actualWidthS);
+    const double defaultExtra = colorMode == "escape" ? 2.0 : 7.0;
+    plan.extraOctaves = j.value("lnMapExtraOctaves", defaultExtra);
+    if (!(plan.extraOctaves >= 2.0) || plan.extraOctaves > 16.0 || !std::isfinite(plan.extraOctaves)) {
+        throw std::runtime_error("invalid lnMapExtraOctaves (2..16)");
+    }
+    const double t_exact = (plan.extraOctaves + depthOctaves) * LN_TWO / TAU * static_cast<double>(plan.actualWidthS);
     plan.heightT = static_cast<int>(std::ceil(t_exact));
     plan.estimatedPeakMemory = estimateVideoPeakMemoryBytes(W, H, plan.actualWidthS, plan.heightT);
     return plan;
@@ -342,6 +348,18 @@ void ensureMat(cv::Mat& mat, int W, int H, int type) {
     }
 }
 
+double smoothstep01(double t) {
+    t = std::clamp(t, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+uint8_t blendByte(uint8_t a, uint8_t b, double t) {
+    const double v = static_cast<double>(a) * (1.0 - t) + static_cast<double>(b) * t;
+    if (v <= 0.0) return 0;
+    if (v >= 255.0) return 255;
+    return static_cast<uint8_t>(v + 0.5);
+}
+
 void renderWarpFrameShared(
     const cv::Mat& stripWrap,
     const cv::Mat& finalImg,
@@ -359,6 +377,8 @@ void renderWarpFrameShared(
     const int stripH    = stripWrap.rows;
     const int s         = stripWrap.cols - 1;
     const float stripLimit = static_cast<float>(stripH - 1);
+    const float finalBlendRows = std::max(4.0f, static_cast<float>(s) / 128.0f);
+    const float finalBlendStart = stripLimit - finalBlendRows;
     const float kTopStripScale = static_cast<float>(kTop * static_cast<double>(s) / TAU);
     const double S      = std::exp(kTop - kTop_end);
 
@@ -388,9 +408,13 @@ void renderWarpFrameShared(
         uint8_t* dp = frame.ptr<uint8_t>(y);
         for (int x = 0; x < W; ++x) {
             if (rowMap[x] >= 0.0f) {
-                dp[3*x+0] = sp[3*x+0];
-                dp[3*x+1] = sp[3*x+1];
-                dp[3*x+2] = sp[3*x+2];
+                const double blend = rowMap[x] > finalBlendStart
+                    ? smoothstep01((static_cast<double>(rowMap[x]) - static_cast<double>(finalBlendStart)) /
+                                   static_cast<double>(finalBlendRows))
+                    : 0.0;
+                dp[3*x+0] = blendByte(sp[3*x+0], fp[3*x+0], blend);
+                dp[3*x+1] = blendByte(sp[3*x+1], fp[3*x+1], blend);
+                dp[3*x+2] = blendByte(sp[3*x+2], fp[3*x+2], blend);
             } else {
                 dp[3*x+0] = fp[3*x+0];
                 dp[3*x+1] = fp[3*x+1];
@@ -454,6 +478,8 @@ void renderWarpFrameManualCpu(
     const int stripH = stripWrap.rows;
     const int s = stripWrap.cols - 1;
     const float stripLimit = static_cast<float>(stripH - 1);
+    const float finalBlendRows = std::max(4.0f, static_cast<float>(s) / 128.0f);
+    const float finalBlendStart = stripLimit - finalBlendRows;
     const float kTopStripScale = static_cast<float>(kTop * static_cast<double>(s) / TAU);
     const double S = std::exp(kTop - kTop_end);
 
@@ -470,6 +496,17 @@ void renderWarpFrameManualCpu(
             uint8_t* out = dp + 3 * x;
             if (useStrip) {
                 sampleBgrBilinearBorder(stripWrap, stripX[x], row, out);
+                if (row > finalBlendStart) {
+                    uint8_t finalPx[3] = {};
+                    const double finalX = (static_cast<double>(x) + 0.5 - 0.5 * static_cast<double>(W)) * S
+                                          + 0.5 * static_cast<double>(W);
+                    sampleBgrBilinearBorder(finalImg, finalX, finalY, finalPx);
+                    const double blend = smoothstep01((static_cast<double>(row) - static_cast<double>(finalBlendStart)) /
+                                                      static_cast<double>(finalBlendRows));
+                    out[0] = blendByte(out[0], finalPx[0], blend);
+                    out[1] = blendByte(out[1], finalPx[1], blend);
+                    out[2] = blendByte(out[2], finalPx[2], blend);
+                }
             } else {
                 const double finalX = (static_cast<double>(x) + 0.5 - 0.5 * static_cast<double>(W)) * S
                                       + 0.5 * static_cast<double>(W);
@@ -1314,14 +1351,17 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const double secondsPerOctave = resolveSecondsPerOctave(j, depth);
     double durSec = 0.0;
     const int frameCount = frameCountFromSpeed(depth, secondsPerOctave, fps, durSec);
-    const StripPlan stripPlan = resolveStripPlan(j, W, H, depth);
-    const int s = stripPlan.actualWidthS;
-    const std::string lnMapMode = j.value("lnMapMode", std::string("standard"));
-    const std::string lnMapScalar = j.value("lnMapScalar", std::string("auto"));
     std::string lnMapColorMode = j.value("lnMapColorMode", std::string("escape"));
     if (!j.contains("lnMapColorMode") && j.contains("colorMode") && !j["colorMode"].is_null()) {
         lnMapColorMode = j.value("colorMode", lnMapColorMode);
     }
+    if (!compute::ln_map_color_mode_supported(lnMapColorMode)) {
+        throw std::runtime_error("invalid lnMapColorMode (escape|hist_eq|row_eq|log_lift|bands|frontier)");
+    }
+    const StripPlan stripPlan = resolveStripPlan(j, W, H, depth, lnMapColorMode);
+    const int s = stripPlan.actualWidthS;
+    const std::string lnMapMode = j.value("lnMapMode", std::string("standard"));
+    const std::string lnMapScalar = j.value("lnMapScalar", std::string("auto"));
     const double lnMapFastFp32Depth = j.value("lnMapFastFp32DepthOctaves", 18.0);
     const double lnMapFastFp64Depth = j.value("lnMapFastFp64DepthOctaves", 34.0);
     const bool lnMapFastValidate = j.value("lnMapFastValidate", true);
@@ -1337,9 +1377,6 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     if (iters < 1 || iters > 10000000)      throw std::runtime_error("invalid iterations");
     if (lnMapMode != "standard" && lnMapMode != "fast") {
         throw std::runtime_error("invalid lnMapMode (standard|fast)");
-    }
-    if (!compute::ln_map_color_mode_supported(lnMapColorMode)) {
-        throw std::runtime_error("invalid lnMapColorMode (escape|hist_eq|row_eq|log_lift|bands|frontier)");
     }
     if (!(lnMapFastFp32Depth >= 0.0) || !(lnMapFastFp64Depth >= 0.0) ||
         !std::isfinite(lnMapFastFp32Depth) || !std::isfinite(lnMapFastFp64Depth)) {
@@ -1479,6 +1516,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"julia", julia}, {"juliaRe", jre}, {"juliaIm", jim},
                 {"widthS", s}, {"actualWidthS", s}, {"fullWidthS", stripPlan.fullWidthS},
                 {"heightT", t}, {"depthOctaves", depth},
+                {"lnMapExtraOctaves", stripPlan.extraOctaves},
                 {"qualityPreset", stripPlan.qualityPreset},
                 {"qualityScale", stripPlan.qualityScale},
                 {"estimatedPeakMemory", stripPlan.estimatedPeakMemory},
@@ -1556,6 +1594,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"qualityPreset", stripPlan.qualityPreset},
             {"qualityScale", stripPlan.qualityScale},
             {"estimatedPeakMemory", stripPlan.estimatedPeakMemory},
+            {"lnMapExtraOctaves", stripPlan.extraOctaves},
         };
         mergeVideoWarpStats(renderLog, warpStats);
         const std::filesystem::path reportPath = std::filesystem::path(run.outputDir) / "video_export.json";
@@ -1608,6 +1647,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"fullWidthS",         stripPlan.fullWidthS},
             {"actualWidthS",       s},
             {"heightT",            t},
+            {"lnMapExtraOctaves",  stripPlan.extraOctaves},
             {"qualityPreset",      stripPlan.qualityPreset},
             {"qualityScale",       stripPlan.qualityScale},
             {"estimatedPeakMemory", stripPlan.estimatedPeakMemory},
@@ -1673,6 +1713,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"fullWidthS", stripPlan.fullWidthS},
             {"actualWidthS", s},
             {"heightT", stripPlan.heightT},
+            {"lnMapExtraOctaves", stripPlan.extraOctaves},
             {"qualityPreset", stripPlan.qualityPreset},
             {"qualityScale", stripPlan.qualityScale},
             {"estimatedPeakMemory", stripPlan.estimatedPeakMemory},

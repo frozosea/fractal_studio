@@ -87,14 +87,25 @@ __global__ void warp_texture_kernel(
 
     const WarpGeom g = geom[idx];
     const float stripY = g.strip_row_base - kTopStripScale;
+    const float finalX = g.final_x_base * finalScale + 0.5f * static_cast<float>(W);
+    const float finalY = g.final_y_base * finalScale + 0.5f * static_cast<float>(H);
+    const float featherRows = fmaxf(4.0f, static_cast<float>(stripW - 1) / 128.0f);
+    const float featherStart = static_cast<float>(stripH - 1) - featherRows;
     float4 color;
     if (stripY >= 0.0f && stripY < static_cast<float>(stripH - 1)) {
         const float stripU = (g.strip_x + 0.5f) / static_cast<float>(stripW);
         const float stripV = (stripY + 0.5f) / static_cast<float>(stripH);
         color = tex2D<float4>(stripTex, stripU, stripV);
+        if (stripY > featherStart) {
+            float t = (stripY - featherStart) / featherRows;
+            t = fminf(fmaxf(t, 0.0f), 1.0f);
+            t = t * t * (3.0f - 2.0f * t);
+            const float4 finalColor = tex2D<float4>(finalTex, finalX + 1.5f, finalY + 1.5f);
+            color.x = color.x * (1.0f - t) + finalColor.x * t;
+            color.y = color.y * (1.0f - t) + finalColor.y * t;
+            color.z = color.z * (1.0f - t) + finalColor.z * t;
+        }
     } else {
-        const float finalX = g.final_x_base * finalScale + 0.5f * static_cast<float>(W);
-        const float finalY = g.final_y_base * finalScale + 0.5f * static_cast<float>(H);
         color = tex2D<float4>(finalTex, finalX + 1.5f, finalY + 1.5f);
     }
 

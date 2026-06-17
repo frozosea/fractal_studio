@@ -793,6 +793,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     const bool needs_global_cdf = mode == "hist_eq" || mode == "bands" || mode == "frontier";
     std::vector<unsigned long long> hist;
     unsigned long long total = 0;
+    int first_hist_iter = p.iterations;
     if (needs_global_cdf) {
         hist.assign(static_cast<size_t>(p.iterations), 0ULL);
         auto accumulate_hist = [&](int row_start) {
@@ -812,6 +813,13 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
             accumulate_hist(0);
         }
 
+        for (int i = 0; i < p.iterations; ++i) {
+            if (hist[static_cast<size_t>(i)] > 0ULL) {
+                first_hist_iter = i;
+                break;
+            }
+        }
+
         unsigned long long cumulative = 0;
         for (auto& count : hist) {
             cumulative += count;
@@ -824,17 +832,35 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
         return std::clamp(q, 0.0, 1.0);
     };
 
+    auto context_q_for_iter = [&](int it) {
+        const double raw = raw_q_for_iter(it);
+        return std::log1p(48.0 * raw) / std::log1p(48.0);
+    };
+
     auto global_q_for_iter = [&](int it) {
         if (total > 0 && it >= 0 && it < p.iterations && !hist.empty()) {
-            return std::clamp(
+            const double q = std::clamp(
                 static_cast<double>(hist[static_cast<size_t>(it)]) / static_cast<double>(total),
                 0.0,
                 1.0);
+            if (q <= 0.0 && first_hist_iter < p.iterations && it < first_hist_iter) {
+                const double denom = std::max(1.0e-12, raw_q_for_iter(first_hist_iter));
+                const double lower_tail = std::clamp(raw_q_for_iter(it) / denom, 0.0, 1.0);
+                return 0.10 * lower_tail;
+            }
+            return 0.10 + 0.90 * q;
         }
         return raw_q_for_iter(it);
     };
 
     const int depth_den = std::max(1, h - radius_two_row - 1);
+    const int cdf_blend_rows = std::max(8, s / 64);
+    auto cdf_domain_blend = [&](int row) {
+        const double edge0 = static_cast<double>(radius_two_row - cdf_blend_rows);
+        const double edge1 = static_cast<double>(radius_two_row + cdf_blend_rows);
+        const double t = std::clamp((static_cast<double>(row) - edge0) / std::max(1.0, edge1 - edge0), 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    };
     const int thread_count = default_render_threads();
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
     for (int row = 0; row < h; ++row) {
@@ -865,13 +891,24 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
             return raw_q_for_iter(it);
         };
 
+        const double cdf_blend = cdf_domain_blend(row);
+        auto blended_global_q_for_iter = [&](int it) {
+            const double context = context_q_for_iter(it);
+            const double global = global_q_for_iter(it);
+            return std::clamp(context * (1.0 - cdf_blend) + global * cdf_blend, 0.0, 1.0);
+        };
+
         auto q_at = [&](int rr, int xx) {
             rr = std::clamp(rr, 0, h - 1);
             if (xx < 0) xx += s;
             else if (xx >= s) xx -= s;
             const int nit = iters[static_cast<size_t>(rr) * static_cast<size_t>(s) + static_cast<size_t>(xx)];
             if (nit >= p.iterations) return 1.0;
-            return global_q_for_iter(nit);
+            const double blend = cdf_domain_blend(rr);
+            return std::clamp(
+                context_q_for_iter(nit) * (1.0 - blend) + global_q_for_iter(nit) * blend,
+                0.0,
+                1.0);
         };
 
         for (int x = 0; x < s; ++x) {
@@ -897,7 +934,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
                     mapped = std::fmod(mapped + 0.12 * depth01, 1.0);
                 }
             } else if (mode == "bands") {
-                const double base = global_q_for_iter(it);
+                const double base = blended_global_q_for_iter(it);
                 const double raw = raw_q_for_iter(it);
                 const double broad = 0.5 + 0.5 * std::sin(TAU * (base * 18.0 + depth01 * 0.72));
                 const double fine = 0.5 + 0.5 * std::sin(TAU * (std::sqrt(raw) * 72.0 + depth01 * 0.19));
@@ -906,7 +943,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
                     mapped = std::fmod(mapped + 0.08 * depth01, 1.0);
                 }
             } else if (mode == "frontier") {
-                const double base = global_q_for_iter(it);
+                const double base = blended_global_q_for_iter(it);
                 const double dx = q_at(row, x + 1) - q_at(row, x - 1);
                 const double dy = q_at(row + 1, x) - q_at(row - 1, x);
                 const double edge = std::clamp(std::sqrt(dx * dx + dy * dy) * 5.0, 0.0, 1.0);
@@ -921,9 +958,10 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
                 px[2] = static_cast<uint8_t>(clamp255(static_cast<int>(static_cast<double>(px[2]) * (1.0 - lift) + 255.0 * lift)));
                 continue;
             } else {
-                const double q = global_q_for_iter(it);
+                const double q = blended_global_q_for_iter(it);
                 const double palette_window = 0.58 + 0.42 * depth01;
-                mapped = q * palette_window;
+                const double palette_floor = 0.10 + 0.04 * (1.0 - depth01);
+                mapped = palette_floor + q * std::max(0.0, palette_window - palette_floor);
                 if (p.colormap != Colormap::Grayscale && p.colormap != Colormap::Mod17) {
                     mapped = std::fmod(mapped + 0.22 * depth01, 1.0);
                 }
@@ -942,6 +980,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     std::ostringstream layer;
     layer << "color=" << mode << ",radius<=2,row>=" << radius_two_row;
     if (needs_global_cdf) layer << ",histPixels=" << total;
+    if (needs_global_cdf) layer << ",outerContext=log";
     if (mode == "row_eq") layer << ",rowLocal=1";
     if (mode == "log_lift") layer << ",curve=log1p64";
     if (mode == "bands") layer << ",bands=18+72";

@@ -528,6 +528,7 @@ export interface VideoExportRequest {
   lnMapFastValidationMaxMismatchRatio?: number
   lnMapFastValidationMaxP99IterDelta?: number
   lnMapFastValidationMaxMeanColorDelta?: number
+  lnMapExtraOctaves?: number
   cudaWarp?: boolean
   background?: boolean
   localExport?: boolean
@@ -569,6 +570,7 @@ export interface VideoExportResponse {
   fullWidthS?: number
   actualWidthS?: number
   heightT?: number
+  lnMapExtraOctaves?: number
   qualityPreset?: string
   qualityScale?: number
   estimatedPeakMemory?: number
