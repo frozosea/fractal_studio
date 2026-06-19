@@ -208,11 +208,26 @@ void Db::upsertRun(const RunRow& row) const {
 }
 
 std::vector<RunRow> Db::listRuns(int limit) const {
+    return listRuns(limit, 0, "", "");
+}
+
+std::vector<RunRow> Db::listRuns(int limit, int offset, const std::string& moduleFilter, const std::string& statusFilter) const {
     DbHandle h(dbPath_);
-    std::string sql = "SELECT id, module, status, params_json, started_at, finished_at, output_dir "
-                      "FROM runs ORDER BY started_at DESC LIMIT ?;";
+    std::string sql = "SELECT id, module, status, params_json, started_at, finished_at, output_dir FROM runs";
+    std::vector<std::string> conditions;
+    if (!moduleFilter.empty()) conditions.push_back("module = ?");
+    if (!statusFilter.empty()) conditions.push_back("status = ?");
+    for (size_t i = 0; i < conditions.size(); ++i) {
+        sql += (i == 0 ? " WHERE " : " AND ") + conditions[i];
+    }
+    sql += " ORDER BY started_at DESC LIMIT ? OFFSET ?;";
+
     Statement stmt(h.db, sql.c_str());
-    checkSqlite(sqlite3_bind_int(stmt.get(), 1, limit > 0 ? limit : 200), h.db);
+    int idx = 1;
+    if (!moduleFilter.empty()) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, moduleFilter.c_str(), -1, SQLITE_TRANSIENT), h.db);
+    if (!statusFilter.empty()) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, statusFilter.c_str(), -1, SQLITE_TRANSIENT), h.db);
+    checkSqlite(sqlite3_bind_int(stmt.get(), idx++, limit > 0 ? limit : 200), h.db);
+    checkSqlite(sqlite3_bind_int(stmt.get(), idx++, std::max(0, offset)), h.db);
 
     std::vector<RunRow> rows;
     while (true) {
@@ -230,6 +245,41 @@ std::vector<RunRow> Db::listRuns(int limit) const {
         rows.push_back(r);
     }
     return rows;
+}
+
+int Db::countRuns(const std::string& moduleFilter, const std::string& statusFilter) const {
+    DbHandle h(dbPath_);
+    std::string sql = "SELECT COUNT(*) FROM runs";
+    std::vector<std::string> conditions;
+    if (!moduleFilter.empty()) conditions.push_back("module = ?");
+    if (!statusFilter.empty()) conditions.push_back("status = ?");
+    for (size_t i = 0; i < conditions.size(); ++i) {
+        sql += (i == 0 ? " WHERE " : " AND ") + conditions[i];
+    }
+    sql += ";";
+
+    Statement stmt(h.db, sql.c_str());
+    int idx = 1;
+    if (!moduleFilter.empty()) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, moduleFilter.c_str(), -1, SQLITE_TRANSIENT), h.db);
+    if (!statusFilter.empty()) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, statusFilter.c_str(), -1, SQLITE_TRANSIENT), h.db);
+
+    const int rc = sqlite3_step(stmt.get());
+    if (rc == SQLITE_DONE) return 0;
+    checkSqlite(rc, h.db);
+    return sqlite3_column_int(stmt.get(), 0);
+}
+
+std::vector<std::string> Db::distinctModules() const {
+    DbHandle h(dbPath_);
+    Statement stmt(h.db, "SELECT DISTINCT module FROM runs ORDER BY module;");
+    std::vector<std::string> modules;
+    while (true) {
+        const int rc = sqlite3_step(stmt.get());
+        if (rc == SQLITE_DONE) break;
+        checkSqlite(rc, h.db);
+        modules.push_back(safeText(stmt.get(), 0));
+    }
+    return modules;
 }
 
 RunRow Db::getRun(const std::string& runId) const {

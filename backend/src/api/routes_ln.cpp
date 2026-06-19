@@ -246,6 +246,12 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"layerSummary", stats.layer_summary},
             {"validationSummary", stats.validation_summary},
         };
+        if (stats.equalization.valid) {
+            sidecar["eqCountMin"]      = stats.equalization.count_min;
+            sidecar["eqPeriod"]        = stats.equalization.period;
+            sidecar["eqOnsetCycles"]   = stats.equalization.onset_cycles;
+            sidecar["eqColormapWraps"] = stats.equalization.colormap_wraps;
+        }
         const std::filesystem::path sidecarPath =
             std::filesystem::path(run.outputDir) / "ln_map.json";
         std::filesystem::create_directories(sidecarPath.parent_path());

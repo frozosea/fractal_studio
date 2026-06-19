@@ -59,6 +59,9 @@ public:
     // Runs + artifacts
     void upsertRun(const RunRow& row) const;
     std::vector<RunRow> listRuns(int limit) const;
+    std::vector<RunRow> listRuns(int limit, int offset, const std::string& moduleFilter, const std::string& statusFilter) const;
+    int countRuns(const std::string& moduleFilter = "", const std::string& statusFilter = "") const;
+    std::vector<std::string> distinctModules() const;
     RunRow getRun(const std::string& runId) const;
 
     long long insertArtifact(const ArtifactRow& row) const;

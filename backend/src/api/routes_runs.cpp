@@ -9,13 +9,19 @@
 namespace fsd {
 
 std::string runsListRoute(const std::filesystem::path& repoRoot, const std::string& query) {
-    int limit = 200;
+    int limit = 50;
+    int offset = 0;
     const std::string limRaw = getQueryParam(query, "limit");
-    if (!limRaw.empty()) {
-        try { limit = std::stoi(limRaw); } catch (...) {}
-    }
+    if (!limRaw.empty()) { try { limit = std::stoi(limRaw); } catch (...) {} }
+    const std::string offRaw = getQueryParam(query, "offset");
+    if (!offRaw.empty()) { try { offset = std::stoi(offRaw); } catch (...) {} }
+    const std::string moduleFilter = getQueryParam(query, "module");
+    const std::string statusFilter = getQueryParam(query, "status");
+
     Db db = openDb(repoRoot);
-    const auto rows = db.listRuns(limit);
+    const auto rows = db.listRuns(limit, offset, moduleFilter, statusFilter);
+    const int totalCount = db.countRuns(moduleFilter, statusFilter);
+    const auto modules = db.distinctModules();
 
     Json items = Json::array();
     for (const auto& r : rows) {
@@ -28,7 +34,7 @@ std::string runsListRoute(const std::filesystem::path& repoRoot, const std::stri
             {"outputDir",  r.outputDir},
         });
     }
-    Json resp = {{"items", items}};
+    Json resp = {{"items", items}, {"totalCount", totalCount}, {"modules", modules}};
     return resp.dump();
 }
 

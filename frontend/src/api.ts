@@ -534,6 +534,7 @@ export interface VideoExportRequest {
   lnMapFastValidationMaxP99IterDelta?: number
   lnMapFastValidationMaxMeanColorDelta?: number
   lnMapExtraOctaves?: number
+  lnMapRunId?: string
   cudaWarp?: boolean
   background?: boolean
   localExport?: boolean
@@ -863,7 +864,15 @@ export const api = {
   videoPreview:(req: VideoPreviewRequest)=> postJson<VideoPreviewResponse>('/api/video/preview', req),
   videoExport: (req: VideoExportRequest) => postJson<VideoExportResponse>('/api/video/export', req),
 
-  runs: (limit = 50) => getJson<{ items: RunRow[] }>(`/api/runs?limit=${limit}`),
+  runs: (params?: { limit?: number; offset?: number; module?: string; status?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.limit)  q.set('limit',  String(params.limit))
+    if (params?.offset) q.set('offset', String(params.offset))
+    if (params?.module) q.set('module', params.module)
+    if (params?.status) q.set('status', params.status)
+    const s = q.toString()
+    return getJson<{ items: RunRow[]; totalCount: number; modules: string[] }>(`/api/runs${s ? '?' + s : ''}`)
+  },
   runStatus: (runId: string) =>
     getJson<RunStatusResponse>(`/api/runs/status?runId=${encodeURIComponent(runId)}`),
   activeTasks: () => getJson<ActiveTasksResponse>('/api/tasks/active'),

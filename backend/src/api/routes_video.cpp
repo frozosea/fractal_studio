@@ -1522,8 +1522,8 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
 // When julia=true, the ln-map samples z₀ around center with c=juliaRe+juliaIm·i.
 
 std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
-    (void)repoRoot;
     const Json j = parseJsonBody(body);
+    const std::string lnMapRunId = j.value("lnMapRunId", std::string(""));
 
     const double cr         = j.value("centerRe", 0.0);
     const double ci         = j.value("centerIm", 0.0);
@@ -1671,61 +1671,113 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         setVideoProgress(runner, run.id, "final_frame", 1, 1, depth, depth,
                          "", "", Json{{"engine", finalStats.engine_used}, {"scalar", finalStats.scalar_used}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
 
-        // ── 2. Render ln-map strip ─────────────────────────────────────────────
-        const int t = stripPlan.heightT;
-        cv::Mat strip(t, s, CV_8UC3);
-        compute::LnMapParams lp;
-        lp.julia = julia;
-        lp.center_re = cr;
-        lp.center_im = ci;
-        lp.julia_re = jre;
-        lp.julia_im = jim;
-        lp.width_s = s;
-        lp.height_t = t;
-        lp.iterations = iters;
-        lp.bailout = bailout;
-        lp.bailout_sq = bailoutSq;
-        lp.variant = v;
-        lp.colormap = cm;
-        lp.color_mode = lnMapColorMode;
-        lp.color_cycles_per_octave = lnMapCyclesPerOctave;
-        lp.engine = j.value("lnMapEngine", std::string("auto"));
-        lp.precision_mode = lnMapMode;
-        lp.scalar_type = lnMapScalar;
-        lp.fast_fp32_depth_octaves = lnMapFastFp32Depth;
-        lp.fast_fp64_depth_octaves = lnMapFastFp64Depth;
-        lp.fast_validate = lnMapFastValidate;
-        lp.fast_validation_band_octaves = lnMapFastValidationBandOctaves;
-        lp.fast_validation_sample_rows = lnMapFastValidationSampleRows;
-        lp.fast_validation_sample_cols = lnMapFastValidationSampleCols;
-        lp.fast_validation_max_mismatch_ratio = lnMapFastValidationMaxMismatchRatio;
-        lp.fast_validation_max_p99_iter_delta = lnMapFastValidationMaxP99IterDelta;
-        lp.fast_validation_max_mean_color_delta = lnMapFastValidationMaxMeanColorDelta;
-        setVideoProgress(runner, run.id, "ln_map", 0, t, 0.0, depth,
-                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"currentLnMapRow", 0}, {"totalLnMapRows", t}});
-        throwIfCancelled(runner, run.id);
-        const compute::LnMapStats lnStats = compute::render_ln_map(
-            lp, strip,
-            [&](int rowsDone) {
-                throwIfCancelled(runner, run.id);
-                const double octave = depth * static_cast<double>(rowsDone) / std::max(1, t);
-                setVideoProgress(runner, run.id, "ln_map", rowsDone, t, octave, depth,
-                                 "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", t}});
-            });
-        throwIfCancelled(runner, run.id);
-        setVideoProgress(runner, run.id, "ln_map", t, t, depth, depth,
-                         "", "", Json{{"engine", lnStats.engine_used}, {"scalar", lnStats.scalar_used}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"currentLnMapRow", t}, {"totalLnMapRows", t}});
-
+        // ── 2. Render ln-map strip (or load from a previous run) ──────────────
+        int t = stripPlan.heightT;
+        cv::Mat strip;
+        compute::LnMapStats lnStats;
         const std::filesystem::path stripPath = std::filesystem::path(run.outputDir) / "ln_map.png";
-        compute::write_png(stripPath.string(), strip);
-        runner.addArtifact(run.id, Artifact{"ln-map", stripPath.string(), "image"});
+
+        if (!lnMapRunId.empty()) {
+            // Load pre-rendered strip from the specified run, skip field computation.
+            namespace fs = std::filesystem;
+            const fs::path srcDir = repoRoot / "fractal_studio" / "runtime" / "runs" / lnMapRunId;
+            const fs::path srcPng = srcDir / "ln_map.png";
+            const fs::path srcSc  = srcDir / "ln_map.json";
+            if (!fs::exists(srcPng)) throw std::runtime_error("ln-map PNG not found in run " + lnMapRunId);
+            if (!fs::exists(srcSc))  throw std::runtime_error("ln-map sidecar not found in run " + lnMapRunId);
+
+            strip = compute::read_png(srcPng.string());
+            t = strip.rows;
+
+            std::ifstream scIn(srcSc);
+            std::ostringstream scBuf; scBuf << scIn.rdbuf();
+            const Json savedSc = Json::parse(scBuf.str());
+
+            const double srcDepth = savedSc.value("depthOctaves", 0.0);
+            const int srcWidthS = savedSc.value("widthS", 0);
+            if (srcWidthS > 0 && std::abs(srcWidthS - s) > std::max(s / 10, 8))
+                throw std::runtime_error("strip width mismatch: saved " + std::to_string(srcWidthS)
+                    + " vs export " + std::to_string(s));
+            if (srcDepth > 0.0 && std::abs(srcDepth - depth) > 0.5)
+                throw std::runtime_error("depth mismatch: saved " + std::to_string(srcDepth)
+                    + " vs export " + std::to_string(depth));
+
+            lnStats.engine_used = "cached:" + lnMapRunId;
+            lnStats.scalar_used = savedSc.value("scalar", std::string(""));
+            lnStats.precision_mode = savedSc.value("precisionMode", std::string(""));
+            lnStats.layer_summary = savedSc.value("layerSummary", std::string(""));
+            lnStats.validation_summary = savedSc.value("validationSummary", std::string(""));
+
+            if (savedSc.contains("eqCountMin") && savedSc.contains("eqPeriod")) {
+                lnStats.equalization = compute::reconstructEqualization(
+                    savedSc.value("eqCountMin", 0.0),
+                    savedSc.value("eqPeriod", 1.0),
+                    savedSc.value("eqOnsetCycles", 1.0 / 6.0),
+                    savedSc.value("eqColormapWraps", false),
+                    cm);
+            }
+
+            fs::copy(srcPng, stripPath, fs::copy_options::overwrite_existing);
+            runner.addArtifact(run.id, Artifact{"ln-map", stripPath.string(), "image"});
+
+            setVideoProgress(runner, run.id, "ln_map", t, t, depth, depth,
+                             "", "", Json{{"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"currentLnMapRow", t}, {"totalLnMapRows", t}});
+        } else {
+            // Full ln-map computation.
+            strip = cv::Mat(t, s, CV_8UC3);
+            compute::LnMapParams lp;
+            lp.julia = julia;
+            lp.center_re = cr;
+            lp.center_im = ci;
+            lp.julia_re = jre;
+            lp.julia_im = jim;
+            lp.width_s = s;
+            lp.height_t = t;
+            lp.iterations = iters;
+            lp.bailout = bailout;
+            lp.bailout_sq = bailoutSq;
+            lp.variant = v;
+            lp.colormap = cm;
+            lp.color_mode = lnMapColorMode;
+            lp.color_cycles_per_octave = lnMapCyclesPerOctave;
+            lp.engine = j.value("lnMapEngine", std::string("auto"));
+            lp.precision_mode = lnMapMode;
+            lp.scalar_type = lnMapScalar;
+            lp.fast_fp32_depth_octaves = lnMapFastFp32Depth;
+            lp.fast_fp64_depth_octaves = lnMapFastFp64Depth;
+            lp.fast_validate = lnMapFastValidate;
+            lp.fast_validation_band_octaves = lnMapFastValidationBandOctaves;
+            lp.fast_validation_sample_rows = lnMapFastValidationSampleRows;
+            lp.fast_validation_sample_cols = lnMapFastValidationSampleCols;
+            lp.fast_validation_max_mismatch_ratio = lnMapFastValidationMaxMismatchRatio;
+            lp.fast_validation_max_p99_iter_delta = lnMapFastValidationMaxP99IterDelta;
+            lp.fast_validation_max_mean_color_delta = lnMapFastValidationMaxMeanColorDelta;
+            setVideoProgress(runner, run.id, "ln_map", 0, t, 0.0, depth,
+                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"currentLnMapRow", 0}, {"totalLnMapRows", t}});
+            throwIfCancelled(runner, run.id);
+            lnStats = compute::render_ln_map(
+                lp, strip,
+                [&](int rowsDone) {
+                    throwIfCancelled(runner, run.id);
+                    const double octave = depth * static_cast<double>(rowsDone) / std::max(1, t);
+                    setVideoProgress(runner, run.id, "ln_map", rowsDone, t, octave, depth,
+                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", t}});
+                });
+            throwIfCancelled(runner, run.id);
+            setVideoProgress(runner, run.id, "ln_map", t, t, depth, depth,
+                             "", "", Json{{"engine", lnStats.engine_used}, {"scalar", lnStats.scalar_used}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"currentLnMapRow", t}, {"totalLnMapRows", t}});
+
+            compute::write_png(stripPath.string(), strip);
+            runner.addArtifact(run.id, Artifact{"ln-map", stripPath.string(), "image"});
+        }
+        throwIfCancelled(runner, run.id);
 
         // Colorize the deferred final frame now that the strip's shared equalization
         // is available (hist_eq), so the strip↔final-frame warp blend is seamless.
         if (finalFrameDeferred) {
             throwIfCancelled(runner, run.id);
             colorizeFinalFrameWithLnMapMode(mp, finalField, lnMapColorMode, lnStats.equalization, finalImg);
-            finalField = compute::FieldOutput{};  // release the field buffer before warp/encode
+            finalField = compute::FieldOutput{};
             compute::write_png(finalPath.string(), finalImg);
             runner.addArtifact(run.id, Artifact{"final-frame", finalPath.string(), "image"});
         }
@@ -1753,6 +1805,12 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"layerSummary", lnStats.layer_summary},
                 {"validationSummary", lnStats.validation_summary},
             };
+            if (lnStats.equalization.valid) {
+                sc["eqCountMin"]      = lnStats.equalization.count_min;
+                sc["eqPeriod"]        = lnStats.equalization.period;
+                sc["eqOnsetCycles"]   = lnStats.equalization.onset_cycles;
+                sc["eqColormapWraps"] = lnStats.equalization.colormap_wraps;
+            }
             const std::filesystem::path scPath = std::filesystem::path(run.outputDir) / "ln_map.json";
             atomicWriteText(scPath, sc.dump(2));
         }

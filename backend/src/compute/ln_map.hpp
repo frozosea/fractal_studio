@@ -81,6 +81,10 @@ struct LnMapStats {
     LnMapEqualization equalization;        // populated only for color_mode == "hist_eq"
 };
 
+LnMapEqualization reconstructEqualization(
+    double count_min, double period, double onset_cycles,
+    bool colormap_wraps, Colormap colormap);
+
 using LnMapProgress = std::function<void(int rowsDone)>;
 
 bool ln_map_variant_supported_by_simd(Variant v);

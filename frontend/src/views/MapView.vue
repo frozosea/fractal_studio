@@ -800,6 +800,11 @@ const exportPreviewResult = ref<VideoPreviewResponse | null>(null)
 const lnMapPreviewBusy = ref(false)
 const lnMapPreviewStatus = ref('')
 const lnMapPreviewUrl = ref('')
+const lnMapPreviewRunId = ref('')
+const lnMapFullResBusy = ref(false)
+const lnMapFullResRunId = ref('')
+const lnMapFullResUrl = ref('')
+const lnMapFullResStatus = ref('')
 const exportJobId     = ref('')
 const exportProgress  = ref<RunProgress>({})
 const exportDepthDirty = ref(false)
@@ -994,11 +999,40 @@ async function runLnMapPreview() {
       widthS: 640,
     })
     lnMapPreviewUrl.value = api.baseUrl + resp.imagePath
+    lnMapPreviewRunId.value = resp.runId
     lnMapPreviewStatus.value = `${resp.widthS}×${resp.heightT} · engine ${resp.engineUsed || '?'} · ${resp.layerSummary || ''} · ${resp.generatedMs.toFixed(0)} ms`
   } catch (e: any) {
     lnMapPreviewStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
   } finally {
     lnMapPreviewBusy.value = false
+  }
+}
+
+async function runLnMapFullRes() {
+  lnMapFullResBusy.value = true
+  lnMapFullResStatus.value = lang.value === 'en' ? 'rendering full-res ln-map…' : '渲染全分辨率 ln-map…'
+  lnMapFullResUrl.value = ''
+  lnMapFullResRunId.value = ''
+  try {
+    const base = videoRequestBase()
+    const resp = await api.lnMap({
+      centerRe: base.centerRe, centerIm: base.centerIm,
+      julia: base.julia, juliaRe: base.juliaRe, juliaIm: base.juliaIm,
+      variant: base.variant, colorMap: base.colorMap,
+      lnMapColorMode: base.lnMapColorMode,
+      lnMapCyclesPerOctave: base.lnMapCyclesPerOctave,
+      iterations: base.iterations,
+      depthOctaves: base.depthOctaves,
+      precisionMode: base.lnMapMode,
+      width: base.width, height: base.height,
+    })
+    lnMapFullResRunId.value = resp.runId
+    lnMapFullResUrl.value = api.baseUrl + resp.imagePath
+    lnMapFullResStatus.value = `${resp.widthS}×${resp.heightT} · ${resp.engineUsed || '?'} · ${resp.generatedMs.toFixed(0)} ms`
+  } catch (e: any) {
+    lnMapFullResStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
+  } finally {
+    lnMapFullResBusy.value = false
   }
 }
 
@@ -1008,7 +1042,11 @@ async function runExport() {
   exportResult.value = null
   exportProgress.value = {}
   try {
-    const resp = await api.videoExport(videoRequestBase())
+    const req: Record<string, any> = { ...videoRequestBase() }
+    if (lnMapFullResRunId.value) {
+      req.lnMapRunId = lnMapFullResRunId.value
+    }
+    const resp = await api.videoExport(req as any)
     exportJobId.value = resp.runId
     exportStatus.value = `${resp.runId} · ${resp.frameCount} frames · ${resp.durationSec.toFixed(2)}s`
     await pollVideoExport(resp)
@@ -1018,6 +1056,12 @@ async function runExport() {
     exportBusy.value = false
   }
 }
+
+watch([centerRe, centerIm, variant, iterations, exportDepth, exportLnMapMode, exportLnMapScalar, colorMap, exportLnMapColorMode, exportCyclesPerOctave], () => {
+  lnMapFullResRunId.value = ''
+  lnMapFullResUrl.value = ''
+  lnMapFullResStatus.value = ''
+})
 
 function artifactByName(status: RunStatusResponse, name: string) {
   return status.artifacts.find(a => a.name === name)
@@ -1421,7 +1465,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
     <!-- ── Unified video export modal ───────────────────────────────────── -->
     <Teleport to="body">
       <div v-if="exportModalOpen" class="modal-backdrop" @click.self="exportModalOpen = false">
-        <div class="modal">
+        <div class="modal" :class="{ 'modal-with-preview': lnMapPreviewUrl || lnMapFullResUrl }">
+          <div class="modal-main">
           <div class="modal-title">
             {{ juliaOn ? t('export_julia_video') : t('export_video') }}
           </div>
@@ -1528,23 +1573,24 @@ async function pollVideoExport(initial: VideoExportResponse) {
           </div>
           <div class="modal-footer">
             <button @click="exportModalOpen = false" class="btn-cancel">{{ t('video_cancel') }}</button>
-            <button @click="runLnMapPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
+            <button @click="runLnMapPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy || lnMapFullResBusy" class="btn-preview">
               {{ lnMapPreviewBusy ? t('loading') : (lang === 'en' ? 'ln-map' : 'ln-map 预览') }}
             </button>
-            <button @click="runPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
+            <button @click="runLnMapFullRes" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy || lnMapFullResBusy" class="btn-preview">
+              {{ lnMapFullResBusy ? t('loading') : (lang === 'en' ? 'full ln-map' : '完整 ln-map') }}
+            </button>
+            <button @click="runPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy || lnMapFullResBusy" class="btn-preview">
               {{ exportPreviewBusy ? t('loading') : t('video_preview') }}
             </button>
-            <button @click="runExport" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-go">
+            <button @click="runExport" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy || lnMapFullResBusy" class="btn-go">
               {{ exportBusy ? t('loading') : t('video_render') }}
             </button>
           </div>
-          <div v-if="lnMapPreviewStatus" class="modal-status mono">{{ lnMapPreviewStatus }}</div>
-          <div v-if="lnMapPreviewUrl" class="modal-body" style="gap:6px">
-            <a :href="lnMapPreviewUrl" class="preview-item" download>
-              <span>ln-map strip</span>
-              <img :src="lnMapPreviewUrl" alt="" style="max-height:420px;width:auto;object-fit:contain" />
-            </a>
+          <div v-if="lnMapFullResRunId" class="modal-status mono ln-map-cached-hint">
+            {{ lang === 'en' ? '✓ full ln-map cached — render will skip ln-map stage' : '✓ 已缓存完整 ln-map — 渲染将跳过 ln-map 阶段' }}
           </div>
+          <div v-if="lnMapPreviewStatus" class="modal-status mono">{{ lnMapPreviewStatus }}</div>
+          <div v-if="lnMapFullResStatus" class="modal-status mono">{{ lnMapFullResStatus }}</div>
           <div v-if="exportPreviewStatus" class="modal-status mono">{{ exportPreviewStatus }}</div>
           <div v-if="exportStatus" class="modal-status mono">{{ exportStatus }}</div>
           <div v-if="exportBusy || exportJobId" class="progress-stack">
@@ -1590,6 +1636,17 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <a v-if="exportResult.lnMapDownloadUrl" :href="api.baseUrl + exportResult.lnMapDownloadUrl" class="dl-link" download>↓ ln-map PNG</a>
               <a v-if="exportResult.finalFrameDownloadUrl" :href="api.baseUrl + exportResult.finalFrameDownloadUrl" class="dl-link" download>↓ {{ t('export_png') }}</a>
             </template>
+          </div>
+          </div><!-- end .modal-main -->
+          <div v-if="lnMapPreviewUrl || lnMapFullResUrl" class="modal-ln-preview">
+            <div class="ln-preview-label mono">
+              {{ lnMapFullResUrl ? (lang === 'en' ? 'full-res strip' : '全分辨率条带') : (lang === 'en' ? 'preview strip' : '预览条带') }}
+            </div>
+            <div class="ln-preview-scroll">
+              <a :href="lnMapFullResUrl || lnMapPreviewUrl" download>
+                <img :src="lnMapFullResUrl || lnMapPreviewUrl" alt="" class="ln-preview-img" />
+              </a>
+            </div>
           </div>
         </div>
       </div>
@@ -1829,6 +1886,53 @@ async function pollVideoExport(initial: VideoExportResponse) {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+.modal.modal-with-preview {
+  flex-direction: row;
+  width: min(780px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  gap: 0;
+}
+.modal.modal-with-preview .modal-main {
+  flex: 1;
+  min-width: 0;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+.modal-ln-preview {
+  width: 200px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ln-preview-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 8px 10px 4px;
+  flex-shrink: 0;
+}
+.ln-preview-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 4px 8px;
+}
+.ln-preview-img {
+  width: 100%;
+  height: auto;
+  image-rendering: crisp-edges;
+  display: block;
+}
+.ln-map-cached-hint {
+  color: var(--good);
 }
 .modal-title {
   font-family: var(--mono);
@@ -2295,6 +2399,21 @@ async function pollVideoExport(initial: VideoExportResponse) {
     padding: 16px;
   }
 
+  .modal.modal-with-preview {
+    flex-direction: column;
+    width: 100%;
+    padding: 0;
+  }
+  .modal.modal-with-preview .modal-main {
+    padding: 16px;
+  }
+  .modal-ln-preview {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--rule);
+    max-height: 300px;
+  }
+
   .mrow {
     align-items: stretch;
     flex-direction: column;
@@ -2450,6 +2569,9 @@ async function pollVideoExport(initial: VideoExportResponse) {
 
   .modal {
     width: min(720px, calc(100vw - 32px));
+  }
+  .modal.modal-with-preview {
+    width: min(960px, calc(100vw - 32px));
   }
 
   .modal-body {

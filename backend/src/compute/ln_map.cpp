@@ -1798,6 +1798,20 @@ LnMapStats render_ln_map_fast(const LnMapParams& p, cv::Mat& out, const LnMapPro
 
 } // namespace
 
+LnMapEqualization reconstructEqualization(
+    double count_min, double period, double onset_cycles,
+    bool colormap_wraps, Colormap colormap)
+{
+    LnMapEqualization eq;
+    eq.count_min      = count_min;
+    eq.period         = period;
+    eq.onset_cycles   = onset_cycles;
+    eq.colormap_wraps = colormap_wraps;
+    eq.colormap       = colormap;
+    eq.valid          = true;
+    return eq;
+}
+
 void LnMapEqualization::colorize(int it, uint8_t& b, uint8_t& g, uint8_t& r) const {
     // Absolute phase in palette cycles: shallowest count → 0, growing ~1 cycle per
     // octave of zoom (for cyclesPerOctave == 1).
