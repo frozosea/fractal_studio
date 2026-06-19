@@ -859,6 +859,7 @@ struct LnFieldCache {
     bool julia = false;
     double center_re = 0, center_im = 0, julia_re = 0, julia_im = 0, bailout = 0, bailout_sq = 0;
     int width_s = 0, height_t = 0, iterations = 0, variant = -1;
+    std::string precision_mode;  // "standard" or "fast" — different precision → different field
     std::string engine;   // engine that produced the cached field (for UI reporting on reuse)
     std::vector<int> iters;
 };
@@ -867,6 +868,7 @@ LnFieldCache g_ln_field_cache;
 
 bool ln_field_cache_matches(const LnMapParams& p, const LnFieldCache& c, size_t pixel_count) {
     return c.valid && c.iters.size() == pixel_count &&
+           c.precision_mode == p.precision_mode &&
            c.julia == p.julia && c.center_re == p.center_re && c.center_im == p.center_im &&
            c.julia_re == p.julia_re && c.julia_im == p.julia_im &&
            c.bailout == p.bailout && c.bailout_sq == p.bailout_sq &&
@@ -916,6 +918,8 @@ std::string compute_ln_field(
     return eng;
 }
 
+std::string compute_ln_field_fast(const LnMapParams&, std::vector<int>&, const TrigColumns&, const LnMapProgress&);
+
 LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {
     ensure_ln_out(p, out);
     const auto t0 = std::chrono::steady_clock::now();
@@ -942,12 +946,19 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     } else {
         // The escape-count field is the expensive pass; compute it with the engine the
         // user selected (CUDA / AVX-512 / AVX2 / OpenMP, fp64 or fx64), not always scalar
-        // OpenMP. The actual engine is surfaced via stats so the UI can show degradation.
-        field_engine = compute_ln_field(p, iters, cols, on_row_done);
+        // OpenMP. The "fast" precision mode layers fp32/fp64/fx64 bands just like the
+        // escape-mode fast path. The actual engine is surfaced via stats so the UI can
+        // show degradation.
+        if (ln_map_fast_mode(p)) {
+            field_engine = compute_ln_field_fast(p, iters, cols, on_row_done);
+        } else {
+            field_engine = compute_ln_field(p, iters, cols, on_row_done);
+        }
         std::lock_guard<std::mutex> lk(g_ln_field_cache_mu);
         g_ln_field_cache = LnFieldCache{true, p.julia, p.center_re, p.center_im, p.julia_re,
                                         p.julia_im, p.bailout, p.bailout_sq, s, h, p.iterations,
-                                        static_cast<int>(p.variant), field_engine, iters};
+                                        static_cast<int>(p.variant), p.precision_mode,
+                                        field_engine, iters};
     }
 
     // hist_eq → periodic equalized coloring via the shared LUT (also reused by the
@@ -1278,6 +1289,173 @@ std::vector<LnRenderBand> make_fast_bands(
         validation_summary = p.fast_validate ? "validated=no_candidate_checks" : "disabled";
     }
     return bands;
+}
+
+// Layered-precision field pass for the "fast" mode: fp32 shallow → fp64 mid → fx64 deep.
+// Uses the same band planning and validation as render_ln_map_fast but writes raw escape
+// counts instead of BGR pixels. Returns the engine/layer summary string.
+// Falls back to compute_ln_field when SIMD+CUDA are unavailable (OpenMP-only has no
+// per-band raw-iter path).
+std::string compute_ln_field_fast(
+    const LnMapParams& p,
+    std::vector<int>& iters,
+    const TrigColumns& cols,
+    const LnMapProgress& on_row_done
+) {
+    const int h = p.height_t;
+    const bool simd_variant = ln_map_variant_supported_by_simd(p.variant);
+    const bool explicit_fp64 = p.scalar_type == "fp64";
+    const bool requested_fx64 = ln_map_scalar_is_fx64(p);
+    const bool cuda_fast =
+#if USE_CUDA_LN_MAP
+        simd_variant && engine_allows_cuda(p) && fsd_cuda::cuda_ln_map_available();
+#else
+        false;
+#endif
+
+    if (!simd_variant && !cuda_fast) {
+        return compute_ln_field(p, iters, cols, on_row_done);
+    }
+
+    const LnCpuBackend fp32_backend = select_ln_cpu_fp32_backend(p);
+    const bool cpu_fp32_available = fp32_backend == LnCpuBackend::Avx512 || fp32_backend == LnCpuBackend::Avx2;
+
+    int fp32_end = rows_for_depth_octaves(p, p.fast_fp32_depth_octaves);
+    int fp64_end = rows_for_depth_octaves(p, p.fast_fp64_depth_octaves);
+    fp64_end = std::max(fp32_end, fp64_end);
+    if (!cuda_fast && !cpu_fp32_available) fp32_end = 0;
+    const bool use_deep_fx64 = (cuda_fast && !explicit_fp64) || requested_fx64;
+    if (!use_deep_fx64) fp64_end = h;
+    fp32_end = std::clamp(fp32_end, 0, h);
+    fp64_end = std::clamp(fp64_end, fp32_end, h);
+
+    std::atomic<int> rows_done{0};
+    std::mutex progress_mu;
+    auto notify = [&](int delta) {
+        if (delta <= 0) return;
+        const int done = rows_done.fetch_add(delta, std::memory_order_relaxed) + delta;
+        if (on_row_done) {
+            std::lock_guard<std::mutex> lock(progress_mu);
+            on_row_done(std::min(done, h));
+        }
+    };
+
+    const LnPlanScalar reference_scalar = requested_fx64 ? LnPlanScalar::Fx64 : LnPlanScalar::Fp64;
+    std::string validation_summary;
+    const std::vector<LnRenderBand> bands = make_fast_bands(
+        p, fp32_end, fp64_end, use_deep_fx64, reference_scalar, validation_summary);
+
+    std::ostringstream layers;
+    bool first_layer = true;
+    auto add_layer = [&](int start, int end, const char* scalar, const std::string& engine) {
+        if (end <= start) return;
+        if (!first_layer) layers << ";";
+        first_layer = false;
+        layers << scalar << "[" << start << "," << end << ")@" << engine;
+    };
+
+    auto render_cuda_iters_band = [&](int start, int end, bool fx64_mode) -> bool {
+#if USE_CUDA_LN_MAP
+        if (!cuda_fast) return false;
+        try {
+            const auto cp = make_cuda_params(p);
+            const int chunk = cuda_progress_chunk_rows(p);
+            for (int r0 = start; r0 < end; r0 += chunk) {
+                const int rows = std::min(chunk, end - r0);
+                fsd_cuda::cuda_render_ln_map_iters_rows(cp, iters.data(), r0, rows, fx64_mode);
+                notify(rows);
+            }
+            return true;
+        } catch (...) {
+            if (p.engine == "cuda") throw;
+            return false;
+        }
+#else
+        (void)start; (void)end; (void)fx64_mode;
+        return false;
+#endif
+    };
+
+    auto render_simd_iters_band = [&](int start, int band_rows) -> const char* {
+        if (p.engine != "openmp" && p.engine != "avx2" &&
+            render_ln_map_avx512_iters_rows(p, iters.data(), start, band_rows, nullptr)) {
+            return "avx512";
+        }
+        if (p.engine != "openmp" &&
+            render_ln_map_avx2_iters_rows(p, iters.data(), start, band_rows, nullptr)) {
+            return "avx2";
+        }
+        return nullptr;
+    };
+
+    for (const LnRenderBand& band : bands) {
+        const int band_rows = band.end - band.start;
+        if (band_rows <= 0) continue;
+
+        if (band.scalar == LnPlanScalar::Fp32) {
+            bool rendered = false;
+#if USE_CUDA_LN_MAP
+            if (cuda_fast) {
+                try {
+                    const auto cp = make_cuda_params(p);
+                    const int chunk = cuda_progress_chunk_rows(p);
+                    for (int r0 = band.start; r0 < band.end; r0 += chunk) {
+                        const int rows = std::min(chunk, band.end - r0);
+                        fsd_cuda::cuda_render_ln_map_iters_fp32_rows(cp, iters.data(), r0, rows);
+                        notify(rows);
+                    }
+                    add_layer(band.start, band.end, "fp32", "cuda");
+                    rendered = true;
+                } catch (...) {
+                    if (p.engine == "cuda") throw;
+                }
+            }
+#endif
+            if (!rendered && cpu_fp32_available) {
+                if (fp32_backend == LnCpuBackend::Avx512) {
+                    render_ln_map_avx512_fp32_iters_rows(p, iters.data(), band.start, band_rows, nullptr);
+                } else {
+                    render_ln_map_avx2_fp32_iters_rows(p, iters.data(), band.start, band_rows, nullptr);
+                }
+                notify(band_rows);
+                add_layer(band.start, band.end, "fp32", ln_cpu_backend_name(fp32_backend));
+                rendered = true;
+            }
+            if (!rendered) {
+                if (const char* eng = render_simd_iters_band(band.start, band_rows)) {
+                    notify(band_rows);
+                    add_layer(band.start, band.end, "fp32->fp64", eng);
+                } else if (render_cuda_iters_band(band.start, band.end, false)) {
+                    add_layer(band.start, band.end, "fp32->fp64", "cuda");
+                }
+            }
+            continue;
+        }
+
+        if (band.scalar == LnPlanScalar::Fx64) {
+            if (render_cuda_iters_band(band.start, band.end, true)) {
+                add_layer(band.start, band.end, "fx64", "cuda");
+                continue;
+            }
+            if (const char* eng = render_simd_iters_band(band.start, band_rows)) {
+                notify(band_rows);
+                add_layer(band.start, band.end, "fx64->fp64", eng);
+            } else if (render_cuda_iters_band(band.start, band.end, false)) {
+                add_layer(band.start, band.end, "fx64->fp64", "cuda");
+            }
+            continue;
+        }
+
+        // fp64 band
+        if (render_cuda_iters_band(band.start, band.end, false)) {
+            add_layer(band.start, band.end, "fp64", "cuda");
+        } else if (const char* eng = render_simd_iters_band(band.start, band_rows)) {
+            notify(band_rows);
+            add_layer(band.start, band.end, "fp64", eng);
+        }
+    }
+
+    return "fast(" + layers.str() + ")";
 }
 
 LnMapStats render_ln_map_hybrid(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {

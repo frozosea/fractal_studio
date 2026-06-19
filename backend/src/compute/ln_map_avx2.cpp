@@ -372,7 +372,8 @@ void render_rows_fp32_impl(
     int row_start,
     int row_end,
     bool threaded,
-    const LnMapProgress& on_row_done
+    const LnMapProgress& on_row_done,
+    int* iters_out = nullptr
 ) {
     const int s = p.width_s;
     const TrigColumnsF& cols = cached_trig_columns_f(s);
@@ -388,7 +389,8 @@ void render_rows_fp32_impl(
     std::atomic<int> rows_done{0};
 
     auto render_row = [&](int row) {
-        uint8_t* rowp = out.ptr<uint8_t>(row);
+        uint8_t* rowp = iters_out ? nullptr : out.ptr<uint8_t>(row);
+        int* iters_rowp = iters_out ? iters_out + static_cast<size_t>(row) * static_cast<size_t>(s) : nullptr;
         const float k = ln_four - static_cast<float>(row) * tau / static_cast<float>(s);
         const float r_mag = std::exp(k);
 
@@ -442,9 +444,14 @@ void render_rows_fp32_impl(
                 zim2 = _mm256_blendv_ps(zim2, nim2, active_vec);
             }
 
-            for (int lane = 0; lane < 8 && col + lane < s; ++lane) {
-                uint8_t* px = rowp + 3 * (col + lane);
-                colorize_escape_bgr(iter_arr[lane], p.iterations, p.colormap, 0.0, false, px[0], px[1], px[2]);
+            if (iters_rowp) {
+                for (int lane = 0; lane < 8 && col + lane < s; ++lane)
+                    iters_rowp[col + lane] = iter_arr[lane];
+            } else {
+                for (int lane = 0; lane < 8 && col + lane < s; ++lane) {
+                    uint8_t* px = rowp + 3 * (col + lane);
+                    colorize_escape_bgr(iter_arr[lane], p.iterations, p.colormap, 0.0, false, px[0], px[1], px[2]);
+                }
             }
         }
 
@@ -535,6 +542,19 @@ LnMapStats render_ln_map_avx2_fp32_rows(const LnMapParams& p, cv::Mat& out, int 
     return stats;
 #else
     return render_ln_map_openmp_rows(p, out, row_start, row_count, on_row_done);
+#endif
+}
+
+bool render_ln_map_avx2_fp32_iters_rows(const LnMapParams& p, int* iters, int row_start, int row_count, const LnMapProgress& on_row_done) {
+    if (!ln_map_avx2_available() || !ln_map_variant_supported_by_simd(p.variant)) return false;
+#if defined(__AVX2__) && defined(__FMA__)
+    const auto [start, end] = clamp_rows(p, row_start, row_count);
+    cv::Mat dummy;
+    render_rows_fp32_impl(p, dummy, start, end, true, on_row_done, iters);
+    return true;
+#else
+    (void)p; (void)iters; (void)row_start; (void)row_count; (void)on_row_done;
+    return false;
 #endif
 }
 

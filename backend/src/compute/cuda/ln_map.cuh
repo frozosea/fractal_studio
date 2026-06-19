@@ -35,5 +35,7 @@ CudaLnMapStats cuda_render_ln_map_fx64(const CudaLnMapParams& p, cv::Mat& out);
 CudaLnMapStats cuda_render_ln_map_fx64_rows(const CudaLnMapParams& p, cv::Mat& out, int row_start, int row_count);
 // Raw escape-count field (int per pixel) on the GPU, fp64 (fx64=false) or fx64 (fx64=true).
 CudaLnMapStats cuda_render_ln_map_iters_rows(const CudaLnMapParams& p, int* iters, int row_start, int row_count, bool fx64);
+// Raw escape-count field at fp32 precision (for the fast mode's shallow rows).
+CudaLnMapStats cuda_render_ln_map_iters_fp32_rows(const CudaLnMapParams& p, int* iters, int row_start, int row_count);
 
 } // namespace fsd_cuda

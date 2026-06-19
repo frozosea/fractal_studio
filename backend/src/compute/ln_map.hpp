@@ -95,7 +95,9 @@ LnMapStats render_ln_map_avx512_fp32_rows(const LnMapParams& p, cv::Mat& out, in
 // use SIMD for the iteration pass instead of degrading to scalar OpenMP. Return false if
 // the path is unavailable (caller falls back to OpenMP).
 bool render_ln_map_avx512_iters_rows(const LnMapParams& p, int* iters, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
+bool render_ln_map_avx512_fp32_iters_rows(const LnMapParams& p, int* iters, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 bool render_ln_map_avx2_iters_rows(const LnMapParams& p, int* iters, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
+bool render_ln_map_avx2_fp32_iters_rows(const LnMapParams& p, int* iters, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx2(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx2_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx2_fp32_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);

@@ -521,8 +521,42 @@ __global__ void ln_map_kernel_fx64_templated(CudaLnMapParams p, int row_start, i
 }
 
 // ---- Raw escape-count field kernels (write int counts, no colorize) ----
-// Used by the mapped color modes (hist_eq, …) so they can run on the GPU at fp64/fx64
+// Used by the mapped color modes (hist_eq, …) so they can run on the GPU at any
 // precision instead of degrading to scalar OpenMP.
+template <int VariantId>
+__global__ void ln_map_iters_kernel_fp32(CudaLnMapParams p, int row_start, int row_count, int* out_iters) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = p.width_s * row_count;
+    if (idx >= total) return;
+    const int x = idx % p.width_s;
+    const int row = row_start + idx / p.width_s;
+    constexpr float tau = static_cast<float>(TAU);
+    constexpr float ln_four = static_cast<float>(LN_FOUR);
+    const float width_s = static_cast<float>(p.width_s);
+    const float th = tau * static_cast<float>(x) / width_s;
+    const float k = ln_four - static_cast<float>(row) * tau / width_s;
+    const float r_mag = expf(k);
+    const float pre = static_cast<float>(p.center_re) + r_mag * cosf(th);
+    const float pim = static_cast<float>(p.center_im) + r_mag * sinf(th);
+    float zr = p.julia ? pre : 0.0f;
+    float zi = p.julia ? pim : 0.0f;
+    const float cr = p.julia ? static_cast<float>(p.julia_re) : pre;
+    const float ci = p.julia ? static_cast<float>(p.julia_im) : pim;
+    float zr2 = zr * zr, zi2 = zi * zi;
+    const float bailout_sq = static_cast<float>(p.bailout_sq);
+    int iter = 0;
+    for (; iter < p.iterations; ++iter) {
+        float nr = 0.0f, ni = 0.0f;
+        d_step_cached_f<VariantId>(zr, zi, zr2, zi2, cr, ci, nr, ni);
+        const bool finite = isfinite(nr) && isfinite(ni);
+        const float nr2 = finite ? nr * nr : INFINITY;
+        const float ni2 = finite ? ni * ni : INFINITY;
+        if (!finite || nr2 + ni2 > bailout_sq) break;
+        zr = nr; zi = ni; zr2 = nr2; zi2 = ni2;
+    }
+    out_iters[idx] = iter;
+}
+
 template <int VariantId>
 __global__ void ln_map_iters_kernel(CudaLnMapParams p, int row_start, int row_count, int* out_iters) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -607,6 +641,29 @@ void launch_ln_map_iters(const CudaLnMapParams& p, int row_start, int row_count,
         case 7: launch_ln_map_iters_variant<7>(p, row_start, row_count, d_iters, fx64); break;
         case 8: launch_ln_map_iters_variant<8>(p, row_start, row_count, d_iters, fx64); break;
         case 9: launch_ln_map_iters_variant<9>(p, row_start, row_count, d_iters, fx64); break;
+        default: throw std::runtime_error("CUDA ln-map unsupported variant");
+    }
+}
+
+template <int VariantId>
+void launch_ln_map_iters_fp32_variant(const CudaLnMapParams& p, int row_start, int row_count, int* d_iters) {
+    const int block = 256;
+    const int grid = (p.width_s * row_count + block - 1) / block;
+    ln_map_iters_kernel_fp32<VariantId><<<grid, block>>>(p, row_start, row_count, d_iters);
+}
+
+void launch_ln_map_iters_fp32(const CudaLnMapParams& p, int row_start, int row_count, int* d_iters) {
+    switch (p.variant_id) {
+        case 0: launch_ln_map_iters_fp32_variant<0>(p, row_start, row_count, d_iters); break;
+        case 1: launch_ln_map_iters_fp32_variant<1>(p, row_start, row_count, d_iters); break;
+        case 2: launch_ln_map_iters_fp32_variant<2>(p, row_start, row_count, d_iters); break;
+        case 3: launch_ln_map_iters_fp32_variant<3>(p, row_start, row_count, d_iters); break;
+        case 4: launch_ln_map_iters_fp32_variant<4>(p, row_start, row_count, d_iters); break;
+        case 5: launch_ln_map_iters_fp32_variant<5>(p, row_start, row_count, d_iters); break;
+        case 6: launch_ln_map_iters_fp32_variant<6>(p, row_start, row_count, d_iters); break;
+        case 7: launch_ln_map_iters_fp32_variant<7>(p, row_start, row_count, d_iters); break;
+        case 8: launch_ln_map_iters_fp32_variant<8>(p, row_start, row_count, d_iters); break;
+        case 9: launch_ln_map_iters_fp32_variant<9>(p, row_start, row_count, d_iters); break;
         default: throw std::runtime_error("CUDA ln-map unsupported variant");
     }
 }
@@ -784,6 +841,34 @@ CudaLnMapStats cuda_render_ln_map_iters_rows(const CudaLnMapParams& p, int* iter
 
 CudaLnMapStats cuda_render_ln_map(const CudaLnMapParams& p, cv::Mat& out) {
     return cuda_render_ln_map_rows(p, out, 0, p.height_t);
+}
+
+CudaLnMapStats cuda_render_ln_map_iters_fp32_rows(const CudaLnMapParams& p, int* iters, int row_start, int row_count) {
+    if (!cuda_ln_map_available()) throw std::runtime_error("CUDA ln-map not available");
+    if (p.variant_id < 0 || p.variant_id > 9) throw std::runtime_error("CUDA ln-map unsupported variant");
+    if (row_start < 0 || row_count <= 0 || row_start + row_count > p.height_t) {
+        throw std::runtime_error("invalid CUDA ln-map row range");
+    }
+    std::lock_guard<std::mutex> lock(g_ln_mu);
+    const size_t count = static_cast<size_t>(p.width_s) * static_cast<size_t>(row_count);
+    const size_t bytes = count * sizeof(int);
+    ScopedDevicePtr transient;
+    CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&transient.ptr), bytes));
+    int* d_iters = reinterpret_cast<int*>(transient.ptr);
+
+    g_ln_events.ensure();
+    CUDA_LN_CHECK(cudaEventRecord(g_ln_events.start));
+    launch_ln_map_iters_fp32(p, row_start, row_count, d_iters);
+    CUDA_LN_CHECK(cudaGetLastError());
+    CUDA_LN_CHECK(cudaEventRecord(g_ln_events.stop));
+    CUDA_LN_CHECK(cudaEventSynchronize(g_ln_events.stop));
+    float ms = 0.0f;
+    CUDA_LN_CHECK(cudaEventElapsedTime(&ms, g_ln_events.start, g_ln_events.stop));
+    CUDA_LN_CHECK(cudaMemcpy(iters + static_cast<size_t>(row_start) * static_cast<size_t>(p.width_s),
+                             d_iters, bytes, cudaMemcpyDeviceToHost));
+    CudaLnMapStats stats;
+    stats.elapsed_ms = static_cast<double>(ms);
+    return stats;
 }
 
 CudaLnMapStats cuda_render_ln_map_fp32_rows(const CudaLnMapParams& p, cv::Mat& out, int row_start, int row_count) {
