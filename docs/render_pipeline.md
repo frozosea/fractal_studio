@@ -114,6 +114,7 @@ c = juliaRe + juliaIm * i
 - `viridis` 是亮度排序稳定的紫蓝-绿黄色表，适合分析截图。
 - `twilight` 是端点闭合的循环暮光色表，适合 smooth 或相位感轮廓。
 - `ember_blue` 是蓝色暗部、青色边缘、暖色高光的风格化边界色表。
+- `spectral1530` 是全饱和 1530 步循环色环（绿→青→蓝→品→红→黄→绿，每段 255 步），周期是 `tri765` 的两倍且循环无缝，是周期性 `hist_eq` ln-map 模式的推荐色表。
 
 ## Engine And Scalar / 引擎与标量
 

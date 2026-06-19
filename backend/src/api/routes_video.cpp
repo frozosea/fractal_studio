@@ -465,7 +465,8 @@ bool videoColormapWrapsPhase(compute::Colormap colormap) {
     return colormap == compute::Colormap::ClassicCos ||
            colormap == compute::Colormap::HsvWheel ||
            colormap == compute::Colormap::Tri765 ||
-           colormap == compute::Colormap::Twilight;
+           colormap == compute::Colormap::Twilight ||
+           colormap == compute::Colormap::Spectral1530;
 }
 
 double applyVideoDepthPhase(double mapped, double phase, compute::Colormap colormap) {
@@ -494,6 +495,7 @@ void colorizeFinalFrameWithLnMapMode(
     const compute::MapParams& p,
     const compute::FieldOutput& field,
     const std::string& mode,
+    const compute::LnMapEqualization& eq,
     cv::Mat& out
 ) {
     if (field.metric != compute::Metric::Escape ||
@@ -503,6 +505,23 @@ void colorizeFinalFrameWithLnMapMode(
     }
     if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
         out.create(p.height, p.width, CV_8UC3);
+    }
+
+    // hist_eq reuses the strip's shared equalization so the warp blend is seamless;
+    // every escaped pixel is then a pure function of its iteration count.
+    const bool usePeriodicEq = mode == "hist_eq" && eq.valid;
+    if (usePeriodicEq) {
+        for (int y = 0; y < p.height; ++y) {
+            uint8_t* row = out.ptr<uint8_t>(y);
+            const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(p.width);
+            for (int x = 0; x < p.width; ++x) {
+                const int it = static_cast<int>(field.iter_u32[rowOffset + static_cast<size_t>(x)]);
+                uint8_t* px = row + 3 * x;
+                if (it >= p.iterations) { px[0] = px[1] = px[2] = 255; continue; }
+                eq.colorize(it, px[0], px[1], px[2]);
+            }
+        }
+        return;
     }
 
     const bool needsGlobalCdf = mode == "hist_eq" || mode == "bands" || mode == "frontier";
@@ -1545,7 +1564,11 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const double lnMapFastValidationMaxMismatchRatio = j.value("lnMapFastValidationMaxMismatchRatio", 0.01);
     const int lnMapFastValidationMaxP99IterDelta = j.value("lnMapFastValidationMaxP99IterDelta", 16);
     const double lnMapFastValidationMaxMeanColorDelta = j.value("lnMapFastValidationMaxMeanColorDelta", 8.0);
+    const double lnMapCyclesPerOctave = j.value("lnMapCyclesPerOctave", 0.5);
 
+    if (!(lnMapCyclesPerOctave > 0.0) || lnMapCyclesPerOctave > 64.0 || !std::isfinite(lnMapCyclesPerOctave)) {
+        throw std::runtime_error("invalid lnMapCyclesPerOctave (0..64)");
+    }
     if (s < 128 || s > 65536)               throw std::runtime_error("invalid widthS (128..65536)");
     if (depth < 0.05 || depth > 120.0)      throw std::runtime_error("invalid depthOctaves (0.05..120)");
     if (iters < 1 || iters > 10000000)      throw std::runtime_error("invalid iterations");
@@ -1627,19 +1650,24 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
 
         cv::Mat finalImg(H, W, CV_8UC3);
         compute::MapStats finalStats;
+        compute::FieldOutput finalField;   // held for deferred coloring (non-escape modes)
+        bool finalFrameDeferred = false;
         if (lnMapColorMode == "escape") {
             finalStats = compute::render_map(mp, finalImg);
         } else {
-            compute::FieldOutput finalField;
+            // Compute the iteration field now, but defer coloring until after the strip:
+            // hist_eq reuses the strip's shared equalization for a seamless warp blend.
             finalStats = compute::render_map_field(mp, finalField);
-            colorizeFinalFrameWithLnMapMode(mp, finalField, lnMapColorMode, finalImg);
             finalStats.engine_used += "_ln_" + lnMapColorMode;
+            finalFrameDeferred = true;
         }
         throwIfCancelled(runner, run.id);
 
         const std::filesystem::path finalPath = std::filesystem::path(run.outputDir) / "final_frame.png";
-        compute::write_png(finalPath.string(), finalImg);
-        runner.addArtifact(run.id, Artifact{"final-frame", finalPath.string(), "image"});
+        if (!finalFrameDeferred) {
+            compute::write_png(finalPath.string(), finalImg);
+            runner.addArtifact(run.id, Artifact{"final-frame", finalPath.string(), "image"});
+        }
         setVideoProgress(runner, run.id, "final_frame", 1, 1, depth, depth,
                          "", "", Json{{"engine", finalStats.engine_used}, {"scalar", finalStats.scalar_used}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
 
@@ -1660,6 +1688,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         lp.variant = v;
         lp.colormap = cm;
         lp.color_mode = lnMapColorMode;
+        lp.color_cycles_per_octave = lnMapCyclesPerOctave;
         lp.engine = j.value("lnMapEngine", std::string("auto"));
         lp.precision_mode = lnMapMode;
         lp.scalar_type = lnMapScalar;
@@ -1691,6 +1720,16 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         compute::write_png(stripPath.string(), strip);
         runner.addArtifact(run.id, Artifact{"ln-map", stripPath.string(), "image"});
 
+        // Colorize the deferred final frame now that the strip's shared equalization
+        // is available (hist_eq), so the strip↔final-frame warp blend is seamless.
+        if (finalFrameDeferred) {
+            throwIfCancelled(runner, run.id);
+            colorizeFinalFrameWithLnMapMode(mp, finalField, lnMapColorMode, lnStats.equalization, finalImg);
+            finalField = compute::FieldOutput{};  // release the field buffer before warp/encode
+            compute::write_png(finalPath.string(), finalImg);
+            runner.addArtifact(run.id, Artifact{"final-frame", finalPath.string(), "image"});
+        }
+
         // Sidecar so old zoomVideoRoute can also consume this ln-map.
         {
             Json sc = {
@@ -1705,6 +1744,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"lnRadiusTop", LN_FOUR}, {"variant", variantStr},
                 {"colorMap", colormapStr}, {"iterations", iters},
                 {"lnMapColorMode", lnMapColorMode},
+                {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
                 {"bailout", bailout},
                 {"bailoutSq", bailoutSq},
                 {"engine", lnStats.engine_used},
@@ -1842,6 +1882,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnMapScalar",        lnStats.scalar_used},
             {"lnMapMode",          lnStats.precision_mode},
             {"lnMapColorMode",     lnMapColorMode},
+            {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
             {"lnMapLayerSummary",  lnStats.layer_summary},
             {"lnMapValidationSummary", lnStats.validation_summary},
             {"warpMethod",         warpMethod},
@@ -1905,6 +1946,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnMapScalar", "fp64"},
             {"lnMapMode", lnMapMode},
             {"lnMapColorMode", lnMapColorMode},
+            {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
             {"lnMapLayerSummary", ""},
             {"lnMapValidationSummary", ""},
             {"warpMethod", queuedWarpMethod},

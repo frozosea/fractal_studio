@@ -27,6 +27,7 @@ enum class Colormap {
     Viridis    = 7,
     Twilight   = 8,
     EmberBlue  = 9,
+    Spectral1530 = 10, // 1530-step fully-saturated cyclic hue wheel (green-started)
 };
 
 inline bool colormap_from_name(const char* name, Colormap& out) {
@@ -42,6 +43,7 @@ inline bool colormap_from_name(const char* name, Colormap& out) {
         {"viridis",     Colormap::Viridis},
         {"twilight",    Colormap::Twilight},
         {"ember_blue",  Colormap::EmberBlue},
+        {"spectral1530", Colormap::Spectral1530},
     };
     for (const auto& e : table) {
         const char* a = e.n;
@@ -198,6 +200,29 @@ inline void rainbow_from_index(int idx, uint8_t& b, uint8_t& g, uint8_t& r) {
     r = static_cast<uint8_t>(clamp255(a1));
 }
 
+// 1530-step fully-saturated cyclic hue wheel, GREEN at index 0:
+//   G -> C -> B -> P(magenta) -> R -> Y -> G, six 255-step transitions.
+// idx is reduced modulo 1530, so the palette wraps seamlessly (green→green).
+// Writes BGR (OpenCV order). Green-started so a black→green lead-in flows into it.
+inline void hue1530(int idx, uint8_t& b, uint8_t& g, uint8_t& r) {
+    idx %= 1530;
+    if (idx < 0) idx += 1530;
+    const int seg = idx / 255;
+    const int d   = idx % 255;   // 0..254
+    int rr = 0, gg = 0, bb = 0;
+    switch (seg) {
+        case 0:  rr = 0;       gg = 255;     bb = d;       break; // G -> C
+        case 1:  rr = 0;       gg = 255 - d; bb = 255;     break; // C -> B
+        case 2:  rr = d;       gg = 0;       bb = 255;     break; // B -> P
+        case 3:  rr = 255;     gg = 0;       bb = 255 - d; break; // P -> R
+        case 4:  rr = 255;     gg = d;       bb = 0;       break; // R -> Y
+        default: rr = 255 - d; gg = 255;     bb = 0;       break; // Y -> G
+    }
+    b = static_cast<uint8_t>(bb);
+    g = static_cast<uint8_t>(gg);
+    r = static_cast<uint8_t>(rr);
+}
+
 // Colorize a field value x (min|z|, max|z|, etc.) with the HsRainbow palette.
 // Matches legacy: index = int((36/35 − log2(x)) × 35)
 // x == 0 or non-finite → white; x > 2 (outside typical range) → black.
@@ -265,6 +290,12 @@ inline void colorize_escape_bgr(
                 r = g = b = static_cast<uint8_t>(v);
                 return;
             }
+            case Colormap::Spectral1530: {
+                // black→green over the first 255 smooth-iters, then the 1530 hue wheel.
+                if (mu < 255.0) { b = 0; g = static_cast<uint8_t>(clamp255(static_cast<int>(mu))); r = 0; }
+                else hue1530(static_cast<int>(std::fmod(mu - 255.0, 1530.0)), b, g, r);
+                return;
+            }
             case Colormap::ClassicCos:
             default: {
                 r = static_cast<uint8_t>(clamp255(static_cast<int>(cos_color(static_cast<double>(t),  53.0))));
@@ -317,6 +348,12 @@ inline void colorize_escape_bgr(
         case Colormap::Grayscale: {
             const int v = clamp255(static_cast<int>(n * 255.0));
             r = g = b = static_cast<uint8_t>(v);
+            return;
+        }
+        case Colormap::Spectral1530: {
+            // black→green over the first 255 iters (the opening), then the 1530 hue wheel.
+            if (iter < 255) { b = 0; g = static_cast<uint8_t>(iter); r = 0; }
+            else hue1530((iter - 255) % 1530, b, g, r);
             return;
         }
         case Colormap::ClassicCos:
@@ -379,6 +416,12 @@ inline void colorize_field_smooth_bgr(
             rainbow_from_index(idx, b, g, r);
             return;
         }
+        case Colormap::Spectral1530: {
+            // ~one hue cycle per 8 halvings of x (1530/8 ≈ 191).
+            const int idx = std::max(0, static_cast<int>(191.0 * base_val));
+            hue1530(idx, b, g, r);
+            return;
+        }
         default:   // Grayscale (and any other palette)
         case Colormap::Grayscale: {
             // cycle = 256 steps; k=32 → one gray cycle per 8 halvings of x
@@ -439,6 +482,12 @@ inline void colorize_field_bgr(
             // Map v01 ∈ [0,1] to the 6-band rainbow index [0, 1785].
             const int idx = std::min(1785, static_cast<int>(v01 * 1785.0));
             rainbow_from_index(idx, b, g, r);
+            return;
+        }
+        case Colormap::Spectral1530: {
+            // One full hue-wheel turn across [0,1]; green at v01==0 (cyclic).
+            const int idx = std::min(1529, static_cast<int>(v01 * 1530.0));
+            hue1530(idx, b, g, r);
             return;
         }
         case Colormap::ClassicCos:

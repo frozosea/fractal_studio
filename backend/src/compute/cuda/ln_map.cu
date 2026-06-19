@@ -143,6 +143,26 @@ __device__ inline bool d_gradient_palette_bgr(double t, int cmap, unsigned char*
     }
 }
 
+// 1530-step fully-saturated cyclic hue wheel, GREEN at index 0 (matches colormap.hpp hue1530).
+__device__ inline void d_hue1530(int idx, unsigned char* px) {
+    idx %= 1530;
+    if (idx < 0) idx += 1530;
+    const int seg = idx / 255;
+    const int d   = idx % 255;
+    int rr = 0, gg = 0, bb = 0;
+    switch (seg) {
+        case 0:  rr = 0;       gg = 255;     bb = d;       break; // G -> C
+        case 1:  rr = 0;       gg = 255 - d; bb = 255;     break; // C -> B
+        case 2:  rr = d;       gg = 0;       bb = 255;     break; // B -> P
+        case 3:  rr = 255;     gg = 0;       bb = 255 - d; break; // P -> R
+        case 4:  rr = 255;     gg = d;       bb = 0;       break; // R -> Y
+        default: rr = 255 - d; gg = 255;     bb = 0;       break; // Y -> G
+    }
+    px[2] = static_cast<unsigned char>(rr);
+    px[1] = static_cast<unsigned char>(gg);
+    px[0] = static_cast<unsigned char>(bb);
+}
+
 __device__ inline void d_colorize_escape_bgr(int iter, int max_iter, int cmap, unsigned char* px) {
     if (iter >= max_iter) {
         px[0] = px[1] = px[2] = 255;
@@ -181,6 +201,11 @@ __device__ inline void d_colorize_escape_bgr(int iter, int max_iter, int cmap, u
         case 4: {
             const int v = d_clamp255(static_cast<int>(n * 255.0));
             px[0] = px[1] = px[2] = static_cast<unsigned char>(v);
+            return;
+        }
+        case 10: {  // Spectral1530 — black→green for first 255 iters, then the 1530 wheel
+            if (iter < 255) { px[0] = 0; px[1] = static_cast<unsigned char>(iter); px[2] = 0; }
+            else d_hue1530((iter - 255) % 1530, px);
             return;
         }
         default:
@@ -495,6 +520,97 @@ __global__ void ln_map_kernel_fx64_templated(CudaLnMapParams p, int row_start, i
     d_colorize_escape_bgr(iter, p.iterations, p.colormap_id, out + 3 * idx);
 }
 
+// ---- Raw escape-count field kernels (write int counts, no colorize) ----
+// Used by the mapped color modes (hist_eq, …) so they can run on the GPU at fp64/fx64
+// precision instead of degrading to scalar OpenMP.
+template <int VariantId>
+__global__ void ln_map_iters_kernel(CudaLnMapParams p, int row_start, int row_count, int* out_iters) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = p.width_s * row_count;
+    if (idx >= total) return;
+    const int x = idx % p.width_s;
+    const int row = row_start + idx / p.width_s;
+    const double th = TAU * static_cast<double>(x) / static_cast<double>(p.width_s);
+    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(p.width_s);
+    const double r_mag = exp(k);
+    const double pre = p.center_re + r_mag * cos(th);
+    const double pim = p.center_im + r_mag * sin(th);
+    double zr = p.julia ? pre : 0.0;
+    double zi = p.julia ? pim : 0.0;
+    const double cr = p.julia ? p.julia_re : pre;
+    const double ci = p.julia ? p.julia_im : pim;
+    double zr2 = zr * zr, zi2 = zi * zi;
+    int iter = 0;
+    for (; iter < p.iterations; ++iter) {
+        double nr = 0.0, ni = 0.0;
+        d_step_cached<VariantId>(zr, zi, zr2, zi2, cr, ci, nr, ni);
+        const bool finite = isfinite(nr) && isfinite(ni);
+        const double nr2 = finite ? nr * nr : INFINITY;
+        const double ni2 = finite ? ni * ni : INFINITY;
+        if (!finite || nr2 + ni2 > p.bailout_sq) break;
+        zr = nr; zi = ni; zr2 = nr2; zi2 = ni2;
+    }
+    out_iters[idx] = iter;
+}
+
+template <int VariantId>
+__global__ void ln_map_iters_kernel_fx64(CudaLnMapParams p, int row_start, int row_count, int* out_iters) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = p.width_s * row_count;
+    if (idx >= total) return;
+    const int x = idx % p.width_s;
+    const int row = row_start + idx / p.width_s;
+    const double th = TAU * static_cast<double>(x) / static_cast<double>(p.width_s);
+    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(p.width_s);
+    const double r_mag = exp(k);
+    const double pre = p.center_re + r_mag * cos(th);
+    const double pim = p.center_im + r_mag * sin(th);
+    using S = Fixed64<57>;
+    S zr = p.julia ? S::from_double(pre) : S{0LL};
+    S zi = p.julia ? S::from_double(pim) : S{0LL};
+    const S cr = p.julia ? S::from_double(p.julia_re) : S::from_double(pre);
+    const S ci = p.julia ? S::from_double(p.julia_im) : S::from_double(pim);
+    S zr2{u64_to_i64_sat_cuda(fixed_square_q_sat_raw_cuda<57>(zr.raw))};
+    S zi2{u64_to_i64_sat_cuda(fixed_square_q_sat_raw_cuda<57>(zi.raw))};
+    const uint64_t bailout2_raw = fixed_positive_raw<57>(p.bailout_sq);
+    int iter = 0;
+    for (; iter < p.iterations; ++iter) {
+        S nr, ni;
+        d_step_fixed_cached<57, VariantId>(zr, zi, zr2, zi2, cr, ci, nr, ni);
+        const uint64_t nr2_raw = fixed_square_q_sat_raw_cuda<57>(nr.raw);
+        const uint64_t ni2_raw = fixed_square_q_sat_raw_cuda<57>(ni.raw);
+        if (add_u64_sat_cuda(nr2_raw, ni2_raw) > bailout2_raw) break;
+        zr = nr; zi = ni;
+        zr2 = S{u64_to_i64_sat_cuda(nr2_raw)};
+        zi2 = S{u64_to_i64_sat_cuda(ni2_raw)};
+    }
+    out_iters[idx] = iter;
+}
+
+template <int VariantId>
+void launch_ln_map_iters_variant(const CudaLnMapParams& p, int row_start, int row_count, int* d_iters, bool fx64) {
+    const int block = 256;
+    const int grid = (p.width_s * row_count + block - 1) / block;
+    if (fx64) ln_map_iters_kernel_fx64<VariantId><<<grid, block>>>(p, row_start, row_count, d_iters);
+    else      ln_map_iters_kernel<VariantId><<<grid, block>>>(p, row_start, row_count, d_iters);
+}
+
+void launch_ln_map_iters(const CudaLnMapParams& p, int row_start, int row_count, int* d_iters, bool fx64) {
+    switch (p.variant_id) {
+        case 0: launch_ln_map_iters_variant<0>(p, row_start, row_count, d_iters, fx64); break;
+        case 1: launch_ln_map_iters_variant<1>(p, row_start, row_count, d_iters, fx64); break;
+        case 2: launch_ln_map_iters_variant<2>(p, row_start, row_count, d_iters, fx64); break;
+        case 3: launch_ln_map_iters_variant<3>(p, row_start, row_count, d_iters, fx64); break;
+        case 4: launch_ln_map_iters_variant<4>(p, row_start, row_count, d_iters, fx64); break;
+        case 5: launch_ln_map_iters_variant<5>(p, row_start, row_count, d_iters, fx64); break;
+        case 6: launch_ln_map_iters_variant<6>(p, row_start, row_count, d_iters, fx64); break;
+        case 7: launch_ln_map_iters_variant<7>(p, row_start, row_count, d_iters, fx64); break;
+        case 8: launch_ln_map_iters_variant<8>(p, row_start, row_count, d_iters, fx64); break;
+        case 9: launch_ln_map_iters_variant<9>(p, row_start, row_count, d_iters, fx64); break;
+        default: throw std::runtime_error("CUDA ln-map unsupported variant");
+    }
+}
+
 template <int VariantId>
 void launch_ln_map_variant(const CudaLnMapParams& p, int row_start, int row_count, unsigned char* d_out) {
     const int block = 256;
@@ -635,6 +751,35 @@ bool cuda_ln_map_available() noexcept {
 
 CudaLnMapStats cuda_render_ln_map_rows(const CudaLnMapParams& p, cv::Mat& out, int row_start, int row_count) {
     return cuda_render_ln_map_rows_impl(p, out, row_start, row_count, launch_ln_map);
+}
+
+// Raw escape-count field on the GPU (fp64 or fx64), for the mapped color modes.
+CudaLnMapStats cuda_render_ln_map_iters_rows(const CudaLnMapParams& p, int* iters, int row_start, int row_count, bool fx64) {
+    if (!cuda_ln_map_available()) throw std::runtime_error("CUDA ln-map not available");
+    if (p.variant_id < 0 || p.variant_id > 9) throw std::runtime_error("CUDA ln-map unsupported variant");
+    if (row_start < 0 || row_count <= 0 || row_start + row_count > p.height_t) {
+        throw std::runtime_error("invalid CUDA ln-map row range");
+    }
+    std::lock_guard<std::mutex> lock(g_ln_mu);
+    const size_t count = static_cast<size_t>(p.width_s) * static_cast<size_t>(row_count);
+    const size_t bytes = count * sizeof(int);
+    ScopedDevicePtr transient;
+    CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&transient.ptr), bytes));
+    int* d_iters = reinterpret_cast<int*>(transient.ptr);
+
+    g_ln_events.ensure();
+    CUDA_LN_CHECK(cudaEventRecord(g_ln_events.start));
+    launch_ln_map_iters(p, row_start, row_count, d_iters, fx64);
+    CUDA_LN_CHECK(cudaGetLastError());
+    CUDA_LN_CHECK(cudaEventRecord(g_ln_events.stop));
+    CUDA_LN_CHECK(cudaEventSynchronize(g_ln_events.stop));
+    float ms = 0.0f;
+    CUDA_LN_CHECK(cudaEventElapsedTime(&ms, g_ln_events.start, g_ln_events.stop));
+    CUDA_LN_CHECK(cudaMemcpy(iters + static_cast<size_t>(row_start) * static_cast<size_t>(p.width_s),
+                             d_iters, bytes, cudaMemcpyDeviceToHost));
+    CudaLnMapStats stats;
+    stats.elapsed_ms = static_cast<double>(ms);
+    return stats;
 }
 
 CudaLnMapStats cuda_render_ln_map(const CudaLnMapParams& p, cv::Mat& out) {

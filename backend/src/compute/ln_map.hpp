@@ -9,8 +9,10 @@
 
 #include <opencv2/core.hpp>
 
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace fsd::compute {
 
@@ -40,6 +42,32 @@ struct LnMapParams {
     double fast_validation_max_mismatch_ratio = 0.01;
     int fast_validation_max_p99_iter_delta = 16;
     double fast_validation_max_mean_color_delta = 8.0;
+    // Periodic (hist_eq) coloring: number of full palette cycles per zoom octave.
+    // Total cycles down the strip = total_octaves * color_cycles_per_octave, i.e.
+    // ≈ log2(zoom magnification) cycles when this is 1.0. Default 0.5 (broader bands).
+    double color_cycles_per_octave = 0.5;
+};
+
+// Shared periodic coloring for the hist_eq ln-map color mode. Built once from the
+// ln-map strip and reused by the final cartesian frame so any pixel with a given
+// escape count gets the SAME color in both → seamless warp blend.
+//
+// Mapping is direct and discrete: phase = (count - count_min) / period, where the
+// period is chosen so the whole strip spans total_octaves*cyclesPerOctave palette
+// cycles (= log2(magnification) cycles when cyclesPerOctave is 1). One escape count =
+// one solid color band (no smoothing). The shallowest counts (the zoom opening) fall
+// in the first 1/6 cycle, which fades pure black → the palette start color (green for
+// spectral1530); after that the palette cycles.
+struct LnMapEqualization {
+    double   count_min      = 0.0;         // globally shallowest escape count → phase 0
+    double   period         = 1.0;         // escape counts per palette cycle
+    double   onset_cycles   = 1.0 / 6.0;   // length of the black→start-color lead-in, in cycles
+    bool     colormap_wraps = false;       // frac (true) vs triangle reflect (false)
+    Colormap colormap       = Colormap::ClassicCos;
+    bool     valid          = false;
+    // Periodic color for an escaped pixel with escape count `it`. Interior pixels are
+    // handled by the caller (kept white); do not call this for it >= iterations.
+    void colorize(int it, uint8_t& b, uint8_t& g, uint8_t& r) const;
 };
 
 struct LnMapStats {
@@ -50,6 +78,7 @@ struct LnMapStats {
     std::string precision_mode = "standard";
     std::string layer_summary;
     std::string validation_summary;
+    LnMapEqualization equalization;        // populated only for color_mode == "hist_eq"
 };
 
 using LnMapProgress = std::function<void(int rowsDone)>;
@@ -62,6 +91,11 @@ LnMapStats render_ln_map_openmp_rows(const LnMapParams& p, cv::Mat& out, int row
 LnMapStats render_ln_map_avx512(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx512_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx512_fp32_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
+// Raw escape-count field output (fp64, exact) for the mapped color modes, so hist_eq can
+// use SIMD for the iteration pass instead of degrading to scalar OpenMP. Return false if
+// the path is unavailable (caller falls back to OpenMP).
+bool render_ln_map_avx512_iters_rows(const LnMapParams& p, int* iters, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
+bool render_ln_map_avx2_iters_rows(const LnMapParams& p, int* iters, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx2(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx2_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map_avx2_fp32_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);

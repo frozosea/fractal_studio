@@ -272,7 +272,8 @@ void render_rows_impl(
     int row_start,
     int row_end,
     bool threaded,
-    const LnMapProgress& on_row_done
+    const LnMapProgress& on_row_done,
+    int* iters_out = nullptr   // when set, store raw escape counts instead of colorizing
 ) {
     const int s = p.width_s;
     const TrigColumns& cols = cached_trig_columns(s);
@@ -284,7 +285,8 @@ void render_rows_impl(
     std::atomic<int> rows_done{0};
 
     auto render_row = [&](int row) {
-        uint8_t* rowp = out.ptr<uint8_t>(row);
+        uint8_t* rowp = iters_out ? nullptr : out.ptr<uint8_t>(row);
+        int* iters_rowp = iters_out ? iters_out + static_cast<size_t>(row) * static_cast<size_t>(s) : nullptr;
         const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
         const double r_mag = std::exp(k);
 
@@ -336,8 +338,12 @@ void render_rows_impl(
             }
 
             for (int lane = 0; lane < 4 && col + lane < s; ++lane) {
-                uint8_t* px = rowp + 3 * (col + lane);
-                colorize_escape_bgr(iter_arr[lane], p.iterations, p.colormap, 0.0, false, px[0], px[1], px[2]);
+                if (iters_rowp) {
+                    iters_rowp[col + lane] = iter_arr[lane];
+                } else {
+                    uint8_t* px = rowp + 3 * (col + lane);
+                    colorize_escape_bgr(iter_arr[lane], p.iterations, p.colormap, 0.0, false, px[0], px[1], px[2]);
+                }
             }
         }
 
@@ -468,6 +474,19 @@ bool ln_map_avx2_available() noexcept {
 #if defined(__AVX2__) && defined(__FMA__)
     return avx2_available() && fma_available();
 #else
+    return false;
+#endif
+}
+
+bool render_ln_map_avx2_iters_rows(const LnMapParams& p, int* iters, int row_start, int row_count, const LnMapProgress& on_row_done) {
+    if (!ln_map_avx2_available() || !ln_map_variant_supported_by_simd(p.variant)) return false;
+#if defined(__AVX2__) && defined(__FMA__)
+    const auto [start, end] = clamp_rows(p, row_start, row_count);
+    cv::Mat dummy;
+    render_rows_impl(p, dummy, start, end, true, on_row_done, iters);
+    return true;
+#else
+    (void)p; (void)iters; (void)row_start; (void)row_count; (void)on_row_done;
     return false;
 #endif
 }

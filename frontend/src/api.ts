@@ -109,6 +109,7 @@ export type ColorMap =
   | 'viridis'
   | 'twilight'
   | 'ember_blue'
+  | 'spectral1530'
 
 export const COLORMAPS: ColorMap[] = [
   'classic_cos',
@@ -121,6 +122,7 @@ export const COLORMAPS: ColorMap[] = [
   'viridis',
   'twilight',
   'ember_blue',
+  'spectral1530',
 ]
 
 export type LnMapColorMode = 'escape' | 'hist_eq' | 'row_eq' | 'log_lift' | 'bands' | 'frontier'
@@ -365,6 +367,7 @@ export interface LnMapRequest {
   variant?: Variant
   colorMap?: ColorMap
   lnMapColorMode?: LnMapColorMode
+  lnMapCyclesPerOctave?: number
   iterations?: number
   engine?: string
   precisionMode?: 'standard' | 'fast'
@@ -392,6 +395,7 @@ export interface LnMapResponse {
   scalarUsed?: string
   precisionMode?: string
   lnMapColorMode?: LnMapColorMode
+  lnMapCyclesPerOctave?: number
   layerSummary?: string
   validationSummary?: string
   generatedMs: number
@@ -521,6 +525,7 @@ export interface VideoExportRequest {
   lnMapMode?: 'standard' | 'fast'
   lnMapScalar?: string
   lnMapColorMode?: LnMapColorMode
+  lnMapCyclesPerOctave?: number
   lnMapFastValidate?: boolean
   lnMapFastValidationBandOctaves?: number
   lnMapFastValidationSampleRows?: number
@@ -580,6 +585,7 @@ export interface VideoExportResponse {
   lnMapScalar?: string
   lnMapMode?: string
   lnMapColorMode?: LnMapColorMode
+  lnMapCyclesPerOctave?: number
   lnMapLayerSummary?: string
   lnMapValidationSummary?: string
   warpMethod?: string
@@ -613,6 +619,7 @@ export interface RunProgress {
   lnMapScalar?: string
   lnMapMode?: string
   lnMapColorMode?: LnMapColorMode
+  lnMapCyclesPerOctave?: number
   lnMapLayerSummary?: string
   lnMapValidationSummary?: string
   warpMethod?: string

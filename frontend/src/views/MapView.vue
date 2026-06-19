@@ -33,6 +33,7 @@ const COLORMAP_LABELS: Record<string, { en: string; zh: string }> = {
   viridis:     { en: 'Viridis',     zh: 'Viridis 感知' },
   twilight:    { en: 'Twilight',    zh: 'Twilight 循环' },
   ember_blue:  { en: 'Ember Blue',  zh: '蓝焰' },
+  spectral1530:{ en: 'Spectral-1530', zh: '光谱色环 1530' },
 }
 
 type LocalizedText = { en: string; zh: string }
@@ -182,6 +183,19 @@ const COLORMAP_OPTIONS: ColorMapInfo[] = [
     },
     cost: { en: 'Fast gradient; deliberately stylized.', zh: '快速渐变；风格化更明显。' },
   },
+  {
+    key: 'spectral1530',
+    label: COLORMAP_LABELS.spectral1530,
+    summary: {
+      en: 'Fully-saturated 1530-step cyclic hue wheel (G→C→B→P→R→Y→G), twice the period of Tri-765 and seamless when wrapped.',
+      zh: '全饱和 1530 步循环色环（绿→青→蓝→品→红→黄→绿），周期是 Tri-765 的两倍，循环无缝。',
+    },
+    bestFor: {
+      en: 'The periodic Global-CDF ln-map mode — richest band colors; pairs with a black→green opening.',
+      zh: '搭配周期性「全局 CDF」ln-map 模式：色带最丰富；开场从纯黑过渡到绿色。',
+    },
+    cost: { en: 'Fast; integer hue ramps, no gradient table.', zh: '很快；整数色相渐变，无渐变表。' },
+  },
 ]
 
 function colorMapInfo(mode: ColorMap): ColorMapInfo {
@@ -204,16 +218,16 @@ const LN_MAP_COLOR_MODE_OPTIONS: LnMapColorModeInfo[] = [
   },
   {
     key: 'hist_eq',
-    label: { en: 'Global CDF · depth weighted', zh: '全局 CDF · 深度加权' },
+    label: { en: 'Global CDF · periodic bands', zh: '全局 CDF · 周期色带' },
     summary: {
-      en: 'Builds one histogram from escaped pixels inside the origin-centered |c| <= 2 disk, maps iteration ranks through its CDF, then lets depth shift the palette window.',
-      zh: '统计以原点为中心的 |c| <= 2 圆盘内、且已发散像素的迭代直方图，用 CDF 做全局秩映射，再让 ln-map 深度轻微推动色带窗口。',
+      en: 'Equalizes escaped-pixel iterations to a global rank, then cycles the palette with cycles ≈ log2(magnification) × cycles/octave, so every depth keeps sharp bands. A black→green lead-in opens the zoom.',
+      zh: '把已发散像素的迭代均衡成全局秩，再以「≈log2(放大倍率) × 每倍频周期数」周期性循环调色板，让每个深度都有锐利色带；开场从纯黑过渡到绿色。',
     },
     bestFor: {
-      en: 'Long zoom videos where early and late regions should keep comparable contrast.',
-      zh: '适合长 zoom 视频，让浅层和深层都有接近的对比度，不至于某段全糊成一片。',
+      en: 'Long zoom videos that should stay crisp at every depth instead of merging into a smooth ramp. Pairs with the Spectral-1530 palette.',
+      zh: '适合长 zoom 视频，让每个深度都保持锐利、不糊成平滑渐变。建议搭配 Spectral-1530 色环。',
     },
-    cost: { en: 'OpenMP fp64 plus one global histogram.', zh: 'OpenMP fp64，加一次全局直方图。' },
+    cost: { en: 'OpenMP fp64 plus one global histogram; shared with the final frame.', zh: 'OpenMP fp64，加一次全局直方图；与最终帧共用。' },
   },
   {
     key: 'row_eq',
@@ -774,6 +788,7 @@ const exportQualityPreset = ref<'draft' | 'balanced' | 'high' | 'full'>('balance
 const exportLnMapMode = ref<'standard' | 'fast'>('fast')
 const exportLnMapScalar = ref<'auto' | 'fp64' | 'fx64'>('auto')
 const exportLnMapColorMode = ref<LnMapColorMode>('escape')
+const exportCyclesPerOctave = ref(0.5)
 const exportW         = ref(1920)
 const exportH         = ref(1080)
 const exportBusy      = ref(false)
@@ -782,6 +797,9 @@ const exportStatus    = ref('')
 const exportPreviewStatus = ref('')
 const exportResult    = ref<VideoExportResponse | null>(null)
 const exportPreviewResult = ref<VideoPreviewResponse | null>(null)
+const lnMapPreviewBusy = ref(false)
+const lnMapPreviewStatus = ref('')
+const lnMapPreviewUrl = ref('')
 const exportJobId     = ref('')
 const exportProgress  = ref<RunProgress>({})
 const exportDepthDirty = ref(false)
@@ -847,6 +865,15 @@ watch([exportW, exportH], () => {
   if (exportModalOpen.value) clearExportPreview()
 })
 
+// Periodic (hist_eq) ln-map mode pairs best with the cyclic Spectral-1530 wheel.
+// Default to it when the user switches into periodic mode but is still on the
+// global default palette — leaving any deliberate palette choice untouched.
+watch(exportLnMapColorMode, mode => {
+  if (mode === 'hist_eq' && colorMap.value === 'classic_cos') {
+    colorMap.value = 'spectral1530'
+  }
+})
+
 function defaultExportDepthForView() {
   const aspect = Math.max(1e-9, exportW.value / Math.max(1, exportH.value))
   const rMax = Math.sqrt(aspect * aspect + 1)
@@ -903,6 +930,7 @@ function videoRequestBase() {
     variant:      variant.value,
     colorMap:     colorMap.value,
     lnMapColorMode: exportLnMapColorMode.value,
+    lnMapCyclesPerOctave: exportCyclesPerOctave.value,
     iterations:   Math.max(iterations.value, 2048),
     depthOctaves: exportDepth.value,
     fps:          exportFps.value,
@@ -943,6 +971,34 @@ async function runPreview() {
     exportPreviewStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
   } finally {
     exportPreviewBusy.value = false
+  }
+}
+
+// Quick ln-map strip preview so the coloring / band density can be checked before
+// committing to the (slow) full video render.
+async function runLnMapPreview() {
+  lnMapPreviewBusy.value = true
+  lnMapPreviewStatus.value = 'rendering ln-map…'
+  lnMapPreviewUrl.value = ''
+  try {
+    const base = videoRequestBase()
+    const resp = await api.lnMap({
+      centerRe: base.centerRe, centerIm: base.centerIm,
+      julia: base.julia, juliaRe: base.juliaRe, juliaIm: base.juliaIm,
+      variant: base.variant, colorMap: base.colorMap,
+      lnMapColorMode: base.lnMapColorMode,
+      lnMapCyclesPerOctave: base.lnMapCyclesPerOctave,
+      iterations: base.iterations,
+      depthOctaves: base.depthOctaves,
+      precisionMode: base.lnMapMode,
+      widthS: 640,
+    })
+    lnMapPreviewUrl.value = api.baseUrl + resp.imagePath
+    lnMapPreviewStatus.value = `${resp.widthS}×${resp.heightT} · engine ${resp.engineUsed || '?'} · ${resp.layerSummary || ''} · ${resp.generatedMs.toFixed(0)} ms`
+  } catch (e: any) {
+    lnMapPreviewStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
+  } finally {
+    lnMapPreviewBusy.value = false
   }
 }
 
@@ -1438,6 +1494,13 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 </div>
               </div>
             </div>
+            <div class="mrow" v-if="exportLnMapColorMode === 'hist_eq'">
+              <label>{{ lang === 'en' ? 'cycles / octave' : '每倍频周期' }}</label>
+              <input type="number" v-model.number="exportCyclesPerOctave" min="0.25" max="16" step="0.25"
+                     :title="lang === 'en'
+                       ? 'Palette cycles per zoom octave. Total ≈ log2(magnification) × this. 1 = literal log-of-magnification; higher = denser bands.'
+                       : '每个 zoom 倍频的调色板周期数。总周期 ≈ log2(放大倍率) × 此值。1 = 严格“放大倍率的对数”；越大色带越密。'" />
+            </div>
             <div class="mrow">
               <label>ln-map scalar</label>
               <select v-model="exportLnMapScalar">
@@ -1465,12 +1528,22 @@ async function pollVideoExport(initial: VideoExportResponse) {
           </div>
           <div class="modal-footer">
             <button @click="exportModalOpen = false" class="btn-cancel">{{ t('video_cancel') }}</button>
-            <button @click="runPreview" :disabled="exportBusy || exportPreviewBusy" class="btn-preview">
+            <button @click="runLnMapPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
+              {{ lnMapPreviewBusy ? t('loading') : (lang === 'en' ? 'ln-map' : 'ln-map 预览') }}
+            </button>
+            <button @click="runPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
               {{ exportPreviewBusy ? t('loading') : t('video_preview') }}
             </button>
-            <button @click="runExport" :disabled="exportBusy || exportPreviewBusy" class="btn-go">
+            <button @click="runExport" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-go">
               {{ exportBusy ? t('loading') : t('video_render') }}
             </button>
+          </div>
+          <div v-if="lnMapPreviewStatus" class="modal-status mono">{{ lnMapPreviewStatus }}</div>
+          <div v-if="lnMapPreviewUrl" class="modal-body" style="gap:6px">
+            <a :href="lnMapPreviewUrl" class="preview-item" download>
+              <span>ln-map strip</span>
+              <img :src="lnMapPreviewUrl" alt="" style="max-height:420px;width:auto;object-fit:contain" />
+            </a>
           </div>
           <div v-if="exportPreviewStatus" class="modal-status mono">{{ exportPreviewStatus }}</div>
           <div v-if="exportStatus" class="modal-status mono">{{ exportStatus }}</div>

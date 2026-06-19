@@ -82,7 +82,8 @@ bool ln_map_colormap_wraps_phase(Colormap colormap) {
     return colormap == Colormap::ClassicCos ||
            colormap == Colormap::HsvWheel ||
            colormap == Colormap::Tri765 ||
-           colormap == Colormap::Twilight;
+           colormap == Colormap::Twilight ||
+           colormap == Colormap::Spectral1530;
 }
 
 double apply_ln_map_depth_phase(double mapped, double phase, Colormap colormap) {
@@ -792,6 +793,129 @@ void compute_ln_iters_fp64(
     }
 }
 
+// Build the shared periodic coloring from the rendered ln-map escape-count field.
+// Direct linear mapping: phase = (count - count_min) / period, period chosen so the
+// whole strip spans total_octaves*cyclesPerOctave palette cycles. No equalization —
+// every escape count is one solid band, uniform width, density ∝ log(magnification).
+LnMapEqualization build_ln_map_equalization(
+    const LnMapParams& p,
+    const std::vector<int>& iters,
+    const TrigColumns& cols
+) {
+    (void)cols;
+    LnMapEqualization eq;
+    eq.colormap = p.colormap;
+    eq.colormap_wraps = ln_map_colormap_wraps_phase(p.colormap);
+    const int s = p.width_s;
+    const int h = p.height_t;
+    if (s <= 0 || h <= 0 || p.iterations <= 0) return eq;
+
+    // total octaves spanned by the strip geometry = log2 of total zoom magnification.
+    const double total_octaves =
+        static_cast<double>(h) * TAU / (static_cast<double>(s) * LN_TWO);
+    double cpo = p.color_cycles_per_octave;
+    if (!(cpo > 0.0) || !std::isfinite(cpo)) cpo = 1.0;
+
+    // Histogram escape counts over ALL escaped pixels to find the count range.
+    std::vector<unsigned long long> hist(static_cast<size_t>(p.iterations), 0ULL);
+    unsigned long long total = 0;
+    for (size_t i = 0; i < iters.size(); ++i) {
+        const int it = iters[i];
+        if (it >= 0 && it < p.iterations) { hist[static_cast<size_t>(it)] += 1ULL; total += 1ULL; }
+    }
+    if (total == 0) return eq;  // degenerate strip → eq.valid stays false
+
+    int count_min = 0;
+    for (int i = 0; i < p.iterations; ++i) { if (hist[static_cast<size_t>(i)] > 0ULL) { count_min = i; break; } }
+    // Anchor the period on the MEDIAN escape count (not the extreme deepest), so the
+    // color spread is even across the strip instead of the bulk collapsing into the
+    // first (green/cyan) cycle while only a deep minibrot reaches the rest of the wheel.
+    // The median sits ~halfway through the cycles, so a single deep minibrot can't wash
+    // everything green.
+    const unsigned long long half = total / 2;
+    int median = count_min;
+    unsigned long long cum = 0;
+    for (int i = 0; i < p.iterations; ++i) {
+        cum += hist[static_cast<size_t>(i)];
+        if (cum >= half) { median = i; break; }
+    }
+    int count_max = count_min + 2 * (median - count_min);
+    if (count_max <= count_min) count_max = count_min + 1;
+
+    const double range = std::max(1.0, static_cast<double>(count_max - count_min));
+    const double cycles = std::max(1e-6, total_octaves * cpo);
+    eq.count_min = static_cast<double>(count_min);
+    eq.period = std::max(1e-6, range / cycles);   // escape counts per palette cycle
+    eq.valid = true;
+    return eq;
+}
+
+// Single-entry cache of the (expensive) escape-count field, keyed by geometry only —
+// NOT by coloring. Re-coloring the same strip (tuning colorMap / cyclesPerOctave before
+// exporting the video) then skips the iteration pass entirely. Shared by /api/map/ln and
+// /api/video/export since both go through render_ln_map_mapped.
+struct LnFieldCache {
+    bool valid = false;
+    bool julia = false;
+    double center_re = 0, center_im = 0, julia_re = 0, julia_im = 0, bailout = 0, bailout_sq = 0;
+    int width_s = 0, height_t = 0, iterations = 0, variant = -1;
+    std::string engine;   // engine that produced the cached field (for UI reporting on reuse)
+    std::vector<int> iters;
+};
+std::mutex g_ln_field_cache_mu;
+LnFieldCache g_ln_field_cache;
+
+bool ln_field_cache_matches(const LnMapParams& p, const LnFieldCache& c, size_t pixel_count) {
+    return c.valid && c.iters.size() == pixel_count &&
+           c.julia == p.julia && c.center_re == p.center_re && c.center_im == p.center_im &&
+           c.julia_re == p.julia_re && c.julia_im == p.julia_im &&
+           c.bailout == p.bailout && c.bailout_sq == p.bailout_sq &&
+           c.width_s == p.width_s && c.height_t == p.height_t &&
+           c.iterations == p.iterations && c.variant == static_cast<int>(p.variant);
+}
+
+// Compute the escape-count field for the mapped color modes using the best engine the
+// user selected (CUDA / AVX-512 / AVX2 / OpenMP, fp64 or fx64) instead of always
+// degrading to scalar OpenMP. Returns the engine name actually used (so the UI can show
+// any degradation). `iters` must be sized width_s*height_t.
+std::string compute_ln_field(
+    const LnMapParams& p,
+    std::vector<int>& iters,
+    const TrigColumns& cols,
+    const LnMapProgress& on_row_done
+) {
+    const int h = p.height_t;
+    const bool want_fx64 = ln_map_scalar_is_fx64(p);
+    const bool simd_variant = ln_map_variant_supported_by_simd(p.variant);
+
+#if USE_CUDA_LN_MAP
+    if (simd_variant && engine_allows_cuda(p) && fsd_cuda::cuda_ln_map_available()) {
+        try {
+            fsd_cuda::cuda_render_ln_map_iters_rows(make_cuda_params(p), iters.data(), 0, h, want_fx64);
+            if (on_row_done) on_row_done(h);
+            return want_fx64 ? "cuda_fx64" : "cuda_fp64";
+        } catch (...) {
+            if (p.engine == "cuda") throw;  // explicitly requested CUDA → surface the error
+        }
+    }
+#endif
+
+    // CPU fp64 paths (exact). fx64 without CUDA degrades to fp64 — reported honestly.
+    std::string eng;
+    if (simd_variant && p.engine != "openmp" && p.engine != "avx2" &&
+        render_ln_map_avx512_iters_rows(p, iters.data(), 0, h, on_row_done)) {
+        eng = "avx512_fp64";
+    } else if (simd_variant && p.engine != "openmp" &&
+               render_ln_map_avx2_iters_rows(p, iters.data(), 0, h, on_row_done)) {
+        eng = "avx2_fp64";
+    } else {
+        compute_ln_iters_fp64(p, iters, cols, on_row_done);
+        eng = "openmp_fp64";
+    }
+    if (want_fx64) eng += "(fx64->fp64:no_cuda)";  // degradation surfaced to the UI
+    return eng;
+}
+
 LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {
     ensure_ln_out(p, out);
     const auto t0 = std::chrono::steady_clock::now();
@@ -802,9 +926,40 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     const TrigColumns cols = make_trig_columns(s);
     std::vector<int> iters(pixel_count, p.iterations);
 
-    compute_ln_iters_fp64(p, iters, cols, on_row_done);
+    bool cache_hit = false;
+    std::string field_engine;
+    {
+        std::lock_guard<std::mutex> lk(g_ln_field_cache_mu);
+        if (ln_field_cache_matches(p, g_ln_field_cache, pixel_count)) {
+            iters = g_ln_field_cache.iters;
+            field_engine = g_ln_field_cache.engine;
+            cache_hit = true;
+        }
+    }
+    if (cache_hit) {
+        if (on_row_done) on_row_done(h);  // field reused → report the row pass as complete
+        field_engine = "cached(" + field_engine + ")";
+    } else {
+        // The escape-count field is the expensive pass; compute it with the engine the
+        // user selected (CUDA / AVX-512 / AVX2 / OpenMP, fp64 or fx64), not always scalar
+        // OpenMP. The actual engine is surfaced via stats so the UI can show degradation.
+        field_engine = compute_ln_field(p, iters, cols, on_row_done);
+        std::lock_guard<std::mutex> lk(g_ln_field_cache_mu);
+        g_ln_field_cache = LnFieldCache{true, p.julia, p.center_re, p.center_im, p.julia_re,
+                                        p.julia_im, p.bailout, p.bailout_sq, s, h, p.iterations,
+                                        static_cast<int>(p.variant), field_engine, iters};
+    }
 
-    const bool needs_global_cdf = mode == "hist_eq" || mode == "bands" || mode == "frontier";
+    // hist_eq → periodic equalized coloring via the shared LUT (also reused by the
+    // final cartesian frame for a seamless warp blend). bands/frontier keep the older
+    // global-CDF blend below.
+    const bool is_hist_eq = mode == "hist_eq";
+    LnMapEqualization eq;
+    if (is_hist_eq) {
+        eq = build_ln_map_equalization(p, iters, cols);
+    }
+
+    const bool needs_global_cdf = mode == "bands" || mode == "frontier";
     std::vector<unsigned long long> hist;
     unsigned long long total = 0;
     int first_hist_iter = p.iterations;
@@ -944,11 +1099,14 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
                 px[2] = static_cast<uint8_t>(clamp255(static_cast<int>(static_cast<double>(px[2]) * (1.0 - lift) + 255.0 * lift)));
                 continue;
             } else {
-                const double q = blended_global_q_for_iter(it);
-                const double palette_window = 0.58 + 0.42 * depth01;
-                const double palette_floor = 0.10 + 0.04 * (1.0 - depth01);
-                mapped = palette_floor + q * std::max(0.0, palette_window - palette_floor);
-                mapped = apply_ln_map_depth_phase(mapped, 0.22 * depth01, p.colormap);
+                // hist_eq → periodic equalized coloring (no depth phase: the N-cycle
+                // phase carries the depth motion, and a shared LUT keeps strip and
+                // final frame in lockstep). One distinct band per escape count.
+                if (eq.valid) {
+                    eq.colorize(it, px[0], px[1], px[2]);
+                    continue;
+                }
+                mapped = raw_q_for_iter(it);  // degenerate-strip fallback
             }
             colorize_field_bgr(mapped, p.colormap, px[0], px[1], px[2]);
         }
@@ -958,18 +1116,26 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     LnMapStats stats;
     stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     stats.pixel_count = p.width_s * p.height_t;
-    stats.engine_used = mode == "hist_eq" ? "openmp_hist_eq" : "openmp_" + mode;
-    stats.scalar_used = "fp64";
+    stats.engine_used = field_engine + "_" + mode;   // e.g. "cuda_fp64_hist_eq" / "avx512_fp64_hist_eq"
+    stats.scalar_used = field_engine.find("fx64") != std::string::npos &&
+                        field_engine.find("->fp64") == std::string::npos ? "fx64" : "fp64";
     stats.precision_mode = p.precision_mode;
     std::ostringstream layer;
     layer << "color=" << mode << ",histDomain=|c|<=2";
     if (needs_global_cdf) layer << ",histPixels=" << total;
     if (needs_global_cdf) layer << ",underflowTail=raw";
+    if (is_hist_eq && eq.valid) {
+        layer << ",cyclesPerOctave=" << p.color_cycles_per_octave
+              << ",countPeriod=" << eq.period
+              << ",countMin=" << eq.count_min
+              << ",periodic=" << (eq.colormap_wraps ? "frac" : "triangle");
+    }
     if (mode == "row_eq") layer << ",rowLocal=1";
     if (mode == "log_lift") layer << ",curve=log1p64";
     if (mode == "bands") layer << ",bands=18+72";
     if (mode == "frontier") layer << ",edge=gradient";
     stats.layer_summary = layer.str();
+    if (is_hist_eq) stats.equalization = std::move(eq);
     return stats;
 }
 
@@ -1453,6 +1619,33 @@ LnMapStats render_ln_map_fast(const LnMapParams& p, cv::Mat& out, const LnMapPro
 }
 
 } // namespace
+
+void LnMapEqualization::colorize(int it, uint8_t& b, uint8_t& g, uint8_t& r) const {
+    // Absolute phase in palette cycles: shallowest count → 0, growing ~1 cycle per
+    // octave of zoom (for cyclesPerOctave == 1).
+    double phase = (static_cast<double>(it) - count_min) / period;
+    if (phase < 0.0) phase = 0.0;
+
+    // One-time black→start-color lead-in: the first 1/6 cycle (the shallowest counts,
+    // i.e. the opening of the zoom) fades pure black → the palette start color. Hue is
+    // held at the cycle start while brightness ramps, flowing into the wheel at 1/6.
+    if (phase < onset_cycles) {
+        double v = std::clamp(phase / onset_cycles, 0.0, 1.0);
+        v = v * v * (3.0 - 2.0 * v);  // smoothstep
+        uint8_t sb = 0, sg = 0, sr = 0;
+        colorize_field_bgr(0.0, colormap, sb, sg, sr);  // cycle-start color (green for spectral1530)
+        b = static_cast<uint8_t>(clamp255(static_cast<int>(std::lround(static_cast<double>(sb) * v))));
+        g = static_cast<uint8_t>(clamp255(static_cast<int>(std::lround(static_cast<double>(sg) * v))));
+        r = static_cast<uint8_t>(clamp255(static_cast<int>(std::lround(static_cast<double>(sr) * v))));
+        return;
+    }
+
+    // Periodic wheel, anchored so frac==0 (cycle start) lands exactly at onset_cycles.
+    const double wheel = phase - onset_cycles;
+    double f = wheel - std::floor(wheel);
+    if (!colormap_wraps) f = 1.0 - std::abs(2.0 * f - 1.0);  // triangle reflect → seam-free
+    colorize_field_bgr(f, colormap, b, g, r);
+}
 
 bool ln_map_variant_supported_by_simd(Variant v) {
     const int id = static_cast<int>(v);

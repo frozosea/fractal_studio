@@ -155,6 +155,18 @@ std::vector<RenderScene> quick_scenes() {
 
     {
         MapParams p = base_params();
+        p.center_re = -0.75;
+        p.center_im = 0.0;
+        p.scale = 3.0;
+        p.iterations = 220;
+        p.variant = Variant::Mandelbrot;
+        p.metric = Metric::Escape;
+        p.colormap = Colormap::Spectral1530;
+        scenes.push_back({"mandelbrot_escape_spectral1530", p});
+    }
+
+    {
+        MapParams p = base_params();
         p.center_re = 0.0;
         p.center_im = 0.0;
         p.scale = 3.0;

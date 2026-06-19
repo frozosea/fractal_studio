@@ -122,8 +122,12 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const double fastValidationMaxMismatchRatio = j.value("fastValidationMaxMismatchRatio", 0.01);
     const int fastValidationMaxP99IterDelta = j.value("fastValidationMaxP99IterDelta", 16);
     const double fastValidationMaxMeanColorDelta = j.value("fastValidationMaxMeanColorDelta", 8.0);
+    const double cyclesPerOctave = j.value("lnMapCyclesPerOctave", 0.5);
     const int iters            = j.value("iterations", 4096);
 
+    if (!(cyclesPerOctave > 0.0) || cyclesPerOctave > 64.0 || !std::isfinite(cyclesPerOctave)) {
+        throw std::runtime_error("invalid lnMapCyclesPerOctave (0..64)");
+    }
     if (s < 128 || s > 65536)              throw std::runtime_error("invalid widthS (128..65536)");
     if (depthOctaves < 1.0 || depthOctaves > 80.0) throw std::runtime_error("invalid depthOctaves (1..80)");
     if (iters < 1 || iters > 10000000)     throw std::runtime_error("invalid iterations");
@@ -192,6 +196,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         lp.variant = v;
         lp.colormap = cm;
         lp.color_mode = colorMode;
+        lp.color_cycles_per_octave = cyclesPerOctave;
         lp.engine = engine;
         lp.precision_mode = precisionMode;
         lp.scalar_type = scalarType;
@@ -231,6 +236,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"variant",      variantStr},
             {"colorMap",     colormapStr},
             {"lnMapColorMode", colorMode},
+            {"lnMapCyclesPerOctave", cyclesPerOctave},
             {"iterations",   iters},
             {"bailout",      bailout},
             {"bailoutSq",    bailoutSq},
@@ -272,6 +278,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         {"scalarUsed",  stats.scalar_used},
         {"precisionMode", stats.precision_mode},
         {"lnMapColorMode", colorMode},
+        {"lnMapCyclesPerOctave", cyclesPerOctave},
         {"layerSummary", stats.layer_summary},
         {"validationSummary", stats.validation_summary},
         {"generatedMs", stats.elapsed_ms},

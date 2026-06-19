@@ -115,8 +115,28 @@ __device__ inline bool d_gradient_palette_bgr(double t, int colormap_id, uint8_t
     }
 }
 
+// 1530-step fully-saturated cyclic hue wheel, GREEN at index 0 (matches colormap.hpp hue1530).
+__device__ inline void d_hue1530(int idx, uint8_t* px) {
+    idx %= 1530;
+    if (idx < 0) idx += 1530;
+    const int seg = idx / 255;
+    const int d   = idx % 255;
+    int rr = 0, gg = 0, bb = 0;
+    switch (seg) {
+        case 0:  rr = 0;       gg = 255;     bb = d;       break; // G -> C
+        case 1:  rr = 0;       gg = 255 - d; bb = 255;     break; // C -> B
+        case 2:  rr = d;       gg = 0;       bb = 255;     break; // B -> P
+        case 3:  rr = 255;     gg = 0;       bb = 255 - d; break; // P -> R
+        case 4:  rr = 255;     gg = d;       bb = 0;       break; // R -> Y
+        default: rr = 255 - d; gg = 255;     bb = 0;       break; // Y -> G
+    }
+    px[2] = static_cast<uint8_t>(rr);
+    px[1] = static_cast<uint8_t>(gg);
+    px[0] = static_cast<uint8_t>(bb);
+}
+
 // Colorize one escaped pixel.  Matches colormap.hpp pixel-exact.
-// colormap_id: 0=ClassicCos, 1=Mod17, 2=HsvWheel, 3=Tri765, 4=Grayscale
+// colormap_id: 0=ClassicCos, 1=Mod17, 2=HsvWheel, 3=Tri765, 4=Grayscale, 10=Spectral1530
 // Writes BGR into px[0..2].
 __device__ inline void colorize_escape_bgr(int iter, int max_iter,
                                             int colormap_id, uint8_t* px) {
@@ -161,6 +181,11 @@ __device__ inline void colorize_escape_bgr(int iter, int max_iter,
         case 4: {  // Grayscale
             const uint8_t v = static_cast<uint8_t>(d_clamp255(static_cast<int>(n * 255.0f)));
             px[0] = px[1] = px[2] = v;
+            return;
+        }
+        case 10: {  // Spectral1530 — black→green for first 255 iters, then the 1530 wheel
+            if (iter < 255) { px[0] = 0; px[1] = static_cast<uint8_t>(iter); px[2] = 0; }
+            else d_hue1530((iter - 255) % 1530, px);
             return;
         }
         case 5:    // HsRainbow is HS raw-field only; escape matches CPU ClassicCos fallback.
@@ -271,6 +296,12 @@ __device__ inline void colorize_field_bgr(double v01, int colormap_id, uint8_t* 
             int idx = static_cast<int>(v01 * 1785.0);
             if (idx > 1785) idx = 1785;
             d_rainbow_from_index(idx, px);
+            return;
+        }
+        case 10: {  // Spectral1530 — one hue-wheel turn across [0,1], green at 0
+            int idx = static_cast<int>(v01 * 1530.0);
+            if (idx > 1529) idx = 1529;
+            d_hue1530(idx, px);
             return;
         }
         case 0:
