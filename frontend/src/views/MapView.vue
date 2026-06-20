@@ -812,10 +812,14 @@ const lnMapPreviewBusy = ref(false)
 const lnMapPreviewStatus = ref('')
 const lnMapPreviewUrl = ref('')
 const lnMapPreviewRunId = ref('')
-const lnMapFullResBusy = ref(false)
-const lnMapFullResRunId = ref('')
-const lnMapFullResUrl = ref('')
-const lnMapFullResStatus = ref('')
+// Once the user opens the preview, equalization-parameter changes auto re-render at small
+// resolution. The escape-count field is cached server-side (keyed by geometry+precision), so
+// these recolors reuse it and return fast — real-time parameter tuning.
+const lnMapPreviewActive = ref(false)
+const lnMapColdRender = ref(false)   // true only while computing the field (not fast recolors)
+const LN_PREVIEW_WIDTH_S = 256   // small res: cheap cold field, approximate equalization
+let lnPreviewDebounce: ReturnType<typeof setTimeout> | undefined
+let lnPreviewRerun = false
 const exportJobId     = ref('')
 const exportProgress  = ref<RunProgress>({})
 const exportDepthDirty = ref(false)
@@ -1005,9 +1009,16 @@ async function runPreview() {
 // Quick ln-map strip preview so the coloring / band density can be checked before
 // committing to the (slow) full video render.
 async function runLnMapPreview() {
+  lnMapPreviewActive.value = true
+  // Coalesce: if a render is already in flight, mark a re-run and let it pick up the latest
+  // parameters when it finishes (so dragging a slider doesn't queue a backlog of requests).
+  if (lnMapPreviewBusy.value) { lnPreviewRerun = true; return }
   lnMapPreviewBusy.value = true
-  lnMapPreviewStatus.value = 'rendering ln-map…'
-  lnMapPreviewUrl.value = ''
+  const firstField = !lnMapPreviewUrl.value
+  lnMapColdRender.value = firstField
+  lnMapPreviewStatus.value = firstField
+    ? (lang.value === 'en' ? 'computing escape field…' : '计算逃逸次数场…')
+    : (lang.value === 'en' ? 'recoloring…' : '重新上色…')
   try {
     const base = videoRequestBase()
     const resp = await api.lnMap({
@@ -1019,48 +1030,26 @@ async function runLnMapPreview() {
       iterations: base.iterations,
       depthOctaves: base.depthOctaves,
       precisionMode: base.lnMapMode,
-      widthS: 640,
+      scalarType: base.lnMapScalar,
+      widthS: LN_PREVIEW_WIDTH_S,
     })
-    lnMapPreviewUrl.value = api.baseUrl + resp.imagePath
+    lnMapPreviewUrl.value = api.baseUrl + resp.imagePath + '&t=' + Date.now()  // bust img cache
     lnMapPreviewRunId.value = resp.runId
-    lnMapPreviewStatus.value = `${resp.widthS}×${resp.heightT} · engine ${resp.engineUsed || '?'} · ${resp.layerSummary || ''} · ${resp.generatedMs.toFixed(0)} ms`
+    lnMapPreviewStatus.value = `${resp.widthS}×${resp.heightT} · ${resp.engineUsed || '?'} · ${resp.generatedMs.toFixed(0)} ms`
   } catch (e: any) {
     lnMapPreviewStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
   } finally {
     lnMapPreviewBusy.value = false
+    if (lnPreviewRerun) { lnPreviewRerun = false; runLnMapPreview() }
   }
 }
 
-async function runLnMapFullRes() {
-  lnMapFullResBusy.value = true
-  lnMapFullResStatus.value = lang.value === 'en' ? 'rendering full-res ln-map…' : '渲染全分辨率 ln-map…'
-  lnMapFullResUrl.value = ''
-  lnMapFullResRunId.value = ''
-  try {
-    const base = videoRequestBase()
-    // Forward width/height AND qualityPreset so the strip's width and height match the
-    // export's resolveStripPlan() exactly — otherwise the export rejects this cached strip
-    // on a width/height mismatch (see lnMapRunId validation in routes_video.cpp).
-    const resp = await api.lnMap({
-      centerRe: base.centerRe, centerIm: base.centerIm,
-      julia: base.julia, juliaRe: base.juliaRe, juliaIm: base.juliaIm,
-      variant: base.variant, colorMap: base.colorMap,
-      lnMapColorMode: base.lnMapColorMode,
-      lnMapCyclesPerOctave: base.lnMapCyclesPerOctave,
-      iterations: base.iterations,
-      depthOctaves: base.depthOctaves,
-      precisionMode: base.lnMapMode,
-      width: base.width, height: base.height,
-      qualityPreset: base.qualityPreset,
-    })
-    lnMapFullResRunId.value = resp.runId
-    lnMapFullResUrl.value = api.baseUrl + resp.imagePath
-    lnMapFullResStatus.value = `${resp.widthS}×${resp.heightT} · ${resp.engineUsed || '?'} · ${resp.generatedMs.toFixed(0)} ms`
-  } catch (e: any) {
-    lnMapFullResStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
-  } finally {
-    lnMapFullResBusy.value = false
-  }
+// Debounced real-time recolor: once the preview is open, an equalization/coloring change
+// re-renders at small res. Same geometry → the server field cache is hit (fast recolor).
+function scheduleLnMapPreview() {
+  if (!lnMapPreviewActive.value) return
+  if (lnPreviewDebounce) clearTimeout(lnPreviewDebounce)
+  lnPreviewDebounce = setTimeout(() => { runLnMapPreview() }, 160)
 }
 
 async function runExport() {
@@ -1070,9 +1059,6 @@ async function runExport() {
   exportProgress.value = {}
   try {
     const req: Record<string, any> = { ...videoRequestBase() }
-    if (lnMapFullResRunId.value) {
-      req.lnMapRunId = lnMapFullResRunId.value
-    }
     const resp = await api.videoExport(req as any)
     exportJobId.value = resp.runId
     exportStatus.value = `${resp.runId} · ${resp.frameCount} frames · ${resp.durationSec.toFixed(2)}s`
@@ -1084,15 +1070,11 @@ async function runExport() {
   }
 }
 
-// Any change that alters the strip's geometry or coloring invalidates the cached full-res
-// strip. Output size and quality preset feed resolveStripPlan()'s width/height, so they must
-// be here too — otherwise a stale strip would be rejected by the export's geometry check.
-watch([centerRe, centerIm, variant, iterations, exportDepth, exportLnMapMode, exportLnMapScalar,
-       colorMap, exportLnMapColorMode, exportCyclesPerOctave, exportW, exportH, exportQualityPreset], () => {
-  lnMapFullResRunId.value = ''
-  lnMapFullResUrl.value = ''
-  lnMapFullResStatus.value = ''
-})
+// Real-time tuning: re-render the preview when an equalization/coloring parameter changes.
+// These share the previewed geometry, so the server reuses the cached escape-count field and
+// only recolors — fast. (Geometry changes are NOT watched here: the user re-runs the preview
+// explicitly to recompute the field, avoiding surprise cold renders while panning.)
+watch([exportCyclesPerOctave, colorMap, exportLnMapColorMode], () => scheduleLnMapPreview())
 
 function artifactByName(status: RunStatusResponse, name: string) {
   return status.artifacts.find(a => a.name === name)
@@ -1523,7 +1505,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
     <!-- ── Unified video export modal ───────────────────────────────────── -->
     <Teleport to="body">
       <div v-if="exportModalOpen" class="modal-backdrop" @click.self="exportModalOpen = false">
-        <div class="modal" :class="{ 'modal-with-preview': lnMapPreviewUrl || lnMapFullResUrl }">
+        <div class="modal" :class="{ 'modal-with-preview': lnMapPreviewUrl }">
           <div class="modal-main">
           <div class="modal-title">
             {{ juliaOn ? t('export_julia_video') : t('export_video') }}
@@ -1599,10 +1581,13 @@ async function pollVideoExport(initial: VideoExportResponse) {
             </div>
             <div class="mrow" v-if="exportLnMapColorMode === 'hist_eq'">
               <label>{{ lang === 'en' ? 'cycles / octave' : '每倍频周期' }}</label>
-              <input type="number" v-model.number="exportCyclesPerOctave" min="0.25" max="16" step="0.25"
-                     :title="lang === 'en'
-                       ? 'Palette cycles per zoom octave. Total ≈ log2(magnification) × this. 1 = literal log-of-magnification; higher = denser bands.'
-                       : '每个 zoom 倍频的调色板周期数。总周期 ≈ log2(放大倍率) × 此值。1 = 严格“放大倍率的对数”；越大色带越密。'" />
+              <div class="cpo-control"
+                   :title="lang === 'en'
+                     ? 'Palette cycles per zoom octave. Total ≈ log2(magnification) × this. 1 = literal log-of-magnification; higher = denser bands. Drag to tune the preview live.'
+                     : '每个 zoom 倍频的调色板周期数。总周期 ≈ log2(放大倍率) × 此值。1 = 严格“放大倍率的对数”；越大色带越密。拖动可实时调预览。'">
+                <input type="range" v-model.number="exportCyclesPerOctave" min="0.1" max="16" step="0.05" class="cpo-slider" />
+                <input type="number" v-model.number="exportCyclesPerOctave" min="0.1" max="64" step="0.05" class="cpo-num" />
+              </div>
             </div>
             <div class="mrow">
               <label>ln-map scalar</label>
@@ -1631,24 +1616,20 @@ async function pollVideoExport(initial: VideoExportResponse) {
           </div>
           <div class="modal-footer">
             <button @click="exportModalOpen = false" class="btn-cancel">{{ t('video_cancel') }}</button>
-            <button @click="runLnMapPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy || lnMapFullResBusy" class="btn-preview">
-              {{ lnMapPreviewBusy ? t('loading') : (lang === 'en' ? 'ln-map' : 'ln-map 预览') }}
+            <button @click="runLnMapPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
+              {{ lnMapPreviewBusy ? t('loading') : (lang === 'en' ? 'ln-map preview' : 'ln-map 预览') }}
             </button>
-            <button @click="runLnMapFullRes" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy || lnMapFullResBusy" class="btn-preview">
-              {{ lnMapFullResBusy ? t('loading') : (lang === 'en' ? 'full ln-map' : '完整 ln-map') }}
-            </button>
-            <button @click="runPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy || lnMapFullResBusy" class="btn-preview">
+            <button @click="runPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
               {{ exportPreviewBusy ? t('loading') : t('video_preview') }}
             </button>
-            <button @click="runExport" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy || lnMapFullResBusy" class="btn-go">
+            <button @click="runExport" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-go">
               {{ exportBusy ? t('loading') : t('video_render') }}
             </button>
           </div>
-          <div v-if="lnMapFullResRunId" class="modal-status mono ln-map-cached-hint">
-            {{ lang === 'en' ? '✓ full ln-map cached — render will skip ln-map stage' : '✓ 已缓存完整 ln-map — 渲染将跳过 ln-map 阶段' }}
+          <div v-if="lnMapPreviewActive" class="ln-preview-progress">
+            <progress v-if="lnMapPreviewBusy && lnMapColdRender"></progress>
+            <span v-if="lnMapPreviewStatus" class="modal-status mono">{{ lnMapPreviewStatus }}</span>
           </div>
-          <div v-if="lnMapPreviewStatus" class="modal-status mono">{{ lnMapPreviewStatus }}</div>
-          <div v-if="lnMapFullResStatus" class="modal-status mono">{{ lnMapFullResStatus }}</div>
           <div v-if="exportPreviewStatus" class="modal-status mono">{{ exportPreviewStatus }}</div>
           <div v-if="exportStatus" class="modal-status mono">{{ exportStatus }}</div>
           <div v-if="exportBusy || exportJobId" class="progress-stack">
@@ -1696,13 +1677,13 @@ async function pollVideoExport(initial: VideoExportResponse) {
             </template>
           </div>
           </div><!-- end .modal-main -->
-          <div v-if="lnMapPreviewUrl || lnMapFullResUrl" class="modal-ln-preview">
+          <div v-if="lnMapPreviewUrl" class="modal-ln-preview">
             <div class="ln-preview-label mono">
-              {{ lnMapFullResUrl ? (lang === 'en' ? 'full-res strip' : '全分辨率条带') : (lang === 'en' ? 'preview strip' : '预览条带') }}
+              {{ lang === 'en' ? 'preview strip' : '预览条带' }}
             </div>
             <div class="ln-preview-scroll">
-              <a :href="lnMapFullResUrl || lnMapPreviewUrl" download>
-                <img :src="lnMapFullResUrl || lnMapPreviewUrl" alt="" class="ln-preview-img" />
+              <a :href="lnMapPreviewUrl" download>
+                <img :src="lnMapPreviewUrl" alt="" class="ln-preview-img" />
               </a>
             </div>
           </div>
@@ -1973,6 +1954,29 @@ async function pollVideoExport(initial: VideoExportResponse) {
   flex-direction: column;
   overflow: hidden;
 }
+.cpo-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+.cpo-slider {
+  flex: 1;
+  min-width: 90px;
+}
+.cpo-num {
+  width: 64px;
+  flex-shrink: 0;
+}
+.ln-preview-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ln-preview-progress progress {
+  width: 120px;
+  height: 6px;
+}
 .ln-preview-label {
   font-size: 10px;
   color: var(--text-dim);
@@ -1992,9 +1996,6 @@ async function pollVideoExport(initial: VideoExportResponse) {
   height: auto;
   image-rendering: crisp-edges;
   display: block;
-}
-.ln-map-cached-hint {
-  color: var(--good);
 }
 .modal-title {
   font-family: var(--mono);
