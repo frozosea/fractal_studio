@@ -598,6 +598,98 @@ __global__ void fractal_fp64(
     }
 }
 
+// ---- escape-count FIELD kernels (iter_u32 + |z|² norm_f32, escape metric only) ----
+// Same iteration as the BGR kernels above (step THEN check), but write raw counts instead of
+// colorizing, so equalized coloring gets the CUDA path. Bounded pixels → iter=max_iter, norm=0.
+
+template <int VariantId>
+__global__ void fractal_field_fp64(
+    double center_re, double center_im, double scale,
+    int W, int H, int max_iter, double bail2,
+    bool julia, double julia_re_p, double julia_im_p,
+    uint32_t* __restrict__ out_iter, float* __restrict__ out_norm
+) {
+    const int px_x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int px_y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (px_x >= W || px_y >= H) return;
+
+    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
+    const double span_im = scale;
+    const double span_re = scale * aspect;
+    const double re = (center_re - span_re * 0.5) + (static_cast<double>(px_x) + 0.5) / W * span_re;
+    const double im = (center_im + span_im * 0.5) - (static_cast<double>(px_y) + 0.5) / H * span_im;
+
+    double zre, zim, cre, cim;
+    if (julia) { zre = re;  zim = im;  cre = julia_re_p; cim = julia_im_p; }
+    else       { zre = 0.0; zim = 0.0; cre = re;         cim = im;         }
+
+    double zre2 = zre * zre;
+    double zim2 = zim * zim;
+    double esc_norm = 0.0;
+
+    int i = 0;
+    for (; i < max_iter; i++) {
+        double next_re = 0.0, next_im = 0.0;
+        step_fp64_cached<VariantId>(zre, zim, zre2, zim2, cre, cim, next_re, next_im);
+        const bool finite_z = isfinite(next_re) && isfinite(next_im);
+        double next_re2 = 0.0, next_im2 = 0.0;
+        const double abs2 = finite_z
+            ? ((next_re2 = next_re * next_re) + (next_im2 = next_im * next_im))
+            : INFINITY;
+        if (!finite_z || abs2 > bail2) { esc_norm = abs2; break; }
+        zre = next_re; zim = next_im; zre2 = next_re2; zim2 = next_im2;
+    }
+
+    const size_t idx = static_cast<size_t>(px_y) * W + px_x;
+    out_iter[idx] = static_cast<uint32_t>(i);   // == max_iter when bounded
+    out_norm[idx] = static_cast<float>(esc_norm);
+}
+
+template <int VariantId>
+__global__ void fractal_field_fp32(
+    float center_re, float center_im, float scale,
+    int W, int H, int max_iter, float bail2,
+    bool julia, float julia_re_p, float julia_im_p,
+    uint32_t* __restrict__ out_iter, float* __restrict__ out_norm
+) {
+    const int px_x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int px_y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (px_x >= W || px_y >= H) return;
+
+    const float aspect  = static_cast<float>(W) / static_cast<float>(H);
+    const float span_im = scale;
+    const float span_re = scale * aspect;
+    const float re = (center_re - span_re * 0.5f) +
+        (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
+    const float im = (center_im + span_im * 0.5f) -
+        (static_cast<float>(px_y) + 0.5f) / static_cast<float>(H) * span_im;
+
+    float zre, zim, cre, cim;
+    if (julia) { zre = re;   zim = im;   cre = julia_re_p; cim = julia_im_p; }
+    else       { zre = 0.0f; zim = 0.0f; cre = re;         cim = im;         }
+
+    float zre2 = zre * zre;
+    float zim2 = zim * zim;
+    float esc_norm = 0.0f;
+
+    int i = 0;
+    for (; i < max_iter; i++) {
+        float next_re = 0.0f, next_im = 0.0f;
+        step_fp32_cached<VariantId>(zre, zim, zre2, zim2, cre, cim, next_re, next_im);
+        const bool finite_z = isfinite(next_re) && isfinite(next_im);
+        float next_re2 = 0.0f, next_im2 = 0.0f;
+        const float abs2 = finite_z
+            ? ((next_re2 = next_re * next_re) + (next_im2 = next_im * next_im))
+            : INFINITY;
+        if (!finite_z || abs2 > bail2) { esc_norm = abs2; break; }
+        zre = next_re; zim = next_im; zre2 = next_re2; zim2 = next_im2;
+    }
+
+    const size_t idx = static_cast<size_t>(px_y) * W + px_x;
+    out_iter[idx] = static_cast<uint32_t>(i);
+    out_norm[idx] = esc_norm;
+}
+
 // ---- fixed-point integer kernel ----
 
 template <int FRAC>
@@ -866,8 +958,29 @@ struct DevBuf {
     void release() { if (d) { cudaFree(d); d = nullptr; W = H = 0; } }
 };
 
-static std::mutex  g_cuda_mutex;
-static DevBuf      g_devbuf;
+// Device buffers for the escape-count FIELD path (uint32 iter + float norm).
+struct FieldDevBuf {
+    int W = 0, H = 0;
+    uint32_t* d_iter = nullptr;
+    float*    d_norm = nullptr;
+
+    void ensure(int w, int h) {
+        if (w == W && h == H) return;
+        release();
+        CUDA_CHECK(cudaMalloc(&d_iter, static_cast<size_t>(w) * h * sizeof(uint32_t)));
+        CUDA_CHECK(cudaMalloc(&d_norm, static_cast<size_t>(w) * h * sizeof(float)));
+        W = w; H = h;
+    }
+    void release() {
+        if (d_iter) { cudaFree(d_iter); d_iter = nullptr; }
+        if (d_norm) { cudaFree(d_norm); d_norm = nullptr; }
+        W = H = 0;
+    }
+};
+
+static std::mutex    g_cuda_mutex;
+static DevBuf        g_devbuf;
+static FieldDevBuf   g_field_devbuf;
 
 // ---- Public API ----
 
@@ -963,6 +1076,51 @@ static void launch_fp64(const CudaMapParams& p, dim3 grid, dim3 block, double ba
         case 3:  launch_fp64_metric<3>(p, grid, block, bail2, out); break;
         default: launch_fp64_metric<0>(p, grid, block, bail2, out); break;
     }
+}
+
+// Field launchers (escape metric only → no metric switch).
+static void launch_field_fp32(const CudaMapParams& p, dim3 grid, dim3 block, float bail2,
+                              uint32_t* d_iter, float* d_norm) {
+#define FSD_LAUNCH_FIELD_FP32(VID) \
+    fractal_field_fp32<VID><<<grid, block>>>( \
+        static_cast<float>(p.center_re), static_cast<float>(p.center_im), static_cast<float>(p.scale), \
+        p.width, p.height, p.iterations, bail2, \
+        p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im), d_iter, d_norm)
+    switch (p.variant_id) {
+        case 1:  FSD_LAUNCH_FIELD_FP32(1); break;
+        case 2:  FSD_LAUNCH_FIELD_FP32(2); break;
+        case 3:  FSD_LAUNCH_FIELD_FP32(3); break;
+        case 4:  FSD_LAUNCH_FIELD_FP32(4); break;
+        case 5:  FSD_LAUNCH_FIELD_FP32(5); break;
+        case 6:  FSD_LAUNCH_FIELD_FP32(6); break;
+        case 7:  FSD_LAUNCH_FIELD_FP32(7); break;
+        case 8:  FSD_LAUNCH_FIELD_FP32(8); break;
+        case 9:  FSD_LAUNCH_FIELD_FP32(9); break;
+        default: FSD_LAUNCH_FIELD_FP32(0); break;
+    }
+#undef FSD_LAUNCH_FIELD_FP32
+}
+
+static void launch_field_fp64(const CudaMapParams& p, dim3 grid, dim3 block, double bail2,
+                              uint32_t* d_iter, float* d_norm) {
+#define FSD_LAUNCH_FIELD_FP64(VID) \
+    fractal_field_fp64<VID><<<grid, block>>>( \
+        p.center_re, p.center_im, p.scale, \
+        p.width, p.height, p.iterations, bail2, \
+        p.julia, p.julia_re, p.julia_im, d_iter, d_norm)
+    switch (p.variant_id) {
+        case 1:  FSD_LAUNCH_FIELD_FP64(1); break;
+        case 2:  FSD_LAUNCH_FIELD_FP64(2); break;
+        case 3:  FSD_LAUNCH_FIELD_FP64(3); break;
+        case 4:  FSD_LAUNCH_FIELD_FP64(4); break;
+        case 5:  FSD_LAUNCH_FIELD_FP64(5); break;
+        case 6:  FSD_LAUNCH_FIELD_FP64(6); break;
+        case 7:  FSD_LAUNCH_FIELD_FP64(7); break;
+        case 8:  FSD_LAUNCH_FIELD_FP64(8); break;
+        case 9:  FSD_LAUNCH_FIELD_FP64(9); break;
+        default: FSD_LAUNCH_FIELD_FP64(0); break;
+    }
+#undef FSD_LAUNCH_FIELD_FP64
 }
 
 template <int FRAC, int VariantId, int MetricId, bool Julia>
@@ -1067,6 +1225,53 @@ CudaMapStats cuda_render_map(const CudaMapParams& p, cv::Mat& out) {
     CudaMapStats s;
     s.elapsed_ms  = static_cast<double>(ms);
     s.scalar_used = use_fp32 ? "fp32" : (use_q360 ? "q3.60" : (use_q459 ? "q4.59" : (use_fx ? "fx64" : "fp64")));
+    s.engine_used = "cuda";
+    return s;
+}
+
+CudaMapStats cuda_render_map_field(const CudaMapParams& p, uint32_t* iter_u32, float* norm_f32) {
+    if (!cuda_available()) throw std::runtime_error("CUDA not available");
+
+    // Field path is fp32/fp64 only (fixed-point/fp80/fp128 stay on the CPU scalar path).
+    const bool use_fp32 = (p.scalar_type == "fp32" ||
+                           p.scalar_type == "float32" ||
+                           p.scalar_type == "float");
+
+    std::lock_guard<std::mutex> lock(g_cuda_mutex);
+    g_field_devbuf.ensure(p.width, p.height);
+
+    const dim3 block(32, 8);
+    const dim3 grid(
+        (p.width + static_cast<int>(block.x) - 1) / static_cast<int>(block.x),
+        (p.height + static_cast<int>(block.y) - 1) / static_cast<int>(block.y));
+    const double bail2 = p.bailout_sq;
+
+    cudaEvent_t ev_start, ev_stop;
+    CUDA_CHECK(cudaEventCreate(&ev_start));
+    CUDA_CHECK(cudaEventCreate(&ev_stop));
+    CUDA_CHECK(cudaEventRecord(ev_start));
+
+    if (use_fp32) {
+        launch_field_fp32(p, grid, block, static_cast<float>(bail2), g_field_devbuf.d_iter, g_field_devbuf.d_norm);
+    } else {
+        launch_field_fp64(p, grid, block, bail2, g_field_devbuf.d_iter, g_field_devbuf.d_norm);
+    }
+
+    CUDA_CHECK(cudaEventRecord(ev_stop));
+    CUDA_CHECK(cudaEventSynchronize(ev_stop));
+
+    float ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, ev_start, ev_stop));
+    CUDA_CHECK(cudaEventDestroy(ev_start));
+    CUDA_CHECK(cudaEventDestroy(ev_stop));
+
+    const size_t n = static_cast<size_t>(p.width) * static_cast<size_t>(p.height);
+    CUDA_CHECK(cudaMemcpy(iter_u32, g_field_devbuf.d_iter, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(norm_f32, g_field_devbuf.d_norm, n * sizeof(float),    cudaMemcpyDeviceToHost));
+
+    CudaMapStats s;
+    s.elapsed_ms  = static_cast<double>(ms);
+    s.scalar_used = use_fp32 ? "fp32" : "fp64";
     s.engine_used = "cuda";
     return s;
 }

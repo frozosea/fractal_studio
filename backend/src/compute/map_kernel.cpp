@@ -463,6 +463,60 @@ static FixedPrecision select_fixed_precision(const MapParams& p) {
     return FixedPrecision::None;
 }
 
+// Resolved precision + engine for a map render. Extracted so render_map (BGR) and
+// render_map_field (raw iter/norm) share one selection path. `field_output` flips the two
+// caller-specific decisions: (1) fx ignores smooth for the field path (the field kernels
+// produce norm), and (2) needs_norm is only meaningful for BGR smooth coloring — the field
+// kernels always emit norm, so it never forces the field path back to scalar.
+struct MapEnginePlan {
+    std::string    engine;                          // "cuda"|"avx512"|"avx2"|"openmp"|"hybrid"
+    bool           fp32 = false, fp80 = false, fp128 = false, fx = false;
+    FixedPrecision fixed_precision = FixedPrecision::None;
+    bool           needs_norm = false;
+    bool           scalar_fallback = false;
+};
+
+static MapEnginePlan select_map_engine_plan(const MapParams& p, bool field_output) {
+    MapEnginePlan plan;
+    const std::string effective_scalar = map_effective_scalar_type(p);
+    plan.fp32  = effective_scalar == "fp32";
+    plan.fp80  = effective_scalar == "fp80";
+    plan.fp128 = effective_scalar == "fp128";
+    plan.fixed_precision = select_fixed_precision(p);
+    plan.fx = plan.fixed_precision != FixedPrecision::None &&
+              supports_fixed_int_path(p, field_output);
+
+    std::string selected_engine = select_map_engine(p, plan.fx);
+    if (plan.fp32 && p.engine == "auto") {
+        if (map_engine_supported(p, "cuda", false)) {
+            selected_engine = "cuda";
+        } else if (avx512_available() && map_engine_supported(p, "avx512", false)) {
+            selected_engine = "avx512";
+        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
+            selected_engine = "avx2";
+        } else {
+            selected_engine = "openmp";
+        }
+    }
+    if (plan.fp32 && selected_engine == "hybrid") {
+        if (avx512_available() && map_engine_supported(p, "avx512", false)) {
+            selected_engine = "avx512";
+        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
+            selected_engine = "avx2";
+        } else {
+            selected_engine = "openmp";
+        }
+    }
+    plan.engine = selected_engine;
+
+    // smooth (BGR) needs per-pixel |z|² which the AVX-512/CUDA *colorize* paths don't track;
+    // the field kernels always emit norm, so field renders never gate on smooth.
+    plan.needs_norm = field_output ? false : p.smooth;
+    // Trig variants need scalar std::cmath — skip AVX-512/AVX-2/CUDA for them.
+    plan.scalar_fallback = variant_needs_scalar_fallback(p.variant);
+    return plan;
+}
+
 // Dispatch fp32/fp64 variants.
 static void dispatch_fp32(const MapParams& p, cv::Mat& out) {
     switch (p.variant) {
@@ -1091,6 +1145,81 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
     fo.height = p.height;
     fo.metric = p.metric;
 
+    // ── Fast SIMD/CUDA field path ────────────────────────────────────────────────
+    // The hot consumer (equalized coloring) reads iter_u32; only the escape metric
+    // carries per-pixel counts. Mirror render_map's engine choice. Everything else —
+    // non-escape metrics, fp80/fp128, fixed-point (no SIMD field yet), custom/trig, or an
+    // explicit "openmp" engine — falls through to the unchanged scalar dispatch below. The
+    // field is fp64 by design (the scalar path has no fp32 branch), so fp32 requests run the
+    // fp64 kernel, preserving existing output. Engines are tried fastest-first; a stub/
+    // unavailable backend is skipped via its availability gate.
+    const MapEnginePlan field_plan = select_map_engine_plan(p, /*field_output=*/true);
+    const bool can_fast_field =
+        !field_plan.scalar_fallback && p.metric == Metric::Escape &&
+        !field_plan.fp80 && !field_plan.fp128 && !field_plan.fx &&
+        field_plan.engine != "openmp";
+    if (can_fast_field) {
+        auto accept = [&](MapStats& s, const char* eng) {
+            if (s.engine_used != eng) return false;
+            s.pixel_count = p.width * p.height;
+            fo.scalar_used = s.scalar_used;
+            fo.engine_used = s.engine_used;
+            return true;
+        };
+#if USE_CUDA
+        // Honor an explicitly/benchmark-selected CUDA field (fp32/fp64). On failure or a
+        // non-cuda result, fall through to the CPU SIMD paths below.
+        if (field_plan.engine == "cuda" && fsd_cuda::cuda_available()) {
+            try {
+                fsd_cuda::CudaMapParams cp;
+                cp.center_re = p.center_re;
+                cp.center_im = p.center_im;
+                cp.scale     = p.scale;
+                cp.width     = p.width;
+                cp.height    = p.height;
+                cp.iterations = p.iterations;
+                cp.bailout    = p.bailout;
+                cp.bailout_sq = p.bailout_sq;
+                cp.scalar_type = field_plan.fp32 ? "fp32" : "fp64";
+                cp.colormap_id = static_cast<int>(p.colormap);
+                cp.variant_id  = static_cast<int>(p.variant);
+                cp.julia       = p.julia;
+                cp.julia_re    = p.julia_re;
+                cp.julia_im    = p.julia_im;
+                cp.metric_id   = 0;  // escape
+                fo.iter_u32.assign(static_cast<size_t>(p.width) * static_cast<size_t>(p.height), 0u);
+                fo.norm_f32.assign(static_cast<size_t>(p.width) * static_cast<size_t>(p.height), 0.0f);
+                auto cs = fsd_cuda::cuda_render_map_field(cp, fo.iter_u32.data(), fo.norm_f32.data());
+                MapStats s;
+                s.elapsed_ms  = cs.elapsed_ms;
+                s.pixel_count = p.width * p.height;
+                s.scalar_used = cs.scalar_used;
+                s.engine_used = "cuda";
+                fo.scalar_used = s.scalar_used;
+                fo.engine_used = s.engine_used;
+                return s;
+            } catch (...) {
+                // CUDA launch/runtime failure → CPU fallback below.
+            }
+        }
+#endif
+        // Honor an explicitly-selected AVX-2 (e.g. AVX-512-less CPUs, path-diff coverage).
+        if (field_plan.engine == "avx2" && avx2_available() && fma_available()) {
+            auto s = render_map_avx2_field(p, fo);
+            if (accept(s, "avx2")) return s;
+        }
+        // Default fast field: AVX-512 (covers avx512 / hybrid / auto selections).
+        if (avx512_available()) {
+            auto s = render_map_field_avx512_fp64(p, fo);
+            if (accept(s, "avx512")) return s;
+        }
+        // AVX-512 unavailable → AVX-2.
+        if (avx2_available() && fma_available()) {
+            auto s = render_map_avx2_field(p, fo);
+            if (accept(s, "avx2")) return s;
+        }
+    }
+
     const std::string effective_scalar = map_effective_scalar_type(p);
     const bool fp80 = effective_scalar == "fp80";
     const bool fp128 = effective_scalar == "fp128";
@@ -1142,34 +1271,13 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
         return render_custom_openmp(p, out);
     }
 
-    const std::string effective_scalar = map_effective_scalar_type(p);
-    const bool fp32 = effective_scalar == "fp32";
-    const bool fp80 = effective_scalar == "fp80";
-    const bool fp128 = effective_scalar == "fp128";
-    const FixedPrecision fixed_precision = select_fixed_precision(p);
-    const bool fx = fixed_precision != FixedPrecision::None &&
-                    supports_fixed_int_path(p, false);
-    std::string selected_engine = select_map_engine(p, fx);
-    if (fp32 && p.engine == "auto") {
-        if (map_engine_supported(p, "cuda", false)) {
-            selected_engine = "cuda";
-        } else if (avx512_available() && map_engine_supported(p, "avx512", false)) {
-            selected_engine = "avx512";
-        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
-            selected_engine = "avx2";
-        } else {
-            selected_engine = "openmp";
-        }
-    }
-    if (fp32 && selected_engine == "hybrid") {
-        if (avx512_available() && map_engine_supported(p, "avx512", false)) {
-            selected_engine = "avx512";
-        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
-            selected_engine = "avx2";
-        } else {
-            selected_engine = "openmp";
-        }
-    }
+    const MapEnginePlan plan = select_map_engine_plan(p, /*field_output=*/false);
+    const bool fp32 = plan.fp32;
+    const bool fp80 = plan.fp80;
+    const bool fp128 = plan.fp128;
+    const FixedPrecision fixed_precision = plan.fixed_precision;
+    const bool fx = plan.fx;
+    const std::string selected_engine = plan.engine;
 
     if (selected_engine == "hybrid") {
         MapParams hybrid_params = p;
@@ -1199,10 +1307,10 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
 
     // smooth coloring needs per-pixel |z|² which the AVX-512/CUDA paths don't track.
     // Fall through to OpenMP which has access to IterResult.norm.
-    const bool needs_norm = p.smooth;
+    const bool needs_norm = plan.needs_norm;
 
     // Trig variants need scalar (std::cmath) — skip AVX-512 and CUDA for them.
-    const bool scalar_fallback = variant_needs_scalar_fallback(p.variant);
+    const bool scalar_fallback = plan.scalar_fallback;
 
     // CUDA path: all 10 polynomial variants, Julia mode, metrics 0-3 (not MinPairwiseDist=4).
     // Trig variants fall to OpenMP (scalar_fallback).

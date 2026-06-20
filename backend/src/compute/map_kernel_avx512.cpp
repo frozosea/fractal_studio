@@ -199,7 +199,9 @@ static void avx512_fp64_row(
     int variant_id,
     bool julia, double julia_re, double julia_im,
     Metric metric, Colormap cmap,
-    uint8_t* row_ptr
+    uint8_t* row_ptr,
+    uint32_t* iter_row = nullptr,   // field mode (Escape only): write raw iter/norm, skip BGR
+    float* norm_row = nullptr
 ) {
     const double im_d = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
     const __m512d vbail2 = _mm512_set1_pd(bail2);
@@ -244,6 +246,7 @@ static void avx512_fp64_row(
         __m512d vzim2 = _mm512_mul_pd(vzim, vzim);
         __m512d vmn = _mm512_set1_pd(std::numeric_limits<double>::infinity());
         __m512d vmx = vzero;
+        __m512d vnorm = vzero;   // |z|² at escape per lane (field mode); 0 for bounded lanes
 
         // Select which variant inner loop to run. The switch is *outside* the
         // pixel loop (hoisted per-row) so the branch predictor and the
@@ -264,6 +267,7 @@ static void avx512_fp64_row(
             const __mmask8 escaped_nan = _mm512_mask_cmp_pd_mask( \
                 active, vn2, vn2, _CMP_UNORD_Q); \
             const __mmask8 escaped = escaped_radius | escaped_nan; \
+            vnorm = _mm512_mask_mov_pd(vnorm, escaped, vn2); \
             vzre = _mm512_mask_mov_pd(vzre, active, new_re); \
             vzim = _mm512_mask_mov_pd(vzim, active, new_im); \
             vzre2 = _mm512_mask_mov_pd(vzre2, active, new_re2); \
@@ -414,14 +418,24 @@ static void avx512_fp64_row(
         // Write output pixels (up to 8, clamped to actual W).
         int64_t iters_arr[8];
         _mm512_storeu_si512(iters_arr, viter);
-        double mn_arr[8], mx_arr[8];
+        double mn_arr[8], mx_arr[8], norm_arr[8];
         if (track_min) _mm512_storeu_pd(mn_arr, vmn);
         if (track_max) _mm512_storeu_pd(mx_arr, vmx);
+        if (iter_row) _mm512_storeu_pd(norm_arr, vnorm);
 
         for (int k = 0; k < 8 && (x + k) < W; k++) {
-            uint8_t* px = row_ptr + 3 * (x + k);
             const bool escaped_k = !((active >> k) & 1);
 
+            // Field mode (Escape only): raw iter count + |z|² at escape, matching the
+            // scalar field_variant_impl contract (bounded → iter=max_iter, norm=0).
+            if (iter_row) {
+                iter_row[x + k] = escaped_k ? static_cast<uint32_t>(iters_arr[k])
+                                            : static_cast<uint32_t>(max_iter);
+                norm_row[x + k] = escaped_k ? static_cast<float>(norm_arr[k]) : 0.0f;
+                continue;
+            }
+
+            uint8_t* px = row_ptr + 3 * (x + k);
             if (metric == Metric::Escape) {
                 const int it = escaped_k ? static_cast<int>(iters_arr[k]) : max_iter;
                 // norm not tracked in AVX-512 path; smooth mode excluded at dispatch.
@@ -628,6 +642,59 @@ MapStats render_map_avx512_fp64(const MapParams& p, cv::Mat& out) {
     return s;
 }
 
+// Escape-count FIELD (iter_u32 + |z|² norm_f32) via the same fp64 kernel as render_map, so
+// equalized coloring gets the AVX-512 path instead of scalar OpenMP. Escape metric only.
+MapStats render_map_field_avx512_fp64(const MapParams& p, FieldOutput& out) {
+    const int W = p.width, H = p.height;
+    out.width  = W;
+    out.height = H;
+    out.metric = Metric::Escape;
+    out.iter_u32.assign(static_cast<size_t>(W) * static_cast<size_t>(H), 0u);
+    out.norm_f32.assign(static_cast<size_t>(W) * static_cast<size_t>(H), 0.0f);
+
+    const double aspect  = static_cast<double>(W) / H;
+    const double span_im = p.scale;
+    const double span_re = p.scale * aspect;
+    const double re_min  = p.center_re - span_re * 0.5;
+    const double im_max  = p.center_im + span_im * 0.5;
+    const double bail2   = p.bailout_sq;
+    const int variant_id = static_cast<int>(p.variant);
+    const int thread_count = resolve_render_threads(p.render_threads);
+    std::atomic<bool> cancelled{false};
+
+    const auto t0 = std::chrono::steady_clock::now();
+
+    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 4)
+    for (int y = 0; y < H; y++) {
+        if (cancelled.load(std::memory_order_relaxed)) continue;
+        if (map_render_cancel_requested(p)) {
+            cancelled.store(true, std::memory_order_relaxed);
+            continue;
+        }
+        avx512_fp64_row(
+            y, W, H, re_min, im_max, span_re, span_im,
+            bail2, p.iterations,
+            variant_id,
+            p.julia, p.julia_re, p.julia_im,
+            Metric::Escape, p.colormap,
+            nullptr,
+            out.iter_u32.data() + static_cast<size_t>(y) * static_cast<size_t>(W),
+            out.norm_f32.data() + static_cast<size_t>(y) * static_cast<size_t>(W)
+        );
+    }
+    if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+        throw std::runtime_error("cancelled");
+    }
+
+    const auto t1 = std::chrono::steady_clock::now();
+    MapStats s;
+    s.elapsed_ms  = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    s.pixel_count = W * H;
+    s.scalar_used = "fp64";
+    s.engine_used = "avx512";
+    return s;
+}
+
 MapStats render_map_avx512_fp32(const MapParams& p, cv::Mat& out) {
     switch (static_cast<int>(p.variant)) {
         case 1: return render_avx512_fp32_variant<1>(p, out);
@@ -655,6 +722,10 @@ MapStats render_map_avx512_fx64(const MapParams& p, cv::Mat& out) {
 
 // Stub implementations when AVX-512 is not available at compile time.
 MapStats render_map_avx512_fp64(const MapParams& p, cv::Mat& out) {
+    (void)p; (void)out;
+    MapStats s; s.engine_used = "openmp_fallback"; return s;
+}
+MapStats render_map_field_avx512_fp64(const MapParams& p, FieldOutput& out) {
     (void)p; (void)out;
     MapStats s; s.engine_used = "openmp_fallback"; return s;
 }

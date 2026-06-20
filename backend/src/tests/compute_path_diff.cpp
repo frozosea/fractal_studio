@@ -579,9 +579,10 @@ Rendered render_transition_scene(const TransitionScene& scene, const std::string
     return {image, stats};
 }
 
-FieldRendered render_field_scene(const RenderScene& scene, const std::string& scalar) {
+FieldRendered render_field_scene(const RenderScene& scene, const std::string& scalar,
+                                 const std::string& engine = "openmp") {
     MapParams p = scene.params;
-    p.engine = "openmp";
+    p.engine = engine;
     p.scalar_type = scalar;
     FieldOutput field;
     MapStats stats = fsd::compute::render_map_field(p, field);
@@ -871,6 +872,50 @@ void compare_field_scalar_pair(
     if (!ok) ++runner.failed;
 }
 
+// Escape FIELD parity across engines: the fast SIMD/CUDA field path (iter_u32 + norm_f32)
+// must match the scalar OpenMP field that feeds equalized coloring. A systematic off-by-one
+// in the iteration convention blows past the limit; a handful of boundary float-rounding
+// differences (FMA/order) do not. Skips silently when the engine is unavailable at runtime.
+void compare_field_engine_pair(
+    Runner& runner,
+    const RenderScene& scene,
+    const std::string& engine,
+    const std::string& scalar,
+    const DiffLimits& limits
+) {
+    const std::string label = scene.name + " raw-field " + engine + "/" + scalar
+        + " vs openmp/" + scalar;
+    FieldRendered baseline;
+    FieldRendered candidate;
+    try {
+        baseline = render_field_scene(scene, scalar, "openmp");
+        candidate = render_field_scene(scene, scalar, engine);
+    } catch (const std::exception& ex) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << label << " threw: " << ex.what() << "\n";
+        return;
+    }
+    remember_stats(runner, baseline.stats);
+    remember_stats(runner, candidate.stats);
+    if (baseline.stats.engine_used != "openmp") return;
+    if (candidate.stats.engine_used != engine) {
+        std::cout << "[INFO] " << label << " skipped (engine_used="
+                  << candidate.stats.engine_used << ")\n";
+        return;
+    }
+
+    const DiffStats stats = diff_field_outputs(baseline.field, candidate.field, limits.bad_pixel_threshold);
+    ++runner.compared;
+    const bool ok = within_limits(stats, limits);
+    std::cout << (ok ? "[PASS] " : "[FAIL] ") << label
+              << " max=" << stats.max_channel
+              << " mean=" << std::fixed << std::setprecision(8) << stats.mean_abs
+              << " bad=" << std::setprecision(4) << stats.bad_pixel_ratio
+              << " elapsed_ms=" << std::setprecision(3) << candidate.stats.elapsed_ms
+              << "\n";
+    if (!ok) ++runner.failed;
+}
+
 MapParams map_params_for_direct_transition(const TransitionParams& p) {
     MapParams mp;
     mp.center_re = p.center_re;
@@ -1045,6 +1090,13 @@ int main() {
             for (const char* engine : {"avx2", "avx512", "cuda"}) {
                 compare_required(runner, scene, fp64_baseline, engine, "fp64", same_scalar_limits);
                 compare_required(runner, scene, fp32_baseline, engine, "fp32", same_scalar_limits);
+            }
+            // Escape FIELD parity (feeds equalized coloring). fp64 only — the field path is
+            // fp64 by design (the scalar dispatch has no fp32 branch).
+            if (scene.params.metric == Metric::Escape) {
+                compare_field_engine_pair(runner, scene, "avx512", "fp64", same_scalar_limits);
+                compare_field_engine_pair(runner, scene, "avx2", "fp64", same_scalar_limits);
+                compare_field_engine_pair(runner, scene, "cuda", "fp64", same_scalar_limits);
             }
         } else {
             std::cout << "[INFO] " << scene.name

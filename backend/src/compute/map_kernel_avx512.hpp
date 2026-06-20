@@ -34,6 +34,10 @@ bool avx512ifma_available() noexcept;
 // Pre-condition: avx512_available() == true.
 MapStats render_map_avx512_fp64(const MapParams& p, cv::Mat& out);
 
+// AVX-512 fp64 escape-count FIELD (iter_u32 + |z|² norm_f32). Escape metric only;
+// feeds equalized coloring. Pre-condition: avx512_available() == true.
+MapStats render_map_field_avx512_fp64(const MapParams& p, FieldOutput& out);
+
 // AVX-512 fp32 render (16 pixels at a time).
 // Pre-condition: avx512_available() == true.
 MapStats render_map_avx512_fp32(const MapParams& p, cv::Mat& out);

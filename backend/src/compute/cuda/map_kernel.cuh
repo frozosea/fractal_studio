@@ -91,4 +91,9 @@ CudaDeviceInfo cuda_device_info() noexcept;
 // Output `out` is allocated as CV_8UC3 BGR on the host.
 CudaMapStats cuda_render_map(const CudaMapParams& p, cv::Mat& out);
 
+// Escape-count FIELD: writes W*H raw iteration counts (uint32) and |z|² at escape (float)
+// into caller-provided host buffers, instead of BGR. Escape metric, fp32/fp64 only (feeds
+// equalized coloring). Mirrors cuda_render_map's scalar/variant dispatch.
+CudaMapStats cuda_render_map_field(const CudaMapParams& p, uint32_t* iter_u32, float* norm_f32);
+
 } // namespace fsd_cuda
