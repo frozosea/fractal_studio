@@ -20,6 +20,7 @@ const METRIC_LABELS: Record<string, { en: string; zh: string }> = {
   max_abs:            { en: 'Max |z|',       zh: '最大 |z|' },
   envelope:           { en: 'Envelope',      zh: '包络' },
   min_pairwise_dist:  { en: 'Min pairwise',  zh: '最小轨道距' },
+  mandel_ship_agree:  { en: 'Ship↔Mandel',   zh: 'Ship↔曼德' },
 }
 
 const COLORMAP_LABELS: Record<string, { en: string; zh: string }> = {

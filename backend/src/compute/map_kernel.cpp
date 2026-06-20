@@ -1135,10 +1135,114 @@ void dispatch_field_fixed(const MapParams& p, FieldOutput& out) {
 
 } // anonymous namespace (field kernels)
 
+// ── Burning-Ship guided exploration ──────────────────────────────────────────
+// Mandelbrot step z²+c and Burning-Ship step (|x|+i|y|)²+c share the real part each iteration;
+// their imaginary parts (2·x·y vs 2·|x|·|y|) agree iff x·y ≥ 0. So the two orbits coincide until
+// the first iterate with x·y < 0. This field marks, per pixel, how long they agree — bright where
+// the Burning Ship reproduces the Mandelbrot, dim where the abs() folds carve new structure. It is
+// variant-independent (always the z²+c step) and scalar-OpenMP (an analysis overlay, not a hot path).
+namespace {
+
+struct MsAgree { int agree; bool fully; };
+
+inline MsAgree mandel_ship_agree_orbit(double zx, double zy, double cx, double cy,
+                                       int max_iter, double bail2) {
+    int agree = 0;
+    bool diverged = false;
+    for (int i = 0; i < max_iter; ++i) {
+        if (zx * zy < 0.0) { diverged = true; break; }   // Burning Ship diverges from here on
+        agree = i + 1;
+        const double nx = zx * zx - zy * zy + cx;
+        const double ny = 2.0 * zx * zy + cy;
+        zx = nx; zy = ny;
+        if (zx * zx + zy * zy > bail2) break;            // escaped while still agreeing → fully
+    }
+    return { agree, !diverged };
+}
+
+// fully-agreeing pixels are bright (1.0); diverged pixels show how long they agreed on a sqrt
+// ramp capped below the highlight so the "same as Mandelbrot" regions stand out.
+inline double ms_agree_v01(MsAgree a, int max_iter) {
+    if (a.fully) return 1.0;
+    return 0.75 * std::sqrt(static_cast<double>(a.agree) / static_cast<double>(std::max(1, max_iter)));
+}
+
+template <class WritePixel>
+void render_mandel_ship_agree_impl(const MapParams& p, WritePixel&& write) {
+    const int W = p.width, H = p.height;
+    const double aspect = static_cast<double>(W) / static_cast<double>(H);
+    const double span_im = p.scale, span_re = p.scale * aspect;
+    const double re_min = p.center_re - span_re * 0.5;
+    const double im_max = p.center_im + span_im * 0.5;
+    const double bail2 = p.bailout_sq;
+    const int max_iter = p.iterations;
+    const int thread_count = resolve_render_threads(p.render_threads);
+
+    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
+    for (int y = 0; y < H; ++y) {
+        if (map_render_cancel_requested(p)) continue;
+        const double im = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
+        for (int x = 0; x < W; ++x) {
+            const double re = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
+            double zx, zy, cx, cy;
+            if (p.julia) { zx = re; zy = im; cx = p.julia_re; cy = p.julia_im; }
+            else         { zx = 0.0; zy = 0.0; cx = re; cy = im; }
+            const MsAgree a = mandel_ship_agree_orbit(zx, zy, cx, cy, max_iter, bail2);
+            write(y, x, ms_agree_v01(a, max_iter));
+        }
+    }
+}
+
+} // anonymous namespace
+
+static MapStats render_mandel_ship_agree(const MapParams& p, cv::Mat& out) {
+    if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
+        out.create(p.height, p.width, CV_8UC3);
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    render_mandel_ship_agree_impl(p, [&](int y, int x, double v01) {
+        uint8_t* px = out.ptr<uint8_t>(y) + 3 * x;
+        colorize_field_bgr(v01, p.colormap, px[0], px[1], px[2]);
+    });
+    if (map_render_cancel_requested(p)) throw_render_cancelled();
+    const auto t1 = std::chrono::steady_clock::now();
+    MapStats s;
+    s.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    s.pixel_count = p.width * p.height;
+    s.scalar_used = "fp64";
+    s.engine_used = "openmp";
+    return s;
+}
+
+static MapStats render_mandel_ship_agree_field(const MapParams& p, FieldOutput& fo) {
+    fo.width = p.width;
+    fo.height = p.height;
+    fo.metric = Metric::MandelShipAgree;
+    fo.field_f64.assign(static_cast<size_t>(p.width) * static_cast<size_t>(p.height), 0.0);
+    const auto t0 = std::chrono::steady_clock::now();
+    render_mandel_ship_agree_impl(p, [&](int y, int x, double v01) {
+        fo.field_f64[static_cast<size_t>(y) * static_cast<size_t>(p.width) + x] = v01;
+    });
+    fo.field_min = 0.0;
+    fo.field_max = 1.0;
+    const auto t1 = std::chrono::steady_clock::now();
+    MapStats s;
+    s.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    s.pixel_count = p.width * p.height;
+    s.scalar_used = "fp64";
+    s.engine_used = "openmp";
+    fo.scalar_used = "fp64";
+    fo.engine_used = "openmp";
+    return s;
+}
+
 MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
     // Custom variant: use function-pointer path (always OpenMP).
     if (p.variant == Variant::Custom && p.custom_step_fn) {
         return render_custom_field_openmp(p, fo);
+    }
+    if (p.metric == Metric::MandelShipAgree) {
+        return render_mandel_ship_agree_field(p, fo);
     }
 
     fo.width  = p.width;
@@ -1269,6 +1373,10 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
     // Custom variant: bypass CUDA/AVX and go straight to OpenMP.
     if (p.variant == Variant::Custom && p.custom_step_fn) {
         return render_custom_openmp(p, out);
+    }
+    // Burning-Ship guided-exploration overlay: variant-independent, scalar OpenMP only.
+    if (p.metric == Metric::MandelShipAgree) {
+        return render_mandel_ship_agree(p, out);
     }
 
     const MapEnginePlan plan = select_map_engine_plan(p, /*field_output=*/false);

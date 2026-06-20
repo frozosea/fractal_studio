@@ -36,6 +36,7 @@ enum class Metric {
     MaxAbs          = 2,
     Envelope        = 3,
     MinPairwiseDist = 4,
+    MandelShipAgree = 5,   // Burning-Ship guided exploration (orbit agreement vs Mandelbrot)
 };
 
 inline const char* metric_name(Metric m) {
@@ -45,6 +46,7 @@ inline const char* metric_name(Metric m) {
         case Metric::MaxAbs:          return "max_abs";
         case Metric::Envelope:        return "envelope";
         case Metric::MinPairwiseDist: return "min_pairwise_dist";
+        case Metric::MandelShipAgree: return "mandel_ship_agree";
     }
     return "escape";
 }
@@ -57,6 +59,7 @@ inline bool metric_from_name(const char* name, Metric& out) {
         {"max_abs",           Metric::MaxAbs},
         {"envelope",          Metric::Envelope},
         {"min_pairwise_dist", Metric::MinPairwiseDist},
+        {"mandel_ship_agree", Metric::MandelShipAgree},
     };
     for (const auto& e : table) {
         const char* a = e.n;

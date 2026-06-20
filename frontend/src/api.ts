@@ -94,9 +94,9 @@ export const VARIANT_LABELS: Record<Variant, { en: string; zh: string }> = {
   tan_z:        { en: 'tan(z)+c',                   zh: 'tan(z)+c' },
 }
 
-export type Metric = 'escape' | 'min_abs' | 'max_abs' | 'envelope' | 'min_pairwise_dist'
+export type Metric = 'escape' | 'min_abs' | 'max_abs' | 'envelope' | 'min_pairwise_dist' | 'mandel_ship_agree'
 
-export const METRICS: Metric[] = ['escape', 'min_abs', 'max_abs', 'envelope', 'min_pairwise_dist']
+export const METRICS: Metric[] = ['escape', 'min_abs', 'max_abs', 'envelope', 'min_pairwise_dist', 'mandel_ship_agree']
 
 export type ColorMap =
   | 'classic_cos'
