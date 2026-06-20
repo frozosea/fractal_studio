@@ -536,6 +536,15 @@ const juliaLabel = computed(() => {
   return `${juliaRe.value.toPrecision(10)} ${sign}${juliaIm.value.toPrecision(10)}i`
 })
 
+// Octave count (倍频数) of the current zoom: log2 of the magnification relative to the
+// full-set view (height 4 — the |c|≤2 bounding disk, the same reference the ln-map
+// equalization uses). Grows by 1 for every factor-of-2 zoom-in.
+const ZOOM_BASE_SCALE = 4
+const zoomOctaves = computed(() => {
+  const s = scale.value
+  return (s > 0 && Number.isFinite(s)) ? Math.log2(ZOOM_BASE_SCALE / s) : 0
+})
+
 function formatViewportNumber(value: number, kind: 're' | 'im' | 'zoom'): string {
   if (!Number.isFinite(value)) return ''
   if (kind === 'zoom') {
@@ -1268,7 +1277,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               @keydown.enter="commitViewportInputOnEnter($event, 'im')" />
           </label>
           <label class="viewport-field">
-            <span>zoom</span>
+            <span>zoom <span class="viewport-oct" :title="lang === 'en' ? 'octaves of zoom (log₂ magnification vs the |c|≤2 full-set view)' : '缩放倍频数（相对 |c|≤2 全集视图的 log₂ 放大倍率）'">· {{ zoomOctaves.toFixed(2) }} oct</span></span>
             <input
               v-model="viewportZoomInput"
               class="viewport-input mono"
@@ -1751,6 +1760,10 @@ async function pollVideoExport(initial: VideoExportResponse) {
   line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+.viewport-oct {
+  color: var(--accent, #6cf);
+  font-variant-numeric: tabular-nums;
 }
 .viewport-input {
   width: 124px;
