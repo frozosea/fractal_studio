@@ -511,16 +511,7 @@ void colorizeFinalFrameWithLnMapMode(
     // every escaped pixel is then a pure function of its iteration count.
     const bool usePeriodicEq = mode == "hist_eq" && eq.valid;
     if (usePeriodicEq) {
-        for (int y = 0; y < p.height; ++y) {
-            uint8_t* row = out.ptr<uint8_t>(y);
-            const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(p.width);
-            for (int x = 0; x < p.width; ++x) {
-                const int it = static_cast<int>(field.iter_u32[rowOffset + static_cast<size_t>(x)]);
-                uint8_t* px = row + 3 * x;
-                if (it >= p.iterations) { px[0] = px[1] = px[2] = 255; continue; }
-                eq.colorize(it, px[0], px[1], px[2]);
-            }
-        }
+        compute::colorize_map_field_equalized(p, field, eq, out);
         return;
     }
 

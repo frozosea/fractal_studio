@@ -797,17 +797,51 @@ void compute_ln_iters_fp64(
 // Direct linear mapping: phase = (count - count_min) / period, period chosen so the
 // whole strip spans total_octaves*cyclesPerOctave palette cycles. No equalization —
 // every escape count is one solid band, uniform width, density ∝ log(magnification).
+// Shared tail of every periodic equalization: given a (possibly weighted) escape-count
+// histogram and the octave span it covers, anchor the palette period on the MEDIAN escape
+// count (not the extreme deepest), so the color spread is even instead of the bulk
+// collapsing into the first cycle while only a deep minibrot reaches the rest of the wheel.
+// `hist`/`total` are doubles so the same code serves unit-weight and distance-weighted
+// histograms. Leaves onset_cycles at its struct default.
+LnMapEqualization finalize_equalization(
+    const std::vector<double>& hist, double total,
+    double total_octaves, double cpo,
+    Colormap colormap, bool colormap_wraps
+) {
+    LnMapEqualization eq;
+    eq.colormap = colormap;
+    eq.colormap_wraps = colormap_wraps;
+    const int iterations = static_cast<int>(hist.size());
+    if (total <= 0.0 || iterations <= 0) return eq;  // degenerate → eq.valid stays false
+
+    int count_min = 0;
+    for (int i = 0; i < iterations; ++i) { if (hist[static_cast<size_t>(i)] > 0.0) { count_min = i; break; } }
+    const double half = total / 2.0;
+    int median = count_min;
+    double cum = 0.0;
+    for (int i = 0; i < iterations; ++i) {
+        cum += hist[static_cast<size_t>(i)];
+        if (cum >= half) { median = i; break; }
+    }
+    int count_max = count_min + 2 * (median - count_min);
+    if (count_max <= count_min) count_max = count_min + 1;
+
+    const double range = std::max(1.0, static_cast<double>(count_max - count_min));
+    const double cycles = std::max(1e-6, total_octaves * cpo);
+    eq.count_min = static_cast<double>(count_min);
+    eq.period = std::max(1e-6, range / cycles);   // escape counts per palette cycle
+    eq.valid = true;
+    return eq;
+}
+
 LnMapEqualization build_ln_map_equalization(
     const LnMapParams& p,
     const std::vector<int>& iters,
     const TrigColumns& cols
 ) {
-    LnMapEqualization eq;
-    eq.colormap = p.colormap;
-    eq.colormap_wraps = ln_map_colormap_wraps_phase(p.colormap);
     const int s = p.width_s;
     const int h = p.height_t;
-    if (s <= 0 || h <= 0 || p.iterations <= 0) return eq;
+    if (s <= 0 || h <= 0 || p.iterations <= 0) return LnMapEqualization{};
 
     double cpo = p.color_cycles_per_octave;
     if (!(cpo > 0.0) || !std::isfinite(cpo)) cpo = 1.0;
@@ -818,8 +852,8 @@ LnMapEqualization build_ln_map_equalization(
     // count_min/median and corrupt the period. Restricting to |c|<=2 also lets the octave
     // span reflect the *participating* pixel range instead of the strip's padding — so the
     // coloring no longer depends on how many extra lead-in/lead-out octaves the strip has.
-    std::vector<unsigned long long> hist(static_cast<size_t>(p.iterations), 0ULL);
-    unsigned long long total = 0;
+    std::vector<double> hist(static_cast<size_t>(p.iterations), 0.0);
+    double total = 0.0;
     int first_row = h, last_row = -1;
     auto accumulate = [&](bool disk_only) {
         for (int row = 0; row < h; ++row) {
@@ -835,8 +869,8 @@ LnMapEqualization build_ln_map_equalization(
                 }
                 const int it = iters[row_offset + static_cast<size_t>(x)];
                 if (it >= 0 && it < p.iterations) {
-                    hist[static_cast<size_t>(it)] += 1ULL;
-                    total += 1ULL;
+                    hist[static_cast<size_t>(it)] += 1.0;
+                    total += 1.0;
                     row_participated = true;
                 }
             }
@@ -844,41 +878,20 @@ LnMapEqualization build_ln_map_equalization(
         }
     };
     accumulate(/*disk_only=*/true);
-    if (total == 0) {  // center sits entirely outside |c|<=2 → fall back to the whole strip
-        std::fill(hist.begin(), hist.end(), 0ULL);
+    if (total == 0.0) {  // center sits entirely outside |c|<=2 → fall back to the whole strip
+        std::fill(hist.begin(), hist.end(), 0.0);
         first_row = h; last_row = -1;
         accumulate(/*disk_only=*/false);
     }
-    if (total == 0) return eq;  // degenerate strip → eq.valid stays false
+    if (total == 0.0) return LnMapEqualization{};  // degenerate strip → eq.valid stays false
 
     // Octaves spanned by the participating pixel rows (not the full padded strip height).
     const int participating_rows = std::max(1, last_row - first_row + 1);
     const double total_octaves =
         static_cast<double>(participating_rows) * TAU / (static_cast<double>(s) * LN_TWO);
 
-    int count_min = 0;
-    for (int i = 0; i < p.iterations; ++i) { if (hist[static_cast<size_t>(i)] > 0ULL) { count_min = i; break; } }
-    // Anchor the period on the MEDIAN escape count (not the extreme deepest), so the
-    // color spread is even across the strip instead of the bulk collapsing into the
-    // first (green/cyan) cycle while only a deep minibrot reaches the rest of the wheel.
-    // The median sits ~halfway through the cycles, so a single deep minibrot can't wash
-    // everything green.
-    const unsigned long long half = total / 2;
-    int median = count_min;
-    unsigned long long cum = 0;
-    for (int i = 0; i < p.iterations; ++i) {
-        cum += hist[static_cast<size_t>(i)];
-        if (cum >= half) { median = i; break; }
-    }
-    int count_max = count_min + 2 * (median - count_min);
-    if (count_max <= count_min) count_max = count_min + 1;
-
-    const double range = std::max(1.0, static_cast<double>(count_max - count_min));
-    const double cycles = std::max(1e-6, total_octaves * cpo);
-    eq.count_min = static_cast<double>(count_min);
-    eq.period = std::max(1e-6, range / cycles);   // escape counts per palette cycle
-    eq.valid = true;
-    return eq;
+    return finalize_equalization(hist, total, total_octaves, cpo,
+                                 p.colormap, ln_map_colormap_wraps_phase(p.colormap));
 }
 
 // Single-entry cache of the (expensive) escape-count field, keyed by geometry only —
@@ -1842,6 +1855,77 @@ LnMapEqualization reconstructEqualization(
     eq.colormap       = colormap;
     eq.valid          = true;
     return eq;
+}
+
+LnMapEqualization build_map_equalization(
+    const MapParams& p, const FieldOutput& field, bool distance_weighted, double cpo)
+{
+    if (field.metric != Metric::Escape || p.width <= 0 || p.height <= 0 || p.iterations <= 0)
+        return LnMapEqualization{};
+    if (field.iter_u32.size() != static_cast<size_t>(p.width) * static_cast<size_t>(p.height))
+        return LnMapEqualization{};
+    if (!(cpo > 0.0) || !std::isfinite(cpo)) cpo = 1.0;
+
+    // Cartesian viewport geometry (matches finalFrameAbs2At / render_map sampling): scale is
+    // the imaginary-axis span; pixel centers at (x+0.5, y+0.5).
+    const double aspect = static_cast<double>(p.width) / static_cast<double>(p.height);
+    const double spanIm = p.scale;
+    const double spanRe = p.scale * aspect;
+    const double reMin  = p.center_re - spanRe * 0.5;
+    const double imMax  = p.center_im + spanIm * 0.5;
+    // Distance-from-center floor: clamp ρ so the central ~quarter-diameter region dominates
+    // uniformly instead of a single pixel blowing up the 1/ρ² weight (stability for live zoom).
+    const double rho_floor = std::max(1e-300, p.scale / 8.0);
+    const double rho_floor_sq = rho_floor * rho_floor;
+
+    std::vector<double> hist(static_cast<size_t>(p.iterations), 0.0);
+    double total = 0.0;
+    for (int y = 0; y < p.height; ++y) {
+        const double im = imMax - (static_cast<double>(y) + 0.5) / static_cast<double>(p.height) * spanIm;
+        const size_t row_offset = static_cast<size_t>(y) * static_cast<size_t>(p.width);
+        for (int x = 0; x < p.width; ++x) {
+            const double re = reMin + (static_cast<double>(x) + 0.5) / static_cast<double>(p.width) * spanRe;
+            double weight = 1.0;
+            if (distance_weighted) {
+                if (re * re + im * im > 4.0) continue;  // origin disk |c|<=2 only
+                const double dre = re - p.center_re, dim = im - p.center_im;
+                weight = 1.0 / std::max(dre * dre + dim * dim, rho_floor_sq);
+            }
+            const int it = static_cast<int>(field.iter_u32[row_offset + static_cast<size_t>(x)]);
+            if (it >= 0 && it < p.iterations) {
+                hist[static_cast<size_t>(it)] += weight;
+                total += weight;
+            }
+        }
+    }
+    if (total <= 0.0) return LnMapEqualization{};
+
+    // Period tracks zoom depth, not per-frame pixel extremes (which diverge as ρ→0 at the
+    // target): ~1 palette cycle per octave of magnification beyond the |c|<=2 disk (height 4).
+    const double total_octaves = std::max(1.0, std::log2(4.0 / std::max(1e-300, p.scale)));
+    return finalize_equalization(hist, total, total_octaves, cpo,
+                                 p.colormap, ln_map_colormap_wraps_phase(p.colormap));
+}
+
+void colorize_map_field_equalized(
+    const MapParams& p, const FieldOutput& field,
+    const LnMapEqualization& eq, cv::Mat& out)
+{
+    const size_t expected = static_cast<size_t>(p.width) * static_cast<size_t>(p.height);
+    if (field.metric != Metric::Escape || field.iter_u32.size() != expected) return;
+    if (out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3)
+        out.create(p.height, p.width, CV_8UC3);
+
+    for (int y = 0; y < p.height; ++y) {
+        uint8_t* row = out.ptr<uint8_t>(y);
+        const size_t row_offset = static_cast<size_t>(y) * static_cast<size_t>(p.width);
+        for (int x = 0; x < p.width; ++x) {
+            const int it = static_cast<int>(field.iter_u32[row_offset + static_cast<size_t>(x)]);
+            uint8_t* px = row + 3 * x;
+            if (it >= p.iterations) { px[0] = px[1] = px[2] = 255; continue; }  // interior → white
+            eq.colorize(it, px[0], px[1], px[2]);
+        }
+    }
 }
 
 void LnMapEqualization::colorize(int it, uint8_t& b, uint8_t& g, uint8_t& r) const {

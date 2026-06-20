@@ -5,6 +5,7 @@
 #pragma once
 
 #include "colormap.hpp"
+#include "map_kernel.hpp"   // MapParams, FieldOutput (cartesian equalized coloring)
 #include "variants.hpp"
 
 #include <opencv2/core.hpp>
@@ -84,6 +85,22 @@ struct LnMapStats {
 LnMapEqualization reconstructEqualization(
     double count_min, double period, double onset_cycles,
     bool colormap_wraps, Colormap colormap);
+
+// Build a periodic equalization from a *cartesian* escape-count field (FieldOutput from
+// render_map_field), so the live map viewer can preview the ln-map's equalized coloring.
+// distance_weighted=false → full-image (every escaped pixel, unit weight); true → center
+// weighted (1/ρ² toward the view center, restricted to the |c|<=2 disk — faithful to the
+// ln-map's log-polar measure). The period tracks zoom depth (~1 cycle/octave × cpo).
+// Requires field.metric == Escape (iter_u32 populated).
+LnMapEqualization build_map_equalization(
+    const MapParams& p, const FieldOutput& field, bool distance_weighted, double cpo);
+
+// Colorize a cartesian escape-count field through a periodic equalization: interior
+// pixels (it >= iterations) → white, escaped pixels → eq.colorize(it). Shared by the live
+// map viewer and the video export's deferred final-frame coloring.
+void colorize_map_field_equalized(
+    const MapParams& p, const FieldOutput& field,
+    const LnMapEqualization& eq, cv::Mat& out);
 
 using LnMapProgress = std::function<void(int rowsDone)>;
 

@@ -16,6 +16,8 @@ const props = defineProps<{
   metric: Metric
   colorMap: ColorMap
   smooth?: boolean
+  colorMode?: 'direct' | 'eq_full' | 'eq_center'
+  cyclesPerOctave?: number
   pairwiseCap?: number
   transitionTheta: number | null
   transitionThetaMilliDeg?: number | null
@@ -228,6 +230,8 @@ async function renderFrame() {
     metric:     props.metric,
     colorMap:   props.colorMap,
     smooth:     props.smooth,
+    colorMode:  props.colorMode,
+    cyclesPerOctave: props.cyclesPerOctave,
     pairwiseCap: props.pairwiseCap,
     julia:      props.julia,
     juliaRe:    props.juliaRe ?? 0,
@@ -293,6 +297,7 @@ function scheduleRender(delay = 200) {
 watch(() => [
   props.centerRe, props.centerIm, props.scale,
   props.variant, props.metric, props.colorMap, props.smooth,
+  props.colorMode, props.cyclesPerOctave,
   props.iterations, props.pairwiseCap, props.julia, props.juliaRe, props.juliaIm,
   props.engine, props.scalarType, props.transitionTheta, props.transitionThetaMilliDeg,
   props.transitionFrom, props.transitionTo,

@@ -10,6 +10,7 @@
 #include "resource_manager.hpp"
 
 #include "../compute/map_kernel.hpp"
+#include "../compute/ln_map.hpp"   // build_map_equalization, colorize_map_field_equalized
 #include "../compute/tile_scheduler.hpp"
 #include "../compute/transition_kernel.hpp"
 #include "../compute/image_io.hpp"
@@ -195,6 +196,8 @@ struct MapRenderInput {
     bool smooth = false;
     bool stillExport = false;
     bool localExport = false;
+    std::string colorMode = "direct";   // direct | eq_full | eq_center (equalized preview)
+    double cyclesPerOctave = 1.0;        // band density for equalized modes
 };
 
 struct MapRenderImage {
@@ -241,12 +244,18 @@ MapRenderInput parseMapRenderInput(const std::string& body) {
     in.smooth = j.value("smooth", false);
     in.stillExport = j.value("taskType", std::string("")) == "still_export";
     in.localExport = j.value("localExport", false);
+    in.colorMode = j.value("colorMode", std::string("direct"));
+    in.cyclesPerOctave = j.value("cyclesPerOctave", 1.0);
 
     if (!(in.scale > 0.0) || !std::isfinite(in.scale)) throw std::runtime_error("invalid scale");
     if (in.width < 64 || in.width > MAX_MAP_DIM) throw std::runtime_error("invalid width");
     if (in.height < 64 || in.height > MAX_MAP_DIM) throw std::runtime_error("invalid height");
     if (in.iters < 1 || in.iters > 1000000) throw std::runtime_error("invalid iterations");
     if (!std::isfinite(in.cRe) || !std::isfinite(in.cIm)) throw std::runtime_error("invalid center");
+    if (in.colorMode != "direct" && in.colorMode != "eq_full" && in.colorMode != "eq_center")
+        throw std::runtime_error("invalid colorMode (direct|eq_full|eq_center)");
+    if (!(in.cyclesPerOctave > 0.0) || in.cyclesPerOctave > 64.0 || !std::isfinite(in.cyclesPerOctave))
+        throw std::runtime_error("invalid cyclesPerOctave (0..64)");
 
     return in;
 }
@@ -391,6 +400,25 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
     p.engine = in.engine;
     p.smooth = in.smooth;
     p.should_cancel = shouldCancel;
+
+    // Equalized preview modes: render the raw escape field, build a periodic equalization
+    // from it (full-image or center-weighted, faithful to the ln-map), then colorize. Only
+    // the escape metric carries per-pixel iteration counts; anything else falls back to the
+    // normal inline-colorized render. render_map_field is OpenMP-only (no CUDA/AVX), which is
+    // acceptable for an opt-in preview and is reported honestly via stats.engine_used.
+    if (in.colorMode != "direct" && p.metric == compute::Metric::Escape) {
+        compute::FieldOutput fo;
+        auto stats = compute::render_map_field(p, fo);
+        throwIfMapRenderCancelled(shouldCancel);
+        const auto eq = compute::build_map_equalization(p, fo, in.colorMode == "eq_center", in.cyclesPerOctave);
+        compute::colorize_map_field_equalized(p, fo, eq, rendered.image);
+        throwIfMapRenderCancelled(shouldCancel);
+        rendered.elapsed = stats.elapsed_ms;
+        rendered.scalarUsed = stats.scalar_used;
+        rendered.engineUsed = stats.engine_used;
+        rendered.artifactName = "map.png";
+        return rendered;
+    }
 
     auto stats = compute::render_map(p, rendered.image);
     throwIfMapRenderCancelled(shouldCancel);

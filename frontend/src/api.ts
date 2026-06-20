@@ -143,6 +143,8 @@ export interface MapRenderRequest {
   metric?: Metric
   colorMap?: ColorMap
   smooth?: boolean           // ln-smooth continuous coloring (μ = iter + 1 − log₂(log₂(|z|²)))
+  colorMode?: 'direct' | 'eq_full' | 'eq_center'  // equalized preview (escape metric only)
+  cyclesPerOctave?: number   // band density for equalized color modes
   bailout?: number
   bailoutSq?: number
   pairwiseCap?: number

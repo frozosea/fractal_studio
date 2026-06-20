@@ -324,6 +324,8 @@ const variant  = ref<string>('mandelbrot')  // Variant literal or "custom:HASH"
 const metric   = ref<Metric>('escape')
 const colorMap = ref<ColorMap>('classic_cos')
 const smooth   = ref(false)
+const mapColorMode = ref<'direct' | 'eq_full' | 'eq_center'>('direct')  // live equalized preview
+const cyclesPerOctave = ref(1)  // band density for equalized modes
 const pairwiseCap = ref(64)
 
 // ── Custom variants ───────────────────────────────────────────────────────────
@@ -879,6 +881,18 @@ watch(exportLnMapColorMode, mode => {
   }
 })
 
+// Live equalized preview pairs best with the cyclic Spectral-1530 wheel, same as the export
+// hist_eq mode. Equalization needs per-pixel escape counts, so it only applies to the escape
+// metric — fall back to direct coloring otherwise.
+watch(mapColorMode, mode => {
+  if (mode !== 'direct' && colorMap.value === 'classic_cos') {
+    colorMap.value = 'spectral1530'
+  }
+})
+watch(metric, m => {
+  if (m !== 'escape') mapColorMode.value = 'direct'
+})
+
 function defaultExportDepthForView() {
   const aspect = Math.max(1e-9, exportW.value / Math.max(1, exportH.value))
   const rMax = Math.sqrt(aspect * aspect + 1)
@@ -1186,6 +1200,33 @@ async function pollVideoExport(initial: VideoExportResponse) {
       </div>
 
       <div class="group">
+        <label>{{ lang === 'en' ? 'Color mode' : '上色模式' }}</label>
+        <select
+          v-model="mapColorMode"
+          :title="lang === 'en'
+            ? 'Equalized modes preview the ln-map zoom-video coloring live (escape metric only).'
+            : '均衡化模式可实时预览 ln-map 缩放视频的上色（仅限 escape 度量）。'">
+          <option value="direct">{{ lang === 'en' ? 'Direct' : '直接' }}</option>
+          <option value="eq_full" :disabled="metric !== 'escape'">
+            {{ lang === 'en' ? 'Equalized · full image' : '均衡化 · 全图' }}
+          </option>
+          <option value="eq_center" :disabled="metric !== 'escape'">
+            {{ lang === 'en' ? 'Equalized · center (ln-map)' : '均衡化 · 中心加权 (ln-map)' }}
+          </option>
+        </select>
+      </div>
+
+      <div class="group" v-if="mapColorMode !== 'direct'">
+        <label>{{ lang === 'en' ? 'Cycles / octave' : '每倍频周期' }}</label>
+        <input
+          type="number" v-model.number="cyclesPerOctave"
+          min="0.05" max="64" step="0.05"
+          style="width:5em"
+          :title="lang === 'en' ? 'Palette cycles per octave of zoom — higher = denser bands.'
+                                 : '每个缩放倍频的调色板周期数 —— 越大条带越密。'" />
+      </div>
+
+      <div class="group">
         <label>
           <input type="checkbox" v-model="smooth" style="width:auto;margin-right:6px" />
           {{ t('smooth') }}
@@ -1371,7 +1412,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <MapCanvas
           :centerRe="centerRe" :centerIm="centerIm" :scale="scale"
           :iterations="iterations" :variant="variant" :metric="metric"
-          :colorMap="colorMap" :smooth="smooth"
+          :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
           :pairwise-cap="pairwiseCap"
           :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
           :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
@@ -1424,7 +1465,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <MapCanvas
                 :centerRe="centerRe" :centerIm="centerIm" :scale="scale"
                 :iterations="iterations" :variant="variant" :metric="metric"
-                :colorMap="colorMap" :smooth="smooth"
+                :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
                 :pairwise-cap="pairwiseCap"
                 :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
                 :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
@@ -1457,7 +1498,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <MapCanvas
                 :centerRe="jCenterRe" :centerIm="jCenterIm" :scale="jScale"
                 :iterations="iterations" :variant="variant" :metric="metric"
-                :colorMap="colorMap" :smooth="smooth"
+                :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
                 :pairwise-cap="pairwiseCap"
                 :transition-theta="null"
                 :julia="true" :juliaRe="juliaRe" :juliaIm="juliaIm"
