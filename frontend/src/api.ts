@@ -364,6 +364,9 @@ export interface LnMapRequest {
   width?: number
   height?: number
   depthOctaves: number
+  qualityPreset?: 'draft' | 'balanced' | 'high' | 'full' | 'custom'
+  qualityScale?: number
+  lnMapExtraOctaves?: number
   variant?: Variant
   colorMap?: ColorMap
   lnMapColorMode?: LnMapColorMode

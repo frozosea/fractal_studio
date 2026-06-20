@@ -1015,6 +1015,9 @@ async function runLnMapFullRes() {
   lnMapFullResRunId.value = ''
   try {
     const base = videoRequestBase()
+    // Forward width/height AND qualityPreset so the strip's width and height match the
+    // export's resolveStripPlan() exactly — otherwise the export rejects this cached strip
+    // on a width/height mismatch (see lnMapRunId validation in routes_video.cpp).
     const resp = await api.lnMap({
       centerRe: base.centerRe, centerIm: base.centerIm,
       julia: base.julia, juliaRe: base.juliaRe, juliaIm: base.juliaIm,
@@ -1025,6 +1028,7 @@ async function runLnMapFullRes() {
       depthOctaves: base.depthOctaves,
       precisionMode: base.lnMapMode,
       width: base.width, height: base.height,
+      qualityPreset: base.qualityPreset,
     })
     lnMapFullResRunId.value = resp.runId
     lnMapFullResUrl.value = api.baseUrl + resp.imagePath
@@ -1057,7 +1061,11 @@ async function runExport() {
   }
 }
 
-watch([centerRe, centerIm, variant, iterations, exportDepth, exportLnMapMode, exportLnMapScalar, colorMap, exportLnMapColorMode, exportCyclesPerOctave], () => {
+// Any change that alters the strip's geometry or coloring invalidates the cached full-res
+// strip. Output size and quality preset feed resolveStripPlan()'s width/height, so they must
+// be here too — otherwise a stale strip would be rejected by the export's geometry check.
+watch([centerRe, centerIm, variant, iterations, exportDepth, exportLnMapMode, exportLnMapScalar,
+       colorMap, exportLnMapColorMode, exportCyclesPerOctave, exportW, exportH, exportQualityPreset], () => {
   lnMapFullResRunId.value = ''
   lnMapFullResUrl.value = ''
   lnMapFullResStatus.value = ''

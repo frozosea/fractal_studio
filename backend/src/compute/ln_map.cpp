@@ -802,7 +802,6 @@ LnMapEqualization build_ln_map_equalization(
     const std::vector<int>& iters,
     const TrigColumns& cols
 ) {
-    (void)cols;
     LnMapEqualization eq;
     eq.colormap = p.colormap;
     eq.colormap_wraps = ln_map_colormap_wraps_phase(p.colormap);
@@ -810,20 +809,52 @@ LnMapEqualization build_ln_map_equalization(
     const int h = p.height_t;
     if (s <= 0 || h <= 0 || p.iterations <= 0) return eq;
 
-    // total octaves spanned by the strip geometry = log2 of total zoom magnification.
-    const double total_octaves =
-        static_cast<double>(h) * TAU / (static_cast<double>(s) * LN_TWO);
     double cpo = p.color_cycles_per_octave;
     if (!(cpo > 0.0) || !std::isfinite(cpo)) cpo = 1.0;
 
-    // Histogram escape counts over ALL escaped pixels to find the count range.
+    // Histogram escape counts over the pixels that actually carry fractal structure: the
+    // origin disk |c| <= 2 (the Mandelbrot bounding disk). The shallow lead-in rows
+    // (r_mag in (2,4]) and off-disk columns escape at count ~0; counting them would spike
+    // count_min/median and corrupt the period. Restricting to |c|<=2 also lets the octave
+    // span reflect the *participating* pixel range instead of the strip's padding — so the
+    // coloring no longer depends on how many extra lead-in/lead-out octaves the strip has.
     std::vector<unsigned long long> hist(static_cast<size_t>(p.iterations), 0ULL);
     unsigned long long total = 0;
-    for (size_t i = 0; i < iters.size(); ++i) {
-        const int it = iters[i];
-        if (it >= 0 && it < p.iterations) { hist[static_cast<size_t>(it)] += 1ULL; total += 1ULL; }
+    int first_row = h, last_row = -1;
+    auto accumulate = [&](bool disk_only) {
+        for (int row = 0; row < h; ++row) {
+            const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
+            const double r_mag = std::exp(k);
+            const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
+            bool row_participated = false;
+            for (int x = 0; x < s; ++x) {
+                if (disk_only) {
+                    const double re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
+                    const double im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
+                    if (re * re + im * im > 4.0) continue;
+                }
+                const int it = iters[row_offset + static_cast<size_t>(x)];
+                if (it >= 0 && it < p.iterations) {
+                    hist[static_cast<size_t>(it)] += 1ULL;
+                    total += 1ULL;
+                    row_participated = true;
+                }
+            }
+            if (row_participated) { if (row < first_row) first_row = row; last_row = row; }
+        }
+    };
+    accumulate(/*disk_only=*/true);
+    if (total == 0) {  // center sits entirely outside |c|<=2 → fall back to the whole strip
+        std::fill(hist.begin(), hist.end(), 0ULL);
+        first_row = h; last_row = -1;
+        accumulate(/*disk_only=*/false);
     }
     if (total == 0) return eq;  // degenerate strip → eq.valid stays false
+
+    // Octaves spanned by the participating pixel rows (not the full padded strip height).
+    const int participating_rows = std::max(1, last_row - first_row + 1);
+    const double total_octaves =
+        static_cast<double>(participating_rows) * TAU / (static_cast<double>(s) * LN_TWO);
 
     int count_min = 0;
     for (int i = 0; i < p.iterations; ++i) { if (hist[static_cast<size_t>(i)] > 0ULL) { count_min = i; break; } }
@@ -1132,7 +1163,8 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
                         field_engine.find("->fp64") == std::string::npos ? "fx64" : "fp64";
     stats.precision_mode = p.precision_mode;
     std::ostringstream layer;
-    layer << "color=" << mode << ",histDomain=|c|<=2";
+    layer << "color=" << mode;
+    if (is_hist_eq || needs_global_cdf) layer << ",histDomain=|c|<=2";
     if (needs_global_cdf) layer << ",histPixels=" << total;
     if (needs_global_cdf) layer << ",underflowTail=raw";
     if (is_hist_eq && eq.valid) {

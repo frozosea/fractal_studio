@@ -150,8 +150,16 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         throw std::runtime_error("invalid fast validation settings");
     }
 
-    // Same formula as big_png_ln.py:20 — 2 base octaves + requested depth.
-    const double t_exact = (2.0 + depthOctaves) * LN_TWO / TAU * static_cast<double>(s);
+    // Strip height = (extra lead-in/lead-out octaves + requested depth). The default must
+    // match resolveStripPlan() in routes_video.cpp so a strip rendered here can be consumed
+    // by /api/video/export via lnMapRunId without a geometry mismatch (escape needs little
+    // lead-in; the equalized modes extend deeper so the warp's central region stays crisp).
+    const double defaultExtraOctaves = colorMode == "escape" ? 2.0 : 7.0;
+    const double extraOctaves = j.value("lnMapExtraOctaves", defaultExtraOctaves);
+    if (!(extraOctaves >= 2.0) || extraOctaves > 16.0 || !std::isfinite(extraOctaves)) {
+        throw std::runtime_error("invalid lnMapExtraOctaves (2..16)");
+    }
+    const double t_exact = (extraOctaves + depthOctaves) * LN_TWO / TAU * static_cast<double>(s);
     const int t = static_cast<int>(std::ceil(t_exact));
     const uint64_t estimatedPeakMemory = estimateLnMapBytes(s, t);
 
@@ -229,6 +237,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"fullWidthS",   fullWidthS},
             {"heightT",      t},
             {"depthOctaves", depthOctaves},
+            {"lnMapExtraOctaves", extraOctaves},
             {"qualityPreset", qualityPreset},
             {"qualityScale", qualityScale},
             {"estimatedPeakMemory", estimatedPeakMemory},

@@ -1701,6 +1701,14 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             if (srcDepth > 0.0 && std::abs(srcDepth - depth) > 0.5)
                 throw std::runtime_error("depth mismatch: saved " + std::to_string(srcDepth)
                     + " vs export " + std::to_string(depth));
+            // Height (extra-octave) compatibility: the strip's row count sets how deep crisp
+            // strip data reaches before the warp falls back to the cartesian final frame. A
+            // strip rendered with fewer lead-in octaves than this export expects would shrink
+            // that crisp region, so reject a strip whose height diverges from the plan.
+            if (std::abs(strip.rows - stripPlan.heightT) > std::max(stripPlan.heightT / 10, 16))
+                throw std::runtime_error("strip height mismatch: saved " + std::to_string(strip.rows)
+                    + " vs export plan " + std::to_string(stripPlan.heightT)
+                    + " (re-render the full ln-map after changing depth/extra-octaves/quality)");
 
             lnStats.engine_used = "cached:" + lnMapRunId;
             lnStats.scalar_used = savedSc.value("scalar", std::string(""));
