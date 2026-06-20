@@ -3,10 +3,36 @@ import { onMounted, ref, watch } from 'vue'
 import { api, type RunRow, type ArtifactRow } from '../api'
 import { t, lang } from '../i18n'
 
+// ── Run categories ──────────────────────────────────────────────────────────
+// Group the raw module names (15+) into a handful of meaningful categories so the 8k+ runs
+// are browsable by what they actually are. "Other" is the catch-all (anything uncategorized,
+// including empty-module runs).
+interface Category {
+  key: string
+  label: { en: string; zh: string }
+  modules: string[]   // empty = "all" (key 'all') or "other" (computed)
+  color: string
+}
+const CATEGORIES: Category[] = [
+  { key: 'all',    label: { en: 'All',      zh: '全部' },    modules: [], color: 'var(--text-dim)' },
+  { key: 'images', label: { en: 'Images',   zh: '图像' },    modules: ['map', 'map-export', 'ln-map', 'start-frame'], color: '#5bc8ff' },
+  { key: 'videos', label: { en: 'Videos',   zh: '视频' },    modules: ['video-export', 'zoom-video', 'video-preview'], color: '#ff8a5b' },
+  { key: 'mesh',   label: { en: '3D / Mesh', zh: '三维/网格' }, modules: ['hs-mesh', 'hs-field', 'transition-mesh', 'transition-voxels'], color: '#7fd66a' },
+  { key: 'points', label: { en: 'Special points', zh: '特殊点' }, modules: ['special-points-search', 'special-points-enumerate'], color: '#c89bff' },
+  { key: 'bench',  label: { en: 'Benchmark', zh: '基准' },    modules: ['benchmark'], color: '#ffd24d' },
+  { key: 'other',  label: { en: 'Other',    zh: '其他' },    modules: [], color: '#9aa' },
+]
+const categorizedModules = new Set(CATEGORIES.flatMap(c => c.modules))
+const moduleToCategory: Record<string, Category> = {}
+for (const c of CATEGORIES) for (const m of c.modules) moduleToCategory[m] = c
+function categoryOf(module: string): Category {
+  return moduleToCategory[module] ?? CATEGORIES[CATEGORIES.length - 1]  // 'other'
+}
+
 const runs = ref<RunRow[]>([])
 const modules = ref<string[]>([])
 const totalCount = ref(0)
-const moduleFilter = ref('')
+const activeCategory = ref('all')
 const statusFilter = ref('')
 const pageSize = 50
 const offset = ref(0)
@@ -14,16 +40,36 @@ const loading = ref(false)
 const expandedRun = ref('')
 const runArtifactsMap = ref<Record<string, ArtifactRow[]>>({})
 
+// Module-filter string sent to the API for the active category. A category spans several
+// modules → comma-joined IN list. "Other" = available modules not in any category (includes
+// the empty-module runs; a lone empty value is sent as ',' so the backend doesn't read it as
+// "no filter").
+function categoryModuleParam(): string | undefined {
+  if (activeCategory.value === 'all') return undefined
+  if (activeCategory.value === 'other') {
+    const others = modules.value.filter(m => !categorizedModules.has(m))
+    if (others.length === 0) return undefined
+    const joined = others.join(',')
+    return joined === '' ? ',' : joined
+  }
+  const cat = CATEGORIES.find(c => c.key === activeCategory.value)
+  return cat ? cat.modules.join(',') : undefined
+}
+
+async function fetchRuns(off: number) {
+  return api.runs({
+    limit: pageSize,
+    offset: off,
+    module: categoryModuleParam(),
+    status: statusFilter.value || undefined,
+  })
+}
+
 async function refresh() {
   loading.value = true
   offset.value = 0
   try {
-    const r = await api.runs({
-      limit: pageSize,
-      offset: 0,
-      module: moduleFilter.value || undefined,
-      status: statusFilter.value || undefined,
-    })
+    const r = await fetchRuns(0)
     runs.value = r.items
     totalCount.value = r.totalCount
     modules.value = r.modules
@@ -36,12 +82,7 @@ async function loadMore() {
   loading.value = true
   try {
     const nextOffset = offset.value + pageSize
-    const r = await api.runs({
-      limit: pageSize,
-      offset: nextOffset,
-      module: moduleFilter.value || undefined,
-      status: statusFilter.value || undefined,
-    })
+    const r = await fetchRuns(nextOffset)
     runs.value = [...runs.value, ...r.items]
     offset.value = nextOffset
     totalCount.value = r.totalCount
@@ -116,7 +157,7 @@ function isVideo(a: ArtifactRow) {
 
 const hasMore = () => runs.value.length < totalCount.value
 
-watch([moduleFilter, statusFilter], () => { refresh() })
+watch([activeCategory, statusFilter], () => { refresh() })
 
 onMounted(refresh)
 </script>
@@ -126,10 +167,6 @@ onMounted(refresh)
     <div class="head">
       <span class="panel-title">{{ t('runs_title') }} <span class="count">({{ runs.length }} / {{ totalCount }})</span></span>
       <div class="filters">
-        <select v-model="moduleFilter" class="filter-select">
-          <option value="">{{ lang === 'en' ? 'all modules' : '全部模块' }}</option>
-          <option v-for="m in modules" :key="m" :value="m">{{ m }}</option>
-        </select>
         <select v-model="statusFilter" class="filter-select">
           <option value="">{{ lang === 'en' ? 'all status' : '全部状态' }}</option>
           <option value="completed">completed</option>
@@ -141,6 +178,16 @@ onMounted(refresh)
       </div>
     </div>
 
+    <div class="category-bar">
+      <button v-for="c in CATEGORIES" :key="c.key"
+              class="cat-chip" :class="{ active: activeCategory === c.key }"
+              :style="activeCategory === c.key ? { borderColor: c.color, color: c.color } : {}"
+              @click="activeCategory = c.key">
+        <span v-if="c.key !== 'all'" class="cat-dot" :style="{ background: c.color }"></span>
+        {{ c.label[lang] }}
+      </button>
+    </div>
+
     <div class="runs-list">
       <template v-for="(r, idx) in runs" :key="r.id">
         <div v-if="showDateSeparator(idx)" class="date-separator">
@@ -149,7 +196,10 @@ onMounted(refresh)
         <div class="run-row" :class="{ expanded: expandedRun === r.id }" @click="toggleRunExpand(r.id)">
           <div class="run-main">
             <span class="run-id mono dim">{{ r.id }}</span>
-            <span class="run-module mono">{{ r.module }}</span>
+            <span class="run-cat" :title="r.module || '—'">
+              <span class="cat-dot" :style="{ background: categoryOf(r.module).color }"></span>
+              <span class="run-module mono">{{ r.module || '—' }}</span>
+            </span>
             <span class="run-status mono" :class="{ good: r.status === 'completed', bad: r.status === 'failed' }">{{ r.status }}</span>
             <span class="run-time mono dim">{{ fmtTime(r.startedAt) }}</span>
             <span class="run-duration mono">{{ fmtDuration(r) }}</span>
@@ -213,6 +263,40 @@ onMounted(refresh)
   padding: 3px 8px;
   font-size: 14px;
   line-height: 1;
+}
+
+.category-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: var(--fs-mono);
+  font-family: var(--mono);
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  cursor: pointer;
+}
+.cat-chip:hover { background: var(--bg-raised); }
+.cat-chip.active { background: var(--accent-weak); font-weight: 600; }
+.cat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.run-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
 }
 
 .date-separator {

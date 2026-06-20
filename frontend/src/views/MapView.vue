@@ -767,6 +767,8 @@ async function exportPng() {
       metric:     metric.value,
       colorMap:   colorMap.value,
       smooth:     smooth.value,
+      colorMode:  mapColorMode.value,
+      cyclesPerOctave: cyclesPerOctave.value,
       pairwiseCap: pairwiseCap.value,
       engine:     engineMode.value,
       scalarType: scalarMode.value,

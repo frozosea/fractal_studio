@@ -211,11 +211,35 @@ std::vector<RunRow> Db::listRuns(int limit) const {
     return listRuns(limit, 0, "", "");
 }
 
+// A module filter may be a single module, or a comma-separated list (a category spans several
+// modules). Empty segments are kept so the "Other" category can include the empty-module runs;
+// an entirely empty filter means "no module filter". Returns {} for no filter.
+static std::vector<std::string> splitModuleFilter(const std::string& f) {
+    std::vector<std::string> out;
+    if (f.empty()) return out;
+    size_t start = 0;
+    for (;;) {
+        const size_t comma = f.find(',', start);
+        out.push_back(f.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return out;
+}
+
+// Builds the "module IN (?,?,…)" fragment for a (possibly multi-valued) module filter.
+static std::string moduleInClause(const std::vector<std::string>& moduleVals) {
+    std::string c = "module IN (";
+    for (size_t i = 0; i < moduleVals.size(); ++i) c += (i ? ",?" : "?");
+    return c + ")";
+}
+
 std::vector<RunRow> Db::listRuns(int limit, int offset, const std::string& moduleFilter, const std::string& statusFilter) const {
     DbHandle h(dbPath_);
+    const std::vector<std::string> moduleVals = splitModuleFilter(moduleFilter);
     std::string sql = "SELECT id, module, status, params_json, started_at, finished_at, output_dir FROM runs";
     std::vector<std::string> conditions;
-    if (!moduleFilter.empty()) conditions.push_back("module = ?");
+    if (!moduleVals.empty()) conditions.push_back(moduleInClause(moduleVals));
     if (!statusFilter.empty()) conditions.push_back("status = ?");
     for (size_t i = 0; i < conditions.size(); ++i) {
         sql += (i == 0 ? " WHERE " : " AND ") + conditions[i];
@@ -224,7 +248,7 @@ std::vector<RunRow> Db::listRuns(int limit, int offset, const std::string& modul
 
     Statement stmt(h.db, sql.c_str());
     int idx = 1;
-    if (!moduleFilter.empty()) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, moduleFilter.c_str(), -1, SQLITE_TRANSIENT), h.db);
+    for (const auto& v : moduleVals) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, v.c_str(), -1, SQLITE_TRANSIENT), h.db);
     if (!statusFilter.empty()) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, statusFilter.c_str(), -1, SQLITE_TRANSIENT), h.db);
     checkSqlite(sqlite3_bind_int(stmt.get(), idx++, limit > 0 ? limit : 200), h.db);
     checkSqlite(sqlite3_bind_int(stmt.get(), idx++, std::max(0, offset)), h.db);
@@ -249,9 +273,10 @@ std::vector<RunRow> Db::listRuns(int limit, int offset, const std::string& modul
 
 int Db::countRuns(const std::string& moduleFilter, const std::string& statusFilter) const {
     DbHandle h(dbPath_);
+    const std::vector<std::string> moduleVals = splitModuleFilter(moduleFilter);
     std::string sql = "SELECT COUNT(*) FROM runs";
     std::vector<std::string> conditions;
-    if (!moduleFilter.empty()) conditions.push_back("module = ?");
+    if (!moduleVals.empty()) conditions.push_back(moduleInClause(moduleVals));
     if (!statusFilter.empty()) conditions.push_back("status = ?");
     for (size_t i = 0; i < conditions.size(); ++i) {
         sql += (i == 0 ? " WHERE " : " AND ") + conditions[i];
@@ -260,7 +285,7 @@ int Db::countRuns(const std::string& moduleFilter, const std::string& statusFilt
 
     Statement stmt(h.db, sql.c_str());
     int idx = 1;
-    if (!moduleFilter.empty()) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, moduleFilter.c_str(), -1, SQLITE_TRANSIENT), h.db);
+    for (const auto& v : moduleVals) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, v.c_str(), -1, SQLITE_TRANSIENT), h.db);
     if (!statusFilter.empty()) checkSqlite(sqlite3_bind_text(stmt.get(), idx++, statusFilter.c_str(), -1, SQLITE_TRANSIENT), h.db);
 
     const int rc = sqlite3_step(stmt.get());

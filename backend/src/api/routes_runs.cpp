@@ -15,8 +15,10 @@ std::string runsListRoute(const std::filesystem::path& repoRoot, const std::stri
     if (!limRaw.empty()) { try { limit = std::stoi(limRaw); } catch (...) {} }
     const std::string offRaw = getQueryParam(query, "offset");
     if (!offRaw.empty()) { try { offset = std::stoi(offRaw); } catch (...) {} }
-    const std::string moduleFilter = getQueryParam(query, "module");
-    const std::string statusFilter = getQueryParam(query, "status");
+    // urlDecode: the module filter may be a comma-separated category list; URLSearchParams
+    // percent-encodes the commas (%2C), so decode before the comma-split in Db::listRuns.
+    const std::string moduleFilter = urlDecode(getQueryParam(query, "module"));
+    const std::string statusFilter = urlDecode(getQueryParam(query, "status"));
 
     Db db = openDb(repoRoot);
     const auto rows = db.listRuns(limit, offset, moduleFilter, statusFilter);
