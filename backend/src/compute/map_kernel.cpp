@@ -1168,11 +1168,14 @@ inline ShipExplore ship_explore_orbit(double zx, double zy, double cx, double cy
     return { i, agree, !diverged };
 }
 
-// Mandelbrot-likeness in [0,1]: 1 where the ship orbit never diverges from the Mandelbrot,
-// rising with agreement length otherwise.
-inline double ship_mark(const ShipExplore& e, int max_iter) {
+// Mandelbrot-likeness in [0,1]: the FRACTION of this pixel's orbit that stayed identical to the
+// Mandelbrot (x·y ≥ 0). 1 = never diverged (bit-identical image); near 1 = diverged only at the
+// very end (escape time barely changed); near 0 = the abs() folds mattered immediately. Using the
+// orbit fraction (not absolute length) means escaped pixels are graded too, not just the interior.
+inline double ship_mark(const ShipExplore& e) {
     if (e.fully) return 1.0;
-    return std::min(0.9, std::sqrt(static_cast<double>(e.agree) / static_cast<double>(std::max(1, max_iter))));
+    const double f = std::min(1.0, static_cast<double>(e.agree) / static_cast<double>(std::max(1, e.iter)));
+    return std::pow(f, 1.5);
 }
 
 } // anonymous namespace
@@ -1206,11 +1209,9 @@ static MapStats render_mandel_ship_agree(const MapParams& p, cv::Mat& out) {
             uint8_t b, g, r;
             colorize_escape_bgr(e.iter, max_iter, p.colormap, 0.0, false, b, g, r);
 
-            // Pixels whose orbit never diverges from the Mandelbrot are identical in both
-            // fractals → recede them to grey; any divergence is ship-specific → keep full colour.
-            // (A small ramp softens the boundary for pixels that agreed almost the whole orbit.)
-            const double mark  = e.fully ? 1.0
-                : 0.55 * std::pow(static_cast<double>(e.agree) / static_cast<double>(std::max(1, max_iter)), 4.0);
+            // Recede Mandelbrot-identical pixels to grey (whether interior OR escaped) so the
+            // ship-specific structure — where the abs() folds change the orbit — keeps full colour.
+            const double mark  = ship_mark(e);
             const double luma  = 0.114 * b + 0.587 * g + 0.299 * r;
             const double desat = 0.85 * mark;
             const double dark  = 1.0 - 0.55 * mark;
@@ -1255,7 +1256,7 @@ static MapStats render_mandel_ship_agree_field(const MapParams& p, FieldOutput& 
             if (p.julia) { zx = re; zy = im; cx = p.julia_re; cy = p.julia_im; }
             else         { zx = 0.0; zy = 0.0; cx = re; cy = im; }
             const ShipExplore e = ship_explore_orbit(zx, zy, cx, cy, max_iter, bail2);
-            fo.field_f64[static_cast<size_t>(y) * static_cast<size_t>(W) + x] = ship_mark(e, max_iter);
+            fo.field_f64[static_cast<size_t>(y) * static_cast<size_t>(W) + x] = ship_mark(e);
         }
     }
     fo.field_min = 0.0;
