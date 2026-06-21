@@ -1209,14 +1209,16 @@ static MapStats render_mandel_ship_agree(const MapParams& p, cv::Mat& out) {
             uint8_t b, g, r;
             colorize_escape_bgr(e.iter, max_iter, p.colormap, 0.0, false, b, g, r);
 
-            // Mark Mandelbrot-identical pixels by inverting toward their photo-negative — strong
-            // and obvious — graded by how much of the orbit matched (full invert when identical,
-            // through grey at half, original where the abs() folds diverged → ship-specific).
+            // Mark Mandelbrot-identical pixels by shifting every channel (x+128)%256 — a high-
+            // contrast recolour that's hard to confuse with the original. Graded by how much of
+            // the orbit matched: full +128 where identical, scaling to 0 where the abs() folds
+            // diverged immediately (ship-specific keeps its original colour).
             const double mark = ship_mark(e);
+            const int shift = static_cast<int>(std::lround(128.0 * mark));
             uint8_t* px = row + 3 * x;
-            px[0] = static_cast<uint8_t>(clamp255(static_cast<int>(std::lround(b + mark * (255.0 - 2.0 * b)))));
-            px[1] = static_cast<uint8_t>(clamp255(static_cast<int>(std::lround(g + mark * (255.0 - 2.0 * g)))));
-            px[2] = static_cast<uint8_t>(clamp255(static_cast<int>(std::lround(r + mark * (255.0 - 2.0 * r)))));
+            px[0] = static_cast<uint8_t>((static_cast<int>(b) + shift) & 255);
+            px[1] = static_cast<uint8_t>((static_cast<int>(g) + shift) & 255);
+            px[2] = static_cast<uint8_t>((static_cast<int>(r) + shift) & 255);
         }
     }
     if (map_render_cancel_requested(p)) throw_render_cancelled();
