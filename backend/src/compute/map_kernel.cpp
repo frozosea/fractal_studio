@@ -1136,39 +1136,51 @@ void dispatch_field_fixed(const MapParams& p, FieldOutput& out) {
 } // anonymous namespace (field kernels)
 
 // ── Burning-Ship guided exploration ──────────────────────────────────────────
-// Mandelbrot step z²+c and Burning-Ship step (|x|+i|y|)²+c share the real part each iteration;
-// their imaginary parts (2·x·y vs 2·|x|·|y|) agree iff x·y ≥ 0. So the two orbits coincide until
-// the first iterate with x·y < 0. This field marks, per pixel, how long they agree — bright where
-// the Burning Ship reproduces the Mandelbrot, dim where the abs() folds carve new structure. It is
-// variant-independent (always the z²+c step) and scalar-OpenMP (an analysis overlay, not a hot path).
+// The Burning-Ship step (|x|+i|y|)²+c and the Mandelbrot step z²+c share the real part each
+// iteration; their imaginary parts (2·|x|·|y| vs 2·x·y) agree iff x·y ≥ 0, so the two orbits
+// coincide until the first iterate with x·y < 0. This mode renders the *actual* Burning Ship and
+// dims/desaturates the pixels whose orbit never diverges from the Mandelbrot's — so the
+// ship-specific structure (where the abs() folds carve new shapes) stands out in full colour,
+// guiding exploration toward what is unique to the Burning Ship. Scalar-OpenMP (an overlay).
 namespace {
 
-struct MsAgree { int agree; bool fully; };
+// One Burning-Ship orbit, also tracking how long it stayed identical to the Mandelbrot
+// (x·y ≥ 0 throughout — the two are bit-identical up to the first x·y < 0). Returns the ship
+// escape iteration (== max_iter if bounded), the agreement length, and whether it never diverged.
+struct ShipExplore { int iter; int agree; bool fully; };
 
-inline MsAgree mandel_ship_agree_orbit(double zx, double zy, double cx, double cy,
-                                       int max_iter, double bail2) {
+inline ShipExplore ship_explore_orbit(double zx, double zy, double cx, double cy,
+                                      int max_iter, double bail2) {
     int agree = 0;
     bool diverged = false;
-    for (int i = 0; i < max_iter; ++i) {
-        if (zx * zy < 0.0) { diverged = true; break; }   // Burning Ship diverges from here on
-        agree = i + 1;
-        const double nx = zx * zx - zy * zy + cx;
-        const double ny = 2.0 * zx * zy + cy;
+    int i = 0;
+    for (; i < max_iter; ++i) {
+        if (!diverged) {
+            if (zx * zy < 0.0) diverged = true;     // the ship's abs() changes the orbit here
+            else               agree = i + 1;
+        }
+        const double ax = std::fabs(zx), ay = std::fabs(zy);
+        const double nx = ax * ax - ay * ay + cx;   // = zx²-zy²+cx  (shared real part)
+        const double ny = 2.0 * ax * ay + cy;       // Burning-Ship imaginary part
         zx = nx; zy = ny;
-        if (zx * zx + zy * zy > bail2) break;            // escaped while still agreeing → fully
+        if (zx * zx + zy * zy > bail2) break;        // escaped (i = escape iteration)
     }
-    return { agree, !diverged };
+    return { i, agree, !diverged };
 }
 
-// fully-agreeing pixels are bright (1.0); diverged pixels show how long they agreed on a sqrt
-// ramp capped below the highlight so the "same as Mandelbrot" regions stand out.
-inline double ms_agree_v01(MsAgree a, int max_iter) {
-    if (a.fully) return 1.0;
-    return 0.75 * std::sqrt(static_cast<double>(a.agree) / static_cast<double>(std::max(1, max_iter)));
+// Mandelbrot-likeness in [0,1]: 1 where the ship orbit never diverges from the Mandelbrot,
+// rising with agreement length otherwise.
+inline double ship_mark(const ShipExplore& e, int max_iter) {
+    if (e.fully) return 1.0;
+    return std::min(0.9, std::sqrt(static_cast<double>(e.agree) / static_cast<double>(std::max(1, max_iter))));
 }
 
-template <class WritePixel>
-void render_mandel_ship_agree_impl(const MapParams& p, WritePixel&& write) {
+} // anonymous namespace
+
+static MapStats render_mandel_ship_agree(const MapParams& p, cv::Mat& out) {
+    if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
+        out.create(p.height, p.width, CV_8UC3);
+    }
     const int W = p.width, H = p.height;
     const double aspect = static_cast<double>(W) / static_cast<double>(H);
     const double span_im = p.scale, span_re = p.scale * aspect;
@@ -1178,6 +1190,61 @@ void render_mandel_ship_agree_impl(const MapParams& p, WritePixel&& write) {
     const int max_iter = p.iterations;
     const int thread_count = resolve_render_threads(p.render_threads);
 
+    const auto t0 = std::chrono::steady_clock::now();
+    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
+    for (int y = 0; y < H; ++y) {
+        if (map_render_cancel_requested(p)) continue;
+        const double im = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
+        uint8_t* row = out.ptr<uint8_t>(y);
+        for (int x = 0; x < W; ++x) {
+            const double re = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
+            double zx, zy, cx, cy;
+            if (p.julia) { zx = re; zy = im; cx = p.julia_re; cy = p.julia_im; }
+            else         { zx = 0.0; zy = 0.0; cx = re; cy = im; }
+            const ShipExplore e = ship_explore_orbit(zx, zy, cx, cy, max_iter, bail2);
+
+            uint8_t b, g, r;
+            colorize_escape_bgr(e.iter, max_iter, p.colormap, 0.0, false, b, g, r);
+
+            // Pixels whose orbit never diverges from the Mandelbrot are identical in both
+            // fractals → recede them to grey; any divergence is ship-specific → keep full colour.
+            // (A small ramp softens the boundary for pixels that agreed almost the whole orbit.)
+            const double mark  = e.fully ? 1.0
+                : 0.55 * std::pow(static_cast<double>(e.agree) / static_cast<double>(std::max(1, max_iter)), 4.0);
+            const double luma  = 0.114 * b + 0.587 * g + 0.299 * r;
+            const double desat = 0.85 * mark;
+            const double dark  = 1.0 - 0.55 * mark;
+            uint8_t* px = row + 3 * x;
+            px[0] = static_cast<uint8_t>(clamp255(static_cast<int>((b * (1.0 - desat) + luma * desat) * dark)));
+            px[1] = static_cast<uint8_t>(clamp255(static_cast<int>((g * (1.0 - desat) + luma * desat) * dark)));
+            px[2] = static_cast<uint8_t>(clamp255(static_cast<int>((r * (1.0 - desat) + luma * desat) * dark)));
+        }
+    }
+    if (map_render_cancel_requested(p)) throw_render_cancelled();
+    const auto t1 = std::chrono::steady_clock::now();
+    MapStats s;
+    s.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    s.pixel_count = W * H;
+    s.scalar_used = "fp64";
+    s.engine_used = "openmp";
+    return s;
+}
+
+static MapStats render_mandel_ship_agree_field(const MapParams& p, FieldOutput& fo) {
+    const int W = p.width, H = p.height;
+    fo.width = W;
+    fo.height = H;
+    fo.metric = Metric::MandelShipAgree;
+    fo.field_f64.assign(static_cast<size_t>(W) * static_cast<size_t>(H), 0.0);
+    const double aspect = static_cast<double>(W) / static_cast<double>(H);
+    const double span_im = p.scale, span_re = p.scale * aspect;
+    const double re_min = p.center_re - span_re * 0.5;
+    const double im_max = p.center_im + span_im * 0.5;
+    const double bail2 = p.bailout_sq;
+    const int max_iter = p.iterations;
+    const int thread_count = resolve_render_threads(p.render_threads);
+
+    const auto t0 = std::chrono::steady_clock::now();
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
     for (int y = 0; y < H; ++y) {
         if (map_render_cancel_requested(p)) continue;
@@ -1187,48 +1254,16 @@ void render_mandel_ship_agree_impl(const MapParams& p, WritePixel&& write) {
             double zx, zy, cx, cy;
             if (p.julia) { zx = re; zy = im; cx = p.julia_re; cy = p.julia_im; }
             else         { zx = 0.0; zy = 0.0; cx = re; cy = im; }
-            const MsAgree a = mandel_ship_agree_orbit(zx, zy, cx, cy, max_iter, bail2);
-            write(y, x, ms_agree_v01(a, max_iter));
+            const ShipExplore e = ship_explore_orbit(zx, zy, cx, cy, max_iter, bail2);
+            fo.field_f64[static_cast<size_t>(y) * static_cast<size_t>(W) + x] = ship_mark(e, max_iter);
         }
     }
-}
-
-} // anonymous namespace
-
-static MapStats render_mandel_ship_agree(const MapParams& p, cv::Mat& out) {
-    if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
-        out.create(p.height, p.width, CV_8UC3);
-    }
-    const auto t0 = std::chrono::steady_clock::now();
-    render_mandel_ship_agree_impl(p, [&](int y, int x, double v01) {
-        uint8_t* px = out.ptr<uint8_t>(y) + 3 * x;
-        colorize_field_bgr(v01, p.colormap, px[0], px[1], px[2]);
-    });
-    if (map_render_cancel_requested(p)) throw_render_cancelled();
-    const auto t1 = std::chrono::steady_clock::now();
-    MapStats s;
-    s.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    s.pixel_count = p.width * p.height;
-    s.scalar_used = "fp64";
-    s.engine_used = "openmp";
-    return s;
-}
-
-static MapStats render_mandel_ship_agree_field(const MapParams& p, FieldOutput& fo) {
-    fo.width = p.width;
-    fo.height = p.height;
-    fo.metric = Metric::MandelShipAgree;
-    fo.field_f64.assign(static_cast<size_t>(p.width) * static_cast<size_t>(p.height), 0.0);
-    const auto t0 = std::chrono::steady_clock::now();
-    render_mandel_ship_agree_impl(p, [&](int y, int x, double v01) {
-        fo.field_f64[static_cast<size_t>(y) * static_cast<size_t>(p.width) + x] = v01;
-    });
     fo.field_min = 0.0;
     fo.field_max = 1.0;
     const auto t1 = std::chrono::steady_clock::now();
     MapStats s;
     s.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    s.pixel_count = p.width * p.height;
+    s.pixel_count = W * H;
     s.scalar_used = "fp64";
     s.engine_used = "openmp";
     fo.scalar_used = "fp64";
