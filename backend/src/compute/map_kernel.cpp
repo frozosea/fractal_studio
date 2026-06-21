@@ -1209,12 +1209,12 @@ static MapStats render_mandel_ship_agree(const MapParams& p, cv::Mat& out) {
             uint8_t b, g, r;
             colorize_escape_bgr(e.iter, max_iter, p.colormap, 0.0, false, b, g, r);
 
-            // Shift every channel (x+128)%256 over the *ship-specific* region — where the abs()
-            // folds diverge from the Mandelbrot — so that new structure stands out, while the
-            // Mandelbrot-identical pixels keep their original colour. Graded: full +128 where the
-            // orbit diverges immediately, scaling to 0 where it stays identical to the Mandelbrot.
-            const double mark = ship_mark(e);
-            const int shift = static_cast<int>(std::lround(128.0 * (1.0 - mark)));
+            // Binary split: a pixel whose orbit ever diverges from the Mandelbrot (ship-specific)
+            // gets a UNIFORM (x+128)%256 shift on every channel; pixels identical to the
+            // Mandelbrot keep their colour. A uniform (not graded) shift avoids the modular
+            // wraparound bands a varying shift would create inside the recoloured region — the
+            // only boundary is the real one, where the ship starts to diverge from the Mandelbrot.
+            const int shift = e.fully ? 0 : 128;
             uint8_t* px = row + 3 * x;
             px[0] = static_cast<uint8_t>((static_cast<int>(b) + shift) & 255);
             px[1] = static_cast<uint8_t>((static_cast<int>(g) + shift) & 255);
