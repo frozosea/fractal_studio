@@ -13,14 +13,18 @@ interface Category {
   modules: string[]   // empty = "all" (key 'all') or "other" (computed)
   color: string
 }
+// Mirrors categoryForModule() in backend/src/core/job_runner.cpp — each chip is one on-disk
+// runs/<category>/ folder. Keep the two in sync.
 const CATEGORIES: Category[] = [
-  { key: 'all',    label: { en: 'All',      zh: '全部' },    modules: [], color: 'var(--text-dim)' },
-  { key: 'images', label: { en: 'Images',   zh: '图像' },    modules: ['map', 'map-export', 'ln-map', 'start-frame'], color: '#5bc8ff' },
-  { key: 'videos', label: { en: 'Videos',   zh: '视频' },    modules: ['video-export', 'zoom-video', 'video-preview'], color: '#ff8a5b' },
-  { key: 'mesh',   label: { en: '3D / Mesh', zh: '三维/网格' }, modules: ['hs-mesh', 'hs-field', 'transition-mesh', 'transition-voxels'], color: '#7fd66a' },
-  { key: 'points', label: { en: 'Special points', zh: '特殊点' }, modules: ['special-points-search', 'special-points-enumerate'], color: '#c89bff' },
-  { key: 'bench',  label: { en: 'Benchmark', zh: '基准' },    modules: ['benchmark'], color: '#ffd24d' },
-  { key: 'other',  label: { en: 'Other',    zh: '其他' },    modules: [], color: '#9aa' },
+  { key: 'all',       label: { en: 'All',      zh: '全部' },   modules: [], color: 'var(--text-dim)' },
+  { key: 'videos',    label: { en: 'Videos',   zh: '视频' },   modules: ['video-export', 'zoom-video', 'video-preview'], color: '#ff8a5b' },
+  { key: 'maps',      label: { en: 'Maps',     zh: '映射' },   modules: ['map', 'map-export'], color: '#5bc8ff' },
+  { key: 'ln-maps',   label: { en: 'Ln-maps',  zh: 'Ln-map' }, modules: ['ln-map'], color: '#5be0c8' },
+  { key: 'frames',    label: { en: 'Frames',   zh: '帧' },     modules: ['start-frame'], color: '#c8e05b' },
+  { key: 'meshes',    label: { en: 'Meshes',   zh: '网格' },   modules: ['hs-mesh', 'hs-field', 'transition-mesh', 'transition-voxels'], color: '#7fd66a' },
+  { key: 'points',    label: { en: 'Points',   zh: '特殊点' }, modules: ['special-points-search', 'special-points-enumerate'], color: '#c89bff' },
+  { key: 'benchmark', label: { en: 'Benchmark', zh: '基准' },  modules: ['benchmark'], color: '#ffd24d' },
+  { key: 'other',     label: { en: 'Other',    zh: '其他' },   modules: [], color: '#9aa' },
 ]
 const categorizedModules = new Set(CATEGORIES.flatMap(c => c.modules))
 const moduleToCategory: Record<string, Category> = {}
