@@ -20,7 +20,7 @@ const METRIC_LABELS: Record<string, { en: string; zh: string }> = {
   max_abs:            { en: 'Max |z|',       zh: '最大 |z|' },
   envelope:           { en: 'Envelope',      zh: '包络' },
   min_pairwise_dist:  { en: 'Min pairwise',  zh: '最小轨道距' },
-  mandel_ship_agree:  { en: 'vs Mandelbrot',  zh: '对比曼德' },
+  mandel_ship_agree:  { en: 'vs Mandelbrot',  zh: '对比曼德布罗特' },
 }
 
 const COLORMAP_LABELS: Record<string, { en: string; zh: string }> = {
@@ -375,10 +375,10 @@ async function compileCustom() {
       showCustomPanel.value = false
       customCompileMsg.value = ''
     } else {
-      customCompileMsg.value = r.error ?? 'compile failed'
+      customCompileMsg.value = r.error ?? (lang.value === 'en' ? 'compile failed' : '编译失败')
     }
   } catch (e: any) {
-    customCompileMsg.value = e?.message ?? 'error'
+    customCompileMsg.value = e?.message ?? (lang.value === 'en' ? 'error' : '错误')
   } finally {
     customCompiling.value = false
   }
@@ -500,9 +500,13 @@ function updateSpecialPointVariantHint(p: SpecialPointEnumResult | null) {
     .filter(name => name !== 'Mandelbrot')
     .map(specialPointVariantLabel)
   if (currentBackend === 'Mandelbrot' && compatible.length) {
-    specialPointVariantHint.value = `Also visible in variants: ${compatible.join(', ')}`
+    specialPointVariantHint.value = lang.value === 'en'
+      ? `Also visible in variants: ${compatible.join(', ')}`
+      : `在以下变体中也可见：${compatible.join('、')}`
   } else if (currentBackend && currentBackend !== 'Mandelbrot' && specialPointExistsInVariant(p, currentBackend)) {
-    specialPointVariantHint.value = `Retained Mandelbrot special point for ${specialPointVariantLabel(currentBackend)}`
+    specialPointVariantHint.value = lang.value === 'en'
+      ? `Retained Mandelbrot special point for ${specialPointVariantLabel(currentBackend)}`
+      : `为 ${specialPointVariantLabel(currentBackend)} 保留的曼德布罗特特殊点`
   } else {
     specialPointVariantHint.value = ''
   }
@@ -788,7 +792,7 @@ async function exportPng() {
     }
     window.open(api.artifactDownloadUrl(resp.artifactId), '_blank')
   } catch (e: any) {
-    pngExportStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
+    pngExportStatus.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (e?.data?.error || e?.message || e)
     console.error('export PNG failed:', e?.data?.error ?? e)
   }
 }
@@ -1000,7 +1004,7 @@ function previewSizeForExport() {
 
 async function runPreview() {
   exportPreviewBusy.value = true
-  exportPreviewStatus.value = 'previewing…'
+  exportPreviewStatus.value = lang.value === 'en' ? 'previewing…' : '预览中…'
   exportPreviewResult.value = null
   try {
     const resp = await api.videoPreview({
@@ -1008,9 +1012,9 @@ async function runPreview() {
       ...previewSizeForExport(),
     })
     exportPreviewResult.value = resp
-    exportPreviewStatus.value = `${resp.width}×${resp.height} · depth ${resp.depthOctaves.toFixed(2)} · ${resp.generatedMs.toFixed(0)} ms`
+    exportPreviewStatus.value = `${resp.width}×${resp.height} · ${lang.value === 'en' ? 'depth' : '深度'} ${resp.depthOctaves.toFixed(2)} · ${resp.generatedMs.toFixed(0)} ms`
   } catch (e: any) {
-    exportPreviewStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
+    exportPreviewStatus.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (e?.data?.error || e?.message || e)
   } finally {
     exportPreviewBusy.value = false
   }
@@ -1047,7 +1051,7 @@ async function runLnMapPreview() {
     lnMapPreviewRunId.value = resp.runId
     lnMapPreviewStatus.value = `${resp.widthS}×${resp.heightT} · ${resp.engineUsed || '?'} · ${resp.generatedMs.toFixed(0)} ms`
   } catch (e: any) {
-    lnMapPreviewStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
+    lnMapPreviewStatus.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (e?.data?.error || e?.message || e)
   } finally {
     lnMapPreviewBusy.value = false
     if (lnPreviewRerun) { lnPreviewRerun = false; runLnMapPreview() }
@@ -1064,17 +1068,17 @@ function scheduleLnMapPreview() {
 
 async function runExport() {
   exportBusy.value   = true
-  exportStatus.value = 'queued…'
+  exportStatus.value = lang.value === 'en' ? 'queued…' : '排队中…'
   exportResult.value = null
   exportProgress.value = {}
   try {
     const req: Record<string, any> = { ...videoRequestBase() }
     const resp = await api.videoExport(req as any)
     exportJobId.value = resp.runId
-    exportStatus.value = `${resp.runId} · ${resp.frameCount} frames · ${resp.durationSec.toFixed(2)}s`
+    exportStatus.value = `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s`
     await pollVideoExport(resp)
   } catch (e: any) {
-    exportStatus.value = 'failed: ' + (e?.data?.error || e?.message || e)
+    exportStatus.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (e?.data?.error || e?.message || e)
   } finally {
     exportBusy.value = false
   }
@@ -1096,12 +1100,12 @@ async function pollVideoExport(initial: VideoExportResponse) {
     const status = await api.runStatus(initial.runId)
     exportProgress.value = status.progress || {}
     if (status.status === 'failed') {
-      const msg = status.progress?.errorMessage || 'video export failed'
-      exportStatus.value = `failed: ${status.progress?.failedStage || status.progress?.stage || 'video_export'} · ${msg}`
+      const msg = status.progress?.errorMessage || (lang.value === 'en' ? 'video export failed' : '视频导出失败')
+      exportStatus.value = `${lang.value === 'en' ? 'failed: ' : '失败：'}${status.progress?.failedStage || status.progress?.stage || 'video_export'} · ${msg}`
       return
     }
     if (status.status === 'cancelled') {
-      exportStatus.value = 'cancelled'
+      exportStatus.value = lang.value === 'en' ? 'cancelled' : '已取消'
       return
     }
     if (status.status !== 'completed') continue
@@ -1137,8 +1141,12 @@ async function pollVideoExport(initial: VideoExportResponse) {
       generatedMs: status.finishedAt && status.startedAt ? status.finishedAt - status.startedAt : undefined,
     }
     exportStatus.value = localExport && video?.localPath
-      ? `completed · ${initial.frameCount} frames · ${video.localPath}`
-      : `completed · ${initial.frameCount} frames`
+      ? (lang.value === 'en'
+          ? `completed · ${initial.frameCount} frames · ${video.localPath}`
+          : `已完成 · ${initial.frameCount} 帧 · ${video.localPath}`)
+      : (lang.value === 'en'
+          ? `completed · ${initial.frameCount} frames`
+          : `已完成 · ${initial.frameCount} 帧`)
     return
   }
 }
@@ -1249,7 +1257,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
       </div>
 
       <div class="group viewport-edit-group">
-        <label>viewport</label>
+        <label>{{ lang === 'en' ? 'viewport' : '视口' }}</label>
         <div class="viewport-edit-row">
           <label class="viewport-field">
             <span>c.re</span>
@@ -1259,7 +1267,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               type="text"
               inputmode="decimal"
               spellcheck="false"
-              title="center real"
+              :title="lang === 'en' ? 'center real' : '中心实部'"
               @focus="activeViewportInput = 're'"
               @blur="finishViewportInput('re')"
               @keydown.enter="commitViewportInputOnEnter($event, 're')" />
@@ -1272,7 +1280,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               type="text"
               inputmode="decimal"
               spellcheck="false"
-              title="center imaginary"
+              :title="lang === 'en' ? 'center imaginary' : '中心虚部'"
               @focus="activeViewportInput = 'im'"
               @blur="finishViewportInput('im')"
               @keydown.enter="commitViewportInputOnEnter($event, 'im')" />
@@ -1285,7 +1293,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               type="text"
               inputmode="decimal"
               spellcheck="false"
-              title="viewport vertical span"
+              :title="lang === 'en' ? 'viewport vertical span' : '视口垂直跨度'"
               @focus="activeViewportInput = 'zoom'"
               @blur="finishViewportInput('zoom')"
               @keydown.enter="commitViewportInputOnEnter($event, 'zoom')" />
@@ -1294,7 +1302,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
       </div>
 
       <div v-if="metric === 'min_pairwise_dist'" class="group">
-        <label>Pairwise cap</label>
+        <label>{{ lang === 'en' ? 'Pairwise cap' : '成对距离上限' }}</label>
         <input type="number" v-model.number="pairwiseCap" min="1" max="1000000" step="64" />
       </div>
 
@@ -1401,7 +1409,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <div v-for="cv in customVariants" :key="cv.variantId" class="custom-item mono">
           <span class="cv-name">{{ cv.name }}</span>
           <span class="cv-formula">{{ cv.formula }}</span>
-          <button class="cv-use" @click="variant = cv.variantId; showCustomPanel = false">use</button>
+          <button class="cv-use" @click="variant = cv.variantId; showCustomPanel = false">{{ lang === 'en' ? 'use' : '使用' }}</button>
           <button class="cv-del" @click="deleteCustom(cv.variantId)">{{ t('custom_delete') }}</button>
         </div>
       </div>
@@ -1440,7 +1448,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <aside :class="['points', { collapsed: pointsCollapsed }]">
           <button
             class="points-toggle"
-            :title="pointsCollapsed ? '展开根列表' : '折叠根列表'"
+            :title="lang === 'en' ? (pointsCollapsed ? 'Expand root list' : 'Collapse root list') : (pointsCollapsed ? '展开根列表' : '折叠根列表')"
             @click="pointsCollapsed = !pointsCollapsed">
             <span>{{ pointsCollapsed ? '‹' : '›' }}</span>
           </button>
@@ -1554,7 +1562,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <span class="mono">{{ lang === 'en' ? 'local mode: save to backend runtime/runs, no browser download by default' : '本地模式：默认写入后端 runtime/runs，不走浏览器下载' }}</span>
             </div>
             <div class="mrow">
-              <label>Quality</label>
+              <label>{{ lang === 'en' ? 'Quality' : '质量' }}</label>
               <select v-model="exportQualityPreset">
                 <option value="draft">draft</option>
                 <option value="balanced">balanced</option>
@@ -1563,14 +1571,14 @@ async function pollVideoExport(initial: VideoExportResponse) {
               </select>
             </div>
             <div class="mrow">
-              <label>ln-map mode</label>
+              <label>{{ lang === 'en' ? 'ln-map mode' : 'ln-map 模式' }}</label>
               <select v-model="exportLnMapMode">
-                <option value="fast">fast · depth layered</option>
-                <option value="standard">standard · full precision</option>
+                <option value="fast">{{ lang === 'en' ? 'fast · depth layered' : '快速 · 深度分层' }}</option>
+                <option value="standard">{{ lang === 'en' ? 'standard · full precision' : '标准 · 全精度' }}</option>
               </select>
             </div>
             <div class="mrow color-mode-row">
-              <label>ln-map color</label>
+              <label>{{ lang === 'en' ? 'ln-map color' : 'ln-map 上色' }}</label>
               <div class="color-mode-control">
                 <select
                   v-model="exportLnMapColorMode"
@@ -1599,7 +1607,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               </div>
             </div>
             <div class="mrow" v-if="exportLnMapColorMode === 'hist_eq'">
-              <label>{{ lang === 'en' ? 'cycles / octave' : '每倍频周期' }}</label>
+              <label>{{ lang === 'en' ? 'Cycles / octave' : '每倍频周期' }}</label>
               <div class="cpo-control"
                    :title="lang === 'en'
                      ? 'Palette cycles per zoom octave. Total ≈ log2(magnification) × this. 1 = literal log-of-magnification; higher = denser bands. Drag to tune the preview live.'
@@ -1609,7 +1617,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               </div>
             </div>
             <div class="mrow">
-              <label>ln-map scalar</label>
+              <label>{{ lang === 'en' ? 'ln-map scalar' : 'ln-map 标量' }}</label>
               <select v-model="exportLnMapScalar">
                 <option value="auto">auto</option>
                 <option value="fp64">fp64</option>
@@ -1653,7 +1661,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
           <div v-if="exportStatus" class="modal-status mono">{{ exportStatus }}</div>
           <div v-if="exportBusy || exportJobId" class="progress-stack">
             <div class="progress-row">
-              <span>final</span>
+              <span>{{ lang === 'en' ? 'final' : '终帧' }}</span>
               <progress :value="progressRatio('final_frame')" max="1"></progress>
             </div>
             <div class="progress-row">
@@ -1661,7 +1669,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <progress :value="progressRatio('ln_map')" max="1"></progress>
             </div>
             <div class="progress-row">
-              <span>encode</span>
+              <span>{{ lang === 'en' ? 'encode' : '编码' }}</span>
               <progress :value="progressRatio('video_warp_encode')" max="1"></progress>
             </div>
           </div>
@@ -1685,9 +1693,9 @@ async function pollVideoExport(initial: VideoExportResponse) {
           <div v-if="exportResult" class="modal-body" style="gap:6px">
             <div v-if="exportResult.localExport" class="local-path-list mono">
               <div class="local-path-title">{{ lang === 'en' ? 'Saved locally' : '已保存到本地' }}</div>
-              <div v-if="exportResult.videoLocalPath">video: {{ exportResult.videoLocalPath }}</div>
+              <div v-if="exportResult.videoLocalPath">{{ lang === 'en' ? 'video:' : '视频：' }} {{ exportResult.videoLocalPath }}</div>
               <div v-if="exportResult.lnMapLocalPath">ln-map: {{ exportResult.lnMapLocalPath }}</div>
-              <div v-if="exportResult.finalFrameLocalPath">final: {{ exportResult.finalFrameLocalPath }}</div>
+              <div v-if="exportResult.finalFrameLocalPath">{{ lang === 'en' ? 'final:' : '终帧：' }} {{ exportResult.finalFrameLocalPath }}</div>
             </div>
             <template v-else>
               <a v-if="exportResult.videoDownloadUrl" :href="api.baseUrl + exportResult.videoDownloadUrl" class="dl-link" download>↓ {{ t('video_download') }}</a>

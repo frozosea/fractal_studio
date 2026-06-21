@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api, type Hardware } from '../api'
-import { t } from '../i18n'
+import { t, lang } from '../i18n'
 
 const hw    = ref<Hardware | null>(null)
 const check = ref<{ openmp: boolean; cuda: boolean } | null>(null)
@@ -79,30 +79,30 @@ function speedBar(mpps: number): string {
           <div class="row">
             <span class="k">openmp</span>
             <span class="v mono" :class="{ good: check.openmp, bad: !check.openmp }">
-              {{ check.openmp ? 'available' : 'unavailable' }}
+              {{ check.openmp ? (lang === 'en' ? 'available' : '可用') : (lang === 'en' ? 'unavailable' : '不可用') }}
             </span>
           </div>
           <div class="row">
             <span class="k">cuda</span>
             <span class="v mono" :class="{ good: check.cuda, bad: !check.cuda }">
-              {{ check.cuda ? 'available' : 'unavailable' }}
+              {{ check.cuda ? (lang === 'en' ? 'available' : '可用') : (lang === 'en' ? 'unavailable' : '不可用') }}
             </span>
           </div>
           <div class="row">
             <span class="k">avx2/fma</span>
             <span class="v mono" :class="{ good: caps?.avx2?.runtime, bad: !caps?.avx2?.runtime }">
-              {{ caps?.avx2?.runtime ? 'available' : 'unavailable' }}
+              {{ caps?.avx2?.runtime ? (lang === 'en' ? 'available' : '可用') : (lang === 'en' ? 'unavailable' : '不可用') }}
             </span>
           </div>
           <div class="row">
             <span class="k">avx-512</span>
             <span class="v mono" :class="{ good: caps?.avx512?.runtime, bad: !caps?.avx512?.runtime }">
-              {{ caps?.avx512?.runtime ? 'available' : 'unavailable' }}
+              {{ caps?.avx512?.runtime ? (lang === 'en' ? 'available' : '可用') : (lang === 'en' ? 'unavailable' : '不可用') }}
             </span>
           </div>
           <div class="row">
             <span class="k">fx64</span>
-            <span class="v mono good">enabled (auto &lt;1e-13)</span>
+            <span class="v mono good">{{ lang === 'en' ? 'enabled (auto <1e-13)' : '已启用（自动 <1e-13）' }}</span>
           </div>
           <div class="row">
             <span class="k">fp80/fp128</span>
@@ -110,7 +110,7 @@ function speedBar(mpps: number): string {
           </div>
           <div class="row">
             <span class="k">hybrid</span>
-            <span class="v mono good">cpu+gpu scheduler</span>
+            <span class="v mono good">{{ lang === 'en' ? 'cpu+gpu scheduler' : 'CPU+GPU 调度器' }}</span>
           </div>
         </div>
       </div>
@@ -119,8 +119,8 @@ function speedBar(mpps: number): string {
         <div class="panel-title">{{ t('sys_title') }}</div>
         <div v-if="hw">
           <div class="row"><span class="k">{{ t('sys_cpu') }}</span><span class="v mono">{{ hw.cpuModel }}</span></div>
-          <div class="row"><span class="k">cores</span><span class="v num">{{ hw.cpuPhysicalCores }} phys / {{ hw.cpuLogicalCores }} logical</span></div>
-          <div class="row"><span class="k">{{ t('sys_ram') }}</span><span class="v num">{{ Math.round(hw.memoryAvailableMiB/1024) }} / {{ Math.round(hw.memoryTotalMiB/1024) }} GiB avail</span></div>
+          <div class="row"><span class="k">cores</span><span class="v num">{{ hw.cpuPhysicalCores }} {{ lang === 'en' ? 'phys' : '物理' }} / {{ hw.cpuLogicalCores }} {{ lang === 'en' ? 'logical' : '逻辑' }}</span></div>
+          <div class="row"><span class="k">{{ t('sys_ram') }}</span><span class="v num">{{ Math.round(hw.memoryAvailableMiB/1024) }} / {{ Math.round(hw.memoryTotalMiB/1024) }} GiB {{ lang === 'en' ? 'avail' : '可用' }}</span></div>
           <div class="row"><span class="k">{{ t('sys_gpu') }}</span><span class="v mono">{{ hw.gpuModel }}</span></div>
           <div class="row"><span class="k">vram</span><span class="v mono">{{ hw.gpuMemory }}</span></div>
         </div>
@@ -130,18 +130,18 @@ function speedBar(mpps: number): string {
     <!-- Benchmark section -->
     <div class="bench-section">
       <div class="bench-head">
-        <span class="panel-title">engine benchmark</span>
+        <span class="panel-title">{{ lang === 'en' ? 'Engine Benchmark' : '引擎基准测试' }}</span>
         <div class="bench-controls">
           <div class="ctrl">
-            <label>size</label>
+            <label>{{ lang === 'en' ? 'size' : '尺寸' }}</label>
             <input type="number" v-model.number="benchSize" min="128" max="1024" step="128" />
           </div>
           <div class="ctrl">
-            <label>iter</label>
+            <label>{{ lang === 'en' ? 'iter' : '迭代' }}</label>
             <input type="number" v-model.number="benchIters" min="100" max="100000" step="500" />
           </div>
           <button @click="runBenchmark" :disabled="benchRunning">
-            {{ benchRunning ? 'running…' : 'run benchmark' }}
+            {{ lang === 'en' ? (benchRunning ? 'running…' : 'run benchmark') : (benchRunning ? '运行中…' : '运行基准测试') }}
           </button>
         </div>
       </div>
@@ -150,8 +150,8 @@ function speedBar(mpps: number): string {
 
       <div v-if="benchResults.length" class="bench-table">
         <div class="bench-row bench-header">
-          <span class="col-engine">engine</span>
-          <span class="col-scalar">scalar</span>
+          <span class="col-engine">{{ lang === 'en' ? 'engine' : '引擎' }}</span>
+          <span class="col-scalar">{{ lang === 'en' ? 'scalar' : '标量类型' }}</span>
           <span class="col-ms">ms</span>
           <span class="col-mpps">Mpix/s</span>
           <span class="col-bar"></span>
@@ -169,7 +169,7 @@ function speedBar(mpps: number): string {
       </div>
 
       <div v-else-if="!benchRunning" class="bench-hint mono">
-        click "run benchmark" to compare engine × scalar throughput
+        {{ lang === 'en' ? 'click "run benchmark" to compare engine × scalar throughput' : '点击“运行基准测试”比较引擎 × 标量类型的吞吐量' }}
       </div>
     </div>
   </div>

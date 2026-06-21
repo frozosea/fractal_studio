@@ -2,6 +2,7 @@
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { api, type MapRenderRequest, type Metric, type ColorMap, type SpecialPointEnumResult } from '../api'
 import { promptSlowRenderWarning, slowRenderWarningsDisabled } from '../slowWarnings'
+import { lang } from '../i18n'
 
 // MapCanvas renders the fractal by requesting a full frame from the backend at
 // the device-pixel backing-store dimensions. CSS pixels stay in charge of
@@ -131,7 +132,9 @@ function maybeWarnSlowRender(generatedMs: number) {
   ].join(':')
   if (slowRenderWarnKey === key) return
   slowRenderWarnKey = key
-  promptSlowRenderWarning(`Render took ${(generatedMs / 1000).toFixed(2)}s. Consider lowering resolution/iterations/pairwise cap, or keep it for an offline-quality pass.`)
+  promptSlowRenderWarning(lang.value === 'en'
+    ? `Render took ${(generatedMs / 1000).toFixed(2)}s. Consider lowering resolution / iterations / pairwise cap, or keep it for an offline-quality pass.`
+    : `渲染耗时 ${(generatedMs / 1000).toFixed(2)} 秒。可降低分辨率/迭代次数/成对距离上限，或保留此设置用于离线高质量渲染。`)
 }
 
 function setViewportSize(cssW: number, cssH: number, physical?: { width: number; height: number } | null) {
@@ -469,7 +472,7 @@ function markerStyle(p: SpecialPointEnumResult) {
 }
 
 function markerTitle(p: SpecialPointEnumResult) {
-  const prefix = (p.fallback || !p.accepted) ? 'fallback ' : ''
+  const prefix = (p.fallback || !p.accepted) ? (lang.value === 'en' ? 'fallback ' : '回退 ') : ''
   return `${prefix}${p.kind} p${p.period} ${p.re.toPrecision(8)} ${p.im.toPrecision(8)}i`
 }
 

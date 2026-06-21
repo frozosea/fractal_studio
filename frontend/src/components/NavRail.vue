@@ -43,7 +43,7 @@ const items = [
         <span class="tip">{{ lang === 'en' ? '中文' : 'English' }}</span>
       </button>
 
-      <button class="theme-btn nav-item" @click="toggleTheme" :title="isLight ? 'Switch to dark mode' : 'Switch to light mode'">
+      <button class="theme-btn nav-item" @click="toggleTheme" :title="isLight ? 'Switch to dark mode / 切换到深色模式' : 'Switch to light mode / 切换到浅色模式'">
         <span class="glyph theme-icon">{{ isLight ? '☀' : '☽' }}</span>
         <span class="tip">{{ isLight ? t('nav_dark') : t('nav_light') }}</span>
       </button>

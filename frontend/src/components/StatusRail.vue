@@ -117,53 +117,53 @@ function taskEta(task: ActiveTask): string {
 
     <!-- engine + timing -->
     <div class="panel">
-      <div class="panel-title">engine</div>
-      <div class="row"><span class="k">engine</span><span class="v mono">{{ status.engine }}</span></div>
+      <div class="panel-title">{{ lang === 'en' ? 'engine' : '引擎' }}</div>
+      <div class="row"><span class="k">{{ lang === 'en' ? 'engine' : '引擎' }}</span><span class="v mono">{{ status.engine }}</span></div>
       <div class="row"><span class="k">{{ t('status_time') }}</span><span class="v num">{{ fmtMs(status.renderMs) }}</span></div>
     </div>
 
     <!-- viewport numerics -->
     <div class="panel">
-      <div class="panel-title">viewport</div>
+      <div class="panel-title">{{ lang === 'en' ? 'viewport' : '视口' }}</div>
       <div class="row"><span class="k">c.re</span><span class="v num">{{ fmt(status.cRe, 10) }}</span></div>
       <div class="row"><span class="k">c.im</span><span class="v num">{{ fmt(status.cIm, 10) }}</span></div>
       <div class="row"><span class="k">zoom</span><span class="v num">{{ fmtSci(status.zoom) }}</span></div>
-      <div class="row"><span class="k">iter</span><span class="v num">{{ status.iter ?? '—' }}</span></div>
-      <div class="row"><span class="k">variant</span><span class="v mono">{{ status.variant }}</span></div>
-      <div class="row"><span class="k">metric</span><span class="v mono">{{ status.metric }}</span></div>
+      <div class="row"><span class="k">{{ lang === 'en' ? 'iter' : '迭代' }}</span><span class="v num">{{ status.iter ?? '—' }}</span></div>
+      <div class="row"><span class="k">{{ lang === 'en' ? 'variant' : '变体' }}</span><span class="v mono">{{ status.variant }}</span></div>
+      <div class="row"><span class="k">{{ lang === 'en' ? 'metric' : '度量' }}</span><span class="v mono">{{ status.metric }}</span></div>
     </div>
 
     <!-- hardware -->
     <div class="panel">
-      <div class="panel-title">hardware</div>
+      <div class="panel-title">{{ lang === 'en' ? 'hardware' : '硬件' }}</div>
       <div v-if="hw">
         <div class="row"><span class="k">cpu</span><span class="v mono hwcpu">{{ hw.cpuModel }}</span></div>
-        <div class="row"><span class="k">cores</span><span class="v num">{{ hw.cpuPhysicalCores }} / {{ hw.cpuLogicalCores }}</span></div>
-        <div class="row"><span class="k">mem</span><span class="v num">{{ Math.round(hw.memoryAvailableMiB/1024) }} / {{ Math.round(hw.memoryTotalMiB/1024) }} GiB</span></div>
+        <div class="row"><span class="k">{{ lang === 'en' ? 'cores' : '核心' }}</span><span class="v num">{{ hw.cpuPhysicalCores }} / {{ hw.cpuLogicalCores }}</span></div>
+        <div class="row"><span class="k">{{ lang === 'en' ? 'mem' : '内存' }}</span><span class="v num">{{ Math.round(hw.memoryAvailableMiB/1024) }} / {{ Math.round(hw.memoryTotalMiB/1024) }} GiB</span></div>
         <div class="row"><span class="k">gpu</span><span class="v mono hwcpu">{{ hw.gpuModel }}</span></div>
-        <div class="row"><span class="k">vram</span><span class="v mono">{{ hw.gpuMemory }}</span></div>
+        <div class="row"><span class="k">{{ lang === 'en' ? 'vram' : '显存' }}</span><span class="v mono">{{ hw.gpuMemory }}</span></div>
       </div>
     </div>
 
     <div class="panel">
-      <div class="panel-title">active tasks</div>
+      <div class="panel-title">{{ lang === 'en' ? 'active tasks' : '活动任务' }}</div>
       <div class="locks">
         <span v-for="lock in locks" :key="lock.name" :class="['lock', lock.busy ? 'busy' : 'idle']">
           {{ lock.name }}
         </span>
       </div>
-      <div v-if="tasks.length === 0" class="empty">idle</div>
+      <div v-if="tasks.length === 0" class="empty">{{ lang === 'en' ? 'idle' : '空闲' }}</div>
       <div v-for="task in tasks" :key="task.runId" class="task">
         <div class="task-head">
           <span class="mono task-type">{{ task.taskType }}</span>
-          <button v-if="task.cancelable" class="cancel" @click="cancelTask(task.runId)">cancel</button>
+          <button v-if="task.cancelable" class="cancel" @click="cancelTask(task.runId)">{{ lang === 'en' ? 'cancel' : '取消' }}</button>
         </div>
-        <div class="row"><span class="k">stage</span><span class="v mono">{{ task.stage || task.status }}</span></div>
-        <div class="row"><span class="k">engine</span><span class="v mono">{{ task.engine || '—' }}</span></div>
-        <div class="row"><span class="k">progress</span><span class="v num">{{ taskPercent(task) }}</span></div>
+        <div class="row"><span class="k">{{ lang === 'en' ? 'stage' : '阶段' }}</span><span class="v mono">{{ task.stage || task.status }}</span></div>
+        <div class="row"><span class="k">{{ lang === 'en' ? 'engine' : '引擎' }}</span><span class="v mono">{{ task.engine || '—' }}</span></div>
+        <div class="row"><span class="k">{{ lang === 'en' ? 'progress' : '进度' }}</span><span class="v num">{{ taskPercent(task) }}</span></div>
         <div class="bar"><span :style="{ width: taskPercent(task) === '—' ? '0%' : taskPercent(task) }"></span></div>
-        <div class="row"><span class="k">elapsed</span><span class="v num">{{ fmtElapsed(task.elapsedMs) }}</span></div>
-        <div class="row"><span class="k">eta</span><span class="v num">{{ taskEta(task) }}</span></div>
+        <div class="row"><span class="k">{{ lang === 'en' ? 'elapsed' : '已用时' }}</span><span class="v num">{{ fmtElapsed(task.elapsedMs) }}</span></div>
+        <div class="row"><span class="k">{{ lang === 'en' ? 'eta' : '预计剩余' }}</span><span class="v num">{{ taskEta(task) }}</span></div>
       </div>
     </div>
     </template>

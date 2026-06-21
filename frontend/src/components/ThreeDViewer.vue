@@ -15,6 +15,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { TransitionVoxelResponse, HsFieldResponse } from '../api'
 import { isLight, clearColor } from '../theme'
+import { lang } from '../i18n'
 
 const props = defineProps<{
   glbUrl?: string | null
@@ -483,10 +484,10 @@ onBeforeUnmount(() => {
   <div class="viewer-wrap">
     <canvas ref="canvasEl" class="canvas" />
     <div v-if="loading" class="overlay">
-      <span class="spinner">computing…</span>
+      <span class="spinner">{{ lang === 'en' ? 'computing…' : '计算中…' }}</span>
     </div>
     <div v-if="!glbUrl && !voxelData && !hsFieldData && !loading" class="overlay">
-      <span class="hint">no mesh — select mode and compute</span>
+      <span class="hint">{{ lang === 'en' ? 'no mesh — select mode and compute' : '暂无网格 — 请选择模式并计算' }}</span>
     </div>
   </div>
 </template>

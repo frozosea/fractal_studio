@@ -173,10 +173,10 @@ onMounted(refresh)
       <div class="filters">
         <select v-model="statusFilter" class="filter-select">
           <option value="">{{ lang === 'en' ? 'all status' : '全部状态' }}</option>
-          <option value="completed">completed</option>
-          <option value="failed">failed</option>
-          <option value="cancelled">cancelled</option>
-          <option value="running">running</option>
+          <option value="completed">{{ lang === 'en' ? 'completed' : '已完成' }}</option>
+          <option value="failed">{{ lang === 'en' ? 'failed' : '失败' }}</option>
+          <option value="cancelled">{{ lang === 'en' ? 'cancelled' : '已取消' }}</option>
+          <option value="running">{{ lang === 'en' ? 'running' : '运行中' }}</option>
         </select>
         <button @click="refresh" :disabled="loading" class="btn-refresh">↻</button>
       </div>
@@ -210,13 +210,13 @@ onMounted(refresh)
           </div>
         </div>
         <div v-if="expandedRun === r.id" class="run-detail">
-          <div v-if="!runArtifactsMap[r.id]" class="loading-artifacts">loading…</div>
+          <div v-if="!runArtifactsMap[r.id]" class="loading-artifacts">{{ lang === 'en' ? 'loading…' : '加载中…' }}</div>
           <div v-else-if="runArtifactsMap[r.id].length === 0" class="no-artifacts">{{ lang === 'en' ? 'no artifacts' : '无产物' }}</div>
           <div v-else class="artifact-grid">
             <a v-for="a in runArtifactsMap[r.id]" :key="a.artifactId"
                :href="api.artifactDownloadUrl(a.artifactId)" target="_blank" class="artifact-card">
               <img v-if="isImage(a)" :src="api.artifactContentUrl(a.artifactId)" loading="lazy" class="artifact-thumb" />
-              <div v-else-if="isVideo(a)" class="artifact-video-badge">▶ video</div>
+              <div v-else-if="isVideo(a)" class="artifact-video-badge">{{ lang === 'en' ? '▶ video' : '▶ 视频' }}</div>
               <div v-else class="artifact-file-badge">{{ a.kind }}</div>
               <span class="artifact-name mono">{{ a.name }}</span>
               <span class="artifact-size dim">{{ (a.sizeBytes / 1024).toFixed(1) }} KiB</span>

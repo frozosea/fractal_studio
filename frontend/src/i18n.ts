@@ -32,7 +32,7 @@ const dict: Dict = {
   variant:          { en: 'Variant',          zh: '变体' },
   metric:           { en: 'Metric',           zh: '指标' },
   colormap:         { en: 'Colormap',         zh: '色图' },
-  smooth:           { en: 'Ln-smooth',        zh: '对数平滑着色' },
+  smooth:           { en: 'Ln-smooth coloring', zh: '对数平滑着色' },
   iterations:       { en: 'Iterations',       zh: '迭代次数' },
   scale:            { en: 'Scale',            zh: '缩放' },
   center:           { en: 'Center',           zh: '中心' },
@@ -57,7 +57,7 @@ const dict: Dict = {
   export_julia_video:   { en: 'Export Julia Video',   zh: '导出 Julia 视频' },
   video_fps:            { en: 'FPS',                  zh: '帧率' },
   video_duration:       { en: 'Duration (s)',         zh: '时长（秒）' },
-  video_seconds_per_octave: { en: 'Seconds / 2×',     zh: '每放大 2 倍（秒）' },
+  video_seconds_per_octave: { en: 'Seconds per 2× zoom', zh: '每放大 2 倍（秒）' },
   video_estimate:       { en: 'Estimated',            zh: '预计' },
   video_start_frame:    { en: 'Start frame',          zh: '首帧' },
   video_end_frame:      { en: 'End frame',            zh: '尾帧' },
@@ -75,7 +75,7 @@ const dict: Dict = {
   points_p:         { en: 'Period p',         zh: '周期 p' },
   points_auto:      { en: 'Auto-solve',       zh: '自动求解' },
   points_seed:      { en: 'Seed solve',       zh: '种子求解' },
-  points_import:    { en: '→ Map',            zh: '→ 导入图谱' },
+  points_import:    { en: '→ Import to map',  zh: '→ 导入图谱' },
   points_seed_re:   { en: 'Seed Re',          zh: '种子实部' },
   points_seed_im:   { en: 'Seed Im',          zh: '种子虚部' },
   points_table_c:   { en: 'c (root)',         zh: 'c（根）' },
@@ -84,7 +84,7 @@ const dict: Dict = {
   points_none:      { en: 'No points yet.',   zh: '暂无特殊点。' },
 
   // ── 3D view ─────────────────────────────────────────────────────────────
-  three_mode_hs:    { en: 'HS',              zh: '隐结构' },
+  three_mode_hs:    { en: 'Hidden structure', zh: '隐结构' },
   three_mode_tx:    { en: 'Axis transition', zh: '轴向过渡' },
   three_metric:     { en: 'Metric',          zh: '指标' },
   three_resolution: { en: 'Resolution',      zh: '分辨率' },
@@ -124,7 +124,7 @@ const dict: Dict = {
   metric_min_abs:   { en: 'Min |z|',          zh: '最小 |z|' },
   metric_max_abs:   { en: 'Max |z|',          zh: '最大 |z|' },
   metric_envelope:  { en: 'Envelope',         zh: '包络' },
-  metric_minpair:   { en: 'Min pairwise',     zh: '最小轨道距' },
+  metric_minpair:   { en: 'Min orbit distance', zh: '最小轨道距' },
 
   // ── Colormaps (display labels) ───────────────────────────────────────────
   cmap_classic_cos: { en: 'Classic Cos',      zh: '经典余弦' },

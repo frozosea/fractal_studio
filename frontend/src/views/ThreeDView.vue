@@ -93,7 +93,7 @@ watch([hsMetric, hsVariant, hsRes, hsIter, hsPairwiseCap, hsCenterRe, hsCenterIm
 async function computeHsField() {
   loading.value = true
   error.value   = ''
-  info.value    = 'computing HS field…'
+  info.value    = lang.value === 'en' ? 'computing HS field…' : '正在计算 HS 场…'
   hsFieldData.value = null
   stlUrl.value  = null
   try {
@@ -150,7 +150,7 @@ async function exportHsStl() {
 async function computeTransitionVoxels() {
   loading.value   = true
   error.value     = ''
-  info.value      = 'computing voxel field…'
+  info.value      = lang.value === 'en' ? 'computing voxel field…' : '正在计算体素场…'
   voxelData.value = null
   stlUrl.value    = null
   try {
@@ -272,9 +272,9 @@ function onHsZoom(factor: number) {
           <input type="number" v-model.number="hsIter" min="64" max="10000" step="128" />
         </div>
         <div v-if="hsMetric === 'min_pairwise_dist'" class="group">
-          <label>PAIRWISE CAP</label>
+          <label>{{ lang === 'en' ? 'PAIRWISE CAP' : '成对距离上限' }}</label>
           <input type="number" v-model.number="hsPairwiseCap" min="1" max="1000000" step="64" />
-          <span class="num dim">O({{ Math.min(hsIter, hsPairwiseCap) }}²) / px</span>
+          <span class="num dim">O({{ Math.min(hsIter, hsPairwiseCap) }}²) / {{ lang === 'en' ? 'px' : '像素' }}</span>
         </div>
         <div class="group">
           <label>{{ t('three_center_re') }}</label>
@@ -292,7 +292,7 @@ function onHsZoom(factor: number) {
         <!-- Z-scale controls -->
         <div class="rule"></div>
         <div class="group">
-          <label>Z-SCALE</label>
+          <label>{{ lang === 'en' ? 'Z-SCALE' : 'Z 轴缩放' }}</label>
           <div class="zscale-row">
             <label class="inline-label">
               <input type="checkbox" :checked="hsZSign === -1" @change="hsZSign = (hsZSign === 1 ? -1 : 1)" />
@@ -328,9 +328,9 @@ function onHsZoom(factor: number) {
           </select>
         </div>
         <div class="group">
-          <label>{{ t('three_iso') }} <span class="dim">(core depth)</span></label>
+          <label>{{ t('three_iso') }} <span class="dim">{{ lang === 'en' ? '(core depth)' : '（核心深度）' }}</span></label>
           <input type="range" min="0.05" max="0.48" step="0.01" v-model.number="txIso" />
-          <span class="num">{{ txIso.toFixed(2) }}{{ txIso >= 0.45 ? ' (all)' : '' }}</span>
+          <span class="num">{{ txIso.toFixed(2) }}{{ txIso >= 0.45 ? (lang === 'en' ? ' (all)' : '（全部）') : '' }}</span>
         </div>
         <div class="group">
           <label>{{ t('three_resolution') }}</label>
@@ -345,19 +345,19 @@ function onHsZoom(factor: number) {
         <!-- Center and extent -->
         <div class="rule"></div>
         <div class="group">
-          <label>CENTER X</label>
+          <label>{{ lang === 'en' ? 'CENTER X' : '中心 X' }}</label>
           <input type="number" v-model.number="txCenterX" step="0.1" />
         </div>
         <div class="group">
-          <label>CENTER Y</label>
+          <label>{{ lang === 'en' ? 'CENTER Y' : '中心 Y' }}</label>
           <input type="number" v-model.number="txCenterY" step="0.1" />
         </div>
         <div class="group">
-          <label>CENTER Z</label>
+          <label>{{ lang === 'en' ? 'CENTER Z' : '中心 Z' }}</label>
           <input type="number" v-model.number="txCenterZ" step="0.1" />
         </div>
         <div class="group">
-          <label>EXTENT</label>
+          <label>{{ lang === 'en' ? 'EXTENT' : '范围' }}</label>
           <input type="number" v-model.number="txExtent" min="0.1" step="0.1" />
         </div>
 
