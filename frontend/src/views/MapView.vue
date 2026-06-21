@@ -20,7 +20,7 @@ const METRIC_LABELS: Record<string, { en: string; zh: string }> = {
   max_abs:            { en: 'Max |z|',       zh: '最大 |z|' },
   envelope:           { en: 'Envelope',      zh: '包络' },
   min_pairwise_dist:  { en: 'Min pairwise',  zh: '最小轨道距' },
-  mandel_ship_agree:  { en: 'BS explore',     zh: 'Ship 探索' },
+  mandel_ship_agree:  { en: 'vs Mandelbrot',  zh: '对比曼德' },
 }
 
 const COLORMAP_LABELS: Record<string, { en: string; zh: string }> = {
@@ -1172,10 +1172,10 @@ async function pollVideoExport(initial: VideoExportResponse) {
 
       <div class="group">
         <label :title="lang === 'en'
-          ? 'Burning Ship guided exploration: renders the Burning Ship and greys out the pixels whose orbit is identical to the Mandelbrot, so the ship-specific structure stands out. Pan/zoom to explore.'
-          : 'Burning Ship 引导式探索：渲染 Burning Ship，并把轨道与 Mandelbrot 完全相同的像素置灰，突出 Ship 独有结构。可平移/缩放探索。'">
+          ? 'Guided exploration: renders the selected variant and recolours the pixels whose orbit diverges from the plain Mandelbrot (z²+c), so the fold structure unique to this variant stands out. Works for Burning Ship, Celtic, Buffalo, …'
+          : '引导式探索：渲染当前变体，并把轨道与普通 Mandelbrot (z²+c) 不同的像素重新上色，突出该变体折叠所独有的结构。适用于 Burning Ship、Celtic、Buffalo 等。'">
           <input type="checkbox" v-model="bsExplore" style="width:auto;margin-right:6px" />
-          {{ lang === 'en' ? 'BS guide' : '引导探索' }}
+          {{ lang === 'en' ? 'vs Mandel' : '引导探索' }}
         </label>
       </div>
 

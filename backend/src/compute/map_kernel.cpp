@@ -1135,55 +1135,46 @@ void dispatch_field_fixed(const MapParams& p, FieldOutput& out) {
 
 } // anonymous namespace (field kernels)
 
-// ── Burning-Ship guided exploration ──────────────────────────────────────────
-// The Burning-Ship step (|x|+i|y|)²+c and the Mandelbrot step z²+c share the real part each
-// iteration; their imaginary parts (2·|x|·|y| vs 2·x·y) agree iff x·y ≥ 0, so the two orbits
-// coincide until the first iterate with x·y < 0. This mode renders the *actual* Burning Ship and
-// dims/desaturates the pixels whose orbit never diverges from the Mandelbrot's — so the
-// ship-specific structure (where the abs() folds carve new shapes) stands out in full colour,
-// guiding exploration toward what is unique to the Burning Ship. Scalar-OpenMP (an overlay).
+// ── Guided exploration: variant vs Mandelbrot ────────────────────────────────
+// Every polynomial variant is the Mandelbrot step z²+c with an extra fold (abs / negate /
+// conjugate of some part), so its orbit coincides with the plain Mandelbrot's until the first
+// iterate where that fold actually changes the result. This mode renders the *selected* variant
+// and applies a uniform (x+128)%256 channel shift to the pixels whose orbit ever diverges from
+// the Mandelbrot — the structure unique to the variant stands out, while the regions it
+// reproduces from the Mandelbrot keep their colour. Generic over all variants (Boat = Burning
+// Ship, plus Celtic, Buffalo, Heart, … and the trig variants, which simply differ everywhere).
+// Scalar-OpenMP — an analysis overlay, not a hot path.
 namespace {
 
-// One Burning-Ship orbit, also tracking how long it stayed identical to the Mandelbrot
-// (x·y ≥ 0 throughout — the two are bit-identical up to the first x·y < 0). Returns the ship
-// escape iteration (== max_iter if bounded), the agreement length, and whether it never diverged.
-struct ShipExplore { int iter; int agree; bool fully; };
-
-inline ShipExplore ship_explore_orbit(double zx, double zy, double cx, double cy,
-                                      int max_iter, double bail2) {
-    int agree = 0;
+// Run variant V's orbit; report the escape iteration and whether it stayed bit-identical to the
+// Mandelbrot orbit the whole way. The two share every step until the first where
+// variant_step<V>(z,c) != variant_step<Mandelbrot>(z,c) — i.e. the fold first alters the result.
+template <Variant V>
+inline void variant_explore_orbit(Cx<double> z, const Cx<double>& c, int max_iter, double bail2,
+                                  int& out_iter, bool& out_fully) {
     bool diverged = false;
     int i = 0;
     for (; i < max_iter; ++i) {
+        const Cx<double> vn = variant_step<V, double>(z, c);
         if (!diverged) {
-            if (zx * zy < 0.0) diverged = true;     // the ship's abs() changes the orbit here
-            else               agree = i + 1;
+            const Cx<double> mn = variant_step<Variant::Mandelbrot, double>(z, c);
+            // A no-op fold gives a mathematically exact match; a real fold changes a term by a
+            // non-trivial amount. Use a small relative tolerance so 1-ULP FMA/contraction noise
+            // between the two step computations doesn't read as divergence (it otherwise marks
+            // even Mandelbrot-vs-itself on ~a quarter of pixels).
+            const double tol = 1e-11 * (1.0 + std::fabs(mn.re) + std::fabs(mn.im));
+            if (std::fabs(vn.re - mn.re) > tol || std::fabs(vn.im - mn.im) > tol) diverged = true;
         }
-        const double ax = std::fabs(zx), ay = std::fabs(zy);
-        const double nx = ax * ax - ay * ay + cx;   // = zx²-zy²+cx  (shared real part)
-        const double ny = 2.0 * ax * ay + cy;       // Burning-Ship imaginary part
-        zx = nx; zy = ny;
-        if (zx * zx + zy * zy > bail2) break;        // escaped (i = escape iteration)
+        z = vn;
+        if (z.re * z.re + z.im * z.im > bail2) break;   // escaped (i = escape iteration)
     }
-    return { i, agree, !diverged };
+    out_iter = i;
+    out_fully = !diverged;
 }
 
-// Mandelbrot-likeness in [0,1]: the FRACTION of this pixel's orbit that stayed identical to the
-// Mandelbrot (x·y ≥ 0). 1 = never diverged (bit-identical image); near 1 = diverged only at the
-// very end (escape time barely changed); near 0 = the abs() folds mattered immediately. Using the
-// orbit fraction (not absolute length) means escaped pixels are graded too, not just the interior.
-inline double ship_mark(const ShipExplore& e) {
-    if (e.fully) return 1.0;
-    const double f = std::min(1.0, static_cast<double>(e.agree) / static_cast<double>(std::max(1, e.iter)));
-    return std::pow(f, 1.5);
-}
-
-} // anonymous namespace
-
-static MapStats render_mandel_ship_agree(const MapParams& p, cv::Mat& out) {
-    if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
-        out.create(p.height, p.width, CV_8UC3);
-    }
+// Walk every pixel of variant V's explore orbit; write(y, x, iter, fully) does the output.
+template <Variant V, class Write>
+void explore_pixels(const MapParams& p, Write&& write) {
     const int W = p.width, H = p.height;
     const double aspect = static_cast<double>(W) / static_cast<double>(H);
     const double span_im = p.scale, span_re = p.scale * aspect;
@@ -1192,84 +1183,96 @@ static MapStats render_mandel_ship_agree(const MapParams& p, cv::Mat& out) {
     const double bail2 = p.bailout_sq;
     const int max_iter = p.iterations;
     const int thread_count = resolve_render_threads(p.render_threads);
-
-    const auto t0 = std::chrono::steady_clock::now();
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
     for (int y = 0; y < H; ++y) {
         if (map_render_cancel_requested(p)) continue;
         const double im = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
-        uint8_t* row = out.ptr<uint8_t>(y);
         for (int x = 0; x < W; ++x) {
             const double re = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
-            double zx, zy, cx, cy;
-            if (p.julia) { zx = re; zy = im; cx = p.julia_re; cy = p.julia_im; }
-            else         { zx = 0.0; zy = 0.0; cx = re; cy = im; }
-            const ShipExplore e = ship_explore_orbit(zx, zy, cx, cy, max_iter, bail2);
-
-            uint8_t b, g, r;
-            colorize_escape_bgr(e.iter, max_iter, p.colormap, 0.0, false, b, g, r);
-
-            // Binary split: a pixel whose orbit ever diverges from the Mandelbrot (ship-specific)
-            // gets a UNIFORM (x+128)%256 shift on every channel; pixels identical to the
-            // Mandelbrot keep their colour. A uniform (not graded) shift avoids the modular
-            // wraparound bands a varying shift would create inside the recoloured region — the
-            // only boundary is the real one, where the ship starts to diverge from the Mandelbrot.
-            const int shift = e.fully ? 0 : 128;
-            uint8_t* px = row + 3 * x;
-            px[0] = static_cast<uint8_t>((static_cast<int>(b) + shift) & 255);
-            px[1] = static_cast<uint8_t>((static_cast<int>(g) + shift) & 255);
-            px[2] = static_cast<uint8_t>((static_cast<int>(r) + shift) & 255);
+            Cx<double> z, c;
+            if (p.julia) { z = Cx<double>{re, im};   c = Cx<double>{p.julia_re, p.julia_im}; }
+            else         { z = Cx<double>{0.0, 0.0}; c = Cx<double>{re, im}; }
+            int it; bool fully;
+            variant_explore_orbit<V>(z, c, max_iter, bail2, it, fully);
+            write(y, x, it, fully);
         }
     }
+}
+
+template <Variant V>
+MapStats render_variant_explore_mat(const MapParams& p, cv::Mat& out) {
+    if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
+        out.create(p.height, p.width, CV_8UC3);
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    explore_pixels<V>(p, [&](int y, int x, int it, bool fully) {
+        uint8_t b, g, r;
+        colorize_escape_bgr(it, p.iterations, p.colormap, 0.0, false, b, g, r);
+        // Variant-specific pixels (orbit diverges from the Mandelbrot) → uniform (x+128)%256 shift
+        // on every channel; pixels the variant reproduces from the Mandelbrot keep their colour.
+        const int shift = fully ? 0 : 128;
+        uint8_t* px = out.ptr<uint8_t>(y) + 3 * x;
+        px[0] = static_cast<uint8_t>((static_cast<int>(b) + shift) & 255);
+        px[1] = static_cast<uint8_t>((static_cast<int>(g) + shift) & 255);
+        px[2] = static_cast<uint8_t>((static_cast<int>(r) + shift) & 255);
+    });
     if (map_render_cancel_requested(p)) throw_render_cancelled();
     const auto t1 = std::chrono::steady_clock::now();
     MapStats s;
     s.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    s.pixel_count = W * H;
+    s.pixel_count = p.width * p.height;
     s.scalar_used = "fp64";
     s.engine_used = "openmp";
     return s;
 }
 
-static MapStats render_mandel_ship_agree_field(const MapParams& p, FieldOutput& fo) {
-    const int W = p.width, H = p.height;
-    fo.width = W;
-    fo.height = H;
+template <Variant V>
+MapStats render_variant_explore_field(const MapParams& p, FieldOutput& fo) {
+    fo.width = p.width;
+    fo.height = p.height;
     fo.metric = Metric::MandelShipAgree;
-    fo.field_f64.assign(static_cast<size_t>(W) * static_cast<size_t>(H), 0.0);
-    const double aspect = static_cast<double>(W) / static_cast<double>(H);
-    const double span_im = p.scale, span_re = p.scale * aspect;
-    const double re_min = p.center_re - span_re * 0.5;
-    const double im_max = p.center_im + span_im * 0.5;
-    const double bail2 = p.bailout_sq;
-    const int max_iter = p.iterations;
-    const int thread_count = resolve_render_threads(p.render_threads);
-
+    fo.field_f64.assign(static_cast<size_t>(p.width) * static_cast<size_t>(p.height), 0.0);
     const auto t0 = std::chrono::steady_clock::now();
-    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
-    for (int y = 0; y < H; ++y) {
-        if (map_render_cancel_requested(p)) continue;
-        const double im = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
-        for (int x = 0; x < W; ++x) {
-            const double re = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
-            double zx, zy, cx, cy;
-            if (p.julia) { zx = re; zy = im; cx = p.julia_re; cy = p.julia_im; }
-            else         { zx = 0.0; zy = 0.0; cx = re; cy = im; }
-            const ShipExplore e = ship_explore_orbit(zx, zy, cx, cy, max_iter, bail2);
-            fo.field_f64[static_cast<size_t>(y) * static_cast<size_t>(W) + x] = ship_mark(e);
-        }
-    }
+    explore_pixels<V>(p, [&](int y, int x, int, bool fully) {
+        fo.field_f64[static_cast<size_t>(y) * static_cast<size_t>(p.width) + x] = fully ? 1.0 : 0.0;
+    });
     fo.field_min = 0.0;
     fo.field_max = 1.0;
     const auto t1 = std::chrono::steady_clock::now();
     MapStats s;
     s.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    s.pixel_count = W * H;
+    s.pixel_count = p.width * p.height;
     s.scalar_used = "fp64";
     s.engine_used = "openmp";
     fo.scalar_used = "fp64";
     fo.engine_used = "openmp";
     return s;
+}
+
+} // anonymous namespace
+
+static MapStats render_explore(const MapParams& p, cv::Mat& out) {
+#define FSD_EXPLORE(VV) case Variant::VV: return render_variant_explore_mat<Variant::VV>(p, out);
+    switch (p.variant) {
+        FSD_EXPLORE(Mandelbrot) FSD_EXPLORE(Tri)   FSD_EXPLORE(Boat)  FSD_EXPLORE(Duck)
+        FSD_EXPLORE(Bell)       FSD_EXPLORE(Fish)  FSD_EXPLORE(Vase)  FSD_EXPLORE(Bird)
+        FSD_EXPLORE(Mask)       FSD_EXPLORE(Ship)  FSD_EXPLORE(SinZ)  FSD_EXPLORE(CosZ)
+        FSD_EXPLORE(ExpZ)       FSD_EXPLORE(SinhZ) FSD_EXPLORE(CoshZ) FSD_EXPLORE(TanZ)
+        default: return render_variant_explore_mat<Variant::Boat>(p, out);
+    }
+#undef FSD_EXPLORE
+}
+
+static MapStats render_explore_field(const MapParams& p, FieldOutput& fo) {
+#define FSD_EXPLORE_F(VV) case Variant::VV: return render_variant_explore_field<Variant::VV>(p, fo);
+    switch (p.variant) {
+        FSD_EXPLORE_F(Mandelbrot) FSD_EXPLORE_F(Tri)   FSD_EXPLORE_F(Boat)  FSD_EXPLORE_F(Duck)
+        FSD_EXPLORE_F(Bell)       FSD_EXPLORE_F(Fish)  FSD_EXPLORE_F(Vase)  FSD_EXPLORE_F(Bird)
+        FSD_EXPLORE_F(Mask)       FSD_EXPLORE_F(Ship)  FSD_EXPLORE_F(SinZ)  FSD_EXPLORE_F(CosZ)
+        FSD_EXPLORE_F(ExpZ)       FSD_EXPLORE_F(SinhZ) FSD_EXPLORE_F(CoshZ) FSD_EXPLORE_F(TanZ)
+        default: return render_variant_explore_field<Variant::Boat>(p, fo);
+    }
+#undef FSD_EXPLORE_F
 }
 
 MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
@@ -1278,7 +1281,7 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
         return render_custom_field_openmp(p, fo);
     }
     if (p.metric == Metric::MandelShipAgree) {
-        return render_mandel_ship_agree_field(p, fo);
+        return render_explore_field(p, fo);
     }
 
     fo.width  = p.width;
@@ -1410,9 +1413,10 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
     if (p.variant == Variant::Custom && p.custom_step_fn) {
         return render_custom_openmp(p, out);
     }
-    // Burning-Ship guided-exploration overlay: variant-independent, scalar OpenMP only.
+    // Guided-exploration overlay: render the selected variant, mark where it diverges from the
+    // Mandelbrot. Scalar OpenMP only, special-cased before engine/variant dispatch.
     if (p.metric == Metric::MandelShipAgree) {
-        return render_mandel_ship_agree(p, out);
+        return render_explore(p, out);
     }
 
     const MapEnginePlan plan = select_map_engine_plan(p, /*field_output=*/false);
