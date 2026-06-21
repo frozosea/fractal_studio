@@ -909,6 +909,13 @@ watch(metric, m => {
   if (m !== 'escape') mapColorMode.value = 'direct'
 })
 
+// Burning Ship guided-exploration toggle. On → the 'mandel_ship_agree' overlay (renders the
+// Burning Ship, greying the regions identical to the Mandelbrot). Off → plain escape time.
+const bsExplore = computed({
+  get: () => metric.value === 'mandel_ship_agree',
+  set: (on: boolean) => { metric.value = on ? 'mandel_ship_agree' : 'escape' },
+})
+
 function defaultExportDepthForView() {
   const aspect = Math.max(1e-9, exportW.value / Math.max(1, exportH.value))
   const rMax = Math.sqrt(aspect * aspect + 1)
@@ -1161,6 +1168,15 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <select v-model="metric">
           <option v-for="m in METRICS" :key="m" :value="m">{{ METRIC_LABELS[m]?.[lang] ?? m }}</option>
         </select>
+      </div>
+
+      <div class="group">
+        <label :title="lang === 'en'
+          ? 'Burning Ship guided exploration: renders the Burning Ship and greys out the pixels whose orbit is identical to the Mandelbrot, so the ship-specific structure stands out. Pan/zoom to explore.'
+          : 'Burning Ship 引导式探索：渲染 Burning Ship，并把轨道与 Mandelbrot 完全相同的像素置灰，突出 Ship 独有结构。可平移/缩放探索。'">
+          <input type="checkbox" v-model="bsExplore" style="width:auto;margin-right:6px" />
+          {{ lang === 'en' ? 'BS guide' : '引导探索' }}
+        </label>
       </div>
 
       <div class="group">
