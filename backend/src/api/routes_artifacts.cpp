@@ -74,25 +74,55 @@ struct ArtifactEntry {
     long long   sizeBytes = 0;
 };
 
+// Append every file in one run directory as an artifact of `runId`.
+void collectRunDir(const fs::path& runDir, const std::string& runId, std::vector<ArtifactEntry>& rows) {
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(runDir, ec), end; it != end; it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_regular_file(ec)) continue;
+        ArtifactEntry row;
+        row.runId      = runId;
+        row.path       = it->path().string();
+        row.fileName   = it->path().filename().string();
+        row.artifactId = runId + ":" + row.fileName;
+        row.kind       = kindFromPath(it->path());
+        std::error_code sec;
+        row.sizeBytes  = static_cast<long long>(fs::file_size(it->path(), sec));
+        rows.push_back(row);
+    }
+}
+
+// Whether a directory directly contains regular files (→ it is a run dir, not a category dir).
+bool hasDirectFiles(const fs::path& dir) {
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; it != end; it.increment(ec)) {
+        if (ec) break;
+        if (it->is_regular_file(ec)) return true;
+    }
+    return false;
+}
+
 std::vector<ArtifactEntry> collectArtifacts(const fs::path& repoRoot) {
     const fs::path runsRoot = repoRoot / "fractal_studio" / "runtime" / "runs";
     std::vector<ArtifactEntry> rows;
     if (!fs::exists(runsRoot)) return rows;
 
-    for (const auto& runDirEntry : fs::directory_iterator(runsRoot)) {
-        if (!runDirEntry.is_directory()) continue;
-        const std::string runId = runDirEntry.path().filename().string();
-        for (const auto& fileEntry : fs::recursive_directory_iterator(runDirEntry.path())) {
-            if (!fileEntry.is_regular_file()) continue;
-            ArtifactEntry row;
-            row.runId      = runId;
-            row.path       = fileEntry.path().string();
-            row.fileName   = fileEntry.path().filename().string();
-            row.artifactId = runId + ":" + row.fileName;
-            row.kind       = kindFromPath(fileEntry.path());
-            std::error_code ec;
-            row.sizeBytes  = static_cast<long long>(fs::file_size(fileEntry.path(), ec));
-            rows.push_back(row);
+    // Runs are grouped by product type: runs/<category>/<runId>/. A top-level dir that holds
+    // loose files is itself an (old, flat) run dir; one that holds only subdirs is a category
+    // container whose children are run dirs.
+    std::error_code ec;
+    for (fs::directory_iterator it(runsRoot, ec), end; it != end; it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_directory(ec)) continue;
+        const fs::path top = it->path();
+        if (hasDirectFiles(top)) {
+            collectRunDir(top, top.filename().string(), rows);          // old flat layout
+        } else {
+            std::error_code cec;
+            for (fs::directory_iterator rit(top, cec), rend; rit != rend; rit.increment(cec)) {
+                if (cec) break;
+                if (rit->is_directory(cec)) collectRunDir(rit->path(), rit->path().filename().string(), rows);
+            }
         }
     }
     return rows;
@@ -111,7 +141,7 @@ fs::path artifactPathFromId(const fs::path& repoRoot, const std::string& artifac
         throw std::runtime_error("invalid artifactId path");
     }
     fileNameOut = fileName;
-    const fs::path path = repoRoot / "fractal_studio" / "runtime" / "runs" / runId / fileName;
+    const fs::path path = resolveRunDir(repoRoot, runId) / fileName;
     if (!fs::exists(path) || !fs::is_regular_file(path)) {
         throw std::runtime_error("artifact not found");
     }

@@ -22,6 +22,24 @@ constexpr int MAX_MAP_DIM = 8192;
 
 using Json = nlohmann::json;
 
+// Resolve a run's output directory from its id. Runs are stored grouped by product type
+// (runs/<category>/<runId>/); older runs are flat (runs/<runId>/). Checks the flat path first,
+// then one category level deep. Returns the flat path if not found (callers test existence).
+inline std::filesystem::path resolveRunDir(const std::filesystem::path& repoRoot, const std::string& runId) {
+    namespace fs = std::filesystem;
+    const fs::path runsRoot = repoRoot / "fractal_studio" / "runtime" / "runs";
+    std::error_code ec;
+    const fs::path flat = runsRoot / runId;
+    if (fs::is_directory(flat, ec)) return flat;
+    for (fs::directory_iterator it(runsRoot, ec), end; it != end; it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_directory(ec)) continue;
+        const fs::path cand = it->path() / runId;
+        if (fs::is_directory(cand, ec)) return cand;
+    }
+    return flat;
+}
+
 inline Json parseJsonBody(const std::string& body) {
     if (body.empty()) return Json::object();
     try {

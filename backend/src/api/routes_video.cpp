@@ -1098,7 +1098,7 @@ LnMapLookup resolveLnMap(const std::filesystem::path& repoRoot, const std::strin
     const std::string runId   = artifactId.substr(0, split);
     const std::string fileName = artifactId.substr(split + 1);
 
-    const fs::path runDir = repoRoot / "fractal_studio" / "runtime" / "runs" / runId;
+    const fs::path runDir = resolveRunDir(repoRoot, runId);
     const fs::path png    = runDir / fileName;
     if (!fs::exists(png)) throw std::runtime_error("ln-map png not found: " + png.string());
 
@@ -1671,7 +1671,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         if (!lnMapRunId.empty()) {
             // Load pre-rendered strip from the specified run, skip field computation.
             namespace fs = std::filesystem;
-            const fs::path srcDir = repoRoot / "fractal_studio" / "runtime" / "runs" / lnMapRunId;
+            const fs::path srcDir = resolveRunDir(repoRoot, lnMapRunId);
             const fs::path srcPng = srcDir / "ln_map.png";
             const fs::path srcSc  = srcDir / "ln_map.json";
             if (!fs::exists(srcPng)) throw std::runtime_error("ln-map PNG not found in run " + lnMapRunId);
