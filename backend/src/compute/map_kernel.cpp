@@ -1208,13 +1208,16 @@ MapStats render_variant_explore_mat(const MapParams& p, cv::Mat& out) {
     explore_pixels<V>(p, [&](int y, int x, int it, bool fully) {
         uint8_t b, g, r;
         colorize_escape_bgr(it, p.iterations, p.colormap, 0.0, false, b, g, r);
-        // Variant-specific pixels (orbit diverges from the Mandelbrot) → uniform (x+128)%256 shift
-        // on every channel; pixels the variant reproduces from the Mandelbrot keep their colour.
-        const int shift = fully ? 0 : 128;
+        // Variant-specific pixels (orbit diverges from the Mandelbrot) → inverted colour
+        // (255 − channel); pixels the variant reproduces from the Mandelbrot keep their colour.
         uint8_t* px = out.ptr<uint8_t>(y) + 3 * x;
-        px[0] = static_cast<uint8_t>((static_cast<int>(b) + shift) & 255);
-        px[1] = static_cast<uint8_t>((static_cast<int>(g) + shift) & 255);
-        px[2] = static_cast<uint8_t>((static_cast<int>(r) + shift) & 255);
+        if (fully) {
+            px[0] = b; px[1] = g; px[2] = r;
+        } else {
+            px[0] = static_cast<uint8_t>(255 - static_cast<int>(b));
+            px[1] = static_cast<uint8_t>(255 - static_cast<int>(g));
+            px[2] = static_cast<uint8_t>(255 - static_cast<int>(r));
+        }
     });
     if (map_render_cancel_requested(p)) throw_render_cancelled();
     const auto t1 = std::chrono::steady_clock::now();
