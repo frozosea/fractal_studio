@@ -121,9 +121,18 @@ void render_variant_metric_impl(const MapParams& p, cv::Mat& out) {
     const double aspect  = static_cast<double>(W) / static_cast<double>(H);
     const double span_im = p.scale;
     const double span_re = p.scale * aspect;
-    const double re_min  = p.center_re - span_re * 0.5;
-    const double im_max  = p.center_im + span_im * 0.5;
     const double bail2   = p.bailout_sq;
+
+    // Native-precision viewport for fp80/fp128: avoids fp64 truncation.
+    const S s_center_re = scalar_from_double<S>(p.center_re);
+    const S s_center_im = scalar_from_double<S>(p.center_im);
+    const S s_span_re   = scalar_from_double<S>(span_re);
+    const S s_span_im   = scalar_from_double<S>(span_im);
+    const S s_half      = scalar_from_double<S>(0.5);
+    const S s_re_min    = s_center_re - s_span_re * s_half;
+    const S s_im_max    = s_center_im + s_span_im * s_half;
+    const S s_inv_W     = scalar_from_double<S>(1.0 / W);
+    const S s_inv_H     = scalar_from_double<S>(1.0 / H);
     const int thread_count = resolve_render_threads(p.render_threads);
     constexpr int tile_size = 32;
     const int tiles_x = ceil_div(W, tile_size);
@@ -155,11 +164,9 @@ void render_variant_metric_impl(const MapParams& p, cv::Mat& out) {
             for (int y = y0; y < y1; y++) {
                 if (mark_cancelled_if_requested(p, cancelled)) break;
                 uint8_t* row = out.ptr<uint8_t>(y);
-                const double im_d = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
-                const S im = scalar_from_double<S>(im_d);
+                const S im = s_im_max - scalar_from_double<S>(static_cast<double>(y) + 0.5) * s_inv_H * s_span_im;
                 for (int x = x0; x < x1; x++) {
-                    const double re_d = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
-                    const S re = scalar_from_double<S>(re_d);
+                    const S re = s_re_min + scalar_from_double<S>(static_cast<double>(x) + 0.5) * s_inv_W * s_span_re;
 
                     Cx<S> z0;
                     Cx<S> c;
@@ -820,9 +827,17 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
     const double aspect  = static_cast<double>(W) / static_cast<double>(H);
     const double span_im = p.scale;
     const double span_re = p.scale * aspect;
-    const double re_min  = p.center_re - span_re * 0.5;
-    const double im_max  = p.center_im + span_im * 0.5;
     const double bail2   = p.bailout_sq;
+
+    const S s_center_re = scalar_from_double<S>(p.center_re);
+    const S s_center_im = scalar_from_double<S>(p.center_im);
+    const S s_span_re   = scalar_from_double<S>(span_re);
+    const S s_span_im   = scalar_from_double<S>(span_im);
+    const S s_half      = scalar_from_double<S>(0.5);
+    const S s_re_min    = s_center_re - s_span_re * s_half;
+    const S s_im_max    = s_center_im + s_span_im * s_half;
+    const S s_inv_W     = scalar_from_double<S>(1.0 / W);
+    const S s_inv_H     = scalar_from_double<S>(1.0 / H);
 
     const S jre = scalar_from_double<S>(p.julia_re);
     const S jim = scalar_from_double<S>(p.julia_im);
@@ -859,11 +874,9 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
             const int y1 = std::min(H, y0 + tile_size);
 
             for (int y = y0; y < y1; y++) {
-                const double im_d = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
-                const S im = scalar_from_double<S>(im_d);
+                const S im = s_im_max - scalar_from_double<S>(static_cast<double>(y) + 0.5) * s_inv_H * s_span_im;
                 for (int x = x0; x < x1; x++) {
-                    const double re_d = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
-                    const S re = scalar_from_double<S>(re_d);
+                    const S re = s_re_min + scalar_from_double<S>(static_cast<double>(x) + 0.5) * s_inv_W * s_span_re;
 
                     Cx<S> z0, c;
                     if (p.julia) {

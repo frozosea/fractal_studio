@@ -132,8 +132,20 @@ inline std::string map_effective_scalar_type(const MapParams& p) {
     if (map_scalar_type_is_fp80(p.scalar_type)) return "fp80";
     if (map_scalar_type_is_fp128(p.scalar_type)) return "fp128";
     if (!map_scalar_type_is_auto(p.scalar_type)) return p.scalar_type;
-    if (p.scale < 1e-13) return "fx64";
-    return map_auto_fp32_is_adequate(p) ? "fp32" : "fp64";
+
+    // Auto precision ladder by zoom depth.
+    // Perturbation (handled separately in render_map) covers Mandelbrot+Escape
+    // at scale < 1e-7 with effectively unlimited precision.
+    // This ladder handles non-perturbation cases (other variants/metrics).
+    if (map_auto_fp32_is_adequate(p)) return "fp32";
+    if (p.scale >= 1e-13) return "fp64";
+    if (p.scale >= 1e-17) return "fx64";
+    if (p.scale >= 1e-18) return "fp80";
+#if defined(FSD_HAS_FLOAT128)
+    return "fp128";
+#else
+    return "fp80";
+#endif
 }
 
 struct MapStats {
