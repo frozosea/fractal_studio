@@ -11,6 +11,8 @@ import { lang } from '../i18n'
 const props = defineProps<{
   centerRe: number
   centerIm: number
+  centerReStr?: string
+  centerImStr?: string
   scale: number
   iterations: number
   variant: string   // Variant literal or "custom:HASH"
@@ -35,7 +37,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'viewport-change', v: { centerRe: number; centerIm: number; scale: number }): void
+  (e: 'viewport-change', v: { centerRe: number; centerIm: number; scale: number; deltaRe?: number; deltaIm?: number }): void
   (e: 'viewport-size', size: { width: number; height: number }): void
   (e: 'rendered', meta: { generatedMs: number; artifactId?: string; engineUsed?: string; scalarUsed?: string }): void
   (e: 'click-world', pos: { re: number; im: number }): void
@@ -250,6 +252,8 @@ async function renderFrame() {
   if (props.transitionTo)             req.transitionTo             = props.transitionTo
   if (props.engine)                   req.engine                    = props.engine
   if (props.scalarType)               req.scalarType                = props.scalarType
+  if (props.centerReStr)              (req as any).centerReStr      = props.centerReStr
+  if (props.centerImStr)              (req as any).centerImStr      = props.centerImStr
 
   try {
     const resp = await api.mapRenderInline(req, controller.signal) as any
@@ -359,14 +363,18 @@ function onWheel(e: WheelEvent) {
   const px      = (e.clientX - rect.left) / rect.width
   const py      = (e.clientY - rect.top)  / rect.height
   const aspect  = rect.width / rect.height
-  const wx      = props.centerRe + (px - 0.5) * props.scale * aspect
-  const wy      = props.centerIm + (0.5 - py) * props.scale
   const factor  = e.deltaY > 0 ? 1.25 : 0.8
   const newScale = props.scale * factor
+  // Compute delta directly from pixel fraction × scale difference.
+  // Avoids catastrophic cancellation in (centerRe + offset - offset').
+  const deltaRe = (px - 0.5) * (props.scale - newScale) * aspect
+  const deltaIm = (0.5 - py) * (props.scale - newScale)
   emit('viewport-change', {
-    centerRe: wx - (px - 0.5) * newScale * aspect,
-    centerIm: wy + (py - 0.5) * newScale,
+    centerRe: props.centerRe + deltaRe,
+    centerIm: props.centerIm + deltaIm,
     scale:    newScale,
+    deltaRe,
+    deltaIm,
   })
 }
 
@@ -447,9 +455,11 @@ function updatePinch() {
   const py = (midpoint.y - rect.top) / rect.height
   const aspect = rect.width / rect.height
   const newScale = Math.max(1e-300, pinchStart.scale * (pinchStart.distance / distance))
+  const newRe = pinchStart.worldRe - (px - 0.5) * newScale * aspect
+  const newIm = pinchStart.worldIm + (py - 0.5) * newScale
   emit('viewport-change', {
-    centerRe: pinchStart.worldRe - (px - 0.5) * newScale * aspect,
-    centerIm: pinchStart.worldIm + (py - 0.5) * newScale,
+    centerRe: newRe,
+    centerIm: newIm,
     scale: newScale,
   })
 }
@@ -505,10 +515,14 @@ function onPointerMove(e: PointerEvent) {
   dragMoved = true
   const rect   = wrapper.value.getBoundingClientRect()
   const aspect = rect.width / rect.height
+  const deltaRe = -(dx / rect.width)  * dragStart.sc * aspect
+  const deltaIm =  (dy / rect.height) * dragStart.sc
   emit('viewport-change', {
-    centerRe: dragStart.cx - (dx / rect.width)  * dragStart.sc * aspect,
-    centerIm: dragStart.cy + (dy / rect.height) * dragStart.sc,
+    centerRe: dragStart.cx + deltaRe,
+    centerIm: dragStart.cy + deltaIm,
     scale:    dragStart.sc,
+    deltaRe,
+    deltaIm,
   })
 }
 

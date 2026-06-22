@@ -313,6 +313,10 @@ const EXPORT_PRESETS: ExportPreset[] = [
 ]
 
 // ── Left / Mandelbrot viewport ────────────────────────────────────────────────
+import { type BigDec, bdFromString, bdFromNumber, bdAddNumber, bdToString, bdToNumber } from '../bigdec'
+
+const centerRePrecise = ref<BigDec>(bdFromString('-0.75'))
+const centerImPrecise = ref<BigDec>(bdFromString('0'))
 const centerRe   = ref(-0.75)
 const centerIm   = ref( 0.0)
 const scale      = ref( 3.0)
@@ -580,9 +584,15 @@ function commitViewportInput(kind: 're' | 'im' | 'zoom') {
     syncViewportInputs(true)
     return
   }
-  if (kind === 're') centerRe.value = next
-  else if (kind === 'im') centerIm.value = next
-  else scale.value = Math.max(1e-300, next)
+  if (kind === 're') {
+    centerRe.value = next
+    centerRePrecise.value = bdFromString(raw)
+  } else if (kind === 'im') {
+    centerIm.value = next
+    centerImPrecise.value = bdFromString(raw)
+  } else {
+    scale.value = Math.max(1e-300, next)
+  }
   syncViewportInputs(true)
 }
 
@@ -602,6 +612,8 @@ function onPickJulia(pos: { re: number; im: number }) {
   juliaIm.value = pos.im
   centerRe.value = pos.re
   centerIm.value = pos.im
+  centerRePrecise.value = bdFromNumber(pos.re)
+  centerImPrecise.value = bdFromNumber(pos.im)
 }
 
 function onJuliaViewport(v: { centerRe: number; centerIm: number; scale: number }) {
@@ -646,6 +658,8 @@ onMounted(() => {
       if (typeof c.re === 'number' && typeof c.im === 'number') {
         centerRe.value = c.re
         centerIm.value = c.im
+        centerRePrecise.value = typeof c.reStr === 'string' ? bdFromString(c.reStr) : bdFromNumber(c.re)
+        centerImPrecise.value = typeof c.imStr === 'string' ? bdFromString(c.imStr) : bdFromNumber(c.im)
         if (typeof c.scale === 'number' && Number.isFinite(c.scale) && c.scale > 0) {
           scale.value = c.scale
         }
@@ -655,7 +669,14 @@ onMounted(() => {
   }
 })
 
-function onViewportChange(v: { centerRe: number; centerIm: number; scale: number }) {
+function onViewportChange(v: { centerRe: number; centerIm: number; scale: number; deltaRe?: number; deltaIm?: number }) {
+  if (v.deltaRe !== undefined && v.deltaIm !== undefined) {
+    centerRePrecise.value = bdAddNumber(centerRePrecise.value, v.deltaRe)
+    centerImPrecise.value = bdAddNumber(centerImPrecise.value, v.deltaIm)
+  } else {
+    centerRePrecise.value = bdFromNumber(v.centerRe)
+    centerImPrecise.value = bdFromNumber(v.centerIm)
+  }
   centerRe.value = v.centerRe
   centerIm.value = v.centerIm
   scale.value    = v.scale
@@ -683,12 +704,16 @@ function resetView() {
   }
   centerRe.value = 0.0
   centerIm.value = 0.0
+  centerRePrecise.value = bdFromString('0')
+  centerImPrecise.value = bdFromString('0')
   scale.value    = 4.0
 }
 
 function onImportPoint(p: SpecialPoint | SpecialPointEnumResult) {
   centerRe.value = 're' in p ? p.re : p.real
   centerIm.value = 'im' in p ? p.im : p.imag
+  centerRePrecise.value = bdFromNumber(centerRe.value)
+  centerImPrecise.value = bdFromNumber(centerIm.value)
 }
 
 const specialPointViewport = computed(() => ({
@@ -766,6 +791,8 @@ async function exportPng() {
       localExport: localExportMode.value,
       centerRe:   centerRe.value,
       centerIm:   centerIm.value,
+      centerReStr: bdToString(centerRePrecise.value),
+      centerImStr: bdToString(centerImPrecise.value),
       scale:      scale.value,
       width:      pngPreset.value.width,
       height:     pngPreset.value.height,
@@ -1434,6 +1461,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
       <template v-if="!juliaOn">
         <MapCanvas
           :centerRe="centerRe" :centerIm="centerIm" :scale="scale"
+          :centerReStr="bdToString(centerRePrecise)" :centerImStr="bdToString(centerImPrecise)"
           :iterations="iterations" :variant="variant" :metric="metric"
           :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
           :pairwise-cap="pairwiseCap"
@@ -1487,6 +1515,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
             <div class="pane-canvas">
               <MapCanvas
                 :centerRe="centerRe" :centerIm="centerIm" :scale="scale"
+                :centerReStr="bdToString(centerRePrecise)" :centerImStr="bdToString(centerImPrecise)"
                 :iterations="iterations" :variant="variant" :metric="metric"
                 :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
                 :pairwise-cap="pairwiseCap"
