@@ -20,6 +20,7 @@
 #include "complex.hpp"
 #include "fx64_raw.hpp"
 #include "parallel.hpp"
+#include "perturbation.hpp"
 #include "scalar/fx64.hpp"
 #include "tile_scheduler.hpp"
 
@@ -505,6 +506,14 @@ static MapEnginePlan select_map_engine_plan(const MapParams& p, bool field_outpu
             selected_engine = "avx2";
         } else {
             selected_engine = "openmp";
+        }
+    }
+    // fp64 auto: prefer AVX-512 > AVX-2; skip CUDA (1:64 fp64:fp32 ratio on consumer GPUs).
+    if (!plan.fp32 && !plan.fp80 && !plan.fp128 && !plan.fx && p.engine == "auto") {
+        if (avx512_available() && map_engine_supported(p, "avx512", false)) {
+            selected_engine = "avx512";
+        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
+            selected_engine = "avx2";
         }
     }
     plan.engine = selected_engine;
@@ -1420,6 +1429,11 @@ MapStats render_map(const MapParams& p, cv::Mat& out) {
     // Mandelbrot. Scalar OpenMP only, special-cased before engine/variant dispatch.
     if (p.metric == Metric::MandelShipAgree) {
         return render_explore(p, out);
+    }
+
+    // Perturbation path: deep zoom Mandelbrot with Escape metric.
+    if (perturbation_applicable(p)) {
+        return render_map_perturbation(p, out);
     }
 
     const MapEnginePlan plan = select_map_engine_plan(p, /*field_output=*/false);

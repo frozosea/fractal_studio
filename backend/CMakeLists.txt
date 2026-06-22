@@ -82,6 +82,7 @@ add_executable(fractal_studio_backend
     src/compute/hs/heightfield_mesh.cpp
     src/compute/newton/mandelbrot_sp.cpp
     src/compute/tile_scheduler.cpp
+    src/compute/perturbation.cpp
 
     # Hardware probes
     src/adapters/cuda_probe.cpp
@@ -160,6 +161,7 @@ add_executable(compute_path_diff
     src/compute/map_kernel_avx512.cpp
     src/compute/transition_kernel.cpp
     src/compute/tile_scheduler.cpp
+    src/compute/perturbation.cpp
 )
 target_include_directories(compute_path_diff PRIVATE
     src
