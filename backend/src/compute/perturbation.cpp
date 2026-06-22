@@ -23,11 +23,16 @@
 #  include <quadmath.h>
 #endif
 
+#if defined(FSD_HAS_MPFR)
+#  include <mpfr.h>
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace fsd::compute {
@@ -109,6 +114,114 @@ RefOrbit compute_reference_orbit(
 }
 
 // ---------------------------------------------------------------------------
+// MPFR reference orbit for ultra-deep zoom (scale < 1e-33)
+// ---------------------------------------------------------------------------
+
+#if defined(FSD_HAS_MPFR)
+namespace {
+
+struct MpfrGuard {
+    mpfr_t v;
+    explicit MpfrGuard(mpfr_prec_t prec) { mpfr_init2(v, prec); }
+    ~MpfrGuard() { mpfr_clear(v); }
+    MpfrGuard(const MpfrGuard&) = delete;
+    MpfrGuard& operator=(const MpfrGuard&) = delete;
+    operator mpfr_ptr() { return v; }
+};
+
+} // namespace
+
+static RefOrbit compute_reference_orbit_mpfr(
+    const std::string& cre_str, const std::string& cim_str,
+    int max_iter, double bailout_sq, int precision_bits)
+{
+    RefOrbit ref;
+    ref.bail2 = bailout_sq;
+    ref.z_re.reserve(max_iter + 1);
+    ref.z_im.reserve(max_iter + 1);
+
+    const mpfr_prec_t prec = static_cast<mpfr_prec_t>(precision_bits);
+    MpfrGuard zr(prec), zi(prec), cr(prec), ci(prec);
+    MpfrGuard zr2(prec), zi2(prec), tmp(prec), mag(prec), b2(prec);
+
+    mpfr_set_d(zr, 0.0, MPFR_RNDN);
+    mpfr_set_d(zi, 0.0, MPFR_RNDN);
+    mpfr_set_str(cr, cre_str.c_str(), 10, MPFR_RNDN);
+    mpfr_set_str(ci, cim_str.c_str(), 10, MPFR_RNDN);
+    mpfr_set_d(b2, bailout_sq, MPFR_RNDN);
+
+    ref.z_re.push_back(0.0);
+    ref.z_im.push_back(0.0);
+
+    for (int n = 0; n < max_iter; ++n) {
+        mpfr_mul(zr2, zr, zr, MPFR_RNDN);  // zr²
+        mpfr_mul(zi2, zi, zi, MPFR_RNDN);  // zi²
+        mpfr_add(mag, zr2, zi2, MPFR_RNDN);
+        if (mpfr_cmp(mag, b2) > 0) {
+            ref.escaped = true;
+            ref.length  = n;
+            return ref;
+        }
+        // new_zr = zr² - zi² + cr
+        mpfr_sub(tmp, zr2, zi2, MPFR_RNDN);
+        mpfr_add(tmp, tmp, cr, MPFR_RNDN);
+        // new_zi = 2·zr·zi + ci
+        mpfr_mul(zi, zr, zi, MPFR_RNDN);
+        mpfr_mul_ui(zi, zi, 2, MPFR_RNDN);
+        mpfr_add(zi, zi, ci, MPFR_RNDN);
+        mpfr_set(zr, tmp, MPFR_RNDN);
+
+        ref.z_re.push_back(mpfr_get_d(zr, MPFR_RNDN));
+        ref.z_im.push_back(mpfr_get_d(zi, MPFR_RNDN));
+    }
+    ref.length  = max_iter;
+    ref.escaped = false;
+    return ref;
+}
+#endif // FSD_HAS_MPFR
+
+// ---------------------------------------------------------------------------
+// Precision-tiered dispatch: double → __float128 → MPFR
+// ---------------------------------------------------------------------------
+
+RefOrbit compute_reference_orbit_auto(
+    const std::string& cre_str, const std::string& cim_str,
+    int max_iter, double bailout_sq, double scale)
+{
+    // Tier 1: scale ≥ 1e-15 → __float128 (or double) is sufficient.
+    // The existing function already selects __float128 when available.
+    if (scale >= 1e-15 || cre_str.empty()) {
+        double cre = cre_str.empty() ? 0.0 : std::stod(cre_str);
+        double cim = cim_str.empty() ? 0.0 : std::stod(cim_str);
+        return compute_reference_orbit(cre, cim, max_iter, bailout_sq);
+    }
+
+    // Tier 2: scale ≥ 1e-33 → __float128 with string-parsed center
+#if defined(FSD_HAS_FLOAT128)
+    if (scale >= 1e-33) {
+        double cre = std::stod(cre_str);
+        double cim = std::stod(cim_str);
+        return compute_reference_orbit(cre, cim, max_iter, bailout_sq);
+    }
+#endif
+
+    // Tier 3: scale < 1e-33 → MPFR with dynamic precision
+#if defined(FSD_HAS_MPFR)
+    {
+        int bits = static_cast<int>(std::ceil(-std::log2(scale))) + 64;
+        if (bits < 128) bits = 128;
+        return compute_reference_orbit_mpfr(cre_str, cim_str,
+                                            max_iter, bailout_sq, bits);
+    }
+#endif
+
+    // Fallback: parse to double, use existing path
+    double cre = std::stod(cre_str);
+    double cim = std::stod(cim_str);
+    return compute_reference_orbit(cre, cim, max_iter, bailout_sq);
+}
+
+// ---------------------------------------------------------------------------
 // Check if perturbation is applicable for this request
 // ---------------------------------------------------------------------------
 
@@ -120,6 +233,8 @@ bool perturbation_applicable(const MapParams& p)
     if (p.smooth)                          return false;
     if (p.custom_step_fn)                  return false;
     if (p.scale >= 1e-7)                   return false;
+    if (p.scalar_type != "auto" && p.scalar_type != "perturbation")
+        return false;
     return true;
 }
 
@@ -142,8 +257,11 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
     const int    max_iter = p.iterations;
     const int    thread_count = resolve_render_threads(p.render_threads);
 
-    // Step 1: compute reference orbit at center
-    RefOrbit ref = compute_reference_orbit(p.center_re, p.center_im, max_iter, bail2);
+    // Step 1: compute reference orbit at center (precision tier by zoom depth)
+    RefOrbit ref = p.center_re_str.empty()
+        ? compute_reference_orbit(p.center_re, p.center_im, max_iter, bail2)
+        : compute_reference_orbit_auto(p.center_re_str, p.center_im_str,
+                                       max_iter, bail2, p.scale);
 
     // Step 2: per-pixel perturbation iteration
     constexpr int tile_size = 32;

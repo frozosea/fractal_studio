@@ -382,6 +382,10 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
     p.center_re = in.cRe;
     p.center_im = in.cIm;
     p.scale = in.scale;
+    if (j.contains("centerReStr") && j["centerReStr"].is_string())
+        p.center_re_str = j["centerReStr"].get<std::string>();
+    if (j.contains("centerImStr") && j["centerImStr"].is_string())
+        p.center_im_str = j["centerImStr"].get<std::string>();
     p.width = in.width;
     p.height = in.height;
     p.iterations = in.iters;
@@ -651,6 +655,10 @@ std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::stri
     p.center_re  = cRe;
     p.center_im  = cIm;
     p.scale      = scale;
+    if (j.contains("centerReStr") && j["centerReStr"].is_string())
+        p.center_re_str = j["centerReStr"].get<std::string>();
+    if (j.contains("centerImStr") && j["centerImStr"].is_string())
+        p.center_im_str = j["centerImStr"].get<std::string>();
     p.width      = width;
     p.height     = height;
     p.iterations = iters;

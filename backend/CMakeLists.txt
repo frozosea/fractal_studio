@@ -203,6 +203,21 @@ else()
     message(STATUS "__float128/libquadmath unavailable — fp128 scalar path disabled")
 endif()
 
+# ---- Optional MPFR (arbitrary precision for deep-zoom perturbation) ----
+find_library(MPFR_LIB mpfr)
+find_path(MPFR_INCLUDE_DIR mpfr.h)
+if(MPFR_LIB AND MPFR_INCLUDE_DIR)
+    target_compile_definitions(fractal_studio_backend PRIVATE FSD_HAS_MPFR=1)
+    target_compile_definitions(compute_path_diff PRIVATE FSD_HAS_MPFR=1)
+    target_include_directories(fractal_studio_backend PRIVATE ${MPFR_INCLUDE_DIR})
+    target_include_directories(compute_path_diff PRIVATE ${MPFR_INCLUDE_DIR})
+    target_link_libraries(fractal_studio_backend PRIVATE ${MPFR_LIB})
+    target_link_libraries(compute_path_diff PRIVATE ${MPFR_LIB})
+    message(STATUS "MPFR enabled (${MPFR_LIB})")
+else()
+    message(STATUS "MPFR not found — arbitrary-precision perturbation disabled")
+endif()
+
 # AVX-512 kernel: compile with AVX-512F + IFMA52 intrinsics enabled when the
 # compiler supports them. avx512_available() does a runtime CPUID check so the
 # binary falls back to OpenMP on CPUs without AVX-512. On compilers/arches that

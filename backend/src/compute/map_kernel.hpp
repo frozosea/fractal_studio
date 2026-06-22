@@ -33,6 +33,11 @@ struct MapParams {
     double center_im =  0.0;
     double scale     =  3.0;
 
+    // Arbitrary-precision center (decimal string). When non-empty, the
+    // perturbation reference orbit uses these instead of center_re/im.
+    std::string center_re_str;
+    std::string center_im_str;
+
     int width        = 1024;
     int height       = 768;
     int iterations   = 1024;

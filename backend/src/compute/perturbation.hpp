@@ -34,6 +34,12 @@ RefOrbit compute_reference_orbit(
     double center_re, double center_im,
     int max_iter, double bailout_sq);
 
+// Precision-tiered overload: selects double / __float128 / MPFR based on scale.
+// String coordinates parsed at full precision for the reference orbit.
+RefOrbit compute_reference_orbit_auto(
+    const std::string& center_re_str, const std::string& center_im_str,
+    int max_iter, double bailout_sq, double scale);
+
 MapStats render_map_perturbation(const MapParams& p, cv::Mat& out);
 
 bool perturbation_applicable(const MapParams& p);
