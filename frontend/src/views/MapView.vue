@@ -291,6 +291,7 @@ function lnMapColorModeInfo(mode: LnMapColorMode): LnMapColorModeInfo {
 const status = inject<StatusState>('status')!
 const localExportMode = computed(() => api.isLocalBrowserAccess())
 const pngExportStatus = ref('')
+const pngExportBusy = ref(false)
 
 type ExportPreset = {
   key: string
@@ -758,6 +759,7 @@ const videoPreset = computed(() =>
 
 async function exportPng() {
   pngExportStatus.value = ''
+  pngExportBusy.value = true
   try {
     const resp = await api.mapRender({
       taskType:   'still_export',
@@ -794,6 +796,8 @@ async function exportPng() {
   } catch (e: any) {
     pngExportStatus.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (e?.data?.error || e?.message || e)
     console.error('export PNG failed:', e?.data?.error ?? e)
+  } finally {
+    pngExportBusy.value = false
   }
 }
 
@@ -1381,8 +1385,9 @@ async function pollVideoExport(initial: VideoExportResponse) {
       <button @click="resetView" :title="juliaOn ? t('reset_julia') : t('reset')">
         ⌂ {{ juliaOn ? t('reset_julia') : t('reset') }}
       </button>
-      <button @click="exportPng">{{ t('export_png') }}</button>
+      <button @click="exportPng" :disabled="pngExportBusy">{{ pngExportBusy ? t('loading') : t('export_png') }}</button>
       <button @click="openExportModal">{{ t('export_video') }}</button>
+      <progress v-if="pngExportBusy" class="png-export-progress"></progress>
       <span v-if="pngExportStatus" class="export-local-status mono">{{ pngExportStatus }}</span>
     </div>
 
@@ -2160,6 +2165,12 @@ async function pollVideoExport(initial: VideoExportResponse) {
 .local-mode-row span {
   color: var(--text-dim);
   font-size: 10px;
+}
+.png-export-progress {
+  width: 80px;
+  height: 7px;
+  accent-color: var(--accent);
+  vertical-align: middle;
 }
 .progress-stack {
   display: flex;
