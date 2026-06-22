@@ -35,3 +35,8 @@
 
 # Local docs
 HS_legacy_guide_zh.md
+
+# Generated reports
+CODE_REVIEW_REPORT.md
+PERFORMANCE_OPTIMIZATION_REPORT.md
+EXPLORATION_REPORT.md

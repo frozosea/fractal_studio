@@ -452,7 +452,7 @@ std::string transitionVoxelsRoute(const std::filesystem::path&, JobRunner& runne
         if (v < iso) {
             vol[i] = 1;
             voxelCount++;
-            dep[i] = static_cast<uint8_t>(1 + static_cast<int>(v / iso * 254.0f));
+            dep[i] = static_cast<uint8_t>(std::min(255, 1 + static_cast<int>(v / iso * 254.0f)));
         }
     }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { api } from '../api'
 import type { ActiveTask, ResourceLockStatus } from '../api'
 import type { StatusState } from '../types'
@@ -45,7 +45,7 @@ onMounted(() => {
   taskInterval = setInterval(refreshTasks, 1500)
 })
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
   if (interval) clearInterval(interval)
   if (taskInterval) clearInterval(taskInterval)
 })

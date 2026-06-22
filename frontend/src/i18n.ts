@@ -5,7 +5,11 @@ import { ref } from 'vue'
 
 export type Lang = 'en' | 'zh'
 
-export const lang = ref<Lang>((localStorage.getItem('fsd_lang') as Lang) || 'en')
+function readSavedLang(): Lang {
+  try { return (localStorage.getItem('fsd_lang') as Lang) || 'en' }
+  catch { return 'en' }
+}
+export const lang = ref<Lang>(readSavedLang())
 
 export function setLang(l: Lang) {
   lang.value = l

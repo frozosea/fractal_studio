@@ -403,7 +403,8 @@ function copyPoint(p: SpecialPointEnumResult) {
 
 function addBookmark(p: SpecialPointEnumResult) {
   const raw = localStorage.getItem('fs_special_point_bookmarks')
-  const items = raw ? JSON.parse(raw) : []
+  let items: any[] = []
+  try { items = raw ? JSON.parse(raw) : [] } catch { items = [] }
   items.push({ id: p.id, re: p.re, im: p.im, kind: p.kind, period: p.period, preperiod: p.preperiod, createdAt: new Date().toISOString() })
   localStorage.setItem('fs_special_point_bookmarks', JSON.stringify(items.slice(-500)))
 }

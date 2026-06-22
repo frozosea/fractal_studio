@@ -72,12 +72,10 @@ RunRecord JobRunner::createRun(const std::string& module, const std::string& par
         runStarted_[run.id] = started;
         runCancelRequested_[run.id] = false;
         runCancelable_[run.id] = false;
-    }
-
-    if (db_) {
-        RunRow row{run.id, module, run.status, paramsJson, started, 0, run.outputDir};
-        std::lock_guard<std::mutex> lk(mu_);
-        db_->upsertRun(row);
+        if (db_) {
+            RunRow row{run.id, module, run.status, paramsJson, started, 0, run.outputDir};
+            db_->upsertRun(row);
+        }
     }
     return run;
 }
@@ -94,6 +92,7 @@ RunRecord JobRunner::getRun(const std::string& runId) const {
 void JobRunner::setStatus(const std::string& runId, const std::string& status) {
     std::string module, paramsJson, outDir;
     long long started = 0;
+    const long long finished = (status == "completed" || status == "failed" || status == "cancelled") ? nowUnixMs() : 0;
     {
         std::lock_guard<std::mutex> lk(mu_);
         auto it = runs_.find(runId);
@@ -103,12 +102,10 @@ void JobRunner::setStatus(const std::string& runId, const std::string& status) {
         module = runModules_[runId];
         paramsJson = runParams_[runId];
         started = runStarted_[runId];
-    }
-    if (db_) {
-        const long long finished = (status == "completed" || status == "failed" || status == "cancelled") ? nowUnixMs() : 0;
-        RunRow row{runId, module, status, paramsJson, started, finished, outDir};
-        std::lock_guard<std::mutex> lk(mu_);
-        db_->upsertRun(row);
+        if (db_) {
+            RunRow row{runId, module, status, paramsJson, started, finished, outDir};
+            db_->upsertRun(row);
+        }
     }
 }
 
@@ -161,15 +158,12 @@ std::string JobRunner::getProgress(const std::string& runId) const {
 }
 
 void JobRunner::addArtifact(const std::string& runId, const Artifact& artifact) {
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        auto it = runs_.find(runId);
-        if (it == runs_.end()) throw std::runtime_error("run not found: " + runId);
-        it->second.artifacts.push_back(artifact);
-    }
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = runs_.find(runId);
+    if (it == runs_.end()) throw std::runtime_error("run not found: " + runId);
+    it->second.artifacts.push_back(artifact);
     if (db_) {
         ArtifactRow row{0, runId, artifact.kind, artifact.path, ""};
-        std::lock_guard<std::mutex> lk(mu_);
         db_->insertArtifact(row);
     }
 }

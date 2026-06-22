@@ -472,7 +472,8 @@ void Db::deleteCustomVariant(const std::string& hash) const {
 std::string nowIso8601() {
     const auto now = std::chrono::system_clock::now();
     const std::time_t nowT = std::chrono::system_clock::to_time_t(now);
-    std::tm tm = *std::gmtime(&nowT);
+    std::tm tm{};
+    gmtime_r(&nowT, &tm);
     std::ostringstream ss;
     ss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
     return ss.str();

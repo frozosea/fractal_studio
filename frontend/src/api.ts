@@ -871,8 +871,8 @@ export const api = {
 
   runs: (params?: { limit?: number; offset?: number; module?: string; status?: string }) => {
     const q = new URLSearchParams()
-    if (params?.limit)  q.set('limit',  String(params.limit))
-    if (params?.offset) q.set('offset', String(params.offset))
+    if (params?.limit  !== undefined) q.set('limit',  String(params.limit))
+    if (params?.offset !== undefined) q.set('offset', String(params.offset))
     if (params?.module) q.set('module', params.module)
     if (params?.status) q.set('status', params.status)
     const s = q.toString()

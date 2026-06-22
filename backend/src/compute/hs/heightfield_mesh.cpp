@@ -105,6 +105,8 @@ void computeFieldImpl(const HsMeshParams& p, std::vector<double>& field) {
                 IterResultField::MinAbs | IterResultField::MaxAbs>(p, field); break;
         case Metric::MinPairwiseDist:
             computeFieldMetricImpl<V, Metric::MinPairwiseDist, IterResultField::Extra>(p, field); break;
+        case Metric::MandelShipAgree:
+            break;
     }
 }
 

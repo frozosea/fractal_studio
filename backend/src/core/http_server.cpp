@@ -20,6 +20,32 @@
 
 namespace fsd {
 
+namespace {
+std::string jsonEscapeString(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20)
+                    out += ' ';
+                else
+                    out += c;
+        }
+    }
+    return out;
+}
+
+std::string jsonErrorBody(const std::string& msg) {
+    return "{\"error\":\"" + jsonEscapeString(msg) + "\"}";
+}
+} // namespace
+
 HttpServer::HttpServer(int port, JobRunner& runner, std::filesystem::path repoRoot)
     : port_(port), runner_(runner), repoRoot_(std::move(repoRoot)) {}
 
@@ -130,7 +156,7 @@ std::string HttpServer::handleRequest(const std::string& request) const {
             const std::string headers = "Content-Disposition: attachment; filename=\"" + downloadName + "\"\r\n";
             return makeHttpResponse(200, bodyText, contentType, headers);
         } catch (const std::exception& ex) {
-            return makeHttpResponse(404, std::string("{\"error\":\"") + ex.what() + "\"}");
+            return makeHttpResponse(404, jsonErrorBody(ex.what()));
         }
     }
     if (method == "GET"  && path == "/api/artifacts/content") {
@@ -139,7 +165,7 @@ std::string HttpServer::handleRequest(const std::string& request) const {
             const std::string bodyText = artifactContentBody(repoRoot_, query, contentType);
             return makeHttpResponse(200, bodyText, contentType);
         } catch (const std::exception& ex) {
-            return makeHttpResponse(404, std::string("{\"error\":\"") + ex.what() + "\"}");
+            return makeHttpResponse(404, jsonErrorBody(ex.what()));
         }
     }
 
@@ -148,7 +174,7 @@ std::string HttpServer::handleRequest(const std::string& request) const {
     } catch (const HttpError& ex) {
         return makeHttpResponse(ex.status(), ex.body());
     } catch (const std::exception& ex) {
-        return makeHttpResponse(500, std::string("{\"error\":\"") + ex.what() + "\"}");
+        return makeHttpResponse(500, jsonErrorBody(ex.what()));
     }
 }
 
