@@ -521,8 +521,6 @@ function onPointerMove(e: PointerEvent) {
     centerRe: dragStart.cx + deltaRe,
     centerIm: dragStart.cy + deltaIm,
     scale:    dragStart.sc,
-    deltaRe,
-    deltaIm,
   })
 }
 

@@ -42,6 +42,8 @@ RefOrbit compute_reference_orbit_auto(
 
 MapStats render_map_perturbation(const MapParams& p, cv::Mat& out);
 
+MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo);
+
 bool perturbation_applicable(const MapParams& p);
 
 } // namespace fsd::compute

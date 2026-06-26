@@ -14,6 +14,7 @@
 #include "perturbation.hpp"
 #include "colormap.hpp"
 #include "parallel.hpp"
+#include "scalar.hpp"
 
 #ifdef _OPENMP
 #  include <omp.h>
@@ -188,20 +189,48 @@ RefOrbit compute_reference_orbit_auto(
     const std::string& cre_str, const std::string& cim_str,
     int max_iter, double bailout_sq, double scale)
 {
-    // Tier 1: scale ≥ 1e-15 → __float128 (or double) is sufficient.
-    // The existing function already selects __float128 when available.
+    // Tier 1: scale ≥ 1e-15 → double center is sufficient (fp64 has ~15 digits).
+    // __float128 iteration is still used when available (via compute_reference_orbit).
     if (scale >= 1e-15 || cre_str.empty()) {
         double cre = cre_str.empty() ? 0.0 : std::stod(cre_str);
         double cim = cim_str.empty() ? 0.0 : std::stod(cim_str);
         return compute_reference_orbit(cre, cim, max_iter, bailout_sq);
     }
 
-    // Tier 2: scale ≥ 1e-33 → __float128 with string-parsed center
+    // Between 1e-15 and 1e-33: need more than double precision for the center.
+    // Fall through to Tier 2 (__float128 with strtoflt128) or Tier 3 (MPFR).
+
+    // Tier 2: scale ≥ 1e-33 → __float128 iteration with string-parsed center
 #if defined(FSD_HAS_FLOAT128)
     if (scale >= 1e-33) {
-        double cre = std::stod(cre_str);
-        double cim = std::stod(cim_str);
-        return compute_reference_orbit(cre, cim, max_iter, bailout_sq);
+        const __float128 cr = strtoflt128(cre_str.c_str(), nullptr);
+        const __float128 ci = strtoflt128(cim_str.c_str(), nullptr);
+        const __float128 b2 = static_cast<__float128>(bailout_sq);
+        RefOrbit ref;
+        ref.bail2 = bailout_sq;
+        ref.z_re.reserve(max_iter + 1);
+        ref.z_im.reserve(max_iter + 1);
+        ref.z_re.push_back(0.0);
+        ref.z_im.push_back(0.0);
+        __float128 zr = 0, zi = 0;
+        for (int n = 0; n < max_iter; ++n) {
+            const __float128 zr2 = zr * zr;
+            const __float128 zi2 = zi * zi;
+            if (zr2 + zi2 > b2) {
+                ref.escaped = true;
+                ref.length  = n;
+                return ref;
+            }
+            const __float128 new_zr = zr2 - zi2 + cr;
+            const __float128 new_zi = (__float128)2.0 * zr * zi + ci;
+            zr = new_zr;
+            zi = new_zi;
+            ref.z_re.push_back(static_cast<double>(zr));
+            ref.z_im.push_back(static_cast<double>(zi));
+        }
+        ref.length  = max_iter;
+        ref.escaped = false;
+        return ref;
     }
 #endif
 
@@ -232,7 +261,7 @@ bool perturbation_applicable(const MapParams& p)
     if (p.julia)                           return false;
     if (p.smooth)                          return false;
     if (p.custom_step_fn)                  return false;
-    if (p.scale >= 1e-7)                   return false;
+    if (p.scale >= 1e-13)                  return false;
     if (p.scalar_type != "auto" && p.scalar_type != "perturbation")
         return false;
     return true;
@@ -305,8 +334,6 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
                         const size_t px_idx = static_cast<size_t>(y) * W + x;
                         if (only_glitched && !glitch_mask[px_idx]) continue;
 
-                        // Compute delta_c directly from pixel offset to avoid
-                        // catastrophic cancellation in (re - ref_re) at deep zoom.
                         const double px_frac_x = (static_cast<double>(x) + 0.5) / W - 0.5;
                         const double px_frac_y = (static_cast<double>(y) + 0.5) / H - 0.5;
                         const double dc_re = span_re * px_frac_x + (p.center_re - ref_re);
@@ -345,7 +372,7 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
                             const double mag2 = z_re * z_re + z_im * z_im;
 
                             if (mag2 > bail2) {
-                                iter = n + 1;
+                                iter = n;
                                 escaped = true;
                                 break;
                             }
@@ -370,6 +397,14 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
                             continue;
                         }
 
+                        if (!escaped && limit < max_iter) {
+                            // Perturbation loop truncated by reference orbit length:
+                            // pixel may need more iterations. fp128 re-check.
+                            glitch[px_idx] = 2;
+                            ++pass_glitches;
+                            continue;
+                        }
+
                         glitch[px_idx] = 0;
                         uint8_t* px = row + 3 * x;
                         colorize_escape_bgr(
@@ -387,37 +422,105 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
     // Primary pass with center reference
     total_glitches = render_pass(ref, p.center_re, p.center_im, nullptr, false);
 
-    // Rebase passes for glitch pixels (up to 3 rebases)
-    for (int rebase = 0; rebase < 3 && total_glitches > 0; ++rebase) {
+    // Rebase passes for glitch=1 (cancellation glitches), up to 3 rounds.
+    for (int rebase = 0; rebase < 3; ++rebase) {
         if (cancelled.load(std::memory_order_relaxed)) break;
-
-        // Find a glitch pixel to use as the new reference
-        double rebase_re = p.center_re;
-        double rebase_im = p.center_im;
-        for (int y = 0; y < H; ++y) {
-            for (int x = 0; x < W; ++x) {
-                if (glitch[static_cast<size_t>(y) * W + x]) {
+        double rebase_re = p.center_re, rebase_im = p.center_im;
+        bool found = false;
+        for (int y = 0; y < H && !found; ++y)
+            for (int x = 0; x < W && !found; ++x)
+                if (glitch[static_cast<size_t>(y) * W + x] == 1) {
                     rebase_re = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
                     rebase_im = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
-                    goto found_rebase;
+                    found = true;
                 }
-            }
-        }
-        found_rebase:
-
+        if (!found) break;
         RefOrbit rebase_ref = compute_reference_orbit(rebase_re, rebase_im, max_iter, bail2);
-        total_glitches = render_pass(rebase_ref, rebase_re, rebase_im, glitch.data(), true);
+        render_pass(rebase_ref, rebase_re, rebase_im, glitch.data(), true);
     }
 
-    // Any remaining glitch pixels: fall back to interior (white)
-    if (total_glitches > 0) {
-        for (int y = 0; y < H; ++y) {
-            uint8_t* row = out.ptr<uint8_t>(y);
-            for (int x = 0; x < W; ++x) {
-                if (glitch[static_cast<size_t>(y) * W + x]) {
-                    uint8_t* px = row + 3 * x;
-                    px[0] = px[1] = px[2] = 255;
+    // Direct high-precision fallback for remaining unresolved pixels.
+    // MPFR (arbitrary precision) → __float128 → double, by zoom depth.
+    {
+        const int mpfr_bits = std::max(128, static_cast<int>(std::ceil(
+            p.scale > 0 ? -std::log2(p.scale) : 53)) + 64);
+
+        #pragma omp parallel num_threads(thread_count)
+        {
+            #pragma omp for schedule(dynamic, 16)
+            for (int idx = 0; idx < W * H; ++idx) {
+                if (!glitch[idx]) continue;
+                const int x = idx % W;
+                const int y = idx / W;
+                const double frac_x = (static_cast<double>(x) + 0.5) / W - 0.5;
+                const double frac_y = (static_cast<double>(y) + 0.5) / H - 0.5;
+                int iter = max_iter;
+
+#if defined(FSD_HAS_MPFR)
+                {
+                    const mpfr_prec_t prec = static_cast<mpfr_prec_t>(mpfr_bits);
+                    MpfrGuard cr(prec), ci(prec), zr(prec), zi(prec);
+                    MpfrGuard zr2(prec), zi2(prec), tmp(prec), mag(prec), b2(prec);
+                    // c = center + span * frac
+                    if (!p.center_re_str.empty())
+                        mpfr_set_str(cr, p.center_re_str.c_str(), 10, MPFR_RNDN);
+                    else
+                        mpfr_set_d(cr, p.center_re, MPFR_RNDN);
+                    mpfr_set_d(tmp, span_re * frac_x, MPFR_RNDN);
+                    mpfr_add(cr, cr, tmp, MPFR_RNDN);
+                    if (!p.center_im_str.empty())
+                        mpfr_set_str(ci, p.center_im_str.c_str(), 10, MPFR_RNDN);
+                    else
+                        mpfr_set_d(ci, p.center_im, MPFR_RNDN);
+                    mpfr_set_d(tmp, -span_im * frac_y, MPFR_RNDN);
+                    mpfr_add(ci, ci, tmp, MPFR_RNDN);
+                    mpfr_set_d(zr, 0.0, MPFR_RNDN);
+                    mpfr_set_d(zi, 0.0, MPFR_RNDN);
+                    mpfr_set_d(b2, bail2, MPFR_RNDN);
+                    for (int n = 0; n < max_iter; ++n) {
+                        mpfr_mul(zr2, zr, zr, MPFR_RNDN);
+                        mpfr_mul(zi2, zi, zi, MPFR_RNDN);
+                        mpfr_add(mag, zr2, zi2, MPFR_RNDN);
+                        if (mpfr_cmp(mag, b2) > 0) { iter = n; break; }
+                        mpfr_sub(tmp, zr2, zi2, MPFR_RNDN);
+                        mpfr_add(tmp, tmp, cr, MPFR_RNDN);
+                        mpfr_mul(zi, zr, zi, MPFR_RNDN);
+                        mpfr_mul_ui(zi, zi, 2, MPFR_RNDN);
+                        mpfr_add(zi, zi, ci, MPFR_RNDN);
+                        mpfr_set(zr, tmp, MPFR_RNDN);
+                    }
                 }
+#elif defined(FSD_HAS_FLOAT128)
+                {
+                    const __float128 cre = scalar_from_string<__float128>(p.center_re_str, p.center_re)
+                        + static_cast<__float128>(span_re * frac_x);
+                    const __float128 cim = scalar_from_string<__float128>(p.center_im_str, p.center_im)
+                        + static_cast<__float128>(-span_im * frac_y);
+                    __float128 zr = 0, zi = 0;
+                    for (int n = 0; n < max_iter; ++n) {
+                        const __float128 zr2 = zr * zr, zi2 = zi * zi;
+                        if (static_cast<double>(zr2 + zi2) > bail2) { iter = n; break; }
+                        const __float128 nzi = static_cast<__float128>(2.0) * zr * zi + cim;
+                        zr = zr2 - zi2 + cre;
+                        zi = nzi;
+                    }
+                }
+#else
+                {
+                    const double cre = p.center_re + span_re * frac_x;
+                    const double cim = p.center_im - span_im * frac_y;
+                    double zr = 0, zi = 0;
+                    for (int n = 0; n < max_iter; ++n) {
+                        const double zr2 = zr * zr, zi2 = zi * zi;
+                        if (zr2 + zi2 > bail2) { iter = n; break; }
+                        const double nzi = 2.0 * zr * zi + cim;
+                        zr = zr2 - zi2 + cre;
+                        zi = nzi;
+                    }
+                }
+#endif
+                uint8_t* px = out.ptr<uint8_t>(y) + 3 * x;
+                colorize_escape_bgr(iter, max_iter, p.colormap, 0.0, false, px[0], px[1], px[2]);
             }
         }
     }
@@ -432,6 +535,259 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
     stats.pixel_count = W * H;
     stats.scalar_used = "perturbation_fp64";
     stats.engine_used = "openmp";
+    return stats;
+}
+
+// ---------------------------------------------------------------------------
+// Perturbation field output (raw iter counts + |z|² for equalized coloring)
+// ---------------------------------------------------------------------------
+
+MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    const int W = p.width;
+    const int H = p.height;
+    const double aspect  = static_cast<double>(W) / H;
+    const double span_im = p.scale;
+    const double span_re = p.scale * aspect;
+    const double bail2   = p.bailout_sq;
+    const int    max_iter = p.iterations;
+    const int    thread_count = resolve_render_threads(p.render_threads);
+
+    fo.width  = W;
+    fo.height = H;
+    fo.metric = Metric::Escape;
+    fo.iter_u32.assign(static_cast<size_t>(W) * H, 0u);
+    fo.norm_f32.assign(static_cast<size_t>(W) * H, 0.0f);
+
+    RefOrbit ref = p.center_re_str.empty()
+        ? compute_reference_orbit(p.center_re, p.center_im, max_iter, bail2)
+        : compute_reference_orbit_auto(p.center_re_str, p.center_im_str,
+                                       max_iter, bail2, p.scale);
+
+    constexpr int tile_size = 32;
+    const int tiles_x = (W + tile_size - 1) / tile_size;
+    const int tiles_y = (H + tile_size - 1) / tile_size;
+    const int tile_count = tiles_x * tiles_y;
+    std::atomic<bool> cancelled{false};
+
+    std::vector<uint8_t> glitch(static_cast<size_t>(W) * H, 0);
+    int total_glitches = 0;
+
+    auto render_pass = [&](const RefOrbit& orbit, double ref_re, double ref_im,
+                            const uint8_t* glitch_mask, bool only_glitched) {
+        const int orbit_len = static_cast<int>(orbit.z_re.size());
+        const double* Or = orbit.z_re.data();
+        const double* Oi = orbit.z_im.data();
+        int pass_glitches = 0;
+
+        #pragma omp parallel num_threads(thread_count) reduction(+:pass_glitches)
+        {
+            #pragma omp for schedule(dynamic, 1)
+            for (int tile = 0; tile < tile_count; ++tile) {
+                if (cancelled.load(std::memory_order_relaxed)) continue;
+                if (map_render_cancel_requested(p)) {
+                    cancelled.store(true, std::memory_order_relaxed);
+                    continue;
+                }
+                const int tx = tile % tiles_x;
+                const int ty = tile / tiles_x;
+                const int x0 = tx * tile_size;
+                const int y0 = ty * tile_size;
+                const int x1 = std::min(W, x0 + tile_size);
+                const int y1 = std::min(H, y0 + tile_size);
+
+                for (int y = y0; y < y1; ++y) {
+                    for (int x = x0; x < x1; ++x) {
+                        const size_t px_idx = static_cast<size_t>(y) * W + x;
+                        if (only_glitched && !glitch_mask[px_idx]) continue;
+
+                        const double px_frac_x = (static_cast<double>(x) + 0.5) / W - 0.5;
+                        const double px_frac_y = (static_cast<double>(y) + 0.5) / H - 0.5;
+                        const double dc_re = span_re * px_frac_x + (p.center_re - ref_re);
+                        const double dc_im = -span_im * px_frac_y + (p.center_im - ref_im);
+
+                        double dz_re = 0.0, dz_im = 0.0;
+                        int iter = max_iter;
+                        bool escaped = false;
+                        bool is_glitch = false;
+                        double escape_mag2 = 0.0;
+
+                        const int limit = std::min(max_iter, orbit_len - 1);
+                        for (int n = 0; n < limit; ++n) {
+                            const double Zn_re = Or[n];
+                            const double Zn_im = Oi[n];
+                            const double two_Zn_re = 2.0 * Zn_re;
+                            const double two_Zn_im = 2.0 * Zn_im;
+
+                            const double new_dz_re = two_Zn_re * dz_re - two_Zn_im * dz_im
+                                                   + dz_re * dz_re - dz_im * dz_im + dc_re;
+                            const double new_dz_im = two_Zn_re * dz_im + two_Zn_im * dz_re
+                                                   + 2.0 * dz_re * dz_im + dc_im;
+                            dz_re = new_dz_re;
+                            dz_im = new_dz_im;
+
+                            const double z_re = Or[n + 1] + dz_re;
+                            const double z_im = Oi[n + 1] + dz_im;
+                            const double mag2 = z_re * z_re + z_im * z_im;
+
+                            if (mag2 > bail2) {
+                                iter = n;
+                                escaped = true;
+                                escape_mag2 = mag2;
+                                break;
+                            }
+                            if (!std::isfinite(dz_re) || !std::isfinite(dz_im)) {
+                                is_glitch = true; break;
+                            }
+                            const double dz_mag2 = dz_re * dz_re + dz_im * dz_im;
+                            if (dz_mag2 > 1e-4 && mag2 < GLITCH_TOLERANCE * dz_mag2) {
+                                is_glitch = true; break;
+                            }
+                        }
+
+                        if (is_glitch) {
+                            glitch[px_idx] = 1;
+                            ++pass_glitches;
+                            continue;
+                        }
+                        if (!escaped && limit < max_iter) {
+                            glitch[px_idx] = 2;
+                            ++pass_glitches;
+                            continue;
+                        }
+                        glitch[px_idx] = 0;
+                        fo.iter_u32[px_idx] = static_cast<uint32_t>(escaped ? iter : max_iter);
+                        fo.norm_f32[px_idx] = escaped ? static_cast<float>(escape_mag2) : 0.0f;
+                    }
+                }
+            }
+        }
+        return pass_glitches;
+    };
+
+    total_glitches = render_pass(ref, p.center_re, p.center_im, nullptr, false);
+
+    // Rebase for glitch=1 (cancellation glitches)
+    for (int rebase = 0; rebase < 3; ++rebase) {
+        if (cancelled.load(std::memory_order_relaxed)) break;
+        double rebase_re = p.center_re, rebase_im = p.center_im;
+        bool found = false;
+        for (int y = 0; y < H && !found; ++y)
+            for (int x = 0; x < W && !found; ++x)
+                if (glitch[static_cast<size_t>(y) * W + x] == 1) {
+                    rebase_re = p.center_re + span_re * ((static_cast<double>(x) + 0.5) / W - 0.5);
+                    rebase_im = p.center_im - span_im * ((static_cast<double>(y) + 0.5) / H - 0.5);
+                    found = true;
+                }
+        if (!found) break;
+        RefOrbit rebase_ref = compute_reference_orbit(rebase_re, rebase_im, max_iter, bail2);
+        render_pass(rebase_ref, rebase_re, rebase_im, glitch.data(), true);
+    }
+
+    // MPFR fallback for remaining glitch=1 and truncated=2 pixels.
+    {
+        const int mpfr_bits = std::max(128, static_cast<int>(std::ceil(
+            p.scale > 0 ? -std::log2(p.scale) : 53)) + 64);
+
+        #pragma omp parallel num_threads(thread_count)
+        {
+            #pragma omp for schedule(dynamic, 16)
+            for (int idx = 0; idx < W * H; ++idx) {
+                if (!glitch[idx]) continue;
+                const int x = idx % W;
+                const int y = idx / W;
+                const double frac_x = (static_cast<double>(x) + 0.5) / W - 0.5;
+                const double frac_y = (static_cast<double>(y) + 0.5) / H - 0.5;
+                int iter = max_iter;
+                double escape_mag2 = 0.0;
+
+#if defined(FSD_HAS_MPFR)
+                {
+                    const mpfr_prec_t prec = static_cast<mpfr_prec_t>(mpfr_bits);
+                    MpfrGuard cr(prec), ci(prec), zr(prec), zi(prec);
+                    MpfrGuard zr2(prec), zi2(prec), tmp(prec), mag(prec), b2(prec);
+                    if (!p.center_re_str.empty())
+                        mpfr_set_str(cr, p.center_re_str.c_str(), 10, MPFR_RNDN);
+                    else
+                        mpfr_set_d(cr, p.center_re, MPFR_RNDN);
+                    mpfr_set_d(tmp, span_re * frac_x, MPFR_RNDN);
+                    mpfr_add(cr, cr, tmp, MPFR_RNDN);
+                    if (!p.center_im_str.empty())
+                        mpfr_set_str(ci, p.center_im_str.c_str(), 10, MPFR_RNDN);
+                    else
+                        mpfr_set_d(ci, p.center_im, MPFR_RNDN);
+                    mpfr_set_d(tmp, -span_im * frac_y, MPFR_RNDN);
+                    mpfr_add(ci, ci, tmp, MPFR_RNDN);
+                    mpfr_set_d(zr, 0.0, MPFR_RNDN);
+                    mpfr_set_d(zi, 0.0, MPFR_RNDN);
+                    mpfr_set_d(b2, bail2, MPFR_RNDN);
+                    for (int n = 0; n < max_iter; ++n) {
+                        mpfr_mul(zr2, zr, zr, MPFR_RNDN);
+                        mpfr_mul(zi2, zi, zi, MPFR_RNDN);
+                        mpfr_add(mag, zr2, zi2, MPFR_RNDN);
+                        if (mpfr_cmp(mag, b2) > 0) {
+                            iter = n;
+                            escape_mag2 = mpfr_get_d(mag, MPFR_RNDN);
+                            break;
+                        }
+                        mpfr_sub(tmp, zr2, zi2, MPFR_RNDN);
+                        mpfr_add(tmp, tmp, cr, MPFR_RNDN);
+                        mpfr_mul(zi, zr, zi, MPFR_RNDN);
+                        mpfr_mul_ui(zi, zi, 2, MPFR_RNDN);
+                        mpfr_add(zi, zi, ci, MPFR_RNDN);
+                        mpfr_set(zr, tmp, MPFR_RNDN);
+                    }
+                }
+#elif defined(FSD_HAS_FLOAT128)
+                {
+                    const __float128 cre = scalar_from_string<__float128>(p.center_re_str, p.center_re)
+                        + static_cast<__float128>(span_re * frac_x);
+                    const __float128 cim = scalar_from_string<__float128>(p.center_im_str, p.center_im)
+                        + static_cast<__float128>(-span_im * frac_y);
+                    __float128 zr = 0, zi = 0;
+                    for (int n = 0; n < max_iter; ++n) {
+                        const __float128 zr2 = zr * zr, zi2 = zi * zi;
+                        const double m2 = static_cast<double>(zr2 + zi2);
+                        if (m2 > bail2) { iter = n; escape_mag2 = m2; break; }
+                        const __float128 nzi = static_cast<__float128>(2.0) * zr * zi + cim;
+                        zr = zr2 - zi2 + cre;
+                        zi = nzi;
+                    }
+                }
+#else
+                {
+                    const double cre = p.center_re + span_re * frac_x;
+                    const double cim = p.center_im - span_im * frac_y;
+                    double zr = 0, zi = 0;
+                    for (int n = 0; n < max_iter; ++n) {
+                        const double zr2 = zr * zr, zi2 = zi * zi;
+                        if (zr2 + zi2 > bail2) { iter = n; escape_mag2 = zr2 + zi2; break; }
+                        const double nzi = 2.0 * zr * zi + cim;
+                        zr = zr2 - zi2 + cre;
+                        zi = nzi;
+                    }
+                }
+#endif
+                fo.iter_u32[idx] = static_cast<uint32_t>(iter);
+                fo.norm_f32[idx] = iter < max_iter ? static_cast<float>(escape_mag2) : 0.0f;
+            }
+        }
+    }
+
+    if (cancelled.load(std::memory_order_relaxed)) {
+        throw std::runtime_error("cancelled");
+    }
+
+    auto t1 = std::chrono::steady_clock::now();
+    MapStats stats;
+    stats.elapsed_ms  = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    stats.pixel_count = W * H;
+    stats.scalar_used = "perturbation_fp64";
+    stats.engine_used = "openmp";
+    fo.scalar_used = stats.scalar_used;
+    fo.engine_used = stats.engine_used;
     return stats;
 }
 

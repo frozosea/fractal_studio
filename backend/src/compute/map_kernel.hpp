@@ -137,10 +137,14 @@ inline std::string map_effective_scalar_type(const MapParams& p) {
     // Perturbation (handled separately in render_map) covers Mandelbrot+Escape
     // at scale < 1e-7 with effectively unlimited precision.
     // This ladder handles non-perturbation cases (other variants/metrics).
+    //
+    // Thresholds based on ULP analysis (pixel_step = scale/H > ~10 × ULP).
+    // ULP at coordinate magnitude ~1:
+    //   fp64 ≈ 2^-52, fx64 ≈ 2^-57, fp80 ≈ 2^-63, fp128 ≈ 2^-112
     if (map_auto_fp32_is_adequate(p)) return "fp32";
     if (p.scale >= 1e-13) return "fp64";
-    if (p.scale >= 1e-17) return "fx64";
-    if (p.scale >= 1e-18) return "fp80";
+    if (p.scale >= 5e-14) return "fx64";
+    if (p.scale >= 1e-15) return "fp80";
 #if defined(FSD_HAS_FLOAT128)
     return "fp128";
 #else

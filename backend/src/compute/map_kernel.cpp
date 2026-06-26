@@ -123,9 +123,9 @@ void render_variant_metric_impl(const MapParams& p, cv::Mat& out) {
     const double span_re = p.scale * aspect;
     const double bail2   = p.bailout_sq;
 
-    // Native-precision viewport for fp80/fp128: avoids fp64 truncation.
-    const S s_center_re = scalar_from_double<S>(p.center_re);
-    const S s_center_im = scalar_from_double<S>(p.center_im);
+    // Parse center from string when available (preserves fp80/fp128 precision).
+    const S s_center_re = scalar_from_string<S>(p.center_re_str, p.center_re);
+    const S s_center_im = scalar_from_string<S>(p.center_im_str, p.center_im);
     const S s_span_re   = scalar_from_double<S>(span_re);
     const S s_span_im   = scalar_from_double<S>(span_im);
     const S s_half      = scalar_from_double<S>(0.5);
@@ -829,8 +829,8 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
     const double span_re = p.scale * aspect;
     const double bail2   = p.bailout_sq;
 
-    const S s_center_re = scalar_from_double<S>(p.center_re);
-    const S s_center_im = scalar_from_double<S>(p.center_im);
+    const S s_center_re = scalar_from_string<S>(p.center_re_str, p.center_re);
+    const S s_center_im = scalar_from_string<S>(p.center_im_str, p.center_im);
     const S s_span_re   = scalar_from_double<S>(span_re);
     const S s_span_im   = scalar_from_double<S>(span_im);
     const S s_half      = scalar_from_double<S>(0.5);
@@ -1307,6 +1307,15 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
     }
     if (p.metric == Metric::MandelShipAgree) {
         return render_explore_field(p, fo);
+    }
+
+    // Perturbation field path: deep zoom Mandelbrot+Escape (covers equalized mode).
+    // Only activate below fp64's useful range (~1e-13) so the fast SIMD/CUDA
+    // fp64 field path handles moderate deep zoom without perturbation glitches.
+    if (p.variant == Variant::Mandelbrot && p.metric == Metric::Escape && !p.julia
+        && !p.custom_step_fn && p.scale < 1e-13
+        && (map_scalar_type_is_auto(p.scalar_type) || p.scalar_type == "perturbation")) {
+        return render_map_field_perturbation(p, fo);
     }
 
     fo.width  = p.width;
