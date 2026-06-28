@@ -8,6 +8,7 @@
 #include "map_kernel_avx2.hpp"
 #include "map_kernel_avx512.hpp"
 #include "parallel.hpp"
+#include "perturbation.hpp"
 
 #if defined(HAS_CUDA_KERNEL)
 #  include "cuda/ln_map.cuh"
@@ -1989,9 +1990,191 @@ LnMapStats render_ln_map_openmp(const LnMapParams& p, cv::Mat& out, const LnMapP
     return render_ln_map_openmp_rows(p, out, 0, p.height_t, on_row_done);
 }
 
+// ---------------------------------------------------------------------------
+// Perturbation-theory LnMap renderer for deep-zoom Mandelbrot.
+// Uses the same reference-orbit + delta iteration as the cartesian perturbation
+// renderer, but maps pixels in log-polar coordinates:
+//   delta_c = r_mag * (cos(theta), sin(theta))
+// where r_mag = exp(ln4 - row * 2π/s).
+// ---------------------------------------------------------------------------
+
+static bool lnmap_perturbation_applicable(const LnMapParams& p) {
+    if (p.variant != Variant::Mandelbrot) return false;
+    if (p.center_re_str.empty())          return false;
+    if (p.color_mode != "escape")         return false;
+    return true;
+}
+
+static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
+                                              const LnMapProgress& on_row_done)
+{
+    ensure_ln_out(p, out);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    const int S       = p.width_s;
+    const int T       = p.height_t;
+    const double bail2 = p.bailout_sq;
+    const int max_iter = p.iterations;
+    const bool is_julia = p.julia;
+    const int thread_count = default_render_threads();
+    constexpr double GLITCH_TOL = 1e-3;
+
+    // Reference orbit at center
+    RefOrbit ref;
+    if (is_julia) {
+        ref = compute_reference_orbit_julia_auto(
+            p.center_re_str, p.center_im_str,
+            p.julia_re, p.julia_im, max_iter, bail2, 0.0);
+    } else {
+        ref = compute_reference_orbit_auto(
+            p.center_re_str, p.center_im_str, max_iter, bail2, 0.0);
+    }
+
+    const TrigColumns cols = make_trig_columns(S);
+    (void)ref; // used by render_rows lambda via captured reference
+
+    std::vector<uint8_t> glitch(static_cast<size_t>(S) * T, 0);
+    std::atomic<int> rows_done{0};
+
+    auto render_rows = [&](const RefOrbit& orb, double ref_re, double ref_im,
+                           const uint8_t* glitch_mask, bool only_glitched) {
+        const int olen = static_cast<int>(orb.z_re.size());
+        const double* oR = orb.z_re.data();
+        const double* oI = orb.z_im.data();
+
+        #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
+        for (int row = 0; row < T; ++row) {
+            uint8_t* rowp = out.ptr<uint8_t>(row);
+            const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(S);
+            const double r_mag = std::exp(k);
+
+            for (int x = 0; x < S; ++x) {
+                const size_t idx = static_cast<size_t>(row) * S + x;
+                if (only_glitched && !(glitch_mask && glitch_mask[idx])) continue;
+
+                const double px_off_re = r_mag * cols.cos_col[static_cast<size_t>(x)]
+                                        + (p.center_re - ref_re);
+                const double px_off_im = r_mag * cols.sin_col[static_cast<size_t>(x)]
+                                        + (p.center_im - ref_im);
+
+                double dc_re, dc_im, dz_re, dz_im;
+                if (is_julia) {
+                    dc_re = 0.0; dc_im = 0.0;
+                    dz_re = px_off_re; dz_im = px_off_im;
+                } else {
+                    dc_re = px_off_re; dc_im = px_off_im;
+                    dz_re = 0.0; dz_im = 0.0;
+                }
+
+                int iter = max_iter;
+                bool escaped = false;
+                bool is_glitch = false;
+
+                const int limit = std::min(max_iter, olen - 1);
+                for (int n = 0; n < limit; ++n) {
+                    const double Zr = oR[n];
+                    const double Zi = oI[n];
+                    const double new_dz_re = 2.0 * Zr * dz_re - 2.0 * Zi * dz_im
+                                            + dz_re * dz_re - dz_im * dz_im + dc_re;
+                    const double new_dz_im = 2.0 * Zr * dz_im + 2.0 * Zi * dz_re
+                                            + 2.0 * dz_re * dz_im + dc_im;
+                    dz_re = new_dz_re;
+                    dz_im = new_dz_im;
+
+                    const double z_re = oR[n + 1] + dz_re;
+                    const double z_im = oI[n + 1] + dz_im;
+                    const double mag2 = z_re * z_re + z_im * z_im;
+
+                    if (mag2 > bail2) {
+                        iter = n; escaped = true; break;
+                    }
+                    if (!std::isfinite(dz_re) || !std::isfinite(dz_im)) {
+                        is_glitch = true; break;
+                    }
+                    const double dz_mag2 = dz_re * dz_re + dz_im * dz_im;
+                    if (dz_mag2 > 1e-4 && mag2 < GLITCH_TOL * dz_mag2) {
+                        is_glitch = true; break;
+                    }
+                }
+
+                if (is_glitch || (!escaped && limit < max_iter)) {
+                    glitch[idx] = is_glitch ? 1 : 2;
+                    continue;
+                }
+                glitch[idx] = 0;
+                uint8_t* px = rowp + 3 * x;
+                colorize_escape_bgr(escaped ? iter : max_iter, max_iter,
+                                    p.colormap, 0.0, false, px[0], px[1], px[2]);
+            }
+            if (on_row_done) {
+                const int done = rows_done.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (done == T || (done % 16) == 0) on_row_done(done);
+            }
+        }
+    };
+
+    render_rows(ref, p.center_re, p.center_im, nullptr, false);
+
+    // Rebase for glitch pixels (up to 3 passes)
+    for (int rebase = 0; rebase < 3; ++rebase) {
+        double rb_re = p.center_re, rb_im = p.center_im;
+        bool found = false;
+        for (int row = 0; row < T && !found; ++row)
+            for (int x = 0; x < S && !found; ++x) {
+                const size_t idx = static_cast<size_t>(row) * S + x;
+                if (glitch[idx] == 1) {
+                    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(S);
+                    const double r_mag = std::exp(k);
+                    rb_re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
+                    rb_im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
+                    found = true;
+                }
+            }
+        if (!found) break;
+        RefOrbit rb_ref = is_julia
+            ? compute_reference_orbit_julia(rb_re, rb_im,
+                                             p.julia_re, p.julia_im, max_iter, bail2)
+            : compute_reference_orbit(rb_re, rb_im, max_iter, bail2);
+        rows_done.store(0, std::memory_order_relaxed);
+        render_rows(rb_ref, rb_re, rb_im, glitch.data(), true);
+    }
+
+    // Fallback: remaining glitch pixels use native double precision
+    for (size_t idx = 0; idx < static_cast<size_t>(S) * T; ++idx) {
+        if (!glitch[idx]) continue;
+        const int row = static_cast<int>(idx / S);
+        const int x   = static_cast<int>(idx % S);
+        const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(S);
+        const double r_mag = std::exp(k);
+        const double pre = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
+        const double pim = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
+        Cx<double> z0, c;
+        if (is_julia) { z0 = {pre, pim}; c = {p.julia_re, p.julia_im}; }
+        else          { z0 = {0.0, 0.0}; c = {pre, pim}; }
+        const auto ir = iterate_masked<
+            IterResultField::Iter | IterResultField::Escaped,
+            Variant::Mandelbrot, double>(z0, c, max_iter, p.bailout, bail2);
+        uint8_t* px = out.ptr<uint8_t>(row) + 3 * x;
+        const int it = ir.escaped ? ir.iter : max_iter;
+        colorize_escape_bgr(it, max_iter, p.colormap, 0.0, false, px[0], px[1], px[2]);
+    }
+
+    const auto t1 = std::chrono::steady_clock::now();
+    LnMapStats stats;
+    stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    stats.pixel_count = S * T;
+    stats.engine_used = "openmp";
+    stats.scalar_used = "perturbation";
+    stats.precision_mode = "standard";
+    return stats;
+}
+
 LnMapStats render_ln_map(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {
     if (!ln_map_color_mode_supported(p.color_mode)) {
         throw std::runtime_error("invalid ln-map color mode");
+    }
+    if (lnmap_perturbation_applicable(p)) {
+        return render_ln_map_perturbation(p, out, on_row_done);
     }
     if (p.color_mode != "escape") {
         return render_ln_map_mapped(p, out, on_row_done);

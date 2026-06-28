@@ -358,6 +358,9 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
             throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
         }
         compute::MapParams mp = buildMapParams(in, j, bailout, bailoutSq, shouldCancel);
+        mp.julia    = in.julia;
+        mp.julia_re = in.juliaRe;
+        mp.julia_im = in.juliaIm;
         compute::TransitionParams tp;
         tp.base = std::move(mp);
         tp.theta = in.theta;

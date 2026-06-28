@@ -423,6 +423,7 @@ function scheduleRender(delay = 200) {
 // Compute watch — viewport, fractal parameters, frame size → full backend re-fetch
 watch(() => [
   props.centerRe, props.centerIm, props.scale,
+  props.centerReStr, props.centerImStr,
   props.variant, props.metric,
   props.colorMode, props.cyclesPerOctave,
   props.iterations, props.pairwiseCap, props.julia, props.juliaRe, props.juliaIm,
@@ -538,6 +539,7 @@ const activePointers = new Map<number, PointerPoint>()
 let dragging  = false
 let dragMoved = false
 let dragStart = { x: 0, y: 0, cx: 0, cy: 0, sc: 0 }
+let prevDragPos = { x: 0, y: 0 }
 let pinchStart: PinchStart | null = null
 
 function screenToWorld(clientX: number, clientY: number): { re: number; im: number } | null {
@@ -646,6 +648,7 @@ function onPointerDown(e: PointerEvent) {
   dragging  = true
   dragMoved = false
   dragStart = { x: e.clientX, y: e.clientY, cx: props.centerRe, cy: props.centerIm, sc: props.scale }
+  prevDragPos = { x: e.clientX, y: e.clientY }
 }
 
 function onPointerMove(e: PointerEvent) {
@@ -663,12 +666,21 @@ function onPointerMove(e: PointerEvent) {
   dragMoved = true
   const rect   = wrapper.value.getBoundingClientRect()
   const aspect = rect.width / rect.height
-  const deltaRe = -(dx / rect.width)  * dragStart.sc * aspect
-  const deltaIm =  (dy / rect.height) * dragStart.sc
+  // Incremental delta from previous pointer position (not drag start)
+  // to preserve BigDec precision at deep zoom where total delta < float64 ULP
+  const incDx = e.clientX - prevDragPos.x
+  const incDy = e.clientY - prevDragPos.y
+  prevDragPos = { x: e.clientX, y: e.clientY }
+  const deltaRe = -(incDx / rect.width)  * dragStart.sc * aspect
+  const deltaIm =  (incDy / rect.height) * dragStart.sc
+  const totalRe = -(dx / rect.width)  * dragStart.sc * aspect
+  const totalIm =  (dy / rect.height) * dragStart.sc
   emit('viewport-change', {
-    centerRe: dragStart.cx + deltaRe,
-    centerIm: dragStart.cy + deltaIm,
+    centerRe: dragStart.cx + totalRe,
+    centerIm: dragStart.cy + totalIm,
     scale:    dragStart.sc,
+    deltaRe,
+    deltaIm,
   })
 }
 
@@ -687,6 +699,7 @@ function onPointerUp(e: PointerEvent) {
     dragging = true
     dragMoved = false
     dragStart = { x: next.x, y: next.y, cx: props.centerRe, cy: props.centerIm, sc: props.scale }
+    prevDragPos = { x: next.x, y: next.y }
   } else {
     dragging = false
     pinchStart = null

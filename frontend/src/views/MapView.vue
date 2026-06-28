@@ -540,11 +540,33 @@ const jCenterRe = ref(0.0)
 const jCenterIm = ref(0.0)
 const jScale    = ref(4.0)
 
-// Format c for display
-const juliaLabel = computed(() => {
-  const sign = juliaIm.value >= 0 ? '+' : ''
-  return `${juliaRe.value.toPrecision(10)} ${sign}${juliaIm.value.toPrecision(10)}i`
-})
+// Julia c input state
+const juliaCReInput = ref('')
+const juliaCImInput = ref('')
+const activeJuliaInput = ref<'' | 'cre' | 'cim'>('')
+
+function syncJuliaCInputs(force = false) {
+  if (force || activeJuliaInput.value !== 'cre')
+    juliaCReInput.value = juliaRe.value.toPrecision(15)
+  if (force || activeJuliaInput.value !== 'cim')
+    juliaCImInput.value = juliaIm.value.toPrecision(15)
+}
+
+function commitJuliaCInput(kind: 'cre' | 'cim') {
+  const raw = (kind === 'cre' ? juliaCReInput.value : juliaCImInput.value).trim()
+  const next = Number(raw)
+  if (!Number.isFinite(next)) { syncJuliaCInputs(true); return }
+  if (kind === 'cre') juliaRe.value = next
+  else                juliaIm.value = next
+  syncJuliaCInputs(true)
+}
+
+function finishJuliaCInput(kind: 'cre' | 'cim') {
+  commitJuliaCInput(kind)
+  activeJuliaInput.value = ''
+}
+
+watch([juliaRe, juliaIm], () => syncJuliaCInputs(), { immediate: true })
 
 // Octave count (倍频数) of the current zoom: log2 of the magnification relative to the
 // full-set view (height 4 — the |c|≤2 bounding disk, the same reference the ln-map
@@ -759,6 +781,10 @@ function onSpecialPointSelect(p: SpecialPointEnumResult) {
   selectedSpecialPointId.value = p.id
   updateSpecialPointVariantHint(p)
   onImportPoint(p)
+  if (juliaOn.value) {
+    juliaRe.value = p.re
+    juliaIm.value = p.im
+  }
 }
 
 function onUseSpecialPointAsJulia(p: SpecialPointEnumResult) {
@@ -1001,6 +1027,8 @@ function videoRequestBase() {
   return {
     centerRe:     centerRe.value,
     centerIm:     centerIm.value,
+    centerReStr:  bdToString(centerRePrecise.value),
+    centerImStr:  bdToString(centerImPrecise.value),
     julia:        juliaOn.value,
     juliaRe:      juliaRe.value,
     juliaIm:      juliaIm.value,
@@ -1068,6 +1096,7 @@ async function runLnMapPreview() {
     const base = videoRequestBase()
     const resp = await api.lnMap({
       centerRe: base.centerRe, centerIm: base.centerIm,
+      centerReStr: base.centerReStr, centerImStr: base.centerImStr,
       julia: base.julia, juliaRe: base.juliaRe, juliaIm: base.juliaIm,
       variant: base.variant, colorMap: base.colorMap,
       lnMapColorMode: base.lnMapColorMode,
@@ -1449,8 +1478,19 @@ async function pollVideoExport(initial: VideoExportResponse) {
 
     <!-- ── Julia info strip ─────────────────────────────────────────────── -->
     <div v-if="juliaOn" class="julia-strip mono">
-      <span class="julia-label">{{ t('julia_selected_c') }}:</span>
-      <span class="julia-val">{{ juliaLabel }}</span>
+      <span class="julia-label">c =</span>
+      <input class="julia-c-input num" type="text"
+        v-model="juliaCReInput"
+        @focus="activeJuliaInput = 'cre'"
+        @blur="finishJuliaCInput('cre')"
+        @keydown.enter="commitJuliaCInput('cre'); ($event.target as HTMLInputElement).blur()" />
+      <span class="julia-label">+</span>
+      <input class="julia-c-input num" type="text"
+        v-model="juliaCImInput"
+        @focus="activeJuliaInput = 'cim'"
+        @blur="finishJuliaCInput('cim')"
+        @keydown.enter="commitJuliaCInput('cim'); ($event.target as HTMLInputElement).blur()" />
+      <span class="julia-label">i</span>
       <span class="julia-hint">{{ t('julia_hint') }}</span>
     </div>
 
@@ -1552,7 +1592,9 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :iterations="iterations" :variant="variant" :metric="metric"
                 :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
                 :pairwise-cap="pairwiseCap"
-                :transition-theta="null"
+                :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
+                :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
+                :transitionFrom="transitionFrom" :transitionTo="transitionTo"
                 :julia="true" :juliaRe="juliaRe" :juliaIm="juliaIm"
                 :engine="engineMode" :scalarType="scalarMode"
                 @viewport-change="onJuliaViewport"
@@ -1862,8 +1904,13 @@ async function pollVideoExport(initial: VideoExportResponse) {
   font-size: var(--fs-label);
   flex-shrink: 0;
 }
-.julia-label { color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
-.julia-val   { color: var(--accent); }
+.julia-label { color: var(--text-dim); letter-spacing: 0.08em; }
+.julia-c-input {
+  width: 14em; padding: 2px 6px;
+  background: var(--input-bg); color: var(--accent); border: 1px solid var(--border);
+  border-radius: 3px; font: inherit;
+}
+.julia-c-input:focus { border-color: var(--accent); outline: none; }
 .julia-hint  { color: var(--text-faint); margin-left: auto; }
 
 /* ── Stage ── */

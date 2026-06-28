@@ -194,6 +194,10 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         lp.julia = julia;
         lp.center_re = cr;
         lp.center_im = ci;
+        if (j.contains("centerReStr") && j["centerReStr"].is_string())
+            lp.center_re_str = j["centerReStr"].get<std::string>();
+        if (j.contains("centerImStr") && j["centerImStr"].is_string())
+            lp.center_im_str = j["centerImStr"].get<std::string>();
         lp.julia_re = jre;
         lp.julia_im = jim;
         lp.width_s = s;
@@ -229,6 +233,8 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         Json sidecar = {
             {"centerRe",     cr},
             {"centerIm",     ci},
+            {"centerReStr",  lp.center_re_str},
+            {"centerImStr",  lp.center_im_str},
             {"julia",        julia},
             {"juliaRe",      jre},
             {"juliaIm",      jim},

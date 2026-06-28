@@ -135,6 +135,8 @@ export interface MapRenderRequest {
   localExport?: boolean
   centerRe: number
   centerIm: number
+  centerReStr?: string
+  centerImStr?: string
   scale: number          // height in complex units
   width: number
   height: number
@@ -361,6 +363,8 @@ export interface MapFieldResponse {
 export interface LnMapRequest {
   centerRe: number
   centerIm: number
+  centerReStr?: string
+  centerImStr?: string
   julia?: boolean
   juliaRe?: number
   juliaIm?: number

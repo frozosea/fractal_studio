@@ -21,6 +21,8 @@ struct LnMapParams {
     bool julia = false;
     double center_re = 0.0;
     double center_im = 0.0;
+    std::string center_re_str;
+    std::string center_im_str;
     double julia_re = 0.0;
     double julia_im = 0.0;
     int width_s = 1024;

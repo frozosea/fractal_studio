@@ -160,8 +160,12 @@ inline TransitionIterResult iterate_transition(
     int max_iter, double bail2,
     Variant from_variant, Variant to_variant,
     int pairwise_cap,
-    std::vector<OrbitPt>& orbit
+    std::vector<OrbitPt>& orbit,
+    bool julia = false, double jx = 0, double jy = 0, double jz = 0
 ) {
+    const double cx = julia ? jx : x0;
+    const double cy = julia ? jy : y0;
+    const double cz = julia ? jz : z0;
     double x = x0, y = y0, z = z0;
     double x2 = x * x;
     double y2 = y * y;
@@ -204,9 +208,9 @@ inline TransitionIterResult iterate_transition(
         const double nx =
             variant_transition_real_projection(from_variant, x2, y2)
           + variant_transition_real_projection(to_variant,   x2, z2)
-          - x2 + x0;
-        const double ny = variant_transition_imag_projection(from_variant, x, y) + y0;
-        const double nz = variant_transition_imag_projection(to_variant,   x, z) + z0;
+          - x2 + cx;
+        const double ny = variant_transition_imag_projection(from_variant, x, y) + cy;
+        const double nz = variant_transition_imag_projection(to_variant,   x, z) + cz;
         const bool finite_xyz = std::isfinite(nx) && std::isfinite(ny) && std::isfinite(nz);
         const double nx2 = finite_xyz ? nx * nx : std::numeric_limits<double>::infinity();
         const double ny2 = finite_xyz ? ny * ny : std::numeric_limits<double>::infinity();
@@ -358,7 +362,9 @@ MapStats render_transition_metric_field(const TransitionParams& p, FieldOutput& 
                     iterate_transition<M, NeedMask>(u, v * cth, v * sth,
                                        b.iterations, bail2,
                                        p.from_variant, p.to_variant,
-                                       b.pairwise_cap, orbit);
+                                       b.pairwise_cap, orbit,
+                                       b.julia, b.julia_re,
+                                       b.julia_im * cth, b.julia_im * sth);
 
                 const size_t idx = row_off + static_cast<size_t>(x);
                 if constexpr (M == Metric::Escape) {
