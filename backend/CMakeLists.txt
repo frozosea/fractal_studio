@@ -64,6 +64,7 @@ add_executable(fractal_studio_backend
     src/api/routes_variants.cpp
 
     # Native compute
+    src/compute/colorize.cpp
     src/compute/cpu_features.cpp
     src/compute/ln_map.cpp
     src/compute/ln_map_avx2.cpp
@@ -154,7 +155,11 @@ add_test(NAME special_points_smoke COMMAND special_points_smoke)
 
 add_executable(compute_path_diff
     src/tests/compute_path_diff.cpp
+    src/compute/colorize.cpp
     src/compute/cpu_features.cpp
+    src/compute/ln_map.cpp
+    src/compute/ln_map_avx2.cpp
+    src/compute/ln_map_avx512.cpp
     src/compute/map_kernel.cpp
     src/compute/engine_select.cpp
     src/compute/map_kernel_avx2.cpp

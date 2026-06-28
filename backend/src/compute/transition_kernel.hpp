@@ -36,40 +36,17 @@
 namespace fsd::compute {
 
 struct TransitionParams {
-    double center_re = -0.5;
-    double center_im =  0.0;
-    double scale     =  4.0;
+    MapParams base;
 
-    int width        = 1024;
-    int height       = 1024;
-    int iterations   = 512;
-    double bailout   = 2.0;  // radius, kept for field normalization
-    double bailout_sq = 4.0; // squared threshold used by escape tests
-
-    // Rotation angle around x-axis, radians. 0 = Mandelbrot, π/2 = Burning Ship.
-    double theta     = 0.0;
-    // Optional fixed-point angle from the UI/API, in milli-degrees. When set,
-    // cardinal slices are detected by exact integer comparison.
+    double theta = 0.0;
     bool theta_milli_deg_set = false;
     int theta_milli_deg = 0;
 
-    // Quadratic/folded variants to place on the xy and xz planes. The default
-    // preserves the original Mandelbrot → Burning Ship bridge.
     Variant from_variant = Variant::Mandelbrot;
     Variant to_variant   = Variant::Boat;
-
-    Metric   metric       = Metric::Escape;
-    Colormap colormap     = Colormap::ClassicCos;
-    bool     smooth       = false;
-    int      pairwise_cap = 64;   // orbit length cap for MinPairwiseDist
-    int      render_threads = 0;  // 0 = auto-select visible logical cores
-    std::string scalar_type = "auto";
-    std::string engine = "openmp";
-
-    // Optional cooperative cancellation hook for interactive renders.
-    std::function<bool()> should_cancel;
 };
 
+MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo);
 MapStats render_transition(const TransitionParams& p, cv::Mat& out);
 
 } // namespace fsd::compute

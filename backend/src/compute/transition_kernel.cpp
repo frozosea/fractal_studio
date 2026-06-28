@@ -1,6 +1,7 @@
 // compute/transition_kernel.cpp
 
 #include "transition_kernel.hpp"
+#include "colorize.hpp"
 #include "map_kernel.hpp"
 #include "parallel.hpp"
 
@@ -88,7 +89,7 @@ DirectSlice direct_slice_for_milli_deg(int milli_deg) {
 }
 
 inline bool transition_cancel_requested(const TransitionParams& p) {
-    return p.should_cancel && p.should_cancel();
+    return p.base.should_cancel && p.base.should_cancel();
 }
 
 [[noreturn]] void throw_transition_cancelled() {
@@ -104,32 +105,37 @@ inline bool mark_cancelled_if_requested(const TransitionParams& p, std::atomic<b
     return false;
 }
 
-MapStats render_direct_slice(const TransitionParams& p, DirectSlice slice, cv::Mat& out) {
+void flip_field_output_y(FieldOutput& fo) {
+    const int W = fo.width;
+    const int H = fo.height;
+    for (int top = 0, bot = H - 1; top < bot; ++top, --bot) {
+        const size_t off_top = static_cast<size_t>(top) * W;
+        const size_t off_bot = static_cast<size_t>(bot) * W;
+        if (fo.metric == Metric::Escape) {
+            std::swap_ranges(fo.iter_u32.begin() + off_top,
+                             fo.iter_u32.begin() + off_top + W,
+                             fo.iter_u32.begin() + off_bot);
+            if (!fo.norm_f32.empty()) {
+                std::swap_ranges(fo.norm_f32.begin() + off_top,
+                                 fo.norm_f32.begin() + off_top + W,
+                                 fo.norm_f32.begin() + off_bot);
+            }
+        } else {
+            std::swap_ranges(fo.field_f64.begin() + off_top,
+                             fo.field_f64.begin() + off_top + W,
+                             fo.field_f64.begin() + off_bot);
+        }
+    }
+}
+
+MapStats render_direct_slice_field(const TransitionParams& p, DirectSlice slice, FieldOutput& fo) {
     const bool flip_y = slice == DirectSlice::FromFlipY || slice == DirectSlice::ToFlipY;
-
-    MapParams mp;
-    mp.center_re = p.center_re;
-    mp.center_im = flip_y ? -p.center_im : p.center_im;
-    mp.scale = p.scale;
-    mp.width = p.width;
-    mp.height = p.height;
-    mp.iterations = p.iterations;
-    mp.bailout = p.bailout;
-    mp.bailout_sq = p.bailout_sq;
+    MapParams mp = p.base;
     mp.variant = (slice == DirectSlice::To || slice == DirectSlice::ToFlipY)
-        ? p.to_variant
-        : p.from_variant;
-    mp.metric = p.metric;
-    mp.colormap = p.colormap;
-    mp.smooth = p.smooth;
-    mp.pairwise_cap = p.pairwise_cap;
-    mp.render_threads = p.render_threads;
-    mp.scalar_type = p.scalar_type;
-    mp.engine = p.engine;
-    mp.should_cancel = p.should_cancel;
-
-    MapStats stats = render_map(mp, out);
-    if (flip_y) cv::flip(out, out, 0);
+        ? p.to_variant : p.from_variant;
+    if (flip_y) mp.center_im = -mp.center_im;
+    MapStats stats = render_map_field(mp, fo);
+    if (flip_y) flip_field_output_y(fo);
     return stats;
 }
 
@@ -282,41 +288,54 @@ double transition_normalized_value(const TransitionIterResult& r, double bailout
 }
 
 template <Metric M, IterResultMask NeedMask>
-MapStats render_transition_metric(const TransitionParams& p, cv::Mat& out) {
+MapStats render_transition_metric_field(const TransitionParams& p, FieldOutput& fo) {
     if (!variant_supports_axis_transition(p.from_variant) ||
         !variant_supports_axis_transition(p.to_variant)) {
         throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
     }
 
-    if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
-        out.create(p.height, p.width, CV_8UC3);
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto& b = p.base;
+
+    const int W = b.width;
+    const int H = b.height;
+    const size_t npx = static_cast<size_t>(W) * H;
+    fo.width = W;
+    fo.height = H;
+    fo.metric = M;
+    if constexpr (M == Metric::Escape) {
+        fo.iter_u32.resize(npx);
+        fo.norm_f32.resize(npx);
+    } else {
+        fo.field_f64.resize(npx);
     }
 
-    const auto t0 = std::chrono::steady_clock::now();
-
-    const int W = p.width;
-    const int H = p.height;
     const double aspect  = static_cast<double>(W) / H;
-    const double span_im = p.scale;
-    const double span_re = p.scale * aspect;
-    const double re_min  = p.center_re - span_re * 0.5;
-    const double im_max  = p.center_im + span_im * 0.5;
-    const double bail2   = p.bailout_sq;
+    const double span_im = b.scale;
+    const double span_re = b.scale * aspect;
+    const double re_min  = b.center_re - span_re * 0.5;
+    const double im_max  = b.center_im + span_im * 0.5;
+    const double bail2   = b.bailout_sq;
     const double cth     = std::cos(p.theta);
     const double sth     = std::sin(p.theta);
-    const int thread_count = resolve_render_threads(p.render_threads);
+    const int thread_count = resolve_render_threads(b.render_threads);
     constexpr int tile_size = 32;
     const int tiles_x = (W + tile_size - 1) / tile_size;
     const int tiles_y = (H + tile_size - 1) / tile_size;
     const int tile_count = tiles_x * tiles_y;
     std::atomic<bool> cancelled{false};
 
+    double global_min = std::numeric_limits<double>::infinity();
+    double global_max = -std::numeric_limits<double>::infinity();
+
     #pragma omp parallel num_threads(thread_count)
     {
         std::vector<OrbitPt> orbit;
         if constexpr (M == Metric::MinPairwiseDist) {
-            orbit.reserve(static_cast<size_t>(p.pairwise_cap));
+            orbit.reserve(static_cast<size_t>(b.pairwise_cap));
         }
+        double local_min = std::numeric_limits<double>::infinity();
+        double local_max = -std::numeric_limits<double>::infinity();
 
     #pragma omp for schedule(dynamic, 1)
     for (int tile = 0; tile < tile_count; tile++) {
@@ -330,58 +349,68 @@ MapStats render_transition_metric(const TransitionParams& p, cv::Mat& out) {
 
         for (int y = y_begin; y < y_end; y++) {
             if (mark_cancelled_if_requested(p, cancelled)) break;
-            uint8_t* row = out.ptr<uint8_t>(y);
+            const size_t row_off = static_cast<size_t>(y) * W;
             const double v = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
             for (int x = x_begin; x < x_end; x++) {
                 const double u = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
 
-                const double x0 = u;
-                const double y0 = v * cth;
-                const double z0 = v * sth;
-
                 const TransitionIterResult r =
-                    iterate_transition<M, NeedMask>(x0, y0, z0, p.iterations, bail2,
+                    iterate_transition<M, NeedMask>(u, v * cth, v * sth,
+                                       b.iterations, bail2,
                                        p.from_variant, p.to_variant,
-                                       p.pairwise_cap, orbit);
+                                       b.pairwise_cap, orbit);
 
-                uint8_t* px = row + 3 * x;
+                const size_t idx = row_off + static_cast<size_t>(x);
                 if constexpr (M == Metric::Escape) {
-                    const int iter = r.escaped ? r.iter : p.iterations;
-                    constexpr bool smooth_escape = iter_result_wants(NeedMask, IterResultField::Norm);
-                    const double norm = smooth_escape && r.escaped ? r.norm : 0.0;
-                    colorize_escape_bgr(iter, p.iterations, p.colormap, norm, smooth_escape, px[0], px[1], px[2]);
+                    fo.iter_u32[idx] = static_cast<uint32_t>(
+                        r.escaped ? r.iter : b.iterations);
+                    constexpr bool has_norm =
+                        iter_result_wants(NeedMask, IterResultField::Norm);
+                    fo.norm_f32[idx] = has_norm && r.escaped
+                        ? static_cast<float>(r.norm) : 0.0f;
                 } else {
-                    if (p.colormap == Colormap::HsRainbow) {
-                        const double fv = transition_raw_value<M>(r);
-                        colorize_field_hs_bgr(fv, px[0], px[1], px[2]);
-                    } else if (p.smooth) {
-                        const double fv = transition_raw_value<M>(r);
-                        colorize_field_smooth_bgr(fv, p.colormap, px[0], px[1], px[2]);
-                    } else {
-                        const double v01 = transition_normalized_value<M>(r, p.bailout);
-                        colorize_field_bgr(v01, p.colormap, px[0], px[1], px[2]);
-                    }
+                    const double fv = transition_raw_value<M>(r);
+                    fo.field_f64[idx] = fv;
+                    if (fv < local_min) local_min = fv;
+                    if (fv > local_max) local_max = fv;
                 }
             }
         }
     }
+
+    if constexpr (M != Metric::Escape) {
+        #pragma omp critical
+        {
+            if (local_min < global_min) global_min = local_min;
+            if (local_max > global_max) global_max = local_max;
+        }
+    }
     } // end omp parallel
+
     if (cancelled.load(std::memory_order_relaxed) || transition_cancel_requested(p)) {
         throw_transition_cancelled();
+    }
+
+    if constexpr (M != Metric::Escape) {
+        fo.field_min = global_min;
+        fo.field_max = global_max;
     }
 
     const auto t1 = std::chrono::steady_clock::now();
     MapStats s;
     s.elapsed_ms  = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    s.pixel_count = p.width * p.height;
+    s.pixel_count = W * H;
     s.scalar_used = "fp64";
     s.engine_used = "openmp";
+    fo.scalar_used = s.scalar_used;
+    fo.engine_used = s.engine_used;
+    fo.elapsed_ms  = s.elapsed_ms;
     return s;
 }
 
 } // namespace
 
-MapStats render_transition(const TransitionParams& p, cv::Mat& out) {
+MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo) {
     if (!variant_supports_axis_transition(p.from_variant) ||
         !variant_supports_axis_transition(p.to_variant)) {
         throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
@@ -391,31 +420,36 @@ MapStats render_transition(const TransitionParams& p, cv::Mat& out) {
     const NormalizedTheta theta = normalize_transition_theta(p);
     const DirectSlice direct = direct_slice_for_milli_deg(theta.milli_deg);
     if (direct != DirectSlice::None) {
-        return render_direct_slice(p, direct, out);
+        return render_direct_slice_field(p, direct, fo);
     }
 
     TransitionParams q = p;
     q.theta = theta.radians;
-    switch (p.metric) {
+    switch (p.base.metric) {
         case Metric::Escape:
-            if (p.smooth) {
-                return render_transition_metric<Metric::Escape,
-                    IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, out);
-            }
-            return render_transition_metric<Metric::Escape,
-                IterResultField::Iter | IterResultField::Escaped>(q, out);
+            return render_transition_metric_field<Metric::Escape,
+                IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, fo);
         case Metric::MinAbs:
-            return render_transition_metric<Metric::MinAbs, IterResultField::MinAbs>(q, out);
+            return render_transition_metric_field<Metric::MinAbs, IterResultField::MinAbs>(q, fo);
         case Metric::MaxAbs:
-            return render_transition_metric<Metric::MaxAbs, IterResultField::MaxAbs>(q, out);
+            return render_transition_metric_field<Metric::MaxAbs, IterResultField::MaxAbs>(q, fo);
         case Metric::Envelope:
-            return render_transition_metric<Metric::Envelope,
-                IterResultField::MinAbs | IterResultField::MaxAbs>(q, out);
+            return render_transition_metric_field<Metric::Envelope,
+                IterResultField::MinAbs | IterResultField::MaxAbs>(q, fo);
         case Metric::MinPairwiseDist:
-            return render_transition_metric<Metric::MinPairwiseDist, IterResultField::Extra>(q, out);
+            return render_transition_metric_field<Metric::MinPairwiseDist, IterResultField::Extra>(q, fo);
+        default:
+            break;
     }
-    return render_transition_metric<Metric::Escape,
-        IterResultField::Iter | IterResultField::Escaped>(q, out);
+    return render_transition_metric_field<Metric::Escape,
+        IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, fo);
+}
+
+MapStats render_transition(const TransitionParams& p, cv::Mat& out) {
+    FieldOutput fo;
+    auto stats = render_transition_field(p, fo);
+    out = colorize_direct(p.base, fo);
+    return stats;
 }
 
 } // namespace fsd::compute

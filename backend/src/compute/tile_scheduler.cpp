@@ -401,4 +401,242 @@ TileSchedulerStats render_map_hybrid(
     return result;
 }
 
+// ---- Field-output hybrid scheduler ----
+
+static double render_tile_cpu_field(
+    const MapParams& base, const Tile& t,
+    FieldOutput& fo, bool use_avx2, bool use_avx512
+) {
+    MapParams p = base;
+    const double aspect  = static_cast<double>(base.width) / base.height;
+    const double span_im = base.scale;
+    const double span_re = base.scale * aspect;
+    const double re_step = span_re / base.width;
+    const double im_step = span_im / base.height;
+    const double re_min  = (base.center_re - span_re * 0.5) + t.x * re_step;
+    const double im_max  = (base.center_im + span_im * 0.5) - t.y * im_step;
+
+    p.center_re = re_min + (t.w * 0.5) * re_step;
+    p.center_im = im_max - (t.h * 0.5) * im_step;
+    p.scale     = t.h * im_step;
+    p.width     = t.w;
+    p.height    = t.h;
+    p.engine    = use_avx512 ? "avx512" : (use_avx2 ? "avx2" : "openmp");
+    p.scalar_type = "fp64";
+    p.render_threads = 1;
+
+    FieldOutput tile_fo;
+    MapStats stats;
+    if (use_avx512) {
+        stats = render_map_field_avx512_fp64(p, tile_fo);
+    } else if (use_avx2) {
+        stats = render_map_avx2_field(p, tile_fo);
+    } else {
+        stats = render_map_field(p, tile_fo);
+    }
+
+    const int W = base.width;
+    for (int row = 0; row < t.h; ++row) {
+        const size_t src_off = static_cast<size_t>(row) * static_cast<size_t>(t.w);
+        const size_t dst_off = static_cast<size_t>(t.y + row) * static_cast<size_t>(W) + static_cast<size_t>(t.x);
+        std::copy_n(tile_fo.iter_u32.data() + src_off, static_cast<size_t>(t.w), fo.iter_u32.data() + dst_off);
+        std::copy_n(tile_fo.norm_f32.data() + src_off, static_cast<size_t>(t.w), fo.norm_f32.data() + dst_off);
+    }
+    return stats.elapsed_ms;
+}
+
+#if USE_CUDA
+static double render_tile_gpu_field(
+    const MapParams& base, const Tile& t,
+    FieldOutput& fo
+) {
+    const double aspect  = static_cast<double>(base.width) / base.height;
+    const double span_re = base.scale * aspect;
+    const double span_im = base.scale;
+    const double re_step = span_re / base.width;
+    const double im_step = span_im / base.height;
+    const double re_min  = (base.center_re - span_re * 0.5) + t.x * re_step;
+    const double im_max  = (base.center_im + span_im * 0.5) - t.y * im_step;
+
+    fsd_cuda::CudaMapParams cp;
+    cp.center_re  = re_min + (t.w * 0.5) * re_step;
+    cp.center_im  = im_max - (t.h * 0.5) * im_step;
+    cp.scale      = t.h * im_step;
+    cp.width      = t.w;
+    cp.height     = t.h;
+    cp.iterations = base.iterations;
+    cp.bailout    = base.bailout;
+    cp.bailout_sq = base.bailout_sq;
+    cp.scalar_type  = "fp64";
+    cp.colormap_id  = static_cast<int>(base.colormap);
+    cp.variant_id   = static_cast<int>(base.variant);
+    cp.julia        = base.julia;
+    cp.julia_re     = base.julia_re;
+    cp.julia_im     = base.julia_im;
+    cp.metric_id    = 0;
+
+    const size_t tile_n = static_cast<size_t>(t.w) * static_cast<size_t>(t.h);
+    std::vector<uint32_t> tile_iter(tile_n, 0u);
+    std::vector<float>    tile_norm(tile_n, 0.0f);
+    auto cs = fsd_cuda::cuda_render_map_field(cp, tile_iter.data(), tile_norm.data());
+
+    const int W = base.width;
+    for (int row = 0; row < t.h; ++row) {
+        const size_t src_off = static_cast<size_t>(row) * static_cast<size_t>(t.w);
+        const size_t dst_off = static_cast<size_t>(t.y + row) * static_cast<size_t>(W) + static_cast<size_t>(t.x);
+        std::copy_n(tile_iter.data() + src_off, static_cast<size_t>(t.w), fo.iter_u32.data() + dst_off);
+        std::copy_n(tile_norm.data() + src_off, static_cast<size_t>(t.w), fo.norm_f32.data() + dst_off);
+    }
+    return cs.elapsed_ms;
+}
+#endif
+
+TileSchedulerStats render_map_field_hybrid(
+    const MapParams& p, FieldOutput& fo, int tile_size
+) {
+    const size_t n_pixels = static_cast<size_t>(p.width) * static_cast<size_t>(p.height);
+    fo.width  = p.width;
+    fo.height = p.height;
+    fo.metric = Metric::Escape;
+    fo.iter_u32.assign(n_pixels, 0u);
+    fo.norm_f32.assign(n_pixels, 0.0f);
+
+    auto tiles = make_tiles(p.width, p.height, tile_size);
+    const size_t n = tiles.size();
+
+    std::atomic<size_t> next_tile{0};
+    std::atomic<bool> cancelled{false};
+    std::exception_ptr first_error;
+    std::mutex error_mutex;
+    auto cancel_requested = [&]() {
+        if (cancelled.load(std::memory_order_relaxed)) return true;
+        if (map_render_cancel_requested(p)) {
+            cancelled.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    };
+    auto record_worker_exception = [&](std::exception_ptr ep) {
+        cancelled.store(true, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lk(error_mutex);
+        if (!first_error) first_error = ep;
+    };
+
+    const bool avx512_ok = map_engine_supported(p, "avx512", false);
+    const bool avx2_ok   = map_engine_supported(p, "avx2", false);
+    const bool use_avx512 = avx512_ok;
+    const bool use_avx2   = !use_avx512 && avx2_ok;
+    const bool use_gpu    = false
+#if USE_CUDA
+                         || map_engine_supported(p, "cuda", false)
+#endif
+                         ;
+
+    TileSchedulerStats result;
+    std::mutex stats_mutex;
+    double total_cpu_ms = 0.0, total_gpu_ms = 0.0;
+    int cpu_tiles = 0, gpu_tiles = 0;
+
+    const auto t_start = std::chrono::steady_clock::now();
+
+    std::thread gpu_thread;
+    if (use_gpu) {
+        gpu_thread = std::thread([&]() {
+            try {
+                const size_t gpu_batch = runtime_capabilities().cuda_low_end ? 4u : 12u;
+                while (true) {
+                    if (cancel_requested()) break;
+                    const size_t first = next_tile.fetch_add(gpu_batch);
+                    if (first >= n) break;
+                    const size_t last = std::min(n, first + gpu_batch);
+                    for (size_t idx = first; idx < last; ++idx) {
+                        if (cancel_requested()) break;
+                        if (idx >= n) break;
+                        const Tile& tile = tiles[idx];
+                        double ms = 0.0;
+#if USE_CUDA
+                        try {
+                            ms = render_tile_gpu_field(p, tile, fo);
+                        } catch (...) {
+                            ms = render_tile_cpu_field(p, tile, fo, use_avx2, use_avx512);
+                        }
+#else
+                        (void)tile;
+#endif
+                        {
+                            std::lock_guard<std::mutex> lk(stats_mutex);
+                            total_gpu_ms += ms;
+                            gpu_tiles++;
+                        }
+                    }
+                }
+            } catch (const std::exception& ex) {
+                cancelled.store(true, std::memory_order_relaxed);
+                if (!is_cancelled_exception(ex)) record_worker_exception(std::current_exception());
+            } catch (...) {
+                record_worker_exception(std::current_exception());
+            }
+        });
+    }
+
+    const int n_cpu_threads = default_render_threads();
+    std::vector<std::thread> cpu_threads;
+    cpu_threads.reserve(static_cast<size_t>(n_cpu_threads));
+
+    for (int tid = 0; tid < n_cpu_threads; tid++) {
+        cpu_threads.emplace_back([&]() {
+            try {
+                while (true) {
+                    if (cancel_requested()) break;
+                    const size_t idx = next_tile.fetch_add(1);
+                    if (idx >= n) break;
+                    const Tile& tile = tiles[idx];
+                    const double ms = render_tile_cpu_field(p, tile, fo, use_avx2, use_avx512);
+                    {
+                        std::lock_guard<std::mutex> lk(stats_mutex);
+                        total_cpu_ms += ms;
+                        cpu_tiles++;
+                    }
+                }
+            } catch (const std::exception& ex) {
+                cancelled.store(true, std::memory_order_relaxed);
+                if (!is_cancelled_exception(ex)) record_worker_exception(std::current_exception());
+            } catch (...) {
+                record_worker_exception(std::current_exception());
+            }
+        });
+    }
+
+    for (auto& t : cpu_threads) t.join();
+    if (gpu_thread.joinable()) gpu_thread.join();
+    if (first_error) std::rethrow_exception(first_error);
+    if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+        throw std::runtime_error("cancelled");
+    }
+
+    const auto t_end = std::chrono::steady_clock::now();
+
+    result.total_ms   = std::chrono::duration<double,std::milli>(t_end - t_start).count();
+    result.cpu_ms     = total_cpu_ms;
+    result.gpu_ms     = total_gpu_ms;
+    result.cpu_tiles  = cpu_tiles;
+    result.gpu_tiles  = gpu_tiles;
+    result.scalar_used = "fp64";
+
+    if (use_gpu && gpu_tiles > 0 && cpu_tiles > 0)
+        result.engine_used = "hybrid";
+    else if (use_gpu && gpu_tiles > 0)
+        result.engine_used = "cuda";
+    else if (use_avx512)
+        result.engine_used = "avx512";
+    else if (use_avx2)
+        result.engine_used = "avx2";
+    else
+        result.engine_used = "openmp";
+
+    fo.scalar_used = result.scalar_used;
+    fo.engine_used = result.engine_used;
+    return result;
+}
+
 } // namespace fsd::compute

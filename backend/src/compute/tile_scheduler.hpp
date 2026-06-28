@@ -59,4 +59,12 @@ TileSchedulerStats render_map_hybrid(
     TileCallback on_tile_done = nullptr
 );
 
+// Field-output hybrid: each tile produces raw numeric data (FieldOutput)
+// instead of BGR pixels. The tile results are scattered into a pre-allocated
+// FieldOutput. Only Escape metric is supported (iter_u32 + norm_f32);
+// non-escape metrics fall back to the OpenMP scalar field path.
+TileSchedulerStats render_map_field_hybrid(
+    const MapParams& p, FieldOutput& fo,
+    int tile_size = 96);
+
 } // namespace fsd::compute

@@ -251,6 +251,156 @@ RefOrbit compute_reference_orbit_auto(
 }
 
 // ---------------------------------------------------------------------------
+// Julia reference orbit: Z_0 = viewport center (high prec), c = julia_c (double)
+// ---------------------------------------------------------------------------
+
+RefOrbit compute_reference_orbit_julia(
+    double z0_re, double z0_im,
+    double julia_re, double julia_im,
+    int max_iter, double bailout_sq)
+{
+    RefOrbit ref;
+    ref.bail2 = bailout_sq;
+    ref.z_re.reserve(max_iter + 1);
+    ref.z_im.reserve(max_iter + 1);
+
+#if defined(FSD_HAS_FLOAT128)
+    __float128 zr = static_cast<__float128>(z0_re);
+    __float128 zi = static_cast<__float128>(z0_im);
+    const __float128 cr = static_cast<__float128>(julia_re);
+    const __float128 ci = static_cast<__float128>(julia_im);
+    const __float128 b2 = static_cast<__float128>(bailout_sq);
+
+    ref.z_re.push_back(z0_re);
+    ref.z_im.push_back(z0_im);
+
+    for (int n = 0; n < max_iter; ++n) {
+        const __float128 zr2 = zr * zr;
+        const __float128 zi2 = zi * zi;
+        if (zr2 + zi2 > b2) { ref.escaped = true; ref.length = n; return ref; }
+        const __float128 new_zr = zr2 - zi2 + cr;
+        const __float128 new_zi = static_cast<__float128>(2.0) * zr * zi + ci;
+        zr = new_zr; zi = new_zi;
+        ref.z_re.push_back(static_cast<double>(zr));
+        ref.z_im.push_back(static_cast<double>(zi));
+    }
+    ref.length = max_iter; ref.escaped = false;
+#else
+    double zr = z0_re, zi = z0_im;
+    ref.z_re.push_back(zr); ref.z_im.push_back(zi);
+    for (int n = 0; n < max_iter; ++n) {
+        const double zr2 = zr * zr, zi2 = zi * zi;
+        if (zr2 + zi2 > bailout_sq) { ref.escaped = true; ref.length = n; return ref; }
+        const double new_zr = zr2 - zi2 + julia_re;
+        const double new_zi = 2.0 * zr * zi + julia_im;
+        zr = new_zr; zi = new_zi;
+        ref.z_re.push_back(zr); ref.z_im.push_back(zi);
+    }
+    ref.length = max_iter; ref.escaped = false;
+#endif
+    return ref;
+}
+
+#if defined(FSD_HAS_MPFR)
+static RefOrbit compute_reference_orbit_julia_mpfr(
+    const std::string& z0_re_str, const std::string& z0_im_str,
+    double julia_re, double julia_im,
+    int max_iter, double bailout_sq, int precision_bits)
+{
+    RefOrbit ref;
+    ref.bail2 = bailout_sq;
+    ref.z_re.reserve(max_iter + 1);
+    ref.z_im.reserve(max_iter + 1);
+
+    const mpfr_prec_t prec = static_cast<mpfr_prec_t>(precision_bits);
+    MpfrGuard zr(prec), zi(prec), cr(prec), ci(prec);
+    MpfrGuard zr2(prec), zi2(prec), tmp(prec), mag(prec), b2(prec);
+
+    mpfr_set_str(zr, z0_re_str.c_str(), 10, MPFR_RNDN);
+    mpfr_set_str(zi, z0_im_str.c_str(), 10, MPFR_RNDN);
+    mpfr_set_d(cr, julia_re, MPFR_RNDN);
+    mpfr_set_d(ci, julia_im, MPFR_RNDN);
+    mpfr_set_d(b2, bailout_sq, MPFR_RNDN);
+
+    ref.z_re.push_back(mpfr_get_d(zr, MPFR_RNDN));
+    ref.z_im.push_back(mpfr_get_d(zi, MPFR_RNDN));
+
+    for (int n = 0; n < max_iter; ++n) {
+        mpfr_mul(zr2, zr, zr, MPFR_RNDN);
+        mpfr_mul(zi2, zi, zi, MPFR_RNDN);
+        mpfr_add(mag, zr2, zi2, MPFR_RNDN);
+        if (mpfr_cmp(mag, b2) > 0) { ref.escaped = true; ref.length = n; return ref; }
+        mpfr_sub(tmp, zr2, zi2, MPFR_RNDN);
+        mpfr_add(tmp, tmp, cr, MPFR_RNDN);
+        mpfr_mul(zi, zr, zi, MPFR_RNDN);
+        mpfr_mul_ui(zi, zi, 2, MPFR_RNDN);
+        mpfr_add(zi, zi, ci, MPFR_RNDN);
+        mpfr_set(zr, tmp, MPFR_RNDN);
+        ref.z_re.push_back(mpfr_get_d(zr, MPFR_RNDN));
+        ref.z_im.push_back(mpfr_get_d(zi, MPFR_RNDN));
+    }
+    ref.length = max_iter; ref.escaped = false;
+    return ref;
+}
+#endif
+
+RefOrbit compute_reference_orbit_julia_auto(
+    const std::string& z0_re_str, const std::string& z0_im_str,
+    double julia_re, double julia_im,
+    int max_iter, double bailout_sq, double scale)
+{
+    if (scale >= 1e-15 || z0_re_str.empty()) {
+        double z0re = z0_re_str.empty() ? 0.0 : std::stod(z0_re_str);
+        double z0im = z0_im_str.empty() ? 0.0 : std::stod(z0_im_str);
+        return compute_reference_orbit_julia(z0re, z0im, julia_re, julia_im,
+                                             max_iter, bailout_sq);
+    }
+
+#if defined(FSD_HAS_FLOAT128)
+    if (scale >= 1e-33) {
+        const __float128 zr0 = strtoflt128(z0_re_str.c_str(), nullptr);
+        const __float128 zi0 = strtoflt128(z0_im_str.c_str(), nullptr);
+        const __float128 cr = static_cast<__float128>(julia_re);
+        const __float128 ci = static_cast<__float128>(julia_im);
+        const __float128 b2 = static_cast<__float128>(bailout_sq);
+        RefOrbit ref;
+        ref.bail2 = bailout_sq;
+        ref.z_re.reserve(max_iter + 1);
+        ref.z_im.reserve(max_iter + 1);
+        __float128 zr = zr0, zi = zi0;
+        ref.z_re.push_back(static_cast<double>(zr));
+        ref.z_im.push_back(static_cast<double>(zi));
+        for (int n = 0; n < max_iter; ++n) {
+            const __float128 zr2 = zr * zr, zi2 = zi * zi;
+            if (zr2 + zi2 > b2) { ref.escaped = true; ref.length = n; return ref; }
+            const __float128 new_zr = zr2 - zi2 + cr;
+            const __float128 new_zi = static_cast<__float128>(2.0) * zr * zi + ci;
+            zr = new_zr; zi = new_zi;
+            ref.z_re.push_back(static_cast<double>(zr));
+            ref.z_im.push_back(static_cast<double>(zi));
+        }
+        ref.length = max_iter; ref.escaped = false;
+        return ref;
+    }
+#endif
+
+#if defined(FSD_HAS_MPFR)
+    {
+        int bits = static_cast<int>(std::ceil(-std::log2(scale))) + 64;
+        if (bits < 128) bits = 128;
+        return compute_reference_orbit_julia_mpfr(z0_re_str, z0_im_str,
+                                                   julia_re, julia_im,
+                                                   max_iter, bailout_sq, bits);
+    }
+#endif
+
+    double z0re = std::stod(z0_re_str);
+    double z0im = std::stod(z0_im_str);
+    return compute_reference_orbit_julia(z0re, z0im, julia_re, julia_im,
+                                         max_iter, bailout_sq);
+}
+
+// ---------------------------------------------------------------------------
 // Check if perturbation is applicable for this request
 // ---------------------------------------------------------------------------
 
@@ -258,7 +408,6 @@ bool perturbation_applicable(const MapParams& p)
 {
     if (p.variant != Variant::Mandelbrot) return false;
     if (p.metric  != Metric::Escape)      return false;
-    if (p.julia)                           return false;
     if (p.smooth)                          return false;
     if (p.custom_step_fn)                  return false;
     if (p.scale >= 1e-13)                  return false;
@@ -286,11 +435,22 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
     const int    max_iter = p.iterations;
     const int    thread_count = resolve_render_threads(p.render_threads);
 
-    // Step 1: compute reference orbit at center (precision tier by zoom depth)
-    RefOrbit ref = p.center_re_str.empty()
-        ? compute_reference_orbit(p.center_re, p.center_im, max_iter, bail2)
-        : compute_reference_orbit_auto(p.center_re_str, p.center_im_str,
-                                       max_iter, bail2, p.scale);
+    const bool is_julia = p.julia;
+
+    RefOrbit ref;
+    if (is_julia) {
+        ref = p.center_re_str.empty()
+            ? compute_reference_orbit_julia(p.center_re, p.center_im,
+                                             p.julia_re, p.julia_im, max_iter, bail2)
+            : compute_reference_orbit_julia_auto(p.center_re_str, p.center_im_str,
+                                                  p.julia_re, p.julia_im,
+                                                  max_iter, bail2, p.scale);
+    } else {
+        ref = p.center_re_str.empty()
+            ? compute_reference_orbit(p.center_re, p.center_im, max_iter, bail2)
+            : compute_reference_orbit_auto(p.center_re_str, p.center_im_str,
+                                           max_iter, bail2, p.scale);
+    }
 
     // Step 2: per-pixel perturbation iteration
     constexpr int tile_size = 32;
@@ -334,13 +494,19 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
                         const size_t px_idx = static_cast<size_t>(y) * W + x;
                         if (only_glitched && !glitch_mask[px_idx]) continue;
 
-                        const double px_frac_x = (static_cast<double>(x) + 0.5) / W - 0.5;
-                        const double px_frac_y = (static_cast<double>(y) + 0.5) / H - 0.5;
-                        const double dc_re = span_re * px_frac_x + (p.center_re - ref_re);
-                        const double dc_im = -span_im * px_frac_y + (p.center_im - ref_im);
+                        const double px_off_re = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5)
+                                               + (p.center_re - ref_re);
+                        const double px_off_im = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5)
+                                               + (p.center_im - ref_im);
 
-                        double dz_re = 0.0;
-                        double dz_im = 0.0;
+                        double dc_re, dc_im, dz_re, dz_im;
+                        if (is_julia) {
+                            dc_re = 0.0; dc_im = 0.0;
+                            dz_re = px_off_re; dz_im = px_off_im;
+                        } else {
+                            dc_re = px_off_re; dc_im = px_off_im;
+                            dz_re = 0.0; dz_im = 0.0;
+                        }
                         int iter = max_iter;
                         bool escaped = false;
                         bool is_glitch = false;
@@ -435,7 +601,10 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
                     found = true;
                 }
         if (!found) break;
-        RefOrbit rebase_ref = compute_reference_orbit(rebase_re, rebase_im, max_iter, bail2);
+        RefOrbit rebase_ref = is_julia
+            ? compute_reference_orbit_julia(rebase_re, rebase_im,
+                                             p.julia_re, p.julia_im, max_iter, bail2)
+            : compute_reference_orbit(rebase_re, rebase_im, max_iter, bail2);
         render_pass(rebase_ref, rebase_re, rebase_im, glitch.data(), true);
     }
 
@@ -561,10 +730,22 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
     fo.iter_u32.assign(static_cast<size_t>(W) * H, 0u);
     fo.norm_f32.assign(static_cast<size_t>(W) * H, 0.0f);
 
-    RefOrbit ref = p.center_re_str.empty()
-        ? compute_reference_orbit(p.center_re, p.center_im, max_iter, bail2)
-        : compute_reference_orbit_auto(p.center_re_str, p.center_im_str,
-                                       max_iter, bail2, p.scale);
+    const bool is_julia = p.julia;
+
+    RefOrbit ref;
+    if (is_julia) {
+        ref = p.center_re_str.empty()
+            ? compute_reference_orbit_julia(p.center_re, p.center_im,
+                                             p.julia_re, p.julia_im, max_iter, bail2)
+            : compute_reference_orbit_julia_auto(p.center_re_str, p.center_im_str,
+                                                  p.julia_re, p.julia_im,
+                                                  max_iter, bail2, p.scale);
+    } else {
+        ref = p.center_re_str.empty()
+            ? compute_reference_orbit(p.center_re, p.center_im, max_iter, bail2)
+            : compute_reference_orbit_auto(p.center_re_str, p.center_im_str,
+                                           max_iter, bail2, p.scale);
+    }
 
     constexpr int tile_size = 32;
     const int tiles_x = (W + tile_size - 1) / tile_size;
@@ -603,12 +784,19 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                         const size_t px_idx = static_cast<size_t>(y) * W + x;
                         if (only_glitched && !glitch_mask[px_idx]) continue;
 
-                        const double px_frac_x = (static_cast<double>(x) + 0.5) / W - 0.5;
-                        const double px_frac_y = (static_cast<double>(y) + 0.5) / H - 0.5;
-                        const double dc_re = span_re * px_frac_x + (p.center_re - ref_re);
-                        const double dc_im = -span_im * px_frac_y + (p.center_im - ref_im);
+                        const double px_off_re = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5)
+                                               + (p.center_re - ref_re);
+                        const double px_off_im = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5)
+                                               + (p.center_im - ref_im);
 
-                        double dz_re = 0.0, dz_im = 0.0;
+                        double dc_re, dc_im, dz_re, dz_im;
+                        if (is_julia) {
+                            dc_re = 0.0; dc_im = 0.0;
+                            dz_re = px_off_re; dz_im = px_off_im;
+                        } else {
+                            dc_re = px_off_re; dc_im = px_off_im;
+                            dz_re = 0.0; dz_im = 0.0;
+                        }
                         int iter = max_iter;
                         bool escaped = false;
                         bool is_glitch = false;
@@ -682,7 +870,10 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                     found = true;
                 }
         if (!found) break;
-        RefOrbit rebase_ref = compute_reference_orbit(rebase_re, rebase_im, max_iter, bail2);
+        RefOrbit rebase_ref = is_julia
+            ? compute_reference_orbit_julia(rebase_re, rebase_im,
+                                             p.julia_re, p.julia_im, max_iter, bail2)
+            : compute_reference_orbit(rebase_re, rebase_im, max_iter, bail2);
         render_pass(rebase_ref, rebase_re, rebase_im, glitch.data(), true);
     }
 
@@ -708,20 +899,37 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                     const mpfr_prec_t prec = static_cast<mpfr_prec_t>(mpfr_bits);
                     MpfrGuard cr(prec), ci(prec), zr(prec), zi(prec);
                     MpfrGuard zr2(prec), zi2(prec), tmp(prec), mag(prec), b2(prec);
-                    if (!p.center_re_str.empty())
-                        mpfr_set_str(cr, p.center_re_str.c_str(), 10, MPFR_RNDN);
-                    else
-                        mpfr_set_d(cr, p.center_re, MPFR_RNDN);
-                    mpfr_set_d(tmp, span_re * frac_x, MPFR_RNDN);
-                    mpfr_add(cr, cr, tmp, MPFR_RNDN);
-                    if (!p.center_im_str.empty())
-                        mpfr_set_str(ci, p.center_im_str.c_str(), 10, MPFR_RNDN);
-                    else
-                        mpfr_set_d(ci, p.center_im, MPFR_RNDN);
-                    mpfr_set_d(tmp, -span_im * frac_y, MPFR_RNDN);
-                    mpfr_add(ci, ci, tmp, MPFR_RNDN);
-                    mpfr_set_d(zr, 0.0, MPFR_RNDN);
-                    mpfr_set_d(zi, 0.0, MPFR_RNDN);
+                    if (is_julia) {
+                        mpfr_set_d(cr, p.julia_re, MPFR_RNDN);
+                        mpfr_set_d(ci, p.julia_im, MPFR_RNDN);
+                        if (!p.center_re_str.empty())
+                            mpfr_set_str(zr, p.center_re_str.c_str(), 10, MPFR_RNDN);
+                        else
+                            mpfr_set_d(zr, p.center_re, MPFR_RNDN);
+                        mpfr_set_d(tmp, span_re * frac_x, MPFR_RNDN);
+                        mpfr_add(zr, zr, tmp, MPFR_RNDN);
+                        if (!p.center_im_str.empty())
+                            mpfr_set_str(zi, p.center_im_str.c_str(), 10, MPFR_RNDN);
+                        else
+                            mpfr_set_d(zi, p.center_im, MPFR_RNDN);
+                        mpfr_set_d(tmp, -span_im * frac_y, MPFR_RNDN);
+                        mpfr_add(zi, zi, tmp, MPFR_RNDN);
+                    } else {
+                        if (!p.center_re_str.empty())
+                            mpfr_set_str(cr, p.center_re_str.c_str(), 10, MPFR_RNDN);
+                        else
+                            mpfr_set_d(cr, p.center_re, MPFR_RNDN);
+                        mpfr_set_d(tmp, span_re * frac_x, MPFR_RNDN);
+                        mpfr_add(cr, cr, tmp, MPFR_RNDN);
+                        if (!p.center_im_str.empty())
+                            mpfr_set_str(ci, p.center_im_str.c_str(), 10, MPFR_RNDN);
+                        else
+                            mpfr_set_d(ci, p.center_im, MPFR_RNDN);
+                        mpfr_set_d(tmp, -span_im * frac_y, MPFR_RNDN);
+                        mpfr_add(ci, ci, tmp, MPFR_RNDN);
+                        mpfr_set_d(zr, 0.0, MPFR_RNDN);
+                        mpfr_set_d(zi, 0.0, MPFR_RNDN);
+                    }
                     mpfr_set_d(b2, bail2, MPFR_RNDN);
                     for (int n = 0; n < max_iter; ++n) {
                         mpfr_mul(zr2, zr, zr, MPFR_RNDN);
@@ -742,11 +950,21 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                 }
 #elif defined(FSD_HAS_FLOAT128)
                 {
-                    const __float128 cre = scalar_from_string<__float128>(p.center_re_str, p.center_re)
-                        + static_cast<__float128>(span_re * frac_x);
-                    const __float128 cim = scalar_from_string<__float128>(p.center_im_str, p.center_im)
-                        + static_cast<__float128>(-span_im * frac_y);
-                    __float128 zr = 0, zi = 0;
+                    __float128 cre, cim, zr, zi;
+                    if (is_julia) {
+                        cre = static_cast<__float128>(p.julia_re);
+                        cim = static_cast<__float128>(p.julia_im);
+                        zr = scalar_from_string<__float128>(p.center_re_str, p.center_re)
+                            + static_cast<__float128>(span_re * frac_x);
+                        zi = scalar_from_string<__float128>(p.center_im_str, p.center_im)
+                            + static_cast<__float128>(-span_im * frac_y);
+                    } else {
+                        cre = scalar_from_string<__float128>(p.center_re_str, p.center_re)
+                            + static_cast<__float128>(span_re * frac_x);
+                        cim = scalar_from_string<__float128>(p.center_im_str, p.center_im)
+                            + static_cast<__float128>(-span_im * frac_y);
+                        zr = 0; zi = 0;
+                    }
                     for (int n = 0; n < max_iter; ++n) {
                         const __float128 zr2 = zr * zr, zi2 = zi * zi;
                         const double m2 = static_cast<double>(zr2 + zi2);
@@ -758,9 +976,16 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                 }
 #else
                 {
-                    const double cre = p.center_re + span_re * frac_x;
-                    const double cim = p.center_im - span_im * frac_y;
-                    double zr = 0, zi = 0;
+                    double cre, cim, zr, zi;
+                    if (is_julia) {
+                        cre = p.julia_re; cim = p.julia_im;
+                        zr = p.center_re + span_re * frac_x;
+                        zi = p.center_im - span_im * frac_y;
+                    } else {
+                        cre = p.center_re + span_re * frac_x;
+                        cim = p.center_im - span_im * frac_y;
+                        zr = 0; zi = 0;
+                    }
                     for (int n = 0; n < max_iter; ++n) {
                         const double zr2 = zr * zr, zi2 = zi * zi;
                         if (zr2 + zi2 > bail2) { iter = n; escape_mag2 = zr2 + zi2; break; }

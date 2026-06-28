@@ -20,7 +20,7 @@ const METRIC_LABELS: Record<string, { en: string; zh: string }> = {
   max_abs:            { en: 'Max |z|',       zh: '最大 |z|' },
   envelope:           { en: 'Envelope',      zh: '包络' },
   min_pairwise_dist:  { en: 'Min pairwise',  zh: '最小轨道距' },
-  mandel_ship_agree:  { en: 'vs Mandelbrot',  zh: '对比曼德布罗特' },
+  mandel_ship_agree:  { en: 'Compare with Mandelbrot', zh: '与 Mandelbrot 对比' },
 }
 
 const COLORMAP_LABELS: Record<string, { en: string; zh: string }> = {
@@ -1214,7 +1214,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
           ? 'Guided exploration: renders the selected variant and recolours the pixels whose orbit diverges from the plain Mandelbrot (z²+c), so the fold structure unique to this variant stands out. Works for Burning Ship, Celtic, Buffalo, …'
           : '引导式探索：渲染当前变体，并把轨道与普通 Mandelbrot (z²+c) 不同的像素重新上色，突出该变体折叠所独有的结构。适用于 Burning Ship、Celtic、Buffalo 等。'">
           <input type="checkbox" v-model="bsExplore" style="width:auto;margin-right:6px" />
-          {{ lang === 'en' ? 'vs Mandel' : '引导探索' }}
+          {{ lang === 'en' ? 'Compare with Mandelbrot' : '与 Mandelbrot 对比' }}
         </label>
       </div>
 
@@ -1255,12 +1255,12 @@ async function pollVideoExport(initial: VideoExportResponse) {
           :title="lang === 'en'
             ? 'Equalized modes preview the ln-map zoom-video coloring live (escape metric only).'
             : '均衡化模式可实时预览 ln-map 缩放视频的上色（仅限 escape 度量）。'">
-          <option value="direct">{{ lang === 'en' ? 'Direct' : '直接' }}</option>
+          <option value="direct">{{ lang === 'en' ? 'Direct mapping' : '直接映射' }}</option>
           <option value="eq_full" :disabled="metric !== 'escape'">
-            {{ lang === 'en' ? 'Equalized · full image' : '均衡化 · 全图' }}
+            {{ lang === 'en' ? 'Equalized (full)' : '均衡化（全图）' }}
           </option>
           <option value="eq_center" :disabled="metric !== 'escape'">
-            {{ lang === 'en' ? 'Equalized · center (ln-map)' : '均衡化 · 中心加权 (ln-map)' }}
+            {{ lang === 'en' ? 'Equalized (center)' : '均衡化（中心加权）' }}
           </option>
         </select>
       </div>
@@ -1291,7 +1291,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <label>{{ lang === 'en' ? 'viewport' : '视口' }}</label>
         <div class="viewport-edit-row">
           <label class="viewport-field">
-            <span>c.re</span>
+            <span>{{ lang === 'en' ? 'Real' : '实部' }}</span>
             <input
               v-model="viewportReInput"
               class="viewport-input mono"
@@ -1304,7 +1304,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               @keydown.enter="commitViewportInputOnEnter($event, 're')" />
           </label>
           <label class="viewport-field">
-            <span>c.im</span>
+            <span>{{ lang === 'en' ? 'Imag' : '虚部' }}</span>
             <input
               v-model="viewportImInput"
               class="viewport-input mono"
@@ -1333,7 +1333,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
       </div>
 
       <div v-if="metric === 'min_pairwise_dist'" class="group">
-        <label>{{ lang === 'en' ? 'Pairwise cap' : '成对距离上限' }}</label>
+        <label>{{ lang === 'en' ? 'Orbit buffer size' : '轨道缓冲区大小' }}</label>
         <input type="number" v-model.number="pairwiseCap" min="1" max="1000000" step="64" />
       </div>
 
@@ -1377,24 +1377,24 @@ async function pollVideoExport(initial: VideoExportResponse) {
       <div class="group">
         <label>{{ t('engine') }}</label>
         <select v-model="engineMode">
-          <option value="auto">auto</option>
-          <option value="cuda">cuda</option>
-          <option value="avx2">avx2</option>
-          <option value="avx512">avx512</option>
-          <option value="hybrid">hybrid</option>
-          <option value="openmp">openmp</option>
+          <option value="auto">{{ lang === 'en' ? 'Auto (recommended)' : '自动（推荐）' }}</option>
+          <option value="cuda">GPU (CUDA)</option>
+          <option value="avx512">CPU AVX-512</option>
+          <option value="avx2">CPU AVX-2</option>
+          <option value="hybrid">CPU + GPU</option>
+          <option value="openmp">{{ lang === 'en' ? 'CPU (basic)' : 'CPU（基础）' }}</option>
         </select>
       </div>
 
       <div class="group">
         <label>{{ t('scalar') }}</label>
         <select v-model="scalarMode">
-          <option value="auto">auto</option>
-          <option value="fp32">fp32</option>
-          <option value="fp64">fp64</option>
-          <option value="fp80">fp80</option>
-          <option value="fp128">fp128</option>
-          <option value="fx64">fx64</option>
+          <option value="auto">{{ lang === 'en' ? 'Auto' : '自动' }}</option>
+          <option value="fp32">{{ lang === 'en' ? '32-bit (fast)' : '32 位（快速）' }}</option>
+          <option value="fp64">{{ lang === 'en' ? '64-bit (standard)' : '64 位（标准）' }}</option>
+          <option value="fp80">{{ lang === 'en' ? '80-bit (extended)' : '80 位（扩展）' }}</option>
+          <option value="fp128">{{ lang === 'en' ? '128-bit (deep zoom)' : '128 位（深层缩放）' }}</option>
+          <option value="fx64">{{ lang === 'en' ? 'Fixed 64-bit' : '定点 64 位' }}</option>
         </select>
       </div>
 

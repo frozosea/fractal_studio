@@ -472,19 +472,19 @@ RenderScene slow_hybrid_scene() {
 
 TransitionParams base_transition_params() {
     TransitionParams p;
-    p.center_re = -0.45;
-    p.center_im = 0.0;
-    p.scale = 3.0;
-    p.width = 96;
-    p.height = 72;
-    p.iterations = 96;
-    p.bailout = 2.0;
-    p.bailout_sq = 4.0;
+    p.base.center_re = -0.45;
+    p.base.center_im = 0.0;
+    p.base.scale = 3.0;
+    p.base.width = 96;
+    p.base.height = 72;
+    p.base.iterations = 96;
+    p.base.bailout = 2.0;
+    p.base.bailout_sq = 4.0;
     p.from_variant = Variant::Mandelbrot;
     p.to_variant = Variant::Boat;
-    p.metric = Metric::Escape;
-    p.colormap = Colormap::Mod17;
-    p.render_threads = 0;
+    p.base.metric = Metric::Escape;
+    p.base.colormap = Colormap::Mod17;
+    p.base.render_threads = 0;
     p.theta_milli_deg_set = true;
     return p;
 }
@@ -518,8 +518,8 @@ std::vector<TransitionScene> transition_smoke_scenes() {
         p.theta_milli_deg = 45 * 1000;
         p.from_variant = Variant::Mandelbrot;
         p.to_variant = Variant::Boat;
-        p.metric = Metric::Escape;
-        p.colormap = Colormap::Mod17;
+        p.base.metric = Metric::Escape;
+        p.base.colormap = Colormap::Mod17;
         scenes.push_back({"transition_mid_escape_mandelbrot_to_ship", p});
     }
 
@@ -528,22 +528,22 @@ std::vector<TransitionScene> transition_smoke_scenes() {
         p.theta_milli_deg = 30 * 1000;
         p.from_variant = Variant::Tri;
         p.to_variant = Variant::Bird;
-        p.metric = Metric::Envelope;
-        p.colormap = Colormap::HsRainbow;
+        p.base.metric = Metric::Envelope;
+        p.base.colormap = Colormap::HsRainbow;
         scenes.push_back({"transition_mid_envelope_rainbow", p});
     }
 
     {
         TransitionParams p = base_transition_params();
-        p.width = 72;
-        p.height = 56;
-        p.iterations = 64;
+        p.base.width = 72;
+        p.base.height = 56;
+        p.base.iterations = 64;
         p.theta_milli_deg = 60 * 1000;
         p.from_variant = Variant::Fish;
         p.to_variant = Variant::Ship;
-        p.metric = Metric::MinPairwiseDist;
-        p.pairwise_cap = 24;
-        p.colormap = Colormap::Grayscale;
+        p.base.metric = Metric::MinPairwiseDist;
+        p.base.pairwise_cap = 24;
+        p.base.colormap = Colormap::Grayscale;
         scenes.push_back({"transition_mid_pairwise_gray", p});
     }
 
@@ -552,9 +552,9 @@ std::vector<TransitionScene> transition_smoke_scenes() {
         p.theta_milli_deg = -45 * 1000;
         p.from_variant = Variant::Duck;
         p.to_variant = Variant::Mask;
-        p.metric = Metric::MinAbs;
-        p.colormap = Colormap::HsvWheel;
-        p.smooth = true;
+        p.base.metric = Metric::MinAbs;
+        p.base.colormap = Colormap::HsvWheel;
+        p.base.smooth = true;
         scenes.push_back({"transition_mid_min_abs_smooth", p});
     }
 
@@ -572,8 +572,8 @@ Rendered render_scene(const RenderScene& scene, const std::string& engine, const
 
 Rendered render_transition_scene(const TransitionScene& scene, const std::string& engine, const std::string& scalar) {
     TransitionParams p = scene.params;
-    p.engine = engine;
-    p.scalar_type = scalar;
+    p.base.engine = engine;
+    p.base.scalar_type = scalar;
     cv::Mat image;
     MapStats stats = fsd::compute::render_transition(p, image);
     return {image, stats};
@@ -917,21 +917,8 @@ void compare_field_engine_pair(
 }
 
 MapParams map_params_for_direct_transition(const TransitionParams& p) {
-    MapParams mp;
-    mp.center_re = p.center_re;
-    mp.center_im = p.center_im;
-    mp.scale = p.scale;
-    mp.width = p.width;
-    mp.height = p.height;
-    mp.iterations = p.iterations;
-    mp.bailout = p.bailout;
-    mp.bailout_sq = p.bailout_sq;
+    MapParams mp = p.base;
     mp.variant = p.theta_milli_deg == 90 * 1000 ? p.to_variant : p.from_variant;
-    mp.metric = p.metric;
-    mp.colormap = p.colormap;
-    mp.smooth = p.smooth;
-    mp.pairwise_cap = p.pairwise_cap;
-    mp.render_threads = p.render_threads;
     return mp;
 }
 

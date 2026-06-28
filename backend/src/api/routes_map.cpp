@@ -10,7 +10,8 @@
 #include "resource_manager.hpp"
 
 #include "../compute/map_kernel.hpp"
-#include "../compute/ln_map.hpp"   // build_map_equalization, colorize_map_field_equalized
+#include "../compute/colorize.hpp"
+#include "../compute/ln_map.hpp"
 #include "../compute/tile_scheduler.hpp"
 #include "../compute/transition_kernel.hpp"
 #include "../compute/image_io.hpp"
@@ -302,6 +303,30 @@ void throwIfMapRenderCancelled(const std::function<bool()>& shouldCancel) {
     if (shouldCancel && shouldCancel()) throw std::runtime_error("cancelled");
 }
 
+compute::MapParams buildMapParams(const MapRenderInput& in, const Json& j,
+                                  double bailout, double bailoutSq,
+                                  const std::function<bool()>& shouldCancel) {
+    compute::MapParams p;
+    p.center_re = in.cRe;
+    p.center_im = in.cIm;
+    p.scale = in.scale;
+    p.width = in.width;
+    p.height = in.height;
+    p.iterations = in.iters;
+    p.bailout = bailout;
+    p.bailout_sq = bailoutSq;
+    p.metric = parseMetric(in.metricStr);
+    p.colormap = parseColormap(in.colormapStr);
+    p.smooth = in.smooth;
+    p.pairwise_cap = j.value("pairwiseCap", 64);
+    if (p.pairwise_cap < 1 || p.pairwise_cap > 1000000)
+        throw std::runtime_error("invalid pairwiseCap");
+    p.scalar_type = in.scalarType;
+    p.engine = in.engine;
+    p.should_cancel = shouldCancel;
+    return p;
+}
+
 MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
                               const MapRenderInput& in,
                               const std::function<bool()>& shouldCancel) {
@@ -332,29 +357,18 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
             !compute::variant_supports_axis_transition(toVariant)) {
             throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
         }
-        compute::TransitionParams p;
-        p.center_re = in.cRe;
-        p.center_im = in.cIm;
-        p.scale = in.scale;
-        p.width = in.width;
-        p.height = in.height;
-        p.iterations = in.iters;
-        p.bailout = bailout;
-        p.bailout_sq = bailoutSq;
-        p.theta = in.theta;
-        p.theta_milli_deg_set = true;
-        p.theta_milli_deg = in.thetaMilliDeg;
-        p.metric = parseMetric(in.metricStr);
-        p.colormap = parseColormap(in.colormapStr);
-        p.smooth = in.smooth;
-        p.pairwise_cap = j.value("pairwiseCap", 64);
-        if (p.pairwise_cap < 1 || p.pairwise_cap > 1000000) throw std::runtime_error("invalid pairwiseCap");
-        p.from_variant = fromVariant;
-        p.to_variant = toVariant;
-        p.scalar_type = in.scalarType;
-        p.engine = in.engine;
-        p.should_cancel = shouldCancel;
-        auto stats = compute::render_transition(p, rendered.image);
+        compute::MapParams mp = buildMapParams(in, j, bailout, bailoutSq, shouldCancel);
+        compute::TransitionParams tp;
+        tp.base = std::move(mp);
+        tp.theta = in.theta;
+        tp.theta_milli_deg_set = true;
+        tp.theta_milli_deg = in.thetaMilliDeg;
+        tp.from_variant = fromVariant;
+        tp.to_variant = toVariant;
+        compute::FieldOutput fo;
+        auto stats = compute::render_transition_field(tp, fo);
+        throwIfMapRenderCancelled(shouldCancel);
+        rendered.image = compute::colorize_field(tp.base, fo, in.colorMode, in.cyclesPerOctave);
         throwIfMapRenderCancelled(shouldCancel);
         rendered.elapsed = stats.elapsed_ms;
         rendered.scalarUsed = stats.scalar_used;
@@ -378,53 +392,21 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
     rendered.effectiveBailout = bailout;
     rendered.effectiveBailoutSq = bailoutSq;
 
-    compute::MapParams p;
-    p.center_re = in.cRe;
-    p.center_im = in.cIm;
-    p.scale = in.scale;
+    compute::MapParams p = buildMapParams(in, j, bailout, bailoutSq, shouldCancel);
     if (j.contains("centerReStr") && j["centerReStr"].is_string())
         p.center_re_str = j["centerReStr"].get<std::string>();
     if (j.contains("centerImStr") && j["centerImStr"].is_string())
         p.center_im_str = j["centerImStr"].get<std::string>();
-    p.width = in.width;
-    p.height = in.height;
-    p.iterations = in.iters;
-    p.bailout = bailout;
-    p.bailout_sq = bailoutSq;
     p.variant = vr.var;
     p.custom_step_fn = vr.fn;
-    p.metric = parseMetric(in.metricStr);
-    p.colormap = parseColormap(in.colormapStr);
-    p.pairwise_cap = j.value("pairwiseCap", 64);
-    if (p.pairwise_cap < 1 || p.pairwise_cap > 1000000) throw std::runtime_error("invalid pairwiseCap");
     p.julia = in.julia;
     p.julia_re = in.juliaRe;
     p.julia_im = in.juliaIm;
-    p.scalar_type = in.scalarType;
-    p.engine = in.engine;
-    p.smooth = in.smooth;
-    p.should_cancel = shouldCancel;
 
-    // Equalized preview modes: render the raw escape field, build a periodic equalization
-    // from it (full-image or center-weighted, faithful to the ln-map), then colorize. Only
-    // the escape metric carries per-pixel iteration counts; anything else falls back to the
-    // normal inline-colorized render. render_map_field is OpenMP-only (no CUDA/AVX), which is
-    // acceptable for an opt-in preview and is reported honestly via stats.engine_used.
-    if (in.colorMode != "direct" && p.metric == compute::Metric::Escape) {
-        compute::FieldOutput fo;
-        auto stats = compute::render_map_field(p, fo);
-        throwIfMapRenderCancelled(shouldCancel);
-        const auto eq = compute::build_map_equalization(p, fo, in.colorMode == "eq_center", in.cyclesPerOctave);
-        compute::colorize_map_field_equalized(p, fo, eq, rendered.image);
-        throwIfMapRenderCancelled(shouldCancel);
-        rendered.elapsed = stats.elapsed_ms;
-        rendered.scalarUsed = stats.scalar_used;
-        rendered.engineUsed = stats.engine_used;
-        rendered.artifactName = "map.png";
-        return rendered;
-    }
-
-    auto stats = compute::render_map(p, rendered.image);
+    compute::FieldOutput fo;
+    auto stats = compute::render_map_field(p, fo);
+    throwIfMapRenderCancelled(shouldCancel);
+    rendered.image = compute::colorize_field(p, fo, in.colorMode, in.cyclesPerOctave);
     throwIfMapRenderCancelled(shouldCancel);
     rendered.elapsed = stats.elapsed_ms;
     rendered.scalarUsed = stats.scalar_used;

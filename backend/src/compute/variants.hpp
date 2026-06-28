@@ -143,7 +143,12 @@ inline bool variant_from_name(const char* name, Variant& out) {
         {"sinh_z",      Variant::SinhZ},
         {"cosh_z",      Variant::CoshZ},
         {"tan_z",       Variant::TanZ},
-        // Legacy aliases (keep old names working)
+        // Mathematical-name aliases (non-conflicting)
+        {"perp_burning_ship", Variant::Duck},   // celtic → Perpendicular Burning Ship
+        {"perp_mandelbrot",   Variant::Bell},   // heart → Perpendicular Mandelbrot
+        {"mandelbar_celtic",  Variant::Vase},   // perp_buffalo → Mandelbar Celtic
+        {"perp_celtic",       Variant::Ship},   // perp_ship → Perpendicular Celtic
+        // Legacy short aliases
         {"tri",         Variant::Tri},
         {"boat",        Variant::Boat},
         {"duck",        Variant::Duck},
