@@ -322,6 +322,8 @@ export interface SpecialPointEnumResponse {
 export interface MapFieldRequest {
   centerRe: number
   centerIm: number
+  centerReStr?: string
+  centerImStr?: string
   scale: number
   width: number
   height: number
@@ -834,7 +836,7 @@ export const api = {
   },
   mapPreempt: (req: Pick<MapRenderRequest, 'preemptKey' | 'preemptSeq'>) =>
     postJson<{ status: string; preemptKey?: string; preemptSeq?: number }>('/api/map/preempt', req),
-  mapField:   (req: MapFieldRequest)   => postJson<MapFieldResponse>('/api/map/field', req),
+  mapField:   (req: MapFieldRequest, signal?: AbortSignal)   => postJson<MapFieldResponse>('/api/map/field', req, signal),
   lnMap:      (req: LnMapRequest)      => postJson<LnMapResponse>('/api/map/ln', req),
 
   specialPointsAuto: (k: number, p: number, pointType?: string) =>

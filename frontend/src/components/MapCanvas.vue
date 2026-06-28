@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { api, type MapRenderRequest, type Metric, type ColorMap, type SpecialPointEnumResult } from '../api'
+import { api, type MapRenderRequest, type MapFieldRequest, type Metric, type ColorMap, type SpecialPointEnumResult } from '../api'
 import { promptSlowRenderWarning, slowRenderWarningsDisabled } from '../slowWarnings'
 import { lang } from '../i18n'
+import { GlColorizer, isWebGL2Available } from '../gl-colorize'
 
 // MapCanvas renders the fractal by requesting a full frame from the backend at
 // the device-pixel backing-store dimensions. CSS pixels stay in charge of
@@ -66,6 +67,12 @@ let   slowRenderWarnKey = ''
 const renderClientId = `map-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 const MIN_FRAME_DIM = 64
 const MAX_FRAME_DIM = 4096
+
+// ── WebGL colorizer state ────────────────────────────────────────────────────
+const glCanvas = ref<HTMLCanvasElement | null>(null)
+const useGl    = ref(false)
+let   glColorizer: GlColorizer | null = null
+let   cachedField: { iter: Uint32Array; norm: Float32Array; w: number; h: number; maxIter: number } | null = null
 
 type ViewportSnapshot = {
   centerRe: number
@@ -207,6 +214,53 @@ function drawRgbaFrame(data: ArrayBuffer, width: number, height: number): number
   return next
 }
 
+function base64ToArrayBuffer(b64: string): Uint8Array {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return bytes
+}
+
+/** True when we can use the field+WebGL path instead of render-inline. */
+function shouldUseFieldPath(): boolean {
+  return useGl.value
+    && props.metric === 'escape'
+    && (props.colorMode ?? 'direct') === 'direct'
+    && props.transitionTheta === null
+    && !props.transitionFrom
+}
+
+/** Re-colorize cached field data via WebGL — no backend round-trip. */
+function recolorize() {
+  if (!cachedField || !glColorizer) return
+  const glc = glCanvas.value
+  if (!glc) return
+
+  // Resize GL canvas to match field data
+  if (glc.width !== cachedField.w || glc.height !== cachedField.h) {
+    glc.width  = cachedField.w
+    glc.height = cachedField.h
+  }
+
+  // Upload and render
+  glColorizer.uploadField(cachedField.iter, cachedField.norm, cachedField.w, cachedField.h)
+  glColorizer.render({
+    colormap: props.colorMap,
+    maxIter:  cachedField.maxIter,
+    smooth:   props.smooth ?? false,
+  })
+
+  // Copy GL result to display canvas via dual-canvas swap
+  const next   = activeCanvas.value === 0 ? 1 : 0
+  const target = canvasByIndex(next)
+  resizeCanvas(target, cachedField.w, cachedField.h)
+  const ctx = target?.getContext('2d')
+  if (!ctx) return
+  ctx.drawImage(glc, 0, 0)
+  activeCanvas.value = next
+  hasFrame.value = true
+}
+
 async function renderFrame() {
   if (!renderableSize()) return
   pending.value = true
@@ -221,6 +275,70 @@ async function renderFrame() {
   const reqW = frameW.value
   const reqH = frameH.value
 
+  if (shouldUseFieldPath()) {
+    // ── WebGL field path: fetch raw iteration data, colorize client-side ──
+    const fieldReq: MapFieldRequest = {
+      centerRe:   props.centerRe,
+      centerIm:   props.centerIm,
+      scale:      props.scale,
+      width:      reqW,
+      height:     reqH,
+      iterations: props.iterations,
+      variant:    props.variant,
+      metric:     props.metric,
+      pairwiseCap: props.pairwiseCap,
+      julia:      props.julia,
+      juliaRe:    props.juliaRe ?? 0,
+      juliaIm:    props.juliaIm ?? 0,
+    }
+    if (props.engine)      fieldReq.engine      = props.engine
+    if (props.scalarType)  fieldReq.scalarType  = props.scalarType
+    if (props.centerReStr) fieldReq.centerReStr = props.centerReStr
+    if (props.centerImStr) fieldReq.centerImStr = props.centerImStr
+
+    try {
+      const resp = await api.mapField(fieldReq, controller.signal)
+      if (seq !== renderSeq) return
+      if (resp.status === 'cancelled') return
+      if (!resp.iterB64 || !resp.finalMagB64) {
+        throw new Error('field response missing iterB64/finalMagB64')
+      }
+
+      const iterBuf = new Uint32Array(base64ToArrayBuffer(resp.iterB64).buffer)
+      const normBuf = new Float32Array(base64ToArrayBuffer(resp.finalMagB64).buffer)
+
+      cachedField = {
+        iter: iterBuf,
+        norm: normBuf,
+        w: resp.width,
+        h: resp.height,
+        maxIter: resp.maxIter ?? props.iterations,
+      }
+
+      if (seq !== renderSeq) return
+      renderedViewport = {
+        centerRe: fieldReq.centerRe,
+        centerIm: fieldReq.centerIm,
+        scale:    fieldReq.scale,
+      }
+      recolorize()
+      maybeWarnSlowRender(resp.generatedMs)
+      emit('rendered', {
+        generatedMs: resp.generatedMs,
+        artifactId:  '',
+        engineUsed:  undefined,
+        scalarUsed:  resp.scalarUsed,
+      })
+    } catch (e: any) {
+      if (seq === renderSeq && e?.name !== 'AbortError') error.value = e?.message ?? String(e)
+    } finally {
+      if (currentRender === controller) currentRender = null
+      if (seq === renderSeq) pending.value = false
+    }
+    return
+  }
+
+  // ── Legacy inline-render path (non-escape metrics, equalized color, transitions) ──
   const req: MapRenderRequest = {
     requestId,
     preemptKey: renderClientId,
@@ -256,6 +374,7 @@ async function renderFrame() {
   if (props.centerImStr)              (req as any).centerImStr      = props.centerImStr
 
   try {
+    cachedField = null  // invalidate field cache when using inline path
     const resp = await api.mapRenderInline(req, controller.signal) as any
     if (seq !== renderSeq || (resp.requestId && resp.requestId !== requestId)) return
     if (resp.status === 'cancelled' || !resp.data) return
@@ -301,9 +420,10 @@ function scheduleRender(delay = 200) {
 
 // ── Watchers ──────────────────────────────────────────────────────────────────
 
+// Compute watch — viewport, fractal parameters, frame size → full backend re-fetch
 watch(() => [
   props.centerRe, props.centerIm, props.scale,
-  props.variant, props.metric, props.colorMap, props.smooth,
+  props.variant, props.metric,
   props.colorMode, props.cyclesPerOctave,
   props.iterations, props.pairwiseCap, props.julia, props.juliaRe, props.juliaIm,
   props.engine, props.scalarType, props.transitionTheta, props.transitionThetaMilliDeg,
@@ -311,10 +431,31 @@ watch(() => [
   frameW.value, frameH.value,
 ], () => scheduleRender())
 
+// Color-only watch — instant re-colorize from cached field data when possible
+watch(() => [props.colorMap, props.smooth], () => {
+  if (useGl.value && cachedField && shouldUseFieldPath()) {
+    recolorize()
+  } else {
+    scheduleRender()
+  }
+})
+
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 onMounted(() => {
   if (!wrapper.value || !canvasA.value || !canvasB.value) return
+
+  // Initialize WebGL colorizer on the hidden canvas
+  if (glCanvas.value && isWebGL2Available()) {
+    try {
+      glColorizer = new GlColorizer(glCanvas.value)
+      useGl.value = true
+    } catch {
+      glColorizer = null
+      useGl.value = false
+    }
+  }
+
   ro = new ResizeObserver(entries => {
     for (const e of entries) {
       const w = Math.round(e.contentRect.width)
@@ -337,6 +478,13 @@ onBeforeUnmount(() => {
   unwatchDevicePixelRatio()
   if (renderTimer) clearTimeout(renderTimer)
   invalidateCurrentRender()
+  // Release WebGL resources
+  if (glColorizer) {
+    glColorizer.dispose()
+    glColorizer = null
+    useGl.value = false
+  }
+  cachedField = null
 })
 
 function onDevicePixelRatioChange() {
@@ -561,6 +709,7 @@ function onPointerCancel(e: PointerEvent) {
        @pointerup="onPointerUp"
        @pointercancel="onPointerCancel"
        @lostpointercapture="onPointerCancel">
+    <canvas ref="glCanvas" style="display:none"></canvas>
     <canvas
       ref="canvasA"
       class="frame"
