@@ -624,6 +624,11 @@ void field_variant_scalar(const MapParams& p, FieldOutput& out) {
 }
 
 template <Variant V>
+void field_variant_fp32(const MapParams& p, FieldOutput& out) {
+    field_variant_scalar<V, float>(p, out);
+}
+
+template <Variant V>
 void field_variant_fp64(const MapParams& p, FieldOutput& out) {
     field_variant_scalar<V, double>(p, out);
 }
@@ -655,6 +660,28 @@ void field_variant_fixed(const MapParams& p, FieldOutput& out) {
             field_variant_fixed_impl<FRAC, V, Metric::Envelope, NeedEnvelope>(p, out); break;
         case Metric::MinPairwiseDist:
             field_variant_impl<V, double, Metric::MinPairwiseDist, IterResultField::Extra>(p, out); break;
+    }
+}
+
+void dispatch_field_fp32(const MapParams& p, FieldOutput& out) {
+    switch (p.variant) {
+        case Variant::Mandelbrot: field_variant_fp32<Variant::Mandelbrot>(p, out); break;
+        case Variant::Tri:        field_variant_fp32<Variant::Tri>       (p, out); break;
+        case Variant::Boat:       field_variant_fp32<Variant::Boat>      (p, out); break;
+        case Variant::Duck:       field_variant_fp32<Variant::Duck>      (p, out); break;
+        case Variant::Bell:       field_variant_fp32<Variant::Bell>      (p, out); break;
+        case Variant::Fish:       field_variant_fp32<Variant::Fish>      (p, out); break;
+        case Variant::Vase:       field_variant_fp32<Variant::Vase>      (p, out); break;
+        case Variant::Bird:       field_variant_fp32<Variant::Bird>      (p, out); break;
+        case Variant::Mask:       field_variant_fp32<Variant::Mask>      (p, out); break;
+        case Variant::Ship:       field_variant_fp32<Variant::Ship>      (p, out); break;
+        case Variant::SinZ:       field_variant_fp32<Variant::SinZ>      (p, out); break;
+        case Variant::CosZ:       field_variant_fp32<Variant::CosZ>      (p, out); break;
+        case Variant::ExpZ:       field_variant_fp32<Variant::ExpZ>      (p, out); break;
+        case Variant::SinhZ:      field_variant_fp32<Variant::SinhZ>     (p, out); break;
+        case Variant::CoshZ:      field_variant_fp32<Variant::CoshZ>     (p, out); break;
+        case Variant::TanZ:       field_variant_fp32<Variant::TanZ>      (p, out); break;
+        default: break;  // Variant::Custom intercepted before this dispatch
     }
 }
 
@@ -881,10 +908,8 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
     // The hot consumer (equalized coloring) reads iter_u32; only the escape metric
     // carries per-pixel counts. Mirror render_map's engine choice. Everything else —
     // non-escape metrics, fp80/fp128, fixed-point (no SIMD field yet), custom/trig, or an
-    // explicit "openmp" engine — falls through to the unchanged scalar dispatch below. The
-    // field is fp64 by design (the scalar path has no fp32 branch), so fp32 requests run the
-    // fp64 kernel, preserving existing output. Engines are tried fastest-first; a stub/
-    // unavailable backend is skipped via its availability gate.
+    // explicit "openmp" engine — falls through to the scalar dispatch below. Engines are
+    // tried fastest-first; a stub/unavailable backend is skipped via its availability gate.
     const MapEnginePlan field_plan = select_map_engine_plan(p, /*field_output=*/true);
     const bool can_fast_field =
         !field_plan.scalar_fallback && p.metric == Metric::Escape &&
@@ -965,6 +990,7 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
     }
 
     const std::string effective_scalar = map_effective_scalar_type(p);
+    const bool fp32 = effective_scalar == "fp32";
     const bool fp80 = effective_scalar == "fp80";
     const bool fp128 = effective_scalar == "fp128";
     const FixedPrecision fixed_precision = select_fixed_precision(p);
@@ -972,7 +998,9 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
                     supports_fixed_int_path(p, true);
     const auto t0 = std::chrono::steady_clock::now();
 
-    if (fx && fixed_precision == FixedPrecision::Q360) {
+    if (fp32) {
+        dispatch_field_fp32(p, fo);
+    } else if (fx && fixed_precision == FixedPrecision::Q360) {
         dispatch_field_fixed<60>(p, fo);
     } else if (fx && fixed_precision == FixedPrecision::Q459) {
         dispatch_field_fixed<59>(p, fo);
@@ -994,8 +1022,9 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
     MapStats s;
     s.elapsed_ms  = std::chrono::duration<double, std::milli>(t1 - t0).count();
     s.pixel_count = p.width * p.height;
-    s.scalar_used = fx ? fixed_precision_name(fixed_precision)
-                  : (fp80 ? "fp80" : (fp128 ? "fp128" : "fp64"));
+    s.scalar_used = fp32 ? "fp32"
+                  : (fx ? fixed_precision_name(fixed_precision)
+                  : (fp80 ? "fp80" : (fp128 ? "fp128" : "fp64")));
     s.engine_used = "openmp";
     fo.scalar_used = s.scalar_used;
     fo.engine_used = s.engine_used;
