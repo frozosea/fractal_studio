@@ -66,6 +66,9 @@ struct MapParams {
     // experimental "q3.60", or "auto" (fp32/fp64/fx64 by viewport depth).
     std::string scalar_type = "auto";
 
+    // Viewport rotation around center, in degrees.
+    double rotation_deg = 0.0;
+
     // Compute engine: "openmp" (default), "avx2", "avx512",
     // "cuda" (GPU kernel), or "hybrid". Silently falls back to openmp if
     // requested engine is unavailable.

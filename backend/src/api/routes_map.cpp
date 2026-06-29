@@ -199,6 +199,7 @@ struct MapRenderInput {
     bool localExport = false;
     std::string colorMode = "direct";   // direct | eq_full | eq_center (equalized preview)
     double cyclesPerOctave = 1.0;        // band density for equalized modes
+    double rotationDeg = 0.0;
 };
 
 struct MapRenderImage {
@@ -247,6 +248,8 @@ MapRenderInput parseMapRenderInput(const std::string& body) {
     in.localExport = j.value("localExport", false);
     in.colorMode = j.value("colorMode", std::string("direct"));
     in.cyclesPerOctave = j.value("cyclesPerOctave", 1.0);
+    in.rotationDeg = j.value("rotationDeg", 0.0);
+    if (!std::isfinite(in.rotationDeg)) in.rotationDeg = 0.0;
 
     if (!(in.scale > 0.0) || !std::isfinite(in.scale)) throw std::runtime_error("invalid scale");
     if (in.width < 64 || in.width > MAX_MAP_DIM) throw std::runtime_error("invalid width");
@@ -296,6 +299,7 @@ Json mapRenderEffectiveJson(const MapRenderInput& in, const MapRenderImage& rend
         {"transitionActive", in.hasTheta},
         {"transitionFrom", in.hasTheta ? in.j.value("transitionFrom", std::string("mandelbrot")) : std::string("")},
         {"transitionTo", in.hasTheta ? in.j.value("transitionTo", std::string("burning_ship")) : std::string("")},
+        {"rotationDeg", in.rotationDeg},
     };
 }
 
@@ -323,6 +327,7 @@ compute::MapParams buildMapParams(const MapRenderInput& in, const Json& j,
         throw std::runtime_error("invalid pairwiseCap");
     p.scalar_type = in.scalarType;
     p.engine = in.engine;
+    p.rotation_deg = in.rotationDeg;
     p.should_cancel = shouldCancel;
     return p;
 }
@@ -659,6 +664,8 @@ std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::stri
     p.julia_im   = juliaIm;
     p.scalar_type = scalarType;
     p.engine      = engine;
+    p.rotation_deg = j.value("rotationDeg", 0.0);
+    if (!std::isfinite(p.rotation_deg)) p.rotation_deg = 0.0;
 
     compute::FieldOutput fo;
     const auto stats = compute::render_map_field(p, fo);

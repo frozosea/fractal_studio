@@ -228,32 +228,46 @@ void avx2_fp64_row(
     bool julia, double julia_re, double julia_im,
     Metric metric, Colormap cmap,
     uint8_t* row_ptr,
-    uint32_t* iter_row = nullptr,   // field mode (Escape only): write raw iter/norm, skip BGR
-    float* norm_row = nullptr
+    uint32_t* iter_row = nullptr,
+    float* norm_row = nullptr,
+    double center_re = 0.0, double center_im = 0.0,
+    double cos_theta = 1.0, double sin_theta = 0.0
 ) {
-    const double im_d = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
+    const bool has_rot = sin_theta != 0.0;
+    const double im_d = has_rot ? 0.0 : (im_max - (static_cast<double>(y) + 0.5) / H * span_im);
+    const double pixel_step = span_im / H;
+    const double half_w = static_cast<double>(W) * 0.5;
+    const double dy_base = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
     const __m256d vbail2 = _mm256_set1_pd(bail2);
     const __m256d vzero = _mm256_setzero_pd();
     const bool track_min = (metric == Metric::MinAbs || metric == Metric::Envelope);
     const bool track_max = (metric == Metric::MaxAbs || metric == Metric::Envelope);
 
     for (int x = 0; x < W; x += 4) {
-        double re_arr[4];
+        double re_arr[4], im_arr[4];
         int iter_arr[4] = {max_iter, max_iter, max_iter, max_iter};
-        double norm_arr[4] = {0.0, 0.0, 0.0, 0.0};   // |z|² at escape (field mode); 0 if bounded
+        double norm_arr[4] = {0.0, 0.0, 0.0, 0.0};
         int lane_mask = 0;
         for (int k = 0; k < 4; ++k) {
             const int px_x = x + k;
             if (px_x < W) {
-                re_arr[k] = re_min + (static_cast<double>(px_x) + 0.5) / W * span_re;
+                if (has_rot) {
+                    const double dx = (static_cast<double>(px_x) + 0.5 - half_w) * pixel_step;
+                    re_arr[k] = center_re + dx * cos_theta - dy_base * sin_theta;
+                    im_arr[k] = center_im + dx * sin_theta + dy_base * cos_theta;
+                } else {
+                    re_arr[k] = re_min + (static_cast<double>(px_x) + 0.5) / W * span_re;
+                    im_arr[k] = im_d;
+                }
                 lane_mask |= (1 << k);
             } else {
                 re_arr[k] = 1.0e30;
+                im_arr[k] = 0.0;
             }
         }
 
         const __m256d vpx_re = _mm256_loadu_pd(re_arr);
-        const __m256d vpx_im = _mm256_set1_pd(im_d);
+        const __m256d vpx_im = has_rot ? _mm256_loadu_pd(im_arr) : _mm256_set1_pd(im_d);
 
         __m256d zre, zim, cre, cim;
         if (julia) {
@@ -348,16 +362,22 @@ void avx2_fp32_row(
     float bail2, int max_iter,
     bool julia, float julia_re, float julia_im,
     Metric metric, Colormap cmap,
-    uint8_t* row_ptr
+    uint8_t* row_ptr,
+    float center_re = 0.0f, float center_im = 0.0f,
+    float cos_theta = 1.0f, float sin_theta = 0.0f
 ) {
-    const float im_d = im_max - (static_cast<float>(y) + 0.5f) / static_cast<float>(H) * span_im;
+    const bool has_rot = sin_theta != 0.0f;
+    const float im_d = has_rot ? 0.0f : (im_max - (static_cast<float>(y) + 0.5f) / static_cast<float>(H) * span_im);
+    const float pixel_step = span_im / static_cast<float>(H);
+    const float half_w = static_cast<float>(W) * 0.5f;
+    const float dy_base = -(static_cast<float>(y) + 0.5f - static_cast<float>(H) * 0.5f) * pixel_step;
     const __m256 vbail2 = _mm256_set1_ps(bail2);
     const __m256 vzero = _mm256_setzero_ps();
     const bool track_min = (metric == Metric::MinAbs || metric == Metric::Envelope);
     const bool track_max = (metric == Metric::MaxAbs || metric == Metric::Envelope);
 
     for (int x = 0; x < W; x += 8) {
-        float re_arr[8];
+        float re_arr[8], im_arr[8];
         int iter_arr[8] = {
             max_iter, max_iter, max_iter, max_iter,
             max_iter, max_iter, max_iter, max_iter
@@ -366,15 +386,23 @@ void avx2_fp32_row(
         for (int k = 0; k < 8; ++k) {
             const int px_x = x + k;
             if (px_x < W) {
-                re_arr[k] = re_min + (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
+                if (has_rot) {
+                    const float dx = (static_cast<float>(px_x) + 0.5f - half_w) * pixel_step;
+                    re_arr[k] = center_re + dx * cos_theta - dy_base * sin_theta;
+                    im_arr[k] = center_im + dx * sin_theta + dy_base * cos_theta;
+                } else {
+                    re_arr[k] = re_min + (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
+                    im_arr[k] = im_d;
+                }
                 lane_mask |= (1 << k);
             } else {
                 re_arr[k] = 1.0e20f;
+                im_arr[k] = 0.0f;
             }
         }
 
         const __m256 vpx_re = _mm256_loadu_ps(re_arr);
-        const __m256 vpx_im = _mm256_set1_ps(im_d);
+        const __m256 vpx_im = has_rot ? _mm256_loadu_ps(im_arr) : _mm256_set1_ps(im_d);
 
         __m256 zre, zim, cre, cim;
         if (julia) {
@@ -457,6 +485,10 @@ MapStats render_avx2_variant(const MapParams& p, cv::Mat& out) {
     const double span_re = p.scale * aspect;
     const double re_min = p.center_re - span_re * 0.5;
     const double im_max = p.center_im + span_im * 0.5;
+    const bool has_rot = p.rotation_deg != 0.0;
+    const double rot_rad = has_rot ? p.rotation_deg * M_PI / 180.0 : 0.0;
+    const double cos_t = has_rot ? std::cos(rot_rad) : 1.0;
+    const double sin_t = has_rot ? std::sin(rot_rad) : 0.0;
     const int thread_count = resolve_render_threads(p.render_threads);
     std::atomic<bool> cancelled{false};
 
@@ -475,13 +507,17 @@ MapStats render_avx2_variant(const MapParams& p, cv::Mat& out) {
                 static_cast<float>(span_re), static_cast<float>(span_im),
                 static_cast<float>(p.bailout_sq), p.iterations,
                 p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im),
-                p.metric, p.colormap, out.ptr<uint8_t>(y));
+                p.metric, p.colormap, out.ptr<uint8_t>(y),
+                static_cast<float>(p.center_re), static_cast<float>(p.center_im),
+                static_cast<float>(cos_t), static_cast<float>(sin_t));
         } else {
             avx2_fp64_row<VariantId>(
                 y, W, H, re_min, im_max, span_re, span_im,
                 p.bailout_sq, p.iterations,
                 p.julia, p.julia_re, p.julia_im,
-                p.metric, p.colormap, out.ptr<uint8_t>(y));
+                p.metric, p.colormap, out.ptr<uint8_t>(y),
+                nullptr, nullptr,
+                p.center_re, p.center_im, cos_t, sin_t);
         }
     }
     if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
@@ -513,6 +549,10 @@ MapStats render_avx2_field_variant(const MapParams& p, FieldOutput& out) {
     const double span_re = p.scale * aspect;
     const double re_min = p.center_re - span_re * 0.5;
     const double im_max = p.center_im + span_im * 0.5;
+    const bool has_rot = p.rotation_deg != 0.0;
+    const double rot_rad = has_rot ? p.rotation_deg * M_PI / 180.0 : 0.0;
+    const double cos_t = has_rot ? std::cos(rot_rad) : 1.0;
+    const double sin_t = has_rot ? std::sin(rot_rad) : 0.0;
     const int thread_count = resolve_render_threads(p.render_threads);
     std::atomic<bool> cancelled{false};
 
@@ -530,7 +570,8 @@ MapStats render_avx2_field_variant(const MapParams& p, FieldOutput& out) {
             p.julia, p.julia_re, p.julia_im,
             Metric::Escape, p.colormap, nullptr,
             out.iter_u32.data() + static_cast<size_t>(y) * static_cast<size_t>(W),
-            out.norm_f32.data() + static_cast<size_t>(y) * static_cast<size_t>(W));
+            out.norm_f32.data() + static_cast<size_t>(y) * static_cast<size_t>(W),
+            p.center_re, p.center_im, cos_t, sin_t);
     }
     if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
         throw std::runtime_error("cancelled");

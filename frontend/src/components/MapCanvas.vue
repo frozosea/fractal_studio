@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { api, type MapRenderRequest, type MapFieldRequest, type Metric, type ColorMap, type SpecialPointEnumResult } from '../api'
 import { promptSlowRenderWarning, slowRenderWarningsDisabled } from '../slowWarnings'
 import { lang } from '../i18n'
@@ -32,6 +32,10 @@ const props = defineProps<{
   juliaIm?: number
   engine?: string
   scalarType?: string
+  rotationDeg?: number
+  showExportFrame?: boolean
+  exportFrameWidth?: number
+  exportFrameHeight?: number
   specialPoints?: SpecialPointEnumResult[]
   hoveredSpecialPointId?: string
   selectedSpecialPointId?: string
@@ -78,6 +82,7 @@ type ViewportSnapshot = {
   centerRe: number
   centerIm: number
   scale: number
+  rotationDeg: number
 }
 
 let renderedViewport: ViewportSnapshot | null = null
@@ -184,11 +189,21 @@ function previewTransform(): string {
   if (!hasFrame.value || !renderedViewport || domW.value < 16 || domH.value < 16) return 'none'
   const aspect = domW.value / domH.value
   const scaleRatio = renderedViewport.scale / props.scale
-  const dx = (renderedViewport.centerRe - props.centerRe) * domW.value / (props.scale * aspect)
-  const dy = -(renderedViewport.centerIm - props.centerIm) * domH.value / props.scale
+  const rotDelta = (props.rotationDeg ?? 0) - renderedViewport.rotationDeg
+  const dre = renderedViewport.centerRe - props.centerRe
+  const dim = renderedViewport.centerIm - props.centerIm
+  const curRad = (props.rotationDeg ?? 0) * Math.PI / 180
+  const cosR = Math.cos(curRad), sinR = Math.sin(curRad)
+  const dx = (dre * cosR + dim * sinR) * domW.value / (props.scale * aspect)
+  const dy = (-dre * sinR + dim * cosR) * (-domH.value) / props.scale
   const tx = domW.value * (1 - scaleRatio) * 0.5 + dx
   const ty = domH.value * (1 - scaleRatio) * 0.5 + dy
-  if (Math.abs(scaleRatio - 1) < 0.000001 && Math.abs(tx) < 0.01 && Math.abs(ty) < 0.01) return 'none'
+  const noChange = Math.abs(scaleRatio - 1) < 0.000001 && Math.abs(tx) < 0.01 && Math.abs(ty) < 0.01 && Math.abs(rotDelta) < 0.001
+  if (noChange) return 'none'
+  const cx = domW.value * 0.5, cy = domH.value * 0.5
+  if (Math.abs(rotDelta) > 0.001) {
+    return `translate(${cx}px,${cy}px) rotate(${rotDelta}deg) translate(${-cx}px,${-cy}px) matrix(${scaleRatio},0,0,${scaleRatio},${tx},${ty})`
+  }
   return `matrix(${scaleRatio}, 0, 0, ${scaleRatio}, ${tx}, ${ty})`
 }
 
@@ -293,6 +308,7 @@ async function renderFrame() {
     }
     if (props.engine)      fieldReq.engine      = props.engine
     if (props.scalarType)  fieldReq.scalarType  = props.scalarType
+    if (props.rotationDeg) fieldReq.rotationDeg = props.rotationDeg
     if (props.centerReStr) fieldReq.centerReStr = props.centerReStr
     if (props.centerImStr) fieldReq.centerImStr = props.centerImStr
 
@@ -320,6 +336,7 @@ async function renderFrame() {
         centerRe: fieldReq.centerRe,
         centerIm: fieldReq.centerIm,
         scale:    fieldReq.scale,
+        rotationDeg: props.rotationDeg ?? 0,
       }
       recolorize()
       maybeWarnSlowRender(resp.generatedMs)
@@ -372,6 +389,7 @@ async function renderFrame() {
   if (props.scalarType)               req.scalarType                = props.scalarType
   if (props.centerReStr)              (req as any).centerReStr      = props.centerReStr
   if (props.centerImStr)              (req as any).centerImStr      = props.centerImStr
+  if (props.rotationDeg)              req.rotationDeg               = props.rotationDeg
 
   try {
     cachedField = null  // invalidate field cache when using inline path
@@ -390,6 +408,7 @@ async function renderFrame() {
       centerRe: req.centerRe,
       centerIm: req.centerIm,
       scale: req.scale,
+      rotationDeg: props.rotationDeg ?? 0,
     }
     hasFrame.value = true
     activeCanvas.value = next
@@ -427,7 +446,7 @@ watch(() => [
   props.variant, props.metric,
   props.colorMode, props.cyclesPerOctave,
   props.iterations, props.pairwiseCap, props.julia, props.juliaRe, props.juliaIm,
-  props.engine, props.scalarType, props.transitionTheta, props.transitionThetaMilliDeg,
+  props.engine, props.scalarType, props.rotationDeg, props.transitionTheta, props.transitionThetaMilliDeg,
   props.transitionFrom, props.transitionTo,
   frameW.value, frameH.value,
 ], () => scheduleRender())
@@ -514,10 +533,13 @@ function onWheel(e: WheelEvent) {
   const aspect  = rect.width / rect.height
   const factor  = e.deltaY > 0 ? 1.25 : 0.8
   const newScale = props.scale * factor
-  // Compute delta directly from pixel fraction × scale difference.
-  // Avoids catastrophic cancellation in (centerRe + offset - offset').
-  const deltaRe = (px - 0.5) * (props.scale - newScale) * aspect
-  const deltaIm = (0.5 - py) * (props.scale - newScale)
+  const dScale = props.scale - newScale
+  const dx = (px - 0.5) * dScale * aspect
+  const dy = -(py - 0.5) * dScale
+  const rad = (props.rotationDeg ?? 0) * Math.PI / 180
+  const cosR = Math.cos(rad), sinR = Math.sin(rad)
+  const deltaRe = dx * cosR - dy * sinR
+  const deltaIm = dx * sinR + dy * cosR
   emit('viewport-change', {
     centerRe: props.centerRe + deltaRe,
     centerIm: props.centerIm + deltaIm,
@@ -548,9 +570,13 @@ function screenToWorld(clientX: number, clientY: number): { re: number; im: numb
   const aspect = rect.width / rect.height
   const px     = (clientX - rect.left) / rect.width
   const py     = (clientY - rect.top)  / rect.height
+  const dx = (px - 0.5) * props.scale * aspect
+  const dy = -(py - 0.5) * props.scale
+  const rad = (props.rotationDeg ?? 0) * Math.PI / 180
+  const cosR = Math.cos(rad), sinR = Math.sin(rad)
   return {
-    re: props.centerRe + (px - 0.5) * props.scale * aspect,
-    im: props.centerIm - (py - 0.5) * props.scale,
+    re: props.centerRe + dx * cosR - dy * sinR,
+    im: props.centerIm + dx * sinR + dy * cosR,
   }
 }
 
@@ -605,8 +631,12 @@ function updatePinch() {
   const py = (midpoint.y - rect.top) / rect.height
   const aspect = rect.width / rect.height
   const newScale = Math.max(1e-300, pinchStart.scale * (pinchStart.distance / distance))
-  const newRe = pinchStart.worldRe - (px - 0.5) * newScale * aspect
-  const newIm = pinchStart.worldIm + (py - 0.5) * newScale
+  const dx = (px - 0.5) * newScale * aspect
+  const dy = -(py - 0.5) * newScale
+  const rad = (props.rotationDeg ?? 0) * Math.PI / 180
+  const cosR = Math.cos(rad), sinR = Math.sin(rad)
+  const newRe = pinchStart.worldRe - (dx * cosR - dy * sinR)
+  const newIm = pinchStart.worldIm - (dx * sinR + dy * cosR)
   emit('viewport-change', {
     centerRe: newRe,
     centerIm: newIm,
@@ -618,8 +648,13 @@ function worldToScreen(re: number, im: number): { x: number; y: number; visible:
   const w = Math.max(1, domW.value)
   const h = Math.max(1, domH.value)
   const aspect = w / h
-  const x = (0.5 + (re - props.centerRe) / (props.scale * aspect)) * w
-  const y = (0.5 - (im - props.centerIm) / props.scale) * h
+  const dre = re - props.centerRe, dim = im - props.centerIm
+  const rad = (props.rotationDeg ?? 0) * Math.PI / 180
+  const cosR = Math.cos(rad), sinR = Math.sin(rad)
+  const dx = dre * cosR + dim * sinR
+  const dy = -dre * sinR + dim * cosR
+  const x = (0.5 + dx / (props.scale * aspect)) * w
+  const y = (0.5 - dy / props.scale) * h
   return { x, y, visible: x >= -8 && x <= w + 8 && y >= -8 && y <= h + 8 }
 }
 
@@ -666,15 +701,19 @@ function onPointerMove(e: PointerEvent) {
   dragMoved = true
   const rect   = wrapper.value.getBoundingClientRect()
   const aspect = rect.width / rect.height
-  // Incremental delta from previous pointer position (not drag start)
-  // to preserve BigDec precision at deep zoom where total delta < float64 ULP
+  const rad = (props.rotationDeg ?? 0) * Math.PI / 180
+  const cosR = Math.cos(rad), sinR = Math.sin(rad)
   const incDx = e.clientX - prevDragPos.x
   const incDy = e.clientY - prevDragPos.y
   prevDragPos = { x: e.clientX, y: e.clientY }
-  const deltaRe = -(incDx / rect.width)  * dragStart.sc * aspect
-  const deltaIm =  (incDy / rect.height) * dragStart.sc
-  const totalRe = -(dx / rect.width)  * dragStart.sc * aspect
-  const totalIm =  (dy / rect.height) * dragStart.sc
+  const rawIncRe = -(incDx / rect.width)  * dragStart.sc * aspect
+  const rawIncIm =  (incDy / rect.height) * dragStart.sc
+  const deltaRe = rawIncRe * cosR - rawIncIm * sinR
+  const deltaIm = rawIncRe * sinR + rawIncIm * cosR
+  const rawTotRe = -(dx / rect.width)  * dragStart.sc * aspect
+  const rawTotIm =  (dy / rect.height) * dragStart.sc
+  const totalRe = rawTotRe * cosR - rawTotIm * sinR
+  const totalIm = rawTotRe * sinR + rawTotIm * cosR
   emit('viewport-change', {
     centerRe: dragStart.cx + totalRe,
     centerIm: dragStart.cy + totalIm,
@@ -711,6 +750,30 @@ function onPointerCancel(e: PointerEvent) {
   if (activePointers.size < 2) pinchStart = null
   if (activePointers.size === 0) dragging = false
 }
+
+const exportFrameStyle = computed(() => {
+  if (!props.showExportFrame || !props.exportFrameWidth || !props.exportFrameHeight) return null
+  const vw = domW.value, vh = domH.value
+  if (vw < 16 || vh < 16) return null
+  const exportAspect = props.exportFrameWidth / props.exportFrameHeight
+  const viewportAspect = vw / vh
+  let frameW: number, frameH: number
+  if (exportAspect > viewportAspect) {
+    frameW = vw
+    frameH = vw / exportAspect
+  } else {
+    frameH = vh
+    frameW = vh * exportAspect
+  }
+  const left = (vw - frameW) / 2
+  const top = (vh - frameH) / 2
+  return {
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${frameW}px`,
+    height: `${frameH}px`,
+  }
+})
 </script>
 
 <template>
@@ -750,6 +813,9 @@ function onPointerCancel(e: PointerEvent) {
         @click.stop="$emit('select-special-point', p)">
       </button>
     </div>
+    <div v-if="showExportFrame && exportFrameStyle"
+         class="export-frame"
+         :style="exportFrameStyle" />
     <div v-if="error"   class="overlay error">{{ error }}</div>
   </div>
 </template>
@@ -815,6 +881,14 @@ function onPointerCancel(e: PointerEvent) {
 @keyframes sweep {
   0% { transform: translateX(-110%); }
   100% { transform: translateX(250%); }
+}
+
+.export-frame {
+  position: absolute;
+  pointer-events: none;
+  border: 2px dashed rgba(255, 255, 255, 0.7);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  z-index: 10;
 }
 
 .overlay {

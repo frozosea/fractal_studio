@@ -333,6 +333,7 @@ const smooth   = ref(false)
 const mapColorMode = ref<'direct' | 'eq_full' | 'eq_center'>('direct')  // live equalized preview
 const cyclesPerOctave = ref(1)  // band density for equalized modes
 const pairwiseCap = ref(64)
+const rotationDeg = ref(0)
 
 // ── Custom variants ───────────────────────────────────────────────────────────
 const customVariants     = ref<CustomVariant[]>([])
@@ -800,6 +801,7 @@ watch(variant, () => {
 
 const pngPresetKey = ref('fhd')
 const videoPresetKey = ref('fhd')
+const showExportFrame = ref(false)
 
 const pngPreset = computed(() =>
   EXPORT_PRESETS.find(p => p.key === pngPresetKey.value) ?? EXPORT_PRESETS[0]
@@ -839,6 +841,7 @@ async function exportPng() {
       transitionThetaMilliDeg: transitionOn.value ? transitionThetaMilliDeg.value : undefined,
       transitionFrom:  transitionOn.value ? transitionFrom.value : undefined,
       transitionTo:    transitionOn.value ? transitionTo.value : undefined,
+      rotationDeg:     rotationDeg.value || undefined,
     }) as any
     if (localExportMode.value && resp.localPath) {
       pngExportStatus.value = `${lang.value === 'en' ? 'saved locally' : '已保存到本地'} · ${resp.localPath}`
@@ -1463,6 +1466,18 @@ async function pollVideoExport(initial: VideoExportResponse) {
         </label>
       </div>
 
+      <div class="group rotation-group">
+        <label>{{ lang === 'en' ? 'Rotation' : '旋转' }}</label>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="range" v-model.number="rotationDeg" min="-180" max="180" step="1" style="flex:1;min-width:60px" />
+          <input type="number" v-model.number="rotationDeg" min="-180" max="180" step="1" class="num" style="width:60px" />
+          <span class="mono" style="font-size:11px">°</span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:2px">
+          <button v-for="a in [-90, -45, 0, 45, 90]" :key="a" class="snap-btn" @click="rotationDeg = a">{{ a }}°</button>
+        </div>
+      </div>
+
       <div class="group">
         <label>{{ t('engine') }}</label>
         <select v-model="engineMode">
@@ -1496,6 +1511,10 @@ async function pollVideoExport(initial: VideoExportResponse) {
             {{ p.label[lang] }} · {{ p.width }}×{{ p.height }}
           </option>
         </select>
+        <label style="margin-top:4px;font-size:11px">
+          <input type="checkbox" v-model="showExportFrame" style="width:auto;margin-right:4px" />
+          {{ lang === 'en' ? 'Composition frame' : '构图框' }}
+        </label>
       </div>
 
       <button @click="resetView" :title="juliaOn ? t('reset_julia') : t('reset')">
@@ -1569,6 +1588,10 @@ async function pollVideoExport(initial: VideoExportResponse) {
           :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
           :transitionFrom="transitionFrom" :transitionTo="transitionTo"
           :engine="engineMode" :scalarType="scalarMode"
+          :rotationDeg="rotationDeg"
+          :showExportFrame="showExportFrame"
+          :exportFrameWidth="pngPreset.width"
+          :exportFrameHeight="pngPreset.height"
           :special-points="renderedSpecialPoints"
           :hovered-special-point-id="hoveredSpecialPointId"
           :selected-special-point-id="selectedSpecialPointId"
@@ -1623,6 +1646,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
                 :transitionFrom="transitionFrom" :transitionTo="transitionTo"
                 :engine="engineMode" :scalarType="scalarMode"
+                :rotationDeg="rotationDeg"
                 :special-points="renderedSpecialPoints"
                 :hovered-special-point-id="hoveredSpecialPointId"
                 :selected-special-point-id="selectedSpecialPointId"
@@ -1657,6 +1681,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :transitionFrom="transitionFrom" :transitionTo="transitionTo"
                 :julia="true" :juliaRe="juliaRe" :juliaIm="juliaIm"
                 :engine="engineMode" :scalarType="scalarMode"
+                :rotationDeg="rotationDeg"
                 @viewport-change="onJuliaViewport"
               />
             </div>
@@ -1978,6 +2003,13 @@ async function pollVideoExport(initial: VideoExportResponse) {
   flex: 1;
   min-width: 42px;
   padding: 3px 4px;
+  font-size: 10px;
+}
+
+.snap-btn {
+  flex: 1;
+  min-width: 32px;
+  padding: 2px 4px;
   font-size: 10px;
 }
 

@@ -429,11 +429,14 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
     const double aspect  = static_cast<double>(W) / H;
     const double span_im = p.scale;
     const double span_re = p.scale * aspect;
-    const double re_min  = p.center_re - span_re * 0.5;
-    const double im_max  = p.center_im + span_im * 0.5;
     const double bail2   = p.bailout_sq;
     const int    max_iter = p.iterations;
     const int    thread_count = resolve_render_threads(p.render_threads);
+
+    const bool has_rot = p.rotation_deg != 0.0;
+    const double rot_rad = has_rot ? p.rotation_deg * M_PI / 180.0 : 0.0;
+    const double cos_t = has_rot ? std::cos(rot_rad) : 1.0;
+    const double sin_t = has_rot ? std::sin(rot_rad) : 0.0;
 
     const bool is_julia = p.julia;
 
@@ -494,10 +497,17 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
                         const size_t px_idx = static_cast<size_t>(y) * W + x;
                         if (only_glitched && !glitch_mask[px_idx]) continue;
 
-                        const double px_off_re = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5)
-                                               + (p.center_re - ref_re);
-                        const double px_off_im = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5)
-                                               + (p.center_im - ref_im);
+                        double dx = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5);
+                        double dy = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5);
+                        double rot_dx, rot_dy;
+                        if (has_rot) {
+                            rot_dx = dx * cos_t - dy * sin_t;
+                            rot_dy = dx * sin_t + dy * cos_t;
+                        } else {
+                            rot_dx = dx; rot_dy = dy;
+                        }
+                        const double px_off_re = rot_dx + (p.center_re - ref_re);
+                        const double px_off_im = rot_dy + (p.center_im - ref_im);
 
                         double dc_re, dc_im, dz_re, dz_im;
                         if (is_julia) {
@@ -596,8 +606,15 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
         for (int y = 0; y < H && !found; ++y)
             for (int x = 0; x < W && !found; ++x)
                 if (glitch[static_cast<size_t>(y) * W + x] == 1) {
-                    rebase_re = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
-                    rebase_im = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
+                    double dx = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5);
+                    double dy = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5);
+                    if (has_rot) {
+                        rebase_re = p.center_re + dx * cos_t - dy * sin_t;
+                        rebase_im = p.center_im + dx * sin_t + dy * cos_t;
+                    } else {
+                        rebase_re = p.center_re + dx;
+                        rebase_im = p.center_im + dy;
+                    }
                     found = true;
                 }
         if (!found) break;
@@ -623,6 +640,16 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
                 const int y = idx / W;
                 const double frac_x = (static_cast<double>(x) + 0.5) / W - 0.5;
                 const double frac_y = (static_cast<double>(y) + 0.5) / H - 0.5;
+                const double dx = span_re * frac_x;
+                const double dy = -span_im * frac_y;
+                double off_re, off_im;
+                if (has_rot) {
+                    off_re = dx * cos_t - dy * sin_t;
+                    off_im = dx * sin_t + dy * cos_t;
+                } else {
+                    off_re = dx;
+                    off_im = dy;
+                }
                 int iter = max_iter;
 
 #if defined(FSD_HAS_MPFR)
@@ -630,18 +657,18 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
                     const mpfr_prec_t prec = static_cast<mpfr_prec_t>(mpfr_bits);
                     MpfrGuard cr(prec), ci(prec), zr(prec), zi(prec);
                     MpfrGuard zr2(prec), zi2(prec), tmp(prec), mag(prec), b2(prec);
-                    // c = center + span * frac
+                    // c = center + rotated offset
                     if (!p.center_re_str.empty())
                         mpfr_set_str(cr, p.center_re_str.c_str(), 10, MPFR_RNDN);
                     else
                         mpfr_set_d(cr, p.center_re, MPFR_RNDN);
-                    mpfr_set_d(tmp, span_re * frac_x, MPFR_RNDN);
+                    mpfr_set_d(tmp, off_re, MPFR_RNDN);
                     mpfr_add(cr, cr, tmp, MPFR_RNDN);
                     if (!p.center_im_str.empty())
                         mpfr_set_str(ci, p.center_im_str.c_str(), 10, MPFR_RNDN);
                     else
                         mpfr_set_d(ci, p.center_im, MPFR_RNDN);
-                    mpfr_set_d(tmp, -span_im * frac_y, MPFR_RNDN);
+                    mpfr_set_d(tmp, off_im, MPFR_RNDN);
                     mpfr_add(ci, ci, tmp, MPFR_RNDN);
                     mpfr_set_d(zr, 0.0, MPFR_RNDN);
                     mpfr_set_d(zi, 0.0, MPFR_RNDN);
@@ -662,9 +689,9 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
 #elif defined(FSD_HAS_FLOAT128)
                 {
                     const __float128 cre = scalar_from_string<__float128>(p.center_re_str, p.center_re)
-                        + static_cast<__float128>(span_re * frac_x);
+                        + static_cast<__float128>(off_re);
                     const __float128 cim = scalar_from_string<__float128>(p.center_im_str, p.center_im)
-                        + static_cast<__float128>(-span_im * frac_y);
+                        + static_cast<__float128>(off_im);
                     __float128 zr = 0, zi = 0;
                     for (int n = 0; n < max_iter; ++n) {
                         const __float128 zr2 = zr * zr, zi2 = zi * zi;
@@ -676,8 +703,8 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
                 }
 #else
                 {
-                    const double cre = p.center_re + span_re * frac_x;
-                    const double cim = p.center_im - span_im * frac_y;
+                    const double cre = p.center_re + off_re;
+                    const double cim = p.center_im + off_im;
                     double zr = 0, zi = 0;
                     for (int n = 0; n < max_iter; ++n) {
                         const double zr2 = zr * zr, zi2 = zi * zi;
@@ -723,6 +750,11 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
     const double bail2   = p.bailout_sq;
     const int    max_iter = p.iterations;
     const int    thread_count = resolve_render_threads(p.render_threads);
+
+    const bool has_rot = p.rotation_deg != 0.0;
+    const double rot_rad = has_rot ? p.rotation_deg * M_PI / 180.0 : 0.0;
+    const double cos_t = has_rot ? std::cos(rot_rad) : 1.0;
+    const double sin_t = has_rot ? std::sin(rot_rad) : 0.0;
 
     fo.width  = W;
     fo.height = H;
@@ -784,10 +816,17 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                         const size_t px_idx = static_cast<size_t>(y) * W + x;
                         if (only_glitched && !glitch_mask[px_idx]) continue;
 
-                        const double px_off_re = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5)
-                                               + (p.center_re - ref_re);
-                        const double px_off_im = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5)
-                                               + (p.center_im - ref_im);
+                        double dx = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5);
+                        double dy = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5);
+                        double rot_dx, rot_dy;
+                        if (has_rot) {
+                            rot_dx = dx * cos_t - dy * sin_t;
+                            rot_dy = dx * sin_t + dy * cos_t;
+                        } else {
+                            rot_dx = dx; rot_dy = dy;
+                        }
+                        const double px_off_re = rot_dx + (p.center_re - ref_re);
+                        const double px_off_im = rot_dy + (p.center_im - ref_im);
 
                         double dc_re, dc_im, dz_re, dz_im;
                         if (is_julia) {
@@ -865,8 +904,15 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
         for (int y = 0; y < H && !found; ++y)
             for (int x = 0; x < W && !found; ++x)
                 if (glitch[static_cast<size_t>(y) * W + x] == 1) {
-                    rebase_re = p.center_re + span_re * ((static_cast<double>(x) + 0.5) / W - 0.5);
-                    rebase_im = p.center_im - span_im * ((static_cast<double>(y) + 0.5) / H - 0.5);
+                    double dx = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5);
+                    double dy = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5);
+                    if (has_rot) {
+                        rebase_re = p.center_re + dx * cos_t - dy * sin_t;
+                        rebase_im = p.center_im + dx * sin_t + dy * cos_t;
+                    } else {
+                        rebase_re = p.center_re + dx;
+                        rebase_im = p.center_im + dy;
+                    }
                     found = true;
                 }
         if (!found) break;
@@ -891,6 +937,16 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                 const int y = idx / W;
                 const double frac_x = (static_cast<double>(x) + 0.5) / W - 0.5;
                 const double frac_y = (static_cast<double>(y) + 0.5) / H - 0.5;
+                const double dx = span_re * frac_x;
+                const double dy = -span_im * frac_y;
+                double off_re, off_im;
+                if (has_rot) {
+                    off_re = dx * cos_t - dy * sin_t;
+                    off_im = dx * sin_t + dy * cos_t;
+                } else {
+                    off_re = dx;
+                    off_im = dy;
+                }
                 int iter = max_iter;
                 double escape_mag2 = 0.0;
 
@@ -906,26 +962,26 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                             mpfr_set_str(zr, p.center_re_str.c_str(), 10, MPFR_RNDN);
                         else
                             mpfr_set_d(zr, p.center_re, MPFR_RNDN);
-                        mpfr_set_d(tmp, span_re * frac_x, MPFR_RNDN);
+                        mpfr_set_d(tmp, off_re, MPFR_RNDN);
                         mpfr_add(zr, zr, tmp, MPFR_RNDN);
                         if (!p.center_im_str.empty())
                             mpfr_set_str(zi, p.center_im_str.c_str(), 10, MPFR_RNDN);
                         else
                             mpfr_set_d(zi, p.center_im, MPFR_RNDN);
-                        mpfr_set_d(tmp, -span_im * frac_y, MPFR_RNDN);
+                        mpfr_set_d(tmp, off_im, MPFR_RNDN);
                         mpfr_add(zi, zi, tmp, MPFR_RNDN);
                     } else {
                         if (!p.center_re_str.empty())
                             mpfr_set_str(cr, p.center_re_str.c_str(), 10, MPFR_RNDN);
                         else
                             mpfr_set_d(cr, p.center_re, MPFR_RNDN);
-                        mpfr_set_d(tmp, span_re * frac_x, MPFR_RNDN);
+                        mpfr_set_d(tmp, off_re, MPFR_RNDN);
                         mpfr_add(cr, cr, tmp, MPFR_RNDN);
                         if (!p.center_im_str.empty())
                             mpfr_set_str(ci, p.center_im_str.c_str(), 10, MPFR_RNDN);
                         else
                             mpfr_set_d(ci, p.center_im, MPFR_RNDN);
-                        mpfr_set_d(tmp, -span_im * frac_y, MPFR_RNDN);
+                        mpfr_set_d(tmp, off_im, MPFR_RNDN);
                         mpfr_add(ci, ci, tmp, MPFR_RNDN);
                         mpfr_set_d(zr, 0.0, MPFR_RNDN);
                         mpfr_set_d(zi, 0.0, MPFR_RNDN);
@@ -955,14 +1011,14 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                         cre = static_cast<__float128>(p.julia_re);
                         cim = static_cast<__float128>(p.julia_im);
                         zr = scalar_from_string<__float128>(p.center_re_str, p.center_re)
-                            + static_cast<__float128>(span_re * frac_x);
+                            + static_cast<__float128>(off_re);
                         zi = scalar_from_string<__float128>(p.center_im_str, p.center_im)
-                            + static_cast<__float128>(-span_im * frac_y);
+                            + static_cast<__float128>(off_im);
                     } else {
                         cre = scalar_from_string<__float128>(p.center_re_str, p.center_re)
-                            + static_cast<__float128>(span_re * frac_x);
+                            + static_cast<__float128>(off_re);
                         cim = scalar_from_string<__float128>(p.center_im_str, p.center_im)
-                            + static_cast<__float128>(-span_im * frac_y);
+                            + static_cast<__float128>(off_im);
                         zr = 0; zi = 0;
                     }
                     for (int n = 0; n < max_iter; ++n) {
@@ -979,11 +1035,11 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                     double cre, cim, zr, zi;
                     if (is_julia) {
                         cre = p.julia_re; cim = p.julia_im;
-                        zr = p.center_re + span_re * frac_x;
-                        zi = p.center_im - span_im * frac_y;
+                        zr = p.center_re + off_re;
+                        zi = p.center_im + off_im;
                     } else {
-                        cre = p.center_re + span_re * frac_x;
-                        cim = p.center_im - span_im * frac_y;
+                        cre = p.center_re + off_re;
+                        cim = p.center_im + off_im;
                         zr = 0; zi = 0;
                     }
                     for (int n = 0; n < max_iter; ++n) {

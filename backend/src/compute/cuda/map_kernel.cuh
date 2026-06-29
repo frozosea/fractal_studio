@@ -53,6 +53,8 @@ struct CudaMapParams {
     //   5=Fish, 6=Vase, 7=Bird, 8=Mask, 9=Ship
     int variant_id = 0;
 
+    double rotation_deg = 0.0;
+
     // Julia mode: if true, z0 = pixel, c = (julia_re, julia_im)
     bool julia    = false;
     double julia_re = 0.0;

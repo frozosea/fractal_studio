@@ -204,6 +204,7 @@ static double render_tile_gpu(
     cp.julia_re     = base.julia_re;
     cp.julia_im     = base.julia_im;
     cp.metric_id    = static_cast<int>(base.metric);
+    cp.rotation_deg = base.rotation_deg;
     if (use_fx && fixed_scalar_type == "q3.60") {
         const FixedViewportRaw<60> vp = make_fixed_viewport_raw<60>(
             cp.center_re, cp.center_im, cp.scale, cp.width, cp.height,
@@ -474,6 +475,7 @@ static double render_tile_gpu_field(
     cp.julia_re     = base.julia_re;
     cp.julia_im     = base.julia_im;
     cp.metric_id    = 0;
+    cp.rotation_deg = base.rotation_deg;
 
     const size_t tile_n = static_cast<size_t>(t.w) * static_cast<size_t>(t.h);
     std::vector<uint32_t> tile_iter(tile_n, 0u);

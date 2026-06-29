@@ -438,19 +438,29 @@ __global__ void fractal_fp32(
     float center_re, float center_im, float scale,
     int W, int H, int max_iter, float bail2, int colormap_id,
     bool julia, float julia_re_p, float julia_im_p,
+    float cos_t, float sin_t,
     uint8_t* __restrict__ out
 ) {
     const int px_x = blockIdx.x * blockDim.x + threadIdx.x;
     const int px_y = blockIdx.y * blockDim.y + threadIdx.y;
     if (px_x >= W || px_y >= H) return;
 
-    const float aspect = static_cast<float>(W) / static_cast<float>(H);
-    const float span_im = scale;
-    const float span_re = scale * aspect;
-    const float re = (center_re - span_re * 0.5f) +
-        (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
-    const float im = (center_im + span_im * 0.5f) -
-        (static_cast<float>(px_y) + 0.5f) / static_cast<float>(H) * span_im;
+    float re, im;
+    if (sin_t != 0.0f) {
+        const float pixel_step = scale / static_cast<float>(H);
+        const float dx = (static_cast<float>(px_x) + 0.5f - static_cast<float>(W) * 0.5f) * pixel_step;
+        const float dy = -(static_cast<float>(px_y) + 0.5f - static_cast<float>(H) * 0.5f) * pixel_step;
+        re = center_re + dx * cos_t - dy * sin_t;
+        im = center_im + dx * sin_t + dy * cos_t;
+    } else {
+        const float aspect = static_cast<float>(W) / static_cast<float>(H);
+        const float span_im = scale;
+        const float span_re = scale * aspect;
+        re = (center_re - span_re * 0.5f) +
+            (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
+        im = (center_im + span_im * 0.5f) -
+            (static_cast<float>(px_y) + 0.5f) / static_cast<float>(H) * span_im;
+    }
 
     float zre, zim, cre, cim;
     if (julia) {
@@ -521,17 +531,27 @@ __global__ void fractal_fp64(
     double center_re, double center_im, double scale,
     int W, int H, int max_iter, double bail2, int colormap_id,
     bool julia, double julia_re_p, double julia_im_p,
+    double cos_t, double sin_t,
     uint8_t* __restrict__ out
 ) {
     const int px_x = blockIdx.x * blockDim.x + threadIdx.x;
     const int px_y = blockIdx.y * blockDim.y + threadIdx.y;
     if (px_x >= W || px_y >= H) return;
 
-    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
-    const double span_im = scale;
-    const double span_re = scale * aspect;
-    const double re = (center_re - span_re * 0.5) + (static_cast<double>(px_x) + 0.5) / W * span_re;
-    const double im = (center_im + span_im * 0.5) - (static_cast<double>(px_y) + 0.5) / H * span_im;
+    double re, im;
+    if (sin_t != 0.0) {
+        const double pixel_step = scale / static_cast<double>(H);
+        const double dx = (static_cast<double>(px_x) + 0.5 - static_cast<double>(W) * 0.5) * pixel_step;
+        const double dy = -(static_cast<double>(px_y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        re = center_re + dx * cos_t - dy * sin_t;
+        im = center_im + dx * sin_t + dy * cos_t;
+    } else {
+        const double aspect  = static_cast<double>(W) / static_cast<double>(H);
+        const double span_im = scale;
+        const double span_re = scale * aspect;
+        re = (center_re - span_re * 0.5) + (static_cast<double>(px_x) + 0.5) / W * span_re;
+        im = (center_im + span_im * 0.5) - (static_cast<double>(px_y) + 0.5) / H * span_im;
+    }
 
     // Initialise z and c based on julia flag.
     double zre, zim, cre, cim;
@@ -607,17 +627,27 @@ __global__ void fractal_field_fp64(
     double center_re, double center_im, double scale,
     int W, int H, int max_iter, double bail2,
     bool julia, double julia_re_p, double julia_im_p,
+    double cos_t, double sin_t,
     uint32_t* __restrict__ out_iter, float* __restrict__ out_norm
 ) {
     const int px_x = blockIdx.x * blockDim.x + threadIdx.x;
     const int px_y = blockIdx.y * blockDim.y + threadIdx.y;
     if (px_x >= W || px_y >= H) return;
 
-    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
-    const double span_im = scale;
-    const double span_re = scale * aspect;
-    const double re = (center_re - span_re * 0.5) + (static_cast<double>(px_x) + 0.5) / W * span_re;
-    const double im = (center_im + span_im * 0.5) - (static_cast<double>(px_y) + 0.5) / H * span_im;
+    double re, im;
+    if (sin_t != 0.0) {
+        const double pixel_step = scale / static_cast<double>(H);
+        const double dx = (static_cast<double>(px_x) + 0.5 - static_cast<double>(W) * 0.5) * pixel_step;
+        const double dy = -(static_cast<double>(px_y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        re = center_re + dx * cos_t - dy * sin_t;
+        im = center_im + dx * sin_t + dy * cos_t;
+    } else {
+        const double aspect  = static_cast<double>(W) / static_cast<double>(H);
+        const double span_im = scale;
+        const double span_re = scale * aspect;
+        re = (center_re - span_re * 0.5) + (static_cast<double>(px_x) + 0.5) / W * span_re;
+        im = (center_im + span_im * 0.5) - (static_cast<double>(px_y) + 0.5) / H * span_im;
+    }
 
     double zre, zim, cre, cim;
     if (julia) { zre = re;  zim = im;  cre = julia_re_p; cim = julia_im_p; }
@@ -650,19 +680,29 @@ __global__ void fractal_field_fp32(
     float center_re, float center_im, float scale,
     int W, int H, int max_iter, float bail2,
     bool julia, float julia_re_p, float julia_im_p,
+    float cos_t, float sin_t,
     uint32_t* __restrict__ out_iter, float* __restrict__ out_norm
 ) {
     const int px_x = blockIdx.x * blockDim.x + threadIdx.x;
     const int px_y = blockIdx.y * blockDim.y + threadIdx.y;
     if (px_x >= W || px_y >= H) return;
 
-    const float aspect  = static_cast<float>(W) / static_cast<float>(H);
-    const float span_im = scale;
-    const float span_re = scale * aspect;
-    const float re = (center_re - span_re * 0.5f) +
-        (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
-    const float im = (center_im + span_im * 0.5f) -
-        (static_cast<float>(px_y) + 0.5f) / static_cast<float>(H) * span_im;
+    float re, im;
+    if (sin_t != 0.0f) {
+        const float pixel_step = scale / static_cast<float>(H);
+        const float dx = (static_cast<float>(px_x) + 0.5f - static_cast<float>(W) * 0.5f) * pixel_step;
+        const float dy = -(static_cast<float>(px_y) + 0.5f - static_cast<float>(H) * 0.5f) * pixel_step;
+        re = center_re + dx * cos_t - dy * sin_t;
+        im = center_im + dx * sin_t + dy * cos_t;
+    } else {
+        const float aspect  = static_cast<float>(W) / static_cast<float>(H);
+        const float span_im = scale;
+        const float span_re = scale * aspect;
+        re = (center_re - span_re * 0.5f) +
+            (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
+        im = (center_im + span_im * 0.5f) -
+            (static_cast<float>(px_y) + 0.5f) / static_cast<float>(H) * span_im;
+    }
 
     float zre, zim, cre, cim;
     if (julia) { zre = re;   zim = im;   cre = julia_re_p; cim = julia_im_p; }
@@ -1016,11 +1056,15 @@ CudaDeviceInfo cuda_device_info() noexcept {
 
 template <int MetricId>
 static void launch_fp32_metric(const CudaMapParams& p, dim3 grid, dim3 block, float bail2, uint8_t* out) {
+    const double rot_rad = p.rotation_deg * (3.14159265358979323846 / 180.0);
+    const float cos_t_f = static_cast<float>(cos(rot_rad));
+    const float sin_t_f = static_cast<float>(sin(rot_rad));
 #define FSD_LAUNCH_FP32(VID) \
     fractal_fp32<VID, MetricId><<<grid, block>>>( \
         static_cast<float>(p.center_re), static_cast<float>(p.center_im), static_cast<float>(p.scale), \
         p.width, p.height, p.iterations, bail2, p.colormap_id, \
-        p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im), out)
+        p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im), \
+        cos_t_f, sin_t_f, out)
 
     switch (p.variant_id) {
         case 1:  FSD_LAUNCH_FP32(1); break;
@@ -1048,11 +1092,15 @@ static void launch_fp32(const CudaMapParams& p, dim3 grid, dim3 block, float bai
 
 template <int MetricId>
 static void launch_fp64_metric(const CudaMapParams& p, dim3 grid, dim3 block, double bail2, uint8_t* out) {
+    const double rot_rad = p.rotation_deg * (3.14159265358979323846 / 180.0);
+    const double cos_t_d = cos(rot_rad);
+    const double sin_t_d = sin(rot_rad);
 #define FSD_LAUNCH_FP64(VID) \
     fractal_fp64<VID, MetricId><<<grid, block>>>( \
         p.center_re, p.center_im, p.scale, \
         p.width, p.height, p.iterations, bail2, p.colormap_id, \
-        p.julia, p.julia_re, p.julia_im, out)
+        p.julia, p.julia_re, p.julia_im, \
+        cos_t_d, sin_t_d, out)
 
     switch (p.variant_id) {
         case 1:  FSD_LAUNCH_FP64(1); break;
@@ -1081,11 +1129,15 @@ static void launch_fp64(const CudaMapParams& p, dim3 grid, dim3 block, double ba
 // Field launchers (escape metric only → no metric switch).
 static void launch_field_fp32(const CudaMapParams& p, dim3 grid, dim3 block, float bail2,
                               uint32_t* d_iter, float* d_norm) {
+    const double rot_rad = p.rotation_deg * (3.14159265358979323846 / 180.0);
+    const float cos_t_f = static_cast<float>(cos(rot_rad));
+    const float sin_t_f = static_cast<float>(sin(rot_rad));
 #define FSD_LAUNCH_FIELD_FP32(VID) \
     fractal_field_fp32<VID><<<grid, block>>>( \
         static_cast<float>(p.center_re), static_cast<float>(p.center_im), static_cast<float>(p.scale), \
         p.width, p.height, p.iterations, bail2, \
-        p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im), d_iter, d_norm)
+        p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im), \
+        cos_t_f, sin_t_f, d_iter, d_norm)
     switch (p.variant_id) {
         case 1:  FSD_LAUNCH_FIELD_FP32(1); break;
         case 2:  FSD_LAUNCH_FIELD_FP32(2); break;
@@ -1103,11 +1155,15 @@ static void launch_field_fp32(const CudaMapParams& p, dim3 grid, dim3 block, flo
 
 static void launch_field_fp64(const CudaMapParams& p, dim3 grid, dim3 block, double bail2,
                               uint32_t* d_iter, float* d_norm) {
+    const double rot_rad = p.rotation_deg * (3.14159265358979323846 / 180.0);
+    const double cos_t_d = cos(rot_rad);
+    const double sin_t_d = sin(rot_rad);
 #define FSD_LAUNCH_FIELD_FP64(VID) \
     fractal_field_fp64<VID><<<grid, block>>>( \
         p.center_re, p.center_im, p.scale, \
         p.width, p.height, p.iterations, bail2, \
-        p.julia, p.julia_re, p.julia_im, d_iter, d_norm)
+        p.julia, p.julia_re, p.julia_im, \
+        cos_t_d, sin_t_d, d_iter, d_norm)
     switch (p.variant_id) {
         case 1:  FSD_LAUNCH_FIELD_FP64(1); break;
         case 2:  FSD_LAUNCH_FIELD_FP64(2); break;

@@ -159,6 +159,7 @@ export interface MapRenderRequest {
   transitionTo?: Variant | string
   engine?: string
   scalarType?: string
+  rotationDeg?: number
 }
 
 export interface MapRenderResponse {
@@ -340,6 +341,7 @@ export interface MapFieldRequest {
   juliaIm?: number
   engine?: string
   scalarType?: string
+  rotationDeg?: number
 }
 
 // Raw field response — no colorization applied.

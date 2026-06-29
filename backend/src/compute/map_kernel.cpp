@@ -256,6 +256,10 @@ static MapEnginePlan select_map_engine_plan(const MapParams& p, bool field_outpu
     plan.fixed_precision = select_fixed_precision(p);
     plan.fx = plan.fixed_precision != FixedPrecision::None &&
               supports_fixed_int_path(p, field_output);
+    if (p.rotation_deg != 0.0) {
+        plan.fx = false;
+        plan.fixed_precision = FixedPrecision::None;
+    }
 
     std::string selected_engine = select_map_engine(p, plan.fx);
     if (plan.fp32 && p.engine == "auto") {
@@ -314,6 +318,13 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
     const double bail2   = p.bailout_sq;
     const double jre     = p.julia_re;
     const double jim     = p.julia_im;
+    const bool has_rot = p.rotation_deg != 0.0;
+    const double rot_rad = has_rot ? p.rotation_deg * M_PI / 180.0 : 0.0;
+    const double cos_t = has_rot ? std::cos(rot_rad) : 1.0;
+    const double sin_t = has_rot ? std::sin(rot_rad) : 0.0;
+    const double pixel_step = p.scale / static_cast<double>(H);
+    const double half_w = static_cast<double>(W) * 0.5;
+    const double half_h = static_cast<double>(H) * 0.5;
     const int thread_count = resolve_render_threads(p.render_threads);
     constexpr int tile_size = 32;
     const int tiles_x = ceil_div(W, tile_size);
@@ -335,9 +346,18 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
         const int y1 = std::min(H, y0 + tile_size);
 
         for (int y = y0; y < y1; y++) {
-            const double im_c = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
+            const double dy_base = -(static_cast<double>(y) + 0.5 - half_h) * pixel_step;
+            const double im_norot = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
             for (int x = x0; x < x1; x++) {
-                const double re_c = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
+                double re_c, im_c;
+                if (has_rot) {
+                    const double dx = (static_cast<double>(x) + 0.5 - half_w) * pixel_step * aspect;
+                    re_c = p.center_re + dx * cos_t - dy_base * sin_t;
+                    im_c = p.center_im + dx * sin_t + dy_base * cos_t;
+                } else {
+                    re_c = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
+                    im_c = im_norot;
+                }
 
                 double zr, zi, cr, ci;
                 if (p.julia) { zr = re_c; zi = im_c; cr = jre; ci = jim; }
@@ -397,6 +417,15 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
     const S s_inv_W     = scalar_from_double<S>(1.0 / W);
     const S s_inv_H     = scalar_from_double<S>(1.0 / H);
 
+    const bool has_rot = p.rotation_deg != 0.0;
+    const double rot_rad = has_rot ? p.rotation_deg * M_PI / 180.0 : 0.0;
+    const S s_cos_t = scalar_from_double<S>(has_rot ? std::cos(rot_rad) : 1.0);
+    const S s_sin_t = scalar_from_double<S>(has_rot ? std::sin(rot_rad) : 0.0);
+    const S s_pixel_step = scalar_from_double<S>(p.scale / static_cast<double>(H));
+    const S s_aspect     = scalar_from_double<S>(aspect);
+    const S s_half_w     = scalar_from_double<S>(static_cast<double>(W) * 0.5);
+    const S s_half_h     = scalar_from_double<S>(static_cast<double>(H) * 0.5);
+
     const S jre = scalar_from_double<S>(p.julia_re);
     const S jim = scalar_from_double<S>(p.julia_im);
     const Cx<S> c_const{jre, jim};
@@ -432,9 +461,18 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
             const int y1 = std::min(H, y0 + tile_size);
 
             for (int y = y0; y < y1; y++) {
-                const S im = s_im_max - scalar_from_double<S>(static_cast<double>(y) + 0.5) * s_inv_H * s_span_im;
+                const S im_norot = s_im_max - scalar_from_double<S>(static_cast<double>(y) + 0.5) * s_inv_H * s_span_im;
+                const S dy_base = -(scalar_from_double<S>(static_cast<double>(y) + 0.5) - s_half_h) * s_pixel_step;
                 for (int x = x0; x < x1; x++) {
-                    const S re = s_re_min + scalar_from_double<S>(static_cast<double>(x) + 0.5) * s_inv_W * s_span_re;
+                    S re, im;
+                    if (has_rot) {
+                        const S dx = (scalar_from_double<S>(static_cast<double>(x) + 0.5) - s_half_w) * s_pixel_step * s_aspect;
+                        re = s_center_re + dx * s_cos_t - dy_base * s_sin_t;
+                        im = s_center_im + dx * s_sin_t + dy_base * s_cos_t;
+                    } else {
+                        re = s_re_min + scalar_from_double<S>(static_cast<double>(x) + 0.5) * s_inv_W * s_span_re;
+                        im = im_norot;
+                    }
 
                     Cx<S> z0, c;
                     if (p.julia) {
@@ -892,6 +930,7 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
                 cp.julia_re    = p.julia_re;
                 cp.julia_im    = p.julia_im;
                 cp.metric_id   = 0;  // escape
+                cp.rotation_deg = p.rotation_deg;
                 fo.iter_u32.assign(static_cast<size_t>(p.width) * static_cast<size_t>(p.height), 0u);
                 fo.norm_f32.assign(static_cast<size_t>(p.width) * static_cast<size_t>(p.height), 0.0f);
                 auto cs = fsd_cuda::cuda_render_map_field(cp, fo.iter_u32.data(), fo.norm_f32.data());
