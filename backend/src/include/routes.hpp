@@ -51,6 +51,10 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
 std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body);
 std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body);
 
+// Transition video: theta sweep rendering (frame-by-frame, no ln-map).
+std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body);
+std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body);
+
 // HS heightfield mesh + transition 3D mesh.
 std::string hsMeshRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body);
 // HS raw field data (float64[W*H]) for frontend-rendered height mesh.

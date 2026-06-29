@@ -31,8 +31,10 @@
 #include "../compute/image_io.hpp"
 #include "../compute/ln_map.hpp"
 #include "../compute/map_kernel.hpp"
+#include "../compute/transition_kernel.hpp"
 #include "../compute/variants.hpp"
 #include "../compute/colormap.hpp"
+#include "../compute/colorize.hpp"
 
 #if defined(HAS_CUDA_KERNEL)
 #  include "../compute/cuda/video_warp.cuh"
@@ -1221,6 +1223,8 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     const double sidecarDepth = lk.sidecar.value("depthOctaves", 40.0);
     const double cr           = lk.sidecar.value("centerRe",    0.0);
     const double ci           = lk.sidecar.value("centerIm",    0.0);
+    const std::string crStr   = lk.sidecar.value("centerReStr", std::string());
+    const std::string ciStr   = lk.sidecar.value("centerImStr", std::string());
     const int    iters        = lk.sidecar.value("iterations",  4096);
     const std::string variantStr  = lk.sidecar.value("variant",  std::string("mandelbrot"));
     const std::string colormapStr = lk.sidecar.value("colorMap", std::string("classic_cos"));
@@ -1265,6 +1269,8 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     compute::MapParams mp;
     mp.center_re  = cr;
     mp.center_im  = ci;
+    mp.center_re_str = crStr;
+    mp.center_im_str = ciStr;
     mp.scale      = 2.0 * std::exp(kTop_end);
     mp.width      = W;
     mp.height     = H;
@@ -1385,6 +1391,10 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
 
     const double cr         = j.value("centerRe", 0.0);
     const double ci         = j.value("centerIm", 0.0);
+    const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
+                              ? j["centerReStr"].get<std::string>() : std::string();
+    const std::string ciStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
+                              ? j["centerImStr"].get<std::string>() : std::string();
     const bool   julia      = j.value("julia",    false);
     const double jre        = j.value("juliaRe",  0.0);
     const double jim        = j.value("juliaIm",  0.0);
@@ -1433,6 +1443,8 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
             compute::MapParams mp;
             mp.center_re  = cr;
             mp.center_im  = ci;
+            mp.center_re_str = crStr;
+            mp.center_im_str = ciStr;
             mp.scale      = 2.0 * std::exp(kTop);
             mp.width      = previewW;
             mp.height     = previewH;
@@ -1518,6 +1530,10 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
 
     const double cr         = j.value("centerRe", 0.0);
     const double ci         = j.value("centerIm", 0.0);
+    const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
+                              ? j["centerReStr"].get<std::string>() : std::string();
+    const std::string ciStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
+                              ? j["centerImStr"].get<std::string>() : std::string();
     const bool   julia      = j.value("julia",    false);
     const double jre        = j.value("juliaRe",  0.0);
     const double jim        = j.value("juliaIm",  0.0);
@@ -1623,6 +1639,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         compute::MapParams mp;
         mp.center_re  = cr;
         mp.center_im  = ci;
+        mp.center_re_str = crStr;
+        mp.center_im_str = ciStr;
         mp.scale      = 2.0 * std::exp(kTop_end);
         mp.width      = W;
         mp.height     = H;
@@ -1728,6 +1746,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             lp.julia = julia;
             lp.center_re = cr;
             lp.center_im = ci;
+            lp.center_re_str = crStr;
+            lp.center_im_str = ciStr;
             lp.julia_re = jre;
             lp.julia_im = jim;
             lp.width_s = s;
@@ -1785,6 +1805,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         {
             Json sc = {
                 {"centerRe", cr}, {"centerIm", ci},
+                {"centerReStr", crStr}, {"centerImStr", ciStr},
                 {"julia", julia}, {"juliaRe", jre}, {"juliaIm", jim},
                 {"widthS", s}, {"actualWidthS", s}, {"fullWidthS", stripPlan.fullWidthS},
                 {"heightT", t}, {"depthOctaves", depth},
@@ -2007,6 +2028,469 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnMapLayerSummary", ""},
             {"lnMapValidationSummary", ""},
             {"warpMethod", queuedWarpMethod},
+        };
+        return resp.dump();
+    }
+
+    return execute().dump();
+}
+
+// ─── Transition video: sweep theta from start to end, render each frame ──────
+//
+// POST /api/video/transition-preview
+// POST /api/video/transition
+
+std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
+    (void)repoRoot;
+    const Json j = parseJsonBody(body);
+
+    const double cr         = j.value("centerRe", 0.0);
+    const double ci         = j.value("centerIm", 0.0);
+    const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
+                              ? j["centerReStr"].get<std::string>() : std::string();
+    const std::string ciStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
+                              ? j["centerImStr"].get<std::string>() : std::string();
+    const bool   julia      = j.value("julia",    false);
+    const double jre        = j.value("juliaRe",  0.0);
+    const double jim        = j.value("juliaIm",  0.0);
+    const std::string fromStr = j.value("transitionFrom", std::string("mandelbrot"));
+    const std::string toStr   = j.value("transitionTo",   std::string("tri"));
+    const std::string colormapStr = j.value("colorMap", std::string("classic_cos"));
+    const int    iters      = j.value("iterations", 2048);
+    const double scale      = j.value("scale", 3.0);
+    const int    W          = j.value("width",  720);
+    const int    H          = j.value("height", 720);
+    const double thetaStartDeg = j.value("thetaStartDeg", 0.0);
+    const double thetaEndDeg   = j.value("thetaEndDeg",   180.0);
+    const std::string metricStr = j.value("metric", std::string("escape"));
+    const std::string engineStr = j.value("engine", std::string("auto"));
+    const std::string scalarStr = j.value("scalarType", std::string("auto"));
+
+    if (iters < 1 || iters > 10000000) throw std::runtime_error("invalid iterations");
+    const auto [previewW, previewH] = resolvePreviewSize(j, W, H);
+
+    compute::Variant fromV, toV;
+    if (!compute::variant_from_name(fromStr.c_str(), fromV)) fromV = compute::Variant::Mandelbrot;
+    if (!compute::variant_from_name(toStr.c_str(), toV))     toV   = compute::Variant::Tri;
+    double bailout = j.contains("bailout") && !j["bailout"].is_null()
+        ? j.value("bailout", 2.0)
+        : std::max(compute::variant_default_bailout(fromV), compute::variant_default_bailout(toV));
+    const double bailoutSq = bailoutSqFromJson(j, bailout,
+        std::max(compute::variant_default_bailout_sq(fromV), compute::variant_default_bailout_sq(toV)));
+    if (!(bailout > 0.0) || !std::isfinite(bailout)) throw std::runtime_error("invalid bailout");
+    compute::Colormap cm;
+    if (!compute::colormap_from_name(colormapStr.c_str(), cm)) cm = compute::Colormap::ClassicCos;
+    compute::Metric metric = compute::Metric::Escape;
+    if (metricStr == "min_abs")   metric = compute::Metric::MinAbs;
+    else if (metricStr == "max_abs")   metric = compute::Metric::MaxAbs;
+    else if (metricStr == "envelope")  metric = compute::Metric::Envelope;
+
+    auto run = runner.createRun("transition-video-preview", body);
+    runner.setStatus(run.id, "running");
+
+    try {
+        const auto t0 = std::chrono::steady_clock::now();
+
+        auto renderFrame = [&](double thetaDeg) {
+            compute::TransitionParams tp;
+            tp.base.center_re  = cr;
+            tp.base.center_im  = ci;
+            tp.base.center_re_str = crStr;
+            tp.base.center_im_str = ciStr;
+            tp.base.scale      = scale;
+            tp.base.width      = previewW;
+            tp.base.height     = previewH;
+            tp.base.iterations = iters;
+            tp.base.bailout    = bailout;
+            tp.base.bailout_sq = bailoutSq;
+            tp.base.metric     = metric;
+            tp.base.colormap   = cm;
+            tp.base.smooth     = false;
+            tp.base.julia      = julia;
+            tp.base.julia_re   = jre;
+            tp.base.julia_im   = jim;
+            tp.base.engine     = engineStr;
+            tp.base.scalar_type = scalarStr;
+            tp.theta           = thetaDeg * PI / 180.0;
+            tp.from_variant    = fromV;
+            tp.to_variant      = toV;
+
+            cv::Mat img;
+            compute::render_transition(tp, img);
+            return img;
+        };
+
+        const cv::Mat startPreview = renderFrame(thetaStartDeg);
+        const cv::Mat endPreview   = renderFrame(thetaEndDeg);
+
+        const std::filesystem::path startPath = std::filesystem::path(run.outputDir) / "start_frame.png";
+        const std::filesystem::path endPath   = std::filesystem::path(run.outputDir) / "end_frame.png";
+        compute::write_png(startPath.string(), startPreview);
+        compute::write_png(endPath.string(), endPreview);
+        runner.addArtifact(run.id, Artifact{"start-frame", startPath.string(), "image"});
+        runner.addArtifact(run.id, Artifact{"end-frame",   endPath.string(),   "image"});
+
+        const auto t1 = std::chrono::steady_clock::now();
+        const double elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        runner.setStatus(run.id, "completed");
+
+        const std::string startArtId = run.id + ":start_frame.png";
+        const std::string endArtId   = run.id + ":end_frame.png";
+        Json resp = {
+            {"runId",                run.id},
+            {"status",               "completed"},
+            {"startFrameArtifactId", startArtId},
+            {"startFrameUrl",        "/api/artifacts/content?artifactId="  + startArtId},
+            {"startFrameDownloadUrl","/api/artifacts/download?artifactId=" + startArtId},
+            {"endFrameArtifactId",   endArtId},
+            {"endFrameUrl",          "/api/artifacts/content?artifactId="  + endArtId},
+            {"endFrameDownloadUrl",  "/api/artifacts/download?artifactId=" + endArtId},
+            {"thetaStartDeg",        thetaStartDeg},
+            {"thetaEndDeg",          thetaEndDeg},
+            {"width",                previewW},
+            {"height",               previewH},
+            {"outputWidth",          W},
+            {"outputHeight",         H},
+            {"generatedMs",          elapsed},
+        };
+        return resp.dump();
+    } catch (const std::exception&) {
+        runner.setStatus(run.id, "failed");
+        throw;
+    }
+}
+
+std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
+    (void)repoRoot;
+    const Json j = parseJsonBody(body);
+
+    const double cr         = j.value("centerRe", 0.0);
+    const double ci         = j.value("centerIm", 0.0);
+    const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
+                              ? j["centerReStr"].get<std::string>() : std::string();
+    const std::string ciStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
+                              ? j["centerImStr"].get<std::string>() : std::string();
+    const bool   julia      = j.value("julia",    false);
+    const double jre        = j.value("juliaRe",  0.0);
+    const double jim        = j.value("juliaIm",  0.0);
+    const std::string fromStr = j.value("transitionFrom", std::string("mandelbrot"));
+    const std::string toStr   = j.value("transitionTo",   std::string("tri"));
+    const std::string colormapStr = j.value("colorMap", std::string("classic_cos"));
+    const int    iters      = j.value("iterations", 2048);
+    const double scale      = j.value("scale", 3.0);
+    const int    fps        = j.value("fps",       30);
+    const int    W          = j.value("width",     720);
+    const int    H          = j.value("height",    720);
+    const double thetaStartDeg = j.value("thetaStartDeg", 0.0);
+    const double thetaEndDeg   = j.value("thetaEndDeg",   180.0);
+    const double durationSec   = j.value("durationSec", 6.0);
+    const bool   localExport   = j.value("localExport", false);
+    const std::string metricStr = j.value("metric", std::string("escape"));
+    const std::string engineStr = j.value("engine", std::string("auto"));
+    const std::string scalarStr = j.value("scalarType", std::string("auto"));
+
+    if (fps < 1 || fps > 120) throw std::runtime_error("invalid fps (1..120)");
+    if (!(durationSec > 0.0) || durationSec > MAX_VIDEO_DURATION_SEC)
+        throw std::runtime_error("invalid durationSec");
+    if (iters < 1 || iters > 10000000) throw std::runtime_error("invalid iterations");
+    validateVideoOutputSize(W, H);
+    const int frameCount = std::max(2, static_cast<int>(std::round(durationSec * fps)));
+
+    compute::Variant fromV, toV;
+    if (!compute::variant_from_name(fromStr.c_str(), fromV)) fromV = compute::Variant::Mandelbrot;
+    if (!compute::variant_from_name(toStr.c_str(), toV))     toV   = compute::Variant::Tri;
+    double bailout = j.contains("bailout") && !j["bailout"].is_null()
+        ? j.value("bailout", 2.0)
+        : std::max(compute::variant_default_bailout(fromV), compute::variant_default_bailout(toV));
+    const double bailoutSq = bailoutSqFromJson(j, bailout,
+        std::max(compute::variant_default_bailout_sq(fromV), compute::variant_default_bailout_sq(toV)));
+    if (!(bailout > 0.0) || !std::isfinite(bailout)) throw std::runtime_error("invalid bailout");
+    if (!(bailoutSq > 0.0) || !std::isfinite(bailoutSq)) throw std::runtime_error("invalid bailoutSq");
+    compute::Colormap cm;
+    if (!compute::colormap_from_name(colormapStr.c_str(), cm)) cm = compute::Colormap::ClassicCos;
+    compute::Metric metric = compute::Metric::Escape;
+    if (metricStr == "min_abs")   metric = compute::Metric::MinAbs;
+    else if (metricStr == "max_abs")   metric = compute::Metric::MaxAbs;
+    else if (metricStr == "envelope")  metric = compute::Metric::Envelope;
+
+    auto run = runner.createRun("transition-video-export", body);
+    ResourceManager::Lease videoLeaseRaw;
+    std::string conflictLock, activeRunId;
+    if (!resourceManager().tryAcquire(run.id, "video_export", {"video_export", "cuda_heavy", "cpu_heavy"}, videoLeaseRaw, conflictLock, activeRunId)) {
+        runner.setStatus(run.id, "failed");
+        throw HttpError(409, Json{
+            {"error", "video_export already running"},
+            {"activeRunId", activeRunId},
+            {"taskType", "video_export"},
+            {"resourceLock", conflictLock},
+        }.dump());
+    }
+    auto videoLease = std::make_shared<ResourceManager::Lease>(std::move(videoLeaseRaw));
+    runner.setCancelable(run.id, true);
+
+    auto execute = [=, &runner]() mutable -> Json {
+    (void)videoLease;
+    runner.setStatus(run.id, "running");
+    try {
+        const auto t0 = std::chrono::steady_clock::now();
+        throwIfCancelled(runner, run.id);
+
+        // ── 1. Render start/end preview frames ──────────────────────────────
+        auto buildTp = [&](double thetaDeg) {
+            compute::TransitionParams tp;
+            tp.base.center_re  = cr;
+            tp.base.center_im  = ci;
+            tp.base.center_re_str = crStr;
+            tp.base.center_im_str = ciStr;
+            tp.base.scale      = scale;
+            tp.base.width      = W;
+            tp.base.height     = H;
+            tp.base.iterations = iters;
+            tp.base.bailout    = bailout;
+            tp.base.bailout_sq = bailoutSq;
+            tp.base.metric     = metric;
+            tp.base.colormap   = cm;
+            tp.base.smooth     = false;
+            tp.base.julia      = julia;
+            tp.base.julia_re   = jre;
+            tp.base.julia_im   = jim;
+            tp.base.engine     = engineStr;
+            tp.base.scalar_type = scalarStr;
+            tp.base.should_cancel = [&runner, runId = run.id]() { return runner.isCancelRequested(runId); };
+            tp.theta           = thetaDeg * PI / 180.0;
+            tp.from_variant    = fromV;
+            tp.to_variant      = toV;
+            return tp;
+        };
+
+        setVideoProgress(runner, run.id, "transition_preview", 0, 2, thetaStartDeg, thetaEndDeg);
+
+        cv::Mat startImg, endImg;
+        compute::render_transition(buildTp(thetaStartDeg), startImg);
+        throwIfCancelled(runner, run.id);
+        compute::render_transition(buildTp(thetaEndDeg), endImg);
+        throwIfCancelled(runner, run.id);
+
+        const std::filesystem::path startPath = std::filesystem::path(run.outputDir) / "start_frame.png";
+        const std::filesystem::path endPath   = std::filesystem::path(run.outputDir) / "end_frame.png";
+        compute::write_png(startPath.string(), startImg);
+        compute::write_png(endPath.string(), endImg);
+        runner.addArtifact(run.id, Artifact{"start-frame", startPath.string(), "image"});
+        runner.addArtifact(run.id, Artifact{"end-frame",   endPath.string(),   "image"});
+        setVideoProgress(runner, run.id, "transition_preview", 2, 2, thetaStartDeg, thetaEndDeg);
+
+        // ── 2. Generate video via FFmpeg pipe ────────────────────────────────
+        setVideoProgress(runner, run.id, "transition_render", 0, frameCount, thetaStartDeg, thetaEndDeg,
+                         "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}});
+
+        const std::filesystem::path mp4 = std::filesystem::path(run.outputDir) / "transition.mp4";
+        const std::filesystem::path tmpMp4 = std::filesystem::path(run.outputDir) / "transition.tmp.mp4";
+        const std::filesystem::path ffmpegErrTmp = std::filesystem::path(run.outputDir) / "transition_ffmpeg.stderr.txt.tmp";
+        const std::filesystem::path ffmpegErrFile = std::filesystem::path(run.outputDir) / "transition_ffmpeg.stderr.txt";
+
+        const std::string inputArgs =
+            "ffmpeg -y -f rawvideo -pix_fmt bgr24 -s " + std::to_string(W) + "x" + std::to_string(H) +
+            " -r " + std::to_string(fps) + " -i - -an ";
+
+        std::vector<std::pair<std::string, std::string>> ffmpegCmds;
+        if (commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_nvenc\"")) {
+            ffmpegCmds.push_back({"h264_nvenc",
+                inputArgs + "-c:v h264_nvenc -pix_fmt yuv420p -preset p5 -cq 18 \"" + tmpMp4.string() +
+                "\" 2>\"" + ffmpegErrTmp.string() + "\""});
+        }
+        if (commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q hevc_nvenc\"")) {
+            ffmpegCmds.push_back({"hevc_nvenc",
+                inputArgs + "-c:v hevc_nvenc -pix_fmt yuv420p -preset p5 -cq 20 \"" + tmpMp4.string() +
+                "\" 2>\"" + ffmpegErrTmp.string() + "\""});
+        }
+        ffmpegCmds.push_back({"libx264",
+            inputArgs + "-c:v libx264 -pix_fmt yuv420p -preset medium -crf 16 \"" + tmpMp4.string() +
+            "\" 2>\"" + ffmpegErrTmp.string() + "\""});
+
+        std::string encoderUsed;
+        std::string ffmpegStderr;
+        std::string videoPath;
+        bool encodingDone = false;
+
+        for (const auto& [encoderName, ffmpegCmd] : ffmpegCmds) {
+            if (encodingDone) break;
+            FILE* pipe = popen(ffmpegCmd.c_str(), "w");
+            if (!pipe) continue;
+
+            bool pipeOk = true;
+            try {
+                const size_t rowBytes = static_cast<size_t>(W) * 3;
+                for (int f = 0; f < frameCount; f++) {
+                    throwIfCancelled(runner, run.id);
+                    const double t = (frameCount <= 1) ? 0.0 : static_cast<double>(f) / (frameCount - 1);
+                    const double thetaDeg = thetaStartDeg + t * (thetaEndDeg - thetaStartDeg);
+
+                    auto tp = buildTp(thetaDeg);
+                    cv::Mat frame;
+                    compute::render_transition(tp, frame);
+
+                    const size_t bytes = static_cast<size_t>(frame.rows) * frame.step;
+                    if (std::fwrite(frame.data, 1, bytes, pipe) != bytes) {
+                        pipeOk = false;
+                        throw std::runtime_error("ffmpeg pipe write failed");
+                    }
+
+                    setVideoProgress(runner, run.id, "transition_render", f + 1, frameCount,
+                                     thetaDeg, thetaEndDeg, "", "",
+                                     Json{{"currentFrame", f + 1}, {"totalFrames", frameCount},
+                                          {"thetaDeg", thetaDeg}});
+                }
+            } catch (const std::exception& e) {
+                pclose(pipe);
+                std::error_code ec;
+                std::filesystem::remove(tmpMp4, ec);
+                std::filesystem::remove(ffmpegErrTmp, ec);
+                if (std::string(e.what()) == "ffmpeg pipe write failed") {
+                    continue;
+                }
+                throw;
+            } catch (...) {
+                pclose(pipe);
+                std::error_code ec;
+                std::filesystem::remove(tmpMp4, ec);
+                std::filesystem::remove(ffmpegErrTmp, ec);
+                throw;
+            }
+
+            const int rc = pclose(pipe);
+            {
+                std::ifstream errIn(ffmpegErrTmp);
+                std::ostringstream ss; ss << errIn.rdbuf();
+                ffmpegStderr = ss.str();
+            }
+            if (std::filesystem::exists(ffmpegErrTmp)) {
+                std::error_code ec;
+                std::filesystem::rename(ffmpegErrTmp, ffmpegErrFile, ec);
+                if (ec) {
+                    std::filesystem::remove(ffmpegErrFile, ec);
+                    ec.clear();
+                    std::filesystem::rename(ffmpegErrTmp, ffmpegErrFile, ec);
+                }
+            }
+
+            if (pipeOk && rc == 0 && std::filesystem::exists(tmpMp4)) {
+                std::error_code ec;
+                std::filesystem::rename(tmpMp4, mp4, ec);
+                if (ec) {
+                    std::filesystem::remove(mp4, ec);
+                    ec.clear();
+                    std::filesystem::rename(tmpMp4, mp4, ec);
+                }
+                encoderUsed = encoderName;
+                videoPath = mp4.string();
+                encodingDone = true;
+            }
+        }
+
+        if (!encodingDone) {
+            throw std::runtime_error("all ffmpeg encoders failed for transition video");
+        }
+
+        const std::string videoFile = std::filesystem::path(videoPath).filename().string();
+        runner.addArtifact(run.id, Artifact{"transition-video", videoPath, "video"});
+
+        setVideoProgress(runner, run.id, "transition_render", frameCount, frameCount,
+                         thetaEndDeg, thetaEndDeg, "", "",
+                         Json{{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"encoder", encoderUsed}});
+
+        const auto t1 = std::chrono::steady_clock::now();
+        const double elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        Json renderLog = {
+            {"encoder", encoderUsed},
+            {"durationSec", durationSec},
+            {"fps", fps},
+            {"frameCount", frameCount},
+            {"thetaStartDeg", thetaStartDeg},
+            {"thetaEndDeg", thetaEndDeg},
+            {"transitionFrom", fromStr},
+            {"transitionTo", toStr},
+            {"engine", engineStr},
+            {"scalarType", scalarStr},
+        };
+        const std::filesystem::path reportPath = std::filesystem::path(run.outputDir) / "transition_export.json";
+        atomicWriteText(reportPath, renderLog.dump(2));
+        runner.addArtifact(run.id, Artifact{"transition-export", reportPath.string(), "report"});
+
+        runner.setStatus(run.id, "completed");
+
+        const std::string startArtId  = run.id + ":start_frame.png";
+        const std::string endArtId    = run.id + ":end_frame.png";
+        const std::string videoArtId  = run.id + ":" + videoFile;
+        const std::string reportArtId = run.id + ":transition_export.json";
+
+        Json resp = {
+            {"runId",              run.id},
+            {"status",             "completed"},
+            {"videoArtifactId",    videoArtId},
+            {"videoUrl",           "/api/artifacts/content?artifactId="  + videoArtId},
+            {"videoDownloadUrl",   "/api/artifacts/download?artifactId=" + videoArtId},
+            {"videoLocalPath",     videoPath},
+            {"startFrameArtifactId", startArtId},
+            {"startFrameUrl",      "/api/artifacts/content?artifactId="  + startArtId},
+            {"startFrameDownloadUrl", "/api/artifacts/download?artifactId=" + startArtId},
+            {"endFrameArtifactId", endArtId},
+            {"endFrameUrl",        "/api/artifacts/content?artifactId="  + endArtId},
+            {"endFrameDownloadUrl", "/api/artifacts/download?artifactId=" + endArtId},
+            {"reportArtifactId",   reportArtId},
+            {"reportDownloadUrl",  "/api/artifacts/download?artifactId=" + reportArtId},
+            {"localExport",        localExport},
+            {"frameCount",         frameCount},
+            {"fps",                fps},
+            {"durationSec",        durationSec},
+            {"thetaStartDeg",      thetaStartDeg},
+            {"thetaEndDeg",        thetaEndDeg},
+            {"transitionFrom",     fromStr},
+            {"transitionTo",       toStr},
+            {"width",              W},
+            {"height",             H},
+            {"generatedMs",        elapsed},
+            {"engine",             engineStr},
+            {"scalarType",         scalarStr},
+            {"encoder",            encoderUsed},
+            {"ffmpegStderr",       ffmpegStderr},
+        };
+        return resp;
+
+    } catch (const std::exception& e) {
+        if (runner.isCancelRequested(run.id) || std::string(e.what()) == "cancelled") {
+            setVideoProgress(runner, run.id, "cancelled", 0, frameCount, 0.0, thetaEndDeg, "transition_video_export", "cancelled");
+            runner.setStatus(run.id, "cancelled");
+        } else {
+            setVideoProgress(runner, run.id, "failed", 0, 0, 0.0, thetaEndDeg, "transition_video_export", e.what());
+            runner.setStatus(run.id, "failed");
+        }
+        throw;
+    }
+    };
+
+    const bool background = j.value("background", true);
+    if (background) {
+        setVideoProgress(runner, run.id, "queued", 0, frameCount, thetaStartDeg, thetaEndDeg);
+        std::thread([execute]() mutable {
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+
+        Json resp = {
+            {"runId", run.id},
+            {"status", "queued"},
+            {"localExport", localExport},
+            {"frameCount", frameCount},
+            {"fps", fps},
+            {"durationSec", durationSec},
+            {"thetaStartDeg", thetaStartDeg},
+            {"thetaEndDeg", thetaEndDeg},
+            {"transitionFrom", fromStr},
+            {"transitionTo", toStr},
+            {"width", W},
+            {"height", H},
         };
         return resp.dump();
     }

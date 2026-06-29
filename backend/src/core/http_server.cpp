@@ -115,6 +115,8 @@ std::string HttpServer::handleRequest(const std::string& request) const {
     if (method == "POST" && path == "/api/video/zoom")       return makeHttpResponse(200, zoomVideoRoute(repoRoot_, runner_, body));
     if (method == "POST" && path == "/api/video/preview")    return makeHttpResponse(200, videoPreviewRoute(repoRoot_, runner_, body));
     if (method == "POST" && path == "/api/video/export")     return makeHttpResponse(200, videoExportRoute(repoRoot_, runner_, body));
+    if (method == "POST" && path == "/api/video/transition")         return makeHttpResponse(200, transitionVideoExportRoute(repoRoot_, runner_, body));
+    if (method == "POST" && path == "/api/video/transition-preview") return makeHttpResponse(200, transitionVideoPreviewRoute(repoRoot_, runner_, body));
     if (method == "POST" && path == "/api/hs/mesh")              return makeHttpResponse(200, hsMeshRoute(repoRoot_, runner_, body));
     if (method == "POST" && path == "/api/hs/field")             return makeHttpResponse(200, hsFieldRoute(repoRoot_, runner_, body));
     if (method == "POST" && path == "/api/transition/mesh")      return makeHttpResponse(200, transitionMeshRoute(repoRoot_, runner_, body));

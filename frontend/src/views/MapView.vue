@@ -887,6 +887,9 @@ let lnPreviewRerun = false
 const exportJobId     = ref('')
 const exportProgress  = ref<RunProgress>({})
 const exportDepthDirty = ref(false)
+const transitionThetaStartDeg = ref(0)
+const transitionThetaEndDeg   = ref(180)
+const transitionDurationSec   = ref(6)
 
 const exportEstimatedDuration = computed(() =>
   Math.max(0, exportDepth.value) * Math.max(0, exportSecondsPerOctave.value)
@@ -926,6 +929,12 @@ const exportProgressDetail = computed(() => {
     return `encode ${p.current || 0}/${p.total || 0} frames${etaSuffix(p.estimatedRemainingMs)}`
   }
   if (p.stage === 'final_frame') return `final frame ${p.current || 0}/${p.total || 1}${etaSuffix(p.estimatedRemainingMs)}`
+  if (p.stage === 'transition_preview') return `transition preview ${p.current || 0}/2`
+  if (p.stage === 'transition_render') {
+    const theta = p.details?.thetaDeg
+    const thetaStr = typeof theta === 'number' ? ` · θ=${theta.toFixed(1)}°` : ''
+    return `transition render ${p.current || 0}/${p.total || 0} frames${thetaStr}${etaSuffix(p.estimatedRemainingMs)}`
+  }
   return p.stage
 })
 const exportMemoryEstimateMiB = computed(() => {
@@ -937,6 +946,41 @@ const exportMemoryEstimateMiB = computed(() => {
   const bytes = actualWidth * heightT * 3 + pixels * (3 * 4 + 4 * 5 + 1)
   return bytes / 1024 / 1024
 })
+
+const transitionEstimatedFrames = computed(() =>
+  Math.max(2, Math.round(transitionDurationSec.value * Math.max(1, exportFps.value)))
+)
+
+function transitionVideoRequestBase() {
+  return {
+    centerRe:     centerRe.value,
+    centerIm:     centerIm.value,
+    centerReStr:  bdToString(centerRePrecise.value),
+    centerImStr:  bdToString(centerImPrecise.value),
+    julia:        juliaOn.value,
+    juliaRe:      juliaRe.value,
+    juliaIm:      juliaIm.value,
+    transitionFrom: transitionFrom.value,
+    transitionTo:   transitionTo.value,
+    colorMap:     colorMap.value,
+    iterations:   Math.max(iterations.value, 2048),
+    scale:        scale.value,
+    thetaStartDeg: transitionThetaStartDeg.value,
+    thetaEndDeg:   transitionThetaEndDeg.value,
+    durationSec:   transitionDurationSec.value,
+    fps:          exportFps.value,
+    metric:       metric.value === 'escape' ? 'escape' :
+                  metric.value === 'min_abs' ? 'min_abs' :
+                  metric.value === 'max_abs' ? 'max_abs' :
+                  metric.value === 'envelope' ? 'envelope' : 'escape',
+    engine:       'auto',
+    scalarType:   'auto',
+    background:   true,
+    localExport:  localExportMode.value,
+    width:        exportW.value,
+    height:       exportH.value,
+  }
+}
 
 watch(videoPreset, p => {
   exportW.value = p.width
@@ -1066,12 +1110,21 @@ async function runPreview() {
   exportPreviewStatus.value = lang.value === 'en' ? 'previewing…' : '预览中…'
   exportPreviewResult.value = null
   try {
-    const resp = await api.videoPreview({
-      ...videoRequestBase(),
-      ...previewSizeForExport(),
-    })
-    exportPreviewResult.value = resp
-    exportPreviewStatus.value = `${resp.width}×${resp.height} · ${lang.value === 'en' ? 'depth' : '深度'} ${resp.depthOctaves.toFixed(2)} · ${resp.generatedMs.toFixed(0)} ms`
+    if (transitionOn.value) {
+      const resp = await api.transitionVideoPreview({
+        ...transitionVideoRequestBase(),
+        ...previewSizeForExport(),
+      })
+      exportPreviewResult.value = resp as any
+      exportPreviewStatus.value = `${resp.width}×${resp.height} · θ ${resp.thetaStartDeg}°→${resp.thetaEndDeg}° · ${resp.generatedMs.toFixed(0)} ms`
+    } else {
+      const resp = await api.videoPreview({
+        ...videoRequestBase(),
+        ...previewSizeForExport(),
+      })
+      exportPreviewResult.value = resp
+      exportPreviewStatus.value = `${resp.width}×${resp.height} · ${lang.value === 'en' ? 'depth' : '深度'} ${resp.depthOctaves.toFixed(2)} · ${resp.generatedMs.toFixed(0)} ms`
+    }
   } catch (e: any) {
     exportPreviewStatus.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (e?.data?.error || e?.message || e)
   } finally {
@@ -1132,11 +1185,18 @@ async function runExport() {
   exportResult.value = null
   exportProgress.value = {}
   try {
-    const req: Record<string, any> = { ...videoRequestBase() }
-    const resp = await api.videoExport(req as any)
-    exportJobId.value = resp.runId
-    exportStatus.value = `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s`
-    await pollVideoExport(resp)
+    if (transitionOn.value) {
+      const resp = await api.transitionVideoExport(transitionVideoRequestBase())
+      exportJobId.value = resp.runId
+      exportStatus.value = `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s · θ ${resp.thetaStartDeg}°→${resp.thetaEndDeg}°`
+      await pollVideoExport(resp as any)
+    } else {
+      const req: Record<string, any> = { ...videoRequestBase() }
+      const resp = await api.videoExport(req as any)
+      exportJobId.value = resp.runId
+      exportStatus.value = `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s`
+      await pollVideoExport(resp)
+    }
   } catch (e: any) {
     exportStatus.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (e?.data?.error || e?.message || e)
   } finally {
@@ -1611,13 +1671,29 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <div class="modal" :class="{ 'modal-with-preview': lnMapPreviewUrl }">
           <div class="modal-main">
           <div class="modal-title">
-            {{ juliaOn ? t('export_julia_video') : t('export_video') }}
+            {{ transitionOn ? (lang === 'en' ? 'Export Transition Video' : '导出 Transition 视频') : juliaOn ? t('export_julia_video') : t('export_video') }}
           </div>
           <div v-if="juliaOn" class="mrow source mono" style="margin-bottom:6px">
             Julia c: {{ juliaRe.toPrecision(8) }} + {{ juliaIm.toPrecision(8) }}i
           </div>
           <div class="modal-body">
-            <div class="mrow">
+            <div v-if="transitionOn" class="mrow">
+              <label>{{ lang === 'en' ? 'Transition' : '变换' }}</label>
+              <span class="mono">{{ transitionFrom }} → {{ transitionTo }}</span>
+            </div>
+            <div v-if="transitionOn" class="mrow">
+              <label>{{ lang === 'en' ? 'θ start (°)' : 'θ 起始 (°)' }}</label>
+              <input type="number" v-model.number="transitionThetaStartDeg" min="-180" max="180" step="1" />
+            </div>
+            <div v-if="transitionOn" class="mrow">
+              <label>{{ lang === 'en' ? 'θ end (°)' : 'θ 终止 (°)' }}</label>
+              <input type="number" v-model.number="transitionThetaEndDeg" min="-180" max="180" step="1" />
+            </div>
+            <div v-if="transitionOn" class="mrow">
+              <label>{{ lang === 'en' ? 'Duration (s)' : '时长 (s)' }}</label>
+              <input type="number" v-model.number="transitionDurationSec" min="0.5" max="3600" step="0.5" />
+            </div>
+            <div v-if="!transitionOn" class="mrow">
               <label>{{ t('video_depth') }}</label>
               <input type="number" v-model.number="exportDepth" min="0.05" max="120" step="0.05" @input="onExportDepthInput" />
             </div>
@@ -1625,19 +1701,23 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <label>{{ t('video_fps') }}</label>
               <input type="number" v-model.number="exportFps" min="1" max="120" step="1" />
             </div>
-            <div class="mrow">
+            <div v-if="!transitionOn" class="mrow">
               <label>{{ t('video_seconds_per_octave') }}</label>
               <input type="number" v-model.number="exportSecondsPerOctave" min="0.05" max="60" step="0.05" />
             </div>
-            <div class="mrow estimate">
+            <div v-if="transitionOn" class="mrow estimate">
+              <label>{{ t('video_estimate') }}</label>
+              <span class="mono">{{ transitionDurationSec.toFixed(1) }}s · {{ transitionEstimatedFrames }} frames</span>
+            </div>
+            <div v-if="!transitionOn" class="mrow estimate">
               <label>{{ t('video_estimate') }}</label>
               <span class="mono">{{ exportEstimatedDuration.toFixed(2) }}s · {{ exportEstimatedFrames }} frames · {{ exportMemoryEstimateMiB.toFixed(0) }} MiB</span>
             </div>
-            <div v-if="localExportMode" class="mrow local-mode-row">
+            <div v-if="localExportMode && !transitionOn" class="mrow local-mode-row">
               <label>{{ lang === 'en' ? 'Output' : '输出' }}</label>
               <span class="mono">{{ lang === 'en' ? 'local mode: save to backend runtime/runs, no browser download by default' : '本地模式：默认写入后端 runtime/runs，不走浏览器下载' }}</span>
             </div>
-            <div class="mrow">
+            <div v-if="!transitionOn" class="mrow">
               <label>{{ lang === 'en' ? 'Quality' : '质量' }}</label>
               <select v-model="exportQualityPreset">
                 <option value="draft">draft</option>
@@ -1646,14 +1726,14 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 <option value="full">full</option>
               </select>
             </div>
-            <div class="mrow">
+            <div v-if="!transitionOn" class="mrow">
               <label>{{ lang === 'en' ? 'ln-map mode' : 'ln-map 模式' }}</label>
               <select v-model="exportLnMapMode">
                 <option value="fast">{{ lang === 'en' ? 'fast · depth layered' : '快速 · 深度分层' }}</option>
                 <option value="standard">{{ lang === 'en' ? 'standard · full precision' : '标准 · 全精度' }}</option>
               </select>
             </div>
-            <div class="mrow color-mode-row">
+            <div v-if="!transitionOn" class="mrow color-mode-row">
               <label>{{ lang === 'en' ? 'ln-map color' : 'ln-map 上色' }}</label>
               <div class="color-mode-control">
                 <select
@@ -1682,7 +1762,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 </div>
               </div>
             </div>
-            <div class="mrow" v-if="exportLnMapColorMode === 'hist_eq'">
+            <div class="mrow" v-if="!transitionOn && exportLnMapColorMode === 'hist_eq'">
               <label>{{ lang === 'en' ? 'Cycles / octave' : '每倍频周期' }}</label>
               <div class="cpo-control"
                    :title="lang === 'en'
@@ -1692,7 +1772,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 <input type="number" v-model.number="exportCyclesPerOctave" min="0.1" max="64" step="0.05" class="cpo-num" />
               </div>
             </div>
-            <div class="mrow">
+            <div v-if="!transitionOn" class="mrow">
               <label>{{ lang === 'en' ? 'ln-map scalar' : 'ln-map 标量' }}</label>
               <select v-model="exportLnMapScalar">
                 <option value="auto">auto</option>
@@ -1719,7 +1799,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
           </div>
           <div class="modal-footer">
             <button @click="exportModalOpen = false" class="btn-cancel">{{ t('video_cancel') }}</button>
-            <button @click="runLnMapPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
+            <button v-if="!transitionOn" @click="runLnMapPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
               {{ lnMapPreviewBusy ? t('loading') : (lang === 'en' ? 'ln-map preview' : 'ln-map 预览') }}
             </button>
             <button @click="runPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
@@ -1735,7 +1815,17 @@ async function pollVideoExport(initial: VideoExportResponse) {
           </div>
           <div v-if="exportPreviewStatus" class="modal-status mono">{{ exportPreviewStatus }}</div>
           <div v-if="exportStatus" class="modal-status mono">{{ exportStatus }}</div>
-          <div v-if="exportBusy || exportJobId" class="progress-stack">
+          <div v-if="(exportBusy || exportJobId) && transitionOn" class="progress-stack">
+            <div class="progress-row">
+              <span>{{ lang === 'en' ? 'preview' : '预览' }}</span>
+              <progress :value="progressRatio('transition_preview')" max="1"></progress>
+            </div>
+            <div class="progress-row">
+              <span>{{ lang === 'en' ? 'render' : '渲染' }}</span>
+              <progress :value="progressRatio('transition_render')" max="1"></progress>
+            </div>
+          </div>
+          <div v-if="(exportBusy || exportJobId) && !transitionOn" class="progress-stack">
             <div class="progress-row">
               <span>{{ lang === 'en' ? 'final' : '终帧' }}</span>
               <progress :value="progressRatio('final_frame')" max="1"></progress>

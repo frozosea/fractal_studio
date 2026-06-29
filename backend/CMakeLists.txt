@@ -74,6 +74,7 @@ add_executable(fractal_studio_backend
     src/compute/map_kernel_avx2.cpp
     src/compute/map_kernel_avx512.cpp
     src/compute/transition_kernel.cpp
+    src/compute/transition_kernel_avx2.cpp
     src/compute/image_io.cpp
     src/compute/mesh_io.cpp
     src/compute/marching_cubes.cpp
@@ -97,6 +98,7 @@ if(HAS_CUDA)
         src/compute/cuda/ln_map.cu
         src/compute/cuda/video_warp.cu
         src/compute/cuda/transition_volume.cu
+        src/compute/cuda/transition_kernel.cu
         src/compute/cuda/special_points.cu
     )
     target_include_directories(fractal_cuda PRIVATE
@@ -165,6 +167,7 @@ add_executable(compute_path_diff
     src/compute/map_kernel_avx2.cpp
     src/compute/map_kernel_avx512.cpp
     src/compute/transition_kernel.cpp
+    src/compute/transition_kernel_avx2.cpp
     src/compute/tile_scheduler.cpp
     src/compute/perturbation.cpp
 )
@@ -237,6 +240,7 @@ if(COMPILER_HAS_AVX2 AND COMPILER_HAS_FMA)
         src/compute/map_kernel_avx2.cpp
         src/compute/ln_map_avx2.cpp
         src/compute/transition_volume_avx2.cpp
+        src/compute/transition_kernel_avx2.cpp
         PROPERTIES COMPILE_FLAGS "-mavx2 -mfma")
     target_compile_definitions(fractal_studio_backend PRIVATE HAS_AVX2_KERNEL=1)
     target_compile_definitions(compute_path_diff PRIVATE HAS_AVX2_KERNEL=1)

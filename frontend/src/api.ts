@@ -516,6 +516,8 @@ export interface TransitionVoxelResponse {
 export interface VideoExportRequest {
   centerRe: number
   centerIm: number
+  centerReStr?: string
+  centerImStr?: string
   julia?: boolean
   juliaRe?: number
   juliaIm?: number
@@ -715,6 +717,89 @@ export interface VideoPreviewResponse {
   generatedMs: number
 }
 
+export interface TransitionVideoExportRequest {
+  centerRe: number
+  centerIm: number
+  centerReStr?: string
+  centerImStr?: string
+  julia?: boolean
+  juliaRe?: number
+  juliaIm?: number
+  transitionFrom?: Variant | string
+  transitionTo?: Variant | string
+  colorMap?: ColorMap
+  iterations?: number
+  bailout?: number
+  bailoutSq?: number
+  scale?: number
+  thetaStartDeg?: number
+  thetaEndDeg?: number
+  durationSec?: number
+  fps?: number
+  metric?: string
+  engine?: string
+  scalarType?: string
+  background?: boolean
+  localExport?: boolean
+  width?: number
+  height?: number
+}
+
+export interface TransitionVideoExportResponse {
+  runId: string
+  status: string
+  videoArtifactId?: string
+  videoUrl?: string
+  videoDownloadUrl?: string
+  videoLocalPath?: string
+  startFrameArtifactId?: string
+  startFrameUrl?: string
+  startFrameDownloadUrl?: string
+  endFrameArtifactId?: string
+  endFrameUrl?: string
+  endFrameDownloadUrl?: string
+  reportArtifactId?: string
+  reportDownloadUrl?: string
+  localExport?: boolean
+  frameCount: number
+  fps: number
+  durationSec: number
+  thetaStartDeg: number
+  thetaEndDeg: number
+  transitionFrom: string
+  transitionTo: string
+  width: number
+  height: number
+  engine?: string
+  scalarType?: string
+  encoder?: string
+  ffmpegStderr?: string
+  generatedMs?: number
+}
+
+export interface TransitionVideoPreviewRequest extends TransitionVideoExportRequest {
+  previewWidth?: number
+  previewHeight?: number
+}
+
+export interface TransitionVideoPreviewResponse {
+  runId: string
+  status: string
+  startFrameArtifactId: string
+  startFrameUrl: string
+  startFrameDownloadUrl: string
+  endFrameArtifactId: string
+  endFrameUrl: string
+  endFrameDownloadUrl: string
+  thetaStartDeg: number
+  thetaEndDeg: number
+  width: number
+  height: number
+  outputWidth: number
+  outputHeight: number
+  generatedMs: number
+}
+
 export interface VideoZoomRequest {
   lnMapArtifactId: string
   localExport?: boolean
@@ -874,6 +959,8 @@ export const api = {
   videoZoom:   (req: VideoZoomRequest)   => postJson<VideoZoomResponse>('/api/video/zoom', req),
   videoPreview:(req: VideoPreviewRequest)=> postJson<VideoPreviewResponse>('/api/video/preview', req),
   videoExport: (req: VideoExportRequest) => postJson<VideoExportResponse>('/api/video/export', req),
+  transitionVideoPreview: (req: TransitionVideoPreviewRequest) => postJson<TransitionVideoPreviewResponse>('/api/video/transition-preview', req),
+  transitionVideoExport:  (req: TransitionVideoExportRequest)  => postJson<TransitionVideoExportResponse>('/api/video/transition', req),
 
   runs: (params?: { limit?: number; offset?: number; module?: string; status?: string }) => {
     const q = new URLSearchParams()

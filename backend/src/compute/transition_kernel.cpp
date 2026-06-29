@@ -1,9 +1,15 @@
 // compute/transition_kernel.cpp
 
 #include "transition_kernel.hpp"
+#include "transition_kernel_avx2.hpp"
 #include "colorize.hpp"
 #include "map_kernel.hpp"
 #include "parallel.hpp"
+#include "scalar.hpp"
+
+#if defined(HAS_CUDA_KERNEL)
+#  include "cuda/transition_kernel.cuh"
+#endif
 
 #ifdef _OPENMP
 #  include <omp.h>
@@ -414,24 +420,257 @@ MapStats render_transition_metric_field(const TransitionParams& p, FieldOutput& 
     return s;
 }
 
-} // namespace
+// ── CUDA bridge ─────────────────────────────────────────────────────────────
 
-MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo) {
-    if (!variant_supports_axis_transition(p.from_variant) ||
-        !variant_supports_axis_transition(p.to_variant)) {
-        throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
+#if defined(HAS_CUDA_KERNEL)
+MapStats render_transition_cuda(const TransitionParams& p, FieldOutput& fo) {
+    const auto& b = p.base;
+    const int W = b.width, H = b.height;
+    const size_t npx = static_cast<size_t>(W) * H;
+
+    fsd_cuda::CudaTransitionSliceParams cp;
+    cp.center_re  = b.center_re;
+    cp.center_im  = b.center_im;
+    cp.scale      = b.scale;
+    cp.width      = W;
+    cp.height     = H;
+    cp.iterations = b.iterations;
+    cp.bailout_sq = b.bailout_sq;
+    cp.cos_theta  = std::cos(p.theta);
+    cp.sin_theta  = std::sin(p.theta);
+    cp.from_variant = static_cast<int>(p.from_variant);
+    cp.to_variant   = static_cast<int>(p.to_variant);
+    cp.julia     = b.julia;
+    cp.julia_re  = b.julia_re;
+    cp.julia_im  = b.julia_im;
+
+    const std::string eff = map_effective_scalar_type(b);
+    cp.scalar_type = map_scalar_type_is_fp32(eff) ? "fp32" : "fp64";
+
+    fo.width  = W;
+    fo.height = H;
+
+    MapStats s;
+
+    if (b.metric == Metric::Escape) {
+        cp.metric_id = 0;
+        fo.metric = Metric::Escape;
+        fo.iter_u32.resize(npx);
+        fo.norm_f32.resize(npx);
+        auto cs = fsd_cuda::cuda_render_transition_slice_escape(
+            cp, fo.iter_u32.data(), fo.norm_f32.data());
+        s.elapsed_ms  = cs.elapsed_ms;
+        s.scalar_used = cs.scalar_used;
+        s.engine_used = cs.engine_used;
+    } else {
+        if (b.metric == Metric::MinAbs) cp.metric_id = 1;
+        else if (b.metric == Metric::MaxAbs) cp.metric_id = 2;
+        else cp.metric_id = 3;
+        fo.metric = b.metric;
+        std::vector<float> field_f32(npx);
+        float fmin = 0, fmax = 0;
+        auto cs = fsd_cuda::cuda_render_transition_slice_metric(
+            cp, field_f32.data(), fmin, fmax);
+        fo.field_f64.resize(npx);
+        for (size_t i = 0; i < npx; i++)
+            fo.field_f64[i] = static_cast<double>(field_f32[i]);
+        fo.field_min = static_cast<double>(fmin);
+        fo.field_max = static_cast<double>(fmax);
+        s.elapsed_ms  = cs.elapsed_ms;
+        s.scalar_used = cs.scalar_used;
+        s.engine_used = cs.engine_used;
     }
-    if (transition_cancel_requested(p)) throw_transition_cancelled();
 
-    const NormalizedTheta theta = normalize_transition_theta(p);
-    const DirectSlice direct = direct_slice_for_milli_deg(theta.milli_deg);
-    if (direct != DirectSlice::None) {
-        return render_direct_slice_field(p, direct, fo);
+    s.pixel_count  = W * H;
+    fo.scalar_used = s.scalar_used;
+    fo.engine_used = s.engine_used;
+    fo.elapsed_ms  = s.elapsed_ms;
+    return s;
+}
+#endif
+
+// ── High-precision scalar path ──────────────────────────────────────────────
+
+template <typename S>
+inline S transition_real_projection_s(Variant v, S x2, S axis2) {
+    S q = x2 - axis2;
+    return variant_transition_post_abs_real(v) ? scalar_abs(q) : q;
+}
+
+template <typename S>
+inline S transition_imag_projection_s(Variant v, S x, S axis) {
+    switch (v) {
+        case Variant::Tri:
+        case Variant::Vase:
+            return scalar_from_double<S>(-2.0) * x * axis;
+        case Variant::Boat:
+        case Variant::Bird:
+            return scalar_from_double<S>(2.0) * scalar_abs(x * axis);
+        case Variant::Duck:
+        case Variant::Mask:
+            return scalar_from_double<S>(2.0) * x * scalar_abs(axis);
+        case Variant::Bell:
+        case Variant::Ship:
+            return scalar_from_double<S>(-2.0) * scalar_abs(x) * axis;
+        case Variant::Mandelbrot:
+        case Variant::Fish:
+        default:
+            return scalar_from_double<S>(2.0) * x * axis;
+    }
+}
+
+template <typename S, Metric M, IterResultMask NeedMask>
+MapStats render_transition_scalar(const TransitionParams& p, FieldOutput& fo) {
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto& b = p.base;
+    const int W = b.width, H = b.height;
+    const size_t npx = static_cast<size_t>(W) * H;
+
+    fo.width = W; fo.height = H; fo.metric = M;
+    if constexpr (M == Metric::Escape) {
+        fo.iter_u32.resize(npx);
+        fo.norm_f32.resize(npx);
+    } else {
+        fo.field_f64.resize(npx);
     }
 
-    TransitionParams q = p;
-    q.theta = theta.radians;
-    switch (p.base.metric) {
+    const S s_center_re = scalar_from_string<S>(b.center_re_str, b.center_re);
+    const S s_center_im = scalar_from_string<S>(b.center_im_str, b.center_im);
+    const S s_scale     = scalar_from_double<S>(b.scale);
+    const S s_aspect    = scalar_from_double<S>(static_cast<double>(W) / H);
+    const S s_span_im   = s_scale;
+    const S s_span_re   = s_scale * s_aspect;
+    const S s_half      = scalar_from_double<S>(0.5);
+    const S s_re_min    = s_center_re - s_span_re * s_half;
+    const S s_im_max    = s_center_im + s_span_im * s_half;
+    const S s_inv_W     = scalar_from_double<S>(1.0 / W);
+    const S s_inv_H     = scalar_from_double<S>(1.0 / H);
+    const double bail2  = b.bailout_sq;
+
+    const int thread_count = resolve_render_threads(b.render_threads);
+    std::atomic<bool> cancelled{false};
+
+    double global_min =  std::numeric_limits<double>::infinity();
+    double global_max = -std::numeric_limits<double>::infinity();
+
+    #pragma omp parallel num_threads(thread_count)
+    {
+    double local_min =  std::numeric_limits<double>::infinity();
+    double local_max = -std::numeric_limits<double>::infinity();
+
+    #pragma omp for schedule(dynamic, 4)
+    for (int y = 0; y < H; y++) {
+        if (mark_cancelled_if_requested(p, cancelled)) continue;
+        const S s_v = s_im_max - scalar_from_double<S>(static_cast<double>(y) + 0.5) * s_inv_H * s_span_im;
+        const size_t row_off = static_cast<size_t>(y) * W;
+
+        for (int x = 0; x < W; x++) {
+            const S s_u = s_re_min + scalar_from_double<S>(static_cast<double>(x) + 0.5) * s_inv_W * s_span_re;
+
+            const double u  = static_cast<double>(s_u);
+            const double v  = static_cast<double>(s_v);
+            const double x0 = u;
+            const double y0 = v * std::cos(p.theta);
+            const double z0 = v * std::sin(p.theta);
+            const double cx = b.julia ? b.julia_re                         : x0;
+            const double cy = b.julia ? b.julia_im * std::cos(p.theta)     : y0;
+            const double cz = b.julia ? b.julia_im * std::sin(p.theta)     : z0;
+
+            double xv = x0, yv = y0, zv = z0;
+            double xv2 = xv*xv, yv2 = yv*yv, zv2 = zv*zv;
+            double min_sq = xv2 + yv2 + zv2, max_sq = min_sq;
+            int iter = 0;
+            bool escaped = false;
+            double norm = 0.0;
+
+            for (; iter < b.iterations; iter++) {
+                const double nx = variant_transition_real_projection(p.from_variant, xv2, yv2)
+                                + variant_transition_real_projection(p.to_variant,   xv2, zv2)
+                                - xv2 + cx;
+                const double ny = variant_transition_imag_projection(p.from_variant, xv, yv) + cy;
+                const double nz = variant_transition_imag_projection(p.to_variant,   xv, zv) + cz;
+                const bool fin = std::isfinite(nx) && std::isfinite(ny) && std::isfinite(nz);
+                const double n2 = fin ? (nx*nx + ny*ny + nz*nz) : std::numeric_limits<double>::infinity();
+                if constexpr (iter_result_wants(NeedMask, IterResultField::MinAbs)) {
+                    if (n2 < min_sq) min_sq = n2;
+                }
+                if constexpr (iter_result_wants(NeedMask, IterResultField::MaxAbs)) {
+                    if (n2 > max_sq) max_sq = n2;
+                }
+                if (!fin || n2 > bail2) { norm = n2; escaped = true; break; }
+                xv = nx; yv = ny; zv = nz;
+                xv2 = nx*nx; yv2 = ny*ny; zv2 = nz*nz;
+            }
+
+            const size_t idx = row_off + static_cast<size_t>(x);
+            if constexpr (M == Metric::Escape) {
+                fo.iter_u32[idx] = static_cast<uint32_t>(escaped ? iter : b.iterations);
+                fo.norm_f32[idx] = escaped ? static_cast<float>(norm) : 0.0f;
+            } else {
+                double fv = 0.0;
+                if constexpr (M == Metric::MinAbs)  fv = std::sqrt(min_sq);
+                if constexpr (M == Metric::MaxAbs)   fv = std::sqrt(max_sq);
+                if constexpr (M == Metric::Envelope) fv = 0.5 * (std::sqrt(min_sq) + std::sqrt(max_sq));
+                fo.field_f64[idx] = fv;
+                if (fv < local_min) local_min = fv;
+                if (fv > local_max) local_max = fv;
+            }
+        }
+    }
+
+    if constexpr (M != Metric::Escape) {
+        #pragma omp critical
+        {
+            if (local_min < global_min) global_min = local_min;
+            if (local_max > global_max) global_max = local_max;
+        }
+    }
+    } // end omp parallel
+
+    if (cancelled.load(std::memory_order_relaxed) || transition_cancel_requested(p))
+        throw_transition_cancelled();
+
+    if constexpr (M != Metric::Escape) {
+        fo.field_min = global_min;
+        fo.field_max = global_max;
+    }
+
+    const auto t1 = std::chrono::steady_clock::now();
+    const char* sname = std::is_same_v<S, long double> ? "fp80" : "fp128";
+    MapStats s;
+    s.elapsed_ms  = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    s.pixel_count = W * H;
+    s.scalar_used = sname;
+    s.engine_used = "openmp";
+    fo.scalar_used = s.scalar_used;
+    fo.engine_used = s.engine_used;
+    fo.elapsed_ms  = s.elapsed_ms;
+    return s;
+}
+
+template <typename S>
+MapStats dispatch_transition_scalar(const TransitionParams& q, FieldOutput& fo) {
+    switch (q.base.metric) {
+        case Metric::Escape:
+            return render_transition_scalar<S, Metric::Escape,
+                IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, fo);
+        case Metric::MinAbs:
+            return render_transition_scalar<S, Metric::MinAbs, IterResultField::MinAbs>(q, fo);
+        case Metric::MaxAbs:
+            return render_transition_scalar<S, Metric::MaxAbs, IterResultField::MaxAbs>(q, fo);
+        case Metric::Envelope:
+            return render_transition_scalar<S, Metric::Envelope,
+                IterResultField::MinAbs | IterResultField::MaxAbs>(q, fo);
+        default:
+            return render_transition_scalar<S, Metric::Escape,
+                IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, fo);
+    }
+}
+
+// ── OpenMP fp64 dispatch ────────────────────────────────────────────────────
+
+MapStats dispatch_transition_openmp(const TransitionParams& q, FieldOutput& fo) {
+    switch (q.base.metric) {
         case Metric::Escape:
             return render_transition_metric_field<Metric::Escape,
                 IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, fo);
@@ -449,6 +688,65 @@ MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo) {
     }
     return render_transition_metric_field<Metric::Escape,
         IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, fo);
+}
+
+} // namespace
+
+MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo) {
+    if (!variant_supports_axis_transition(p.from_variant) ||
+        !variant_supports_axis_transition(p.to_variant)) {
+        throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
+    }
+    if (transition_cancel_requested(p)) throw_transition_cancelled();
+
+    const NormalizedTheta theta = normalize_transition_theta(p);
+    const DirectSlice direct = direct_slice_for_milli_deg(theta.milli_deg);
+    if (direct != DirectSlice::None) {
+        return render_direct_slice_field(p, direct, fo);
+    }
+
+    TransitionParams q = p;
+    q.theta = theta.radians;
+
+    // ── Engine dispatch ─────────────────────────────────────────────────────
+    const std::string eff = map_effective_scalar_type(q.base);
+    const bool need_hp = map_scalar_type_is_fp128(eff) || map_scalar_type_is_fp80(eff);
+    const bool pairwise = (q.base.metric == Metric::MinPairwiseDist);
+
+    // High-precision scalar path (fp128 / fp80)
+    if (need_hp && !pairwise) {
+#if defined(FSD_HAS_FLOAT128)
+        if (map_scalar_type_is_fp128(eff))
+            return dispatch_transition_scalar<__float128>(q, fo);
+#endif
+        return dispatch_transition_scalar<long double>(q, fo);
+    }
+
+    // MinPairwiseDist requires orbit storage — OpenMP only
+    if (pairwise) {
+        return dispatch_transition_openmp(q, fo);
+    }
+
+    // Try CUDA
+    const std::string engine = q.base.engine;
+#if defined(HAS_CUDA_KERNEL)
+    if (engine == "auto" || engine == "cuda") {
+        if (fsd_cuda::cuda_transition_slice_available()) {
+            return render_transition_cuda(q, fo);
+        }
+    }
+#endif
+
+    // Try AVX2
+    if (engine == "auto" || engine == "avx2") {
+        if (render_transition_field_avx2(q, fo)) {
+            return MapStats{fo.elapsed_ms, q.base.width * q.base.height,
+                            fo.scalar_used, fo.engine_used};
+        }
+    }
+
+    // Fallback: OpenMP fp64
+    return dispatch_transition_openmp(q, fo);
 }
 
 MapStats render_transition(const TransitionParams& p, cv::Mat& out) {
