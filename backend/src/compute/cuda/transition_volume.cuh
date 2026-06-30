@@ -6,6 +6,8 @@
 
 namespace fsd_cuda {
 
+constexpr int CUDA_MAX_TRANSITION_VOLUME_LEGS = 4;
+
 struct CudaTransitionVolumeParams {
     float center_x = 0.0f;
     float center_y = 0.0f;
@@ -17,6 +19,11 @@ struct CudaTransitionVolumeParams {
     float bailout_sq = 4.0f;
     int from_variant = 0;
     int to_variant = 2;
+    int multi_count = 0;
+    int multi_variants[CUDA_MAX_TRANSITION_VOLUME_LEGS] = {0, 0, 0, 0};
+    float multi_y_factor[CUDA_MAX_TRANSITION_VOLUME_LEGS] = {1.0f, 0.0f, 0.0f, 0.0f};
+    float multi_z_factor[CUDA_MAX_TRANSITION_VOLUME_LEGS] = {0.0f, 1.0f, 0.0f, 0.0f};
+    float multi_influence[CUDA_MAX_TRANSITION_VOLUME_LEGS] = {1.0f, 1.0f, 0.0f, 0.0f};
 };
 
 bool cuda_transition_available() noexcept;

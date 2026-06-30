@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import ThreeDViewer from '../components/ThreeDViewer.vue'
-import { api, VARIANTS, VARIANT_LABELS, type Variant, type HsStage, type TransitionVoxelResponse, type HsFieldResponse, type MeshResponse } from '../api'
+import TransitionLegEditor from '../components/TransitionLegEditor.vue'
+import { api, VARIANTS, VARIANT_LABELS, type Variant, type HsStage, type TransitionVoxelResponse, type HsFieldResponse, type MeshResponse, type TransitionLegInput } from '../api'
 import { t, lang } from '../i18n'
 import { promptSlowRenderWarning, slowRenderWarningsDisabled } from '../slowWarnings'
 
@@ -32,8 +33,10 @@ const txCenterX  = ref(0.0)
 const txCenterY  = ref(0.0)
 const txCenterZ  = ref(0.0)
 const txExtent   = ref(2.0)
-const txFrom     = ref<string>('mandelbrot')
-const txTo       = ref<string>('burning_ship')
+const txLegs     = ref<TransitionLegInput[]>([
+  { variant: 'mandelbrot', weight: 1 },
+  { variant: 'burning_ship', weight: 1 },
+])
 
 // State
 const hsFieldData  = ref<HsFieldResponse | null>(null)
@@ -46,7 +49,19 @@ const error        = ref('')
 let slowHsWarnKey = ''
 
 const HS_METRICS: HsStage[] = ['min_abs', 'max_abs', 'envelope', 'min_pairwise_dist']
-const AXIS_TRANSITION_VARIANTS = VARIANTS.slice(0, 10)
+const activeTxLegs = computed(() => {
+  const cleaned = txLegs.value
+    .map(leg => ({
+      variant: leg.variant,
+      weight: Number.isFinite(leg.weight) ? Math.max(0, Math.min(1, leg.weight)) : 0,
+    }))
+    .filter(leg => leg.weight > 0)
+    .slice(0, 4)
+  if (cleaned.length) return cleaned
+  return [{ variant: txLegs.value[0]?.variant ?? 'mandelbrot', weight: 1 }]
+})
+const txVariantIds = computed(() => activeTxLegs.value.map(leg => String(leg.variant)))
+const txWeights = computed(() => activeTxLegs.value.map(leg => leg.weight))
 
 const HS_METRIC_LABELS: Record<HsStage, { en: string; zh: string }> = {
   min_abs:            { en: 'Min abs(z) (HS-base)',       zh: '最小 abs(z)（HS 基础）' },
@@ -162,8 +177,10 @@ async function computeTransitionVoxels() {
       resolution: txRes.value,
       iso:        txIso.value,
       iterations: txIter.value,
-      transitionFrom: txFrom.value,
-      transitionTo:   txTo.value,
+      transitionFrom: txVariantIds.value[0] ?? 'mandelbrot',
+      transitionTo:   txVariantIds.value[1] ?? 'burning_ship',
+      transitionVariants: txVariantIds.value,
+      transitionWeights:  txWeights.value,
     })
     voxelData.value = r
     stlUrl.value = transitionStlDownloadUrl(r)
@@ -198,8 +215,10 @@ async function exportTxStl() {
       resolution: txRes.value,
       iso:        txIso.value,
       iterations: txIter.value,
-      transitionFrom: txFrom.value,
-      transitionTo:   txTo.value,
+      transitionFrom: txVariantIds.value[0] ?? 'mandelbrot',
+      transitionTo:   txVariantIds.value[1] ?? 'burning_ship',
+      transitionVariants: txVariantIds.value,
+      transitionWeights:  txWeights.value,
     })
     voxelData.value = r
     stlUrl.value = transitionStlDownloadUrl(r)
@@ -316,16 +335,8 @@ function onHsZoom(factor: number) {
       <!-- Transition params (voxel only) -->
       <template v-else>
         <div class="group">
-          <label>{{ t('variant') }} A</label>
-          <select v-model="txFrom">
-            <option v-for="v in AXIS_TRANSITION_VARIANTS" :key="'tx-from-' + v" :value="v">{{ VARIANT_LABELS[v][lang] }}</option>
-          </select>
-        </div>
-        <div class="group">
-          <label>{{ t('variant') }} B</label>
-          <select v-model="txTo">
-            <option v-for="v in AXIS_TRANSITION_VARIANTS" :key="'tx-to-' + v" :value="v">{{ VARIANT_LABELS[v][lang] }}</option>
-          </select>
+          <label>{{ t('variant') }}</label>
+          <TransitionLegEditor v-model="txLegs" :min="1" :max="4" />
         </div>
         <div class="group">
           <label>{{ t('three_iso') }} <span class="dim">{{ lang === 'en' ? '(core depth)' : '（核心深度）' }}</span></label>

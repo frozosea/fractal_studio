@@ -94,6 +94,11 @@ export const VARIANT_LABELS: Record<Variant, { en: string; zh: string }> = {
   tan_z:        { en: 'tan(z)+c',                   zh: 'tan(z)+c' },
 }
 
+export interface TransitionLegInput {
+  variant: Variant | string
+  weight: number
+}
+
 export type Metric = 'escape' | 'min_abs' | 'max_abs' | 'envelope' | 'min_pairwise_dist' | 'mandel_ship_agree'
 
 export const METRICS: Metric[] = ['escape', 'min_abs', 'max_abs', 'envelope', 'min_pairwise_dist', 'mandel_ship_agree']
@@ -157,6 +162,9 @@ export interface MapRenderRequest {
   transitionThetaMilliDeg?: number
   transitionFrom?: Variant | string
   transitionTo?: Variant | string
+  transitionVariants?: Array<Variant | string>
+  transitionWeights?: number[]
+  transitionLegs?: TransitionLegInput[]
   engine?: string
   scalarType?: string
   rotationDeg?: number
@@ -481,6 +489,9 @@ export interface TransitionMeshRequest {
   bailoutSq?: number
   transitionFrom?: Variant | string
   transitionTo?: Variant | string
+  transitionVariants?: Array<Variant | string>
+  transitionWeights?: number[]
+  transitionLegs?: TransitionLegInput[]
   engine?: string
 }
 
@@ -496,6 +507,9 @@ export interface TransitionVoxelRequest {
   bailoutSq?: number
   transitionFrom?: Variant | string
   transitionTo?: Variant | string
+  transitionVariants?: Array<Variant | string>
+  transitionWeights?: number[]
+  transitionLegs?: TransitionLegInput[]
   engine?: string
 }
 

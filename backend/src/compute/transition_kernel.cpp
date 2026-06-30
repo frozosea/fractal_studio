@@ -16,6 +16,7 @@
 #endif
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -160,6 +161,56 @@ struct TransitionIterResult {
 // When metric == MinPairwiseDist, also stores the orbit and computes min pairwise dist.
 struct OrbitPt { double x, y, z; };
 
+constexpr int MAX_TRANSITION_LEGS = 4;
+
+struct ActiveTransitionLeg {
+    Variant variant = Variant::Mandelbrot;
+    double direction = 1.0;
+    double influence = 1.0;
+};
+
+struct MultiOrbitPt {
+    std::array<double, MAX_TRANSITION_LEGS + 1> coord{};
+};
+
+std::vector<ActiveTransitionLeg> active_transition_legs(const std::vector<TransitionLeg>& input) {
+    if (input.size() > MAX_TRANSITION_LEGS) {
+        throw std::runtime_error("multi transition supports at most 4 variants");
+    }
+
+    double max_w = 0.0;
+    double sum_w2 = 0.0;
+    std::vector<TransitionLeg> kept;
+    kept.reserve(input.size());
+    for (const TransitionLeg& leg : input) {
+        if (!variant_supports_axis_transition(leg.variant)) {
+            throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
+        }
+        if (!std::isfinite(leg.weight)) {
+            throw std::runtime_error("invalid transition weight");
+        }
+        if (leg.weight <= 0.0) continue;
+        kept.push_back(leg);
+        if (leg.weight > max_w) max_w = leg.weight;
+        sum_w2 += leg.weight * leg.weight;
+    }
+    if (kept.empty() || max_w <= 0.0 || sum_w2 <= 0.0) {
+        throw std::runtime_error("multi transition needs at least one positive-weight variant");
+    }
+
+    const double inv_len = 1.0 / std::sqrt(sum_w2);
+    std::vector<ActiveTransitionLeg> out;
+    out.reserve(kept.size());
+    for (const TransitionLeg& leg : kept) {
+        out.push_back({
+            leg.variant,
+            leg.weight * inv_len,
+            leg.weight / max_w,
+        });
+    }
+    return out;
+}
+
 template <Metric M, IterResultMask NeedMask>
 inline TransitionIterResult iterate_transition(
     double x0, double y0, double z0,
@@ -258,6 +309,153 @@ inline TransitionIterResult iterate_transition(
                 const double dy = orbit[a].y - orbit[b].y;
                 const double dz = orbit[a].z - orbit[b].z;
                 const double d2 = dx*dx + dy*dy + dz*dz;
+                if (d2 < min_d2) min_d2 = d2;
+            }
+        }
+        r.extra = std::sqrt(min_d2);
+    }
+
+    return r;
+}
+
+template <Metric M, IterResultMask NeedMask>
+inline TransitionIterResult iterate_transition_multi(
+    double x0,
+    const std::array<double, MAX_TRANSITION_LEGS>& axis0,
+    int axis_count,
+    const std::vector<ActiveTransitionLeg>& legs,
+    int max_iter, double bail2,
+    int pairwise_cap,
+    std::vector<MultiOrbitPt>& orbit,
+    bool julia,
+    double jx,
+    const std::array<double, MAX_TRANSITION_LEGS>& jaxis
+) {
+    const double cx = julia ? jx : x0;
+    std::array<double, MAX_TRANSITION_LEGS> caxis{};
+    for (int k = 0; k < axis_count; ++k) {
+        caxis[k] = julia ? jaxis[k] : axis0[k];
+    }
+
+    double x = x0;
+    double x2 = x * x;
+    std::array<double, MAX_TRANSITION_LEGS> axis = axis0;
+    std::array<double, MAX_TRANSITION_LEGS> axis2{};
+    for (int k = 0; k < axis_count; ++k) axis2[k] = axis[k] * axis[k];
+
+    TransitionIterResult r{};
+    r.iter = 0;
+    r.min_abs_sq = std::numeric_limits<double>::infinity();
+    r.max_abs_sq = 0.0;
+    r.extra = 0.0;
+    r.norm = 0.0;
+    r.escaped = false;
+    r.valid_mask = 0;
+
+    constexpr bool track_iter    = iter_result_wants(NeedMask, IterResultField::Iter);
+    constexpr bool track_min_abs = iter_result_wants(NeedMask, IterResultField::MinAbs);
+    constexpr bool track_max_abs = iter_result_wants(NeedMask, IterResultField::MaxAbs);
+    constexpr bool track_norm    = iter_result_wants(NeedMask, IterResultField::Norm);
+    constexpr bool track_escaped = iter_result_wants(NeedMask, IterResultField::Escaped);
+    const bool track_orbit = (M == Metric::MinPairwiseDist) && pairwise_cap > 0;
+
+    if constexpr (track_iter)    r.valid_mask |= IterResultField::Iter;
+    if constexpr (track_min_abs) r.valid_mask |= IterResultField::MinAbs;
+    if constexpr (track_max_abs) r.valid_mask |= IterResultField::MaxAbs;
+    if constexpr (track_norm)    r.valid_mask |= IterResultField::Norm;
+    if constexpr (track_escaped) r.valid_mask |= IterResultField::Escaped;
+    if constexpr (M == Metric::MinPairwiseDist) r.valid_mask |= IterResultField::Extra;
+
+    auto norm_sq = [&]() {
+        double n2 = x2;
+        for (int k = 0; k < axis_count; ++k) n2 += axis2[k];
+        return n2;
+    };
+
+    if constexpr (track_min_abs || track_max_abs) {
+        const double init_n2 = norm_sq();
+        r.min_abs_sq = init_n2;
+        r.max_abs_sq = init_n2;
+    }
+
+    if (track_orbit) {
+        orbit.clear();
+        MultiOrbitPt p{};
+        p.coord[0] = x;
+        for (int k = 0; k < axis_count; ++k) p.coord[k + 1] = axis[k];
+        orbit.push_back(p);
+    }
+
+    std::array<double, MAX_TRANSITION_LEGS> next_axis{};
+    for (int i = 0; i < max_iter; ++i) {
+        double real_sum = 0.0;
+        double influence_sum = 0.0;
+        for (int k = 0; k < axis_count; ++k) {
+            const double influence = legs[static_cast<size_t>(k)].influence;
+            real_sum += influence * variant_transition_real_projection(
+                legs[static_cast<size_t>(k)].variant, x2, axis2[k]);
+            influence_sum += influence;
+            next_axis[k] = influence * variant_transition_imag_projection(
+                legs[static_cast<size_t>(k)].variant, x, axis[k]) + caxis[k];
+        }
+
+        const double nx = real_sum - (influence_sum - 1.0) * x2 + cx;
+        const bool finite_x = std::isfinite(nx);
+        const double nx2 = finite_x ? nx * nx : std::numeric_limits<double>::infinity();
+        double n2 = finite_x ? nx2 : std::numeric_limits<double>::infinity();
+        bool finite_all = finite_x;
+
+        for (int k = 0; k < axis_count; ++k) {
+            if (!std::isfinite(next_axis[k])) {
+                finite_all = false;
+                n2 = std::numeric_limits<double>::infinity();
+                break;
+            }
+            const double a2 = next_axis[k] * next_axis[k];
+            n2 += a2;
+        }
+
+        if constexpr (track_min_abs) {
+            if (n2 < r.min_abs_sq) r.min_abs_sq = n2;
+        }
+        if constexpr (track_max_abs) {
+            if (n2 > r.max_abs_sq) r.max_abs_sq = n2;
+        }
+
+        if (track_orbit && static_cast<int>(orbit.size()) < pairwise_cap) {
+            MultiOrbitPt p{};
+            p.coord[0] = nx;
+            for (int k = 0; k < axis_count; ++k) p.coord[k + 1] = next_axis[k];
+            orbit.push_back(p);
+        }
+
+        if (!finite_all || n2 > bail2) {
+            if constexpr (track_iter)    r.iter = i;
+            if constexpr (track_norm)    r.norm = n2;
+            if constexpr (track_escaped) r.escaped = true;
+            break;
+        }
+
+        x = nx;
+        x2 = nx2;
+        for (int k = 0; k < axis_count; ++k) {
+            axis[k] = next_axis[k];
+            axis2[k] = axis[k] * axis[k];
+        }
+    }
+    if (!r.escaped) {
+        if constexpr (track_iter) r.iter = max_iter;
+    }
+
+    if (track_orbit && orbit.size() >= 2) {
+        double min_d2 = std::numeric_limits<double>::max();
+        for (size_t a = 0; a < orbit.size(); ++a) {
+            for (size_t b = a + 1; b < orbit.size(); ++b) {
+                double d2 = 0.0;
+                for (int k = 0; k <= axis_count; ++k) {
+                    const double d = orbit[a].coord[k] - orbit[b].coord[k];
+                    d2 += d * d;
+                }
                 if (d2 < min_d2) min_d2 = d2;
             }
         }
@@ -420,6 +618,131 @@ MapStats render_transition_metric_field(const TransitionParams& p, FieldOutput& 
     return s;
 }
 
+template <Metric M, IterResultMask NeedMask>
+MapStats render_transition_multi_field(const TransitionParams& p, FieldOutput& fo) {
+    const std::vector<ActiveTransitionLeg> legs = active_transition_legs(p.multi_legs);
+    const int axis_count = static_cast<int>(legs.size());
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto& b = p.base;
+
+    const int W = b.width;
+    const int H = b.height;
+    const size_t npx = static_cast<size_t>(W) * H;
+    fo.width = W;
+    fo.height = H;
+    fo.metric = M;
+    if constexpr (M == Metric::Escape) {
+        fo.iter_u32.resize(npx);
+        fo.norm_f32.resize(npx);
+    } else {
+        fo.field_f64.resize(npx);
+    }
+
+    const double aspect  = static_cast<double>(W) / H;
+    const double span_im = b.scale;
+    const double span_re = b.scale * aspect;
+    const double re_min  = b.center_re - span_re * 0.5;
+    const double im_max  = b.center_im + span_im * 0.5;
+    const double bail2   = b.bailout_sq;
+    const int thread_count = resolve_render_threads(b.render_threads);
+    constexpr int tile_size = 32;
+    const int tiles_x = (W + tile_size - 1) / tile_size;
+    const int tiles_y = (H + tile_size - 1) / tile_size;
+    const int tile_count = tiles_x * tiles_y;
+    std::atomic<bool> cancelled{false};
+
+    double global_min = std::numeric_limits<double>::infinity();
+    double global_max = -std::numeric_limits<double>::infinity();
+
+    #pragma omp parallel num_threads(thread_count)
+    {
+        std::vector<MultiOrbitPt> orbit;
+        if constexpr (M == Metric::MinPairwiseDist) {
+            orbit.reserve(static_cast<size_t>(b.pairwise_cap));
+        }
+        double local_min = std::numeric_limits<double>::infinity();
+        double local_max = -std::numeric_limits<double>::infinity();
+
+    #pragma omp for schedule(dynamic, 1)
+    for (int tile = 0; tile < tile_count; tile++) {
+        if (mark_cancelled_if_requested(p, cancelled)) continue;
+        const int tile_x = tile % tiles_x;
+        const int tile_y = tile / tiles_x;
+        const int x_begin = tile_x * tile_size;
+        const int y_begin = tile_y * tile_size;
+        const int x_end = std::min(W, x_begin + tile_size);
+        const int y_end = std::min(H, y_begin + tile_size);
+
+        for (int y = y_begin; y < y_end; y++) {
+            if (mark_cancelled_if_requested(p, cancelled)) break;
+            const size_t row_off = static_cast<size_t>(y) * W;
+            const double v = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
+            for (int x = x_begin; x < x_end; x++) {
+                const double u = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
+
+                std::array<double, MAX_TRANSITION_LEGS> axis0{};
+                std::array<double, MAX_TRANSITION_LEGS> jaxis{};
+                for (int k = 0; k < axis_count; ++k) {
+                    axis0[k] = v * legs[static_cast<size_t>(k)].direction;
+                    jaxis[k] = b.julia_im * legs[static_cast<size_t>(k)].direction;
+                }
+
+                const TransitionIterResult r =
+                    iterate_transition_multi<M, NeedMask>(
+                        u, axis0, axis_count, legs,
+                        b.iterations, bail2,
+                        b.pairwise_cap, orbit,
+                        b.julia, b.julia_re, jaxis);
+
+                const size_t idx = row_off + static_cast<size_t>(x);
+                if constexpr (M == Metric::Escape) {
+                    fo.iter_u32[idx] = static_cast<uint32_t>(
+                        r.escaped ? r.iter : b.iterations);
+                    constexpr bool has_norm =
+                        iter_result_wants(NeedMask, IterResultField::Norm);
+                    fo.norm_f32[idx] = has_norm && r.escaped
+                        ? static_cast<float>(r.norm) : 0.0f;
+                } else {
+                    const double fv = transition_raw_value<M>(r);
+                    fo.field_f64[idx] = fv;
+                    if (fv < local_min) local_min = fv;
+                    if (fv > local_max) local_max = fv;
+                }
+            }
+        }
+    }
+
+    if constexpr (M != Metric::Escape) {
+        #pragma omp critical
+        {
+            if (local_min < global_min) global_min = local_min;
+            if (local_max > global_max) global_max = local_max;
+        }
+    }
+    } // end omp parallel
+
+    if (cancelled.load(std::memory_order_relaxed) || transition_cancel_requested(p)) {
+        throw_transition_cancelled();
+    }
+
+    if constexpr (M != Metric::Escape) {
+        fo.field_min = global_min;
+        fo.field_max = global_max;
+    }
+
+    const auto t1 = std::chrono::steady_clock::now();
+    MapStats s;
+    s.elapsed_ms  = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    s.pixel_count = W * H;
+    s.scalar_used = "fp64";
+    s.engine_used = "openmp_multi";
+    fo.scalar_used = s.scalar_used;
+    fo.engine_used = s.engine_used;
+    fo.elapsed_ms  = s.elapsed_ms;
+    return s;
+}
+
 // ── CUDA bridge ─────────────────────────────────────────────────────────────
 
 #if defined(HAS_CUDA_KERNEL)
@@ -440,6 +763,15 @@ MapStats render_transition_cuda(const TransitionParams& p, FieldOutput& fo) {
     cp.sin_theta  = std::sin(p.theta);
     cp.from_variant = static_cast<int>(p.from_variant);
     cp.to_variant   = static_cast<int>(p.to_variant);
+    if (!p.multi_legs.empty()) {
+        const std::vector<ActiveTransitionLeg> legs = active_transition_legs(p.multi_legs);
+        cp.multi_count = static_cast<int>(legs.size());
+        for (int i = 0; i < cp.multi_count; ++i) {
+            cp.multi_variants[i] = static_cast<int>(legs[static_cast<size_t>(i)].variant);
+            cp.multi_direction[i] = legs[static_cast<size_t>(i)].direction;
+            cp.multi_influence[i] = legs[static_cast<size_t>(i)].influence;
+        }
+    }
     cp.julia     = b.julia;
     cp.julia_re  = b.julia_re;
     cp.julia_im  = b.julia_im;
@@ -690,18 +1022,39 @@ MapStats dispatch_transition_openmp(const TransitionParams& q, FieldOutput& fo) 
         IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, fo);
 }
 
+MapStats dispatch_transition_multi_openmp(const TransitionParams& q, FieldOutput& fo) {
+    switch (q.base.metric) {
+        case Metric::Escape:
+            return render_transition_multi_field<Metric::Escape,
+                IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, fo);
+        case Metric::MinAbs:
+            return render_transition_multi_field<Metric::MinAbs, IterResultField::MinAbs>(q, fo);
+        case Metric::MaxAbs:
+            return render_transition_multi_field<Metric::MaxAbs, IterResultField::MaxAbs>(q, fo);
+        case Metric::Envelope:
+            return render_transition_multi_field<Metric::Envelope,
+                IterResultField::MinAbs | IterResultField::MaxAbs>(q, fo);
+        case Metric::MinPairwiseDist:
+            return render_transition_multi_field<Metric::MinPairwiseDist, IterResultField::Extra>(q, fo);
+        default:
+            break;
+    }
+    return render_transition_multi_field<Metric::Escape,
+        IterResultField::Iter | IterResultField::Escaped | IterResultField::Norm>(q, fo);
+}
+
 } // namespace
 
 MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo) {
-    if (!variant_supports_axis_transition(p.from_variant) ||
-        !variant_supports_axis_transition(p.to_variant)) {
+    if (p.multi_legs.empty() && (!variant_supports_axis_transition(p.from_variant) ||
+        !variant_supports_axis_transition(p.to_variant))) {
         throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
     }
     if (transition_cancel_requested(p)) throw_transition_cancelled();
 
     const NormalizedTheta theta = normalize_transition_theta(p);
     const DirectSlice direct = direct_slice_for_milli_deg(theta.milli_deg);
-    if (direct != DirectSlice::None) {
+    if (p.multi_legs.empty() && direct != DirectSlice::None) {
         return render_direct_slice_field(p, direct, fo);
     }
 
@@ -714,7 +1067,7 @@ MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo) {
     const bool pairwise = (q.base.metric == Metric::MinPairwiseDist);
 
     // High-precision scalar path (fp128 / fp80)
-    if (need_hp && !pairwise) {
+    if (need_hp && !pairwise && q.multi_legs.empty()) {
 #if defined(FSD_HAS_FLOAT128)
         if (map_scalar_type_is_fp128(eff))
             return dispatch_transition_scalar<__float128>(q, fo);
@@ -724,7 +1077,9 @@ MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo) {
 
     // MinPairwiseDist requires orbit storage — OpenMP only
     if (pairwise) {
-        return dispatch_transition_openmp(q, fo);
+        return q.multi_legs.empty()
+            ? dispatch_transition_openmp(q, fo)
+            : dispatch_transition_multi_openmp(q, fo);
     }
 
     // Try CUDA
@@ -746,7 +1101,9 @@ MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo) {
     }
 
     // Fallback: OpenMP fp64
-    return dispatch_transition_openmp(q, fo);
+    return q.multi_legs.empty()
+        ? dispatch_transition_openmp(q, fo)
+        : dispatch_transition_multi_openmp(q, fo);
 }
 
 MapStats render_transition(const TransitionParams& p, cv::Mat& out) {

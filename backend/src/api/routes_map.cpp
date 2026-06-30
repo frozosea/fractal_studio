@@ -31,6 +31,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace fsd {
 
@@ -146,6 +147,47 @@ compute::Variant parseBuiltinVariant(const std::string& s, compute::Variant fall
     compute::Variant v;
     if (compute::variant_from_name(s.c_str(), v)) return v;
     return fallback;
+}
+
+std::string variantJsonToString(const Json& value, const std::string& fallback = "mandelbrot") {
+    if (value.is_string()) return value.get<std::string>();
+    if (value.is_number_integer()) return std::to_string(value.get<int>());
+    return fallback;
+}
+
+std::vector<compute::TransitionLeg> parseTransitionLegs(const Json& j) {
+    std::vector<compute::TransitionLeg> legs;
+    if (j.contains("transitionLegs") && j["transitionLegs"].is_array()) {
+        for (const Json& item : j["transitionLegs"]) {
+            std::string variant = "mandelbrot";
+            double weight = 1.0;
+            if (item.is_object()) {
+                variant = item.contains("variant")
+                    ? variantJsonToString(item["variant"])
+                    : std::string("mandelbrot");
+                weight = item.value("weight", 1.0);
+            } else {
+                variant = variantJsonToString(item);
+            }
+            legs.push_back({parseBuiltinVariant(variant, compute::Variant::Mandelbrot), weight});
+        }
+        return legs;
+    }
+
+    if (j.contains("transitionVariants") && j["transitionVariants"].is_array()) {
+        const Json& variants = j["transitionVariants"];
+        const Json* weights = (j.contains("transitionWeights") && j["transitionWeights"].is_array())
+            ? &j["transitionWeights"]
+            : nullptr;
+        for (size_t i = 0; i < variants.size(); ++i) {
+            const std::string variant = variantJsonToString(variants[i]);
+            const double weight = (weights && i < weights->size() && (*weights)[i].is_number())
+                ? (*weights)[i].get<double>()
+                : 1.0;
+            legs.push_back({parseBuiltinVariant(variant, compute::Variant::Mandelbrot), weight});
+        }
+    }
+    return legs;
 }
 
 double normalizeTransitionTheta(double theta) {
@@ -281,7 +323,7 @@ Json cancelledMapRenderJson(const std::string& runId, const MapRenderInput& in) 
 }
 
 Json mapRenderEffectiveJson(const MapRenderInput& in, const MapRenderImage& rendered) {
-    return {
+    Json resp = {
         {"centerRe", in.cRe},
         {"centerIm", in.cIm},
         {"scale", in.scale},
@@ -301,6 +343,16 @@ Json mapRenderEffectiveJson(const MapRenderInput& in, const MapRenderImage& rend
         {"transitionTo", in.hasTheta ? in.j.value("transitionTo", std::string("burning_ship")) : std::string("")},
         {"rotationDeg", in.rotationDeg},
     };
+    if (in.hasTheta && in.j.contains("transitionVariants")) {
+        resp["transitionVariants"] = in.j["transitionVariants"];
+    }
+    if (in.hasTheta && in.j.contains("transitionWeights")) {
+        resp["transitionWeights"] = in.j["transitionWeights"];
+    }
+    if (in.hasTheta && in.j.contains("transitionLegs")) {
+        resp["transitionLegs"] = in.j["transitionLegs"];
+    }
+    return resp;
 }
 
 void throwIfMapRenderCancelled(const std::function<bool()>& shouldCancel) {
@@ -358,8 +410,9 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
         const compute::Variant toVariant = parseBuiltinVariant(
             j.value("transitionTo", std::string("burning_ship")),
             compute::Variant::Boat);
-        if (!compute::variant_supports_axis_transition(fromVariant) ||
-            !compute::variant_supports_axis_transition(toVariant)) {
+        const std::vector<compute::TransitionLeg> multiLegs = parseTransitionLegs(j);
+        if (multiLegs.empty() && (!compute::variant_supports_axis_transition(fromVariant) ||
+            !compute::variant_supports_axis_transition(toVariant))) {
             throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
         }
         compute::MapParams mp = buildMapParams(in, j, bailout, bailoutSq, shouldCancel);
@@ -373,6 +426,7 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
         tp.theta_milli_deg = in.thetaMilliDeg;
         tp.from_variant = fromVariant;
         tp.to_variant = toVariant;
+        tp.multi_legs = multiLegs;
         compute::FieldOutput fo;
         auto stats = compute::render_transition_field(tp, fo);
         throwIfMapRenderCancelled(shouldCancel);

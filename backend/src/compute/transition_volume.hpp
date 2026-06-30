@@ -13,6 +13,7 @@
 #include "variants.hpp"
 
 #include <string>
+#include <vector>
 
 namespace fsd::compute {
 
@@ -32,6 +33,7 @@ struct TransitionVolumeParams {
 
     Variant from_variant = Variant::Mandelbrot;
     Variant to_variant   = Variant::Boat;
+    std::vector<TransitionLeg> multi_legs;
 
     // "auto", "hybrid", "cuda", "avx2", "avx512", "openmp". The current guaranteed
     // fallback is OpenMP fp32; accelerated fp32 paths are selected only when

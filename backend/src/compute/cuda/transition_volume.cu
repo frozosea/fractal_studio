@@ -48,6 +48,67 @@ __global__ void transition_volume_kernel(CudaTransitionVolumeParams p, int z_sta
     const float y0 = (p.center_y - p.extent) + (static_cast<float>(yi) + 0.5f) / static_cast<float>(N) * span;
     const float z0 = (p.center_z - p.extent) + (static_cast<float>(zi) + 0.5f) / static_cast<float>(N) * span;
 
+    if (p.multi_count > 0) {
+        float x = x0;
+        float x2 = x * x;
+        float axis[CUDA_MAX_TRANSITION_VOLUME_LEGS];
+        float axis2[CUDA_MAX_TRANSITION_VOLUME_LEGS];
+        for (int k = 0; k < p.multi_count; ++k) {
+            axis[k] = y0 * p.multi_y_factor[k] + z0 * p.multi_z_factor[k];
+            axis2[k] = axis[k] * axis[k];
+        }
+
+        int iter = 0;
+        bool escaped = false;
+        for (; iter < p.iterations; ++iter) {
+            float real_sum = 0.0f;
+            float influence_sum = 0.0f;
+            float next_axis[CUDA_MAX_TRANSITION_VOLUME_LEGS];
+            for (int k = 0; k < p.multi_count; ++k) {
+                const float influence = p.multi_influence[k];
+                real_sum += influence * real_projection(p.multi_variants[k], x2, axis2[k]);
+                influence_sum += influence;
+                const float caxis = y0 * p.multi_y_factor[k] + z0 * p.multi_z_factor[k];
+                next_axis[k] = influence * imag_projection(p.multi_variants[k], x, axis[k]) + caxis;
+            }
+
+            const float nx = real_sum - (influence_sum - 1.0f) * x2 + x0;
+            const bool finite_x = isfinite(nx);
+            const float nx2 = finite_x ? nx * nx : INFINITY;
+            bool finite_all = finite_x;
+            float n2 = finite_x ? nx2 : INFINITY;
+            for (int k = 0; k < p.multi_count; ++k) {
+                if (!isfinite(next_axis[k])) {
+                    finite_all = false;
+                    n2 = INFINITY;
+                    break;
+                }
+                n2 += next_axis[k] * next_axis[k];
+            }
+            if (!finite_all || n2 > p.bailout_sq) {
+                escaped = true;
+                break;
+            }
+
+            x = nx;
+            x2 = nx2;
+            for (int k = 0; k < p.multi_count; ++k) {
+                axis[k] = next_axis[k];
+                axis2[k] = axis[k] * axis[k];
+            }
+        }
+
+        if (escaped) {
+            out[idx] = 0.5f + 0.5f * (static_cast<float>(iter) / static_cast<float>(p.iterations));
+        } else {
+            float mag2 = x2;
+            for (int k = 0; k < p.multi_count; ++k) mag2 += axis2[k];
+            const float final_mag = sqrtf(mag2);
+            out[idx] = fminf(0.48f, final_mag / p.bailout * 0.48f);
+        }
+        return;
+    }
+
     float x = x0, y = y0, z = z0;
     float x2 = x * x;
     float y2 = y * y;

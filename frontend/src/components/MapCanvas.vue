@@ -27,6 +27,8 @@ const props = defineProps<{
   transitionThetaMilliDeg?: number | null
   transitionFrom?: string
   transitionTo?: string
+  transitionVariants?: string[]
+  transitionWeights?: number[]
   julia?: boolean
   juliaRe?: number
   juliaIm?: number
@@ -243,6 +245,7 @@ function shouldUseFieldPath(): boolean {
     && (props.colorMode ?? 'direct') === 'direct'
     && props.transitionTheta === null
     && !props.transitionFrom
+    && !props.transitionVariants?.length
 }
 
 /** Re-colorize cached field data via WebGL — no backend round-trip. */
@@ -385,6 +388,10 @@ async function renderFrame() {
   }
   if (props.transitionFrom)           req.transitionFrom           = props.transitionFrom
   if (props.transitionTo)             req.transitionTo             = props.transitionTo
+  if (props.transitionVariants?.length) {
+    req.transitionVariants = props.transitionVariants
+    req.transitionWeights = props.transitionWeights ?? props.transitionVariants.map(() => 1)
+  }
   if (props.engine)                   req.engine                    = props.engine
   if (props.scalarType)               req.scalarType                = props.scalarType
   if (props.centerReStr)              (req as any).centerReStr      = props.centerReStr
@@ -448,6 +455,7 @@ watch(() => [
   props.iterations, props.pairwiseCap, props.julia, props.juliaRe, props.juliaIm,
   props.engine, props.scalarType, props.rotationDeg, props.transitionTheta, props.transitionThetaMilliDeg,
   props.transitionFrom, props.transitionTo,
+  props.transitionVariants?.join(','), props.transitionWeights?.join(','),
   frameW.value, frameH.value,
 ], () => scheduleRender())
 

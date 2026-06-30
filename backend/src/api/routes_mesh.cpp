@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <system_error>
 #include <cstring>
+#include <vector>
 
 namespace fsd {
 
@@ -33,6 +34,47 @@ compute::Variant parseVariant(const std::string& s) {
     compute::Variant v;
     if (compute::variant_from_name(s.c_str(), v)) return v;
     return compute::Variant::Mandelbrot;
+}
+
+std::string variantJsonToString(const Json& value, const std::string& fallback = "mandelbrot") {
+    if (value.is_string()) return value.get<std::string>();
+    if (value.is_number_integer()) return std::to_string(value.get<int>());
+    return fallback;
+}
+
+std::vector<compute::TransitionLeg> parseTransitionLegs(const Json& j) {
+    std::vector<compute::TransitionLeg> legs;
+    if (j.contains("transitionLegs") && j["transitionLegs"].is_array()) {
+        for (const Json& item : j["transitionLegs"]) {
+            std::string variant = "mandelbrot";
+            double weight = 1.0;
+            if (item.is_object()) {
+                variant = item.contains("variant")
+                    ? variantJsonToString(item["variant"])
+                    : std::string("mandelbrot");
+                weight = item.value("weight", 1.0);
+            } else {
+                variant = variantJsonToString(item);
+            }
+            legs.push_back({parseVariant(variant), weight});
+        }
+        return legs;
+    }
+
+    if (j.contains("transitionVariants") && j["transitionVariants"].is_array()) {
+        const Json& variants = j["transitionVariants"];
+        const Json* weights = (j.contains("transitionWeights") && j["transitionWeights"].is_array())
+            ? &j["transitionWeights"]
+            : nullptr;
+        for (size_t i = 0; i < variants.size(); ++i) {
+            const std::string variant = variantJsonToString(variants[i]);
+            const double weight = (weights && i < weights->size() && (*weights)[i].is_number())
+                ? (*weights)[i].get<double>()
+                : 1.0;
+            legs.push_back({parseVariant(variant), weight});
+        }
+    }
+    return legs;
 }
 
 compute::Metric parseMetric(const std::string& s) {
@@ -308,6 +350,7 @@ std::string transitionMeshRoute(const std::filesystem::path&, JobRunner& runner,
     }
     p.from_variant = parseVariant(j.value("transitionFrom", std::string("mandelbrot")));
     p.to_variant   = parseVariant(j.value("transitionTo",   std::string("burning_ship")));
+    p.multi_legs    = parseTransitionLegs(j);
     p.engine        = j.value("engine", std::string("auto"));
     p.scalar_type   = j.value("scalarType", std::string("fp32"));
     const double iso = j.value("iso",  0.5);
@@ -412,6 +455,7 @@ std::string transitionVoxelsRoute(const std::filesystem::path&, JobRunner& runne
     }
     p.from_variant = parseVariant(j.value("transitionFrom", std::string("mandelbrot")));
     p.to_variant   = parseVariant(j.value("transitionTo",   std::string("burning_ship")));
+    p.multi_legs    = parseTransitionLegs(j);
     p.engine        = j.value("engine", std::string("auto"));
     p.scalar_type   = j.value("scalarType", std::string("fp32"));
     const float iso = static_cast<float>(j.value("iso", 0.48));

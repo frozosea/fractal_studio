@@ -23,6 +23,13 @@
 
 namespace fsd_cuda {
 
+struct SliceMultiArgs {
+    int count = 0;
+    int variants[CUDA_MAX_TRANSITION_LEGS] = {0, 0, 0, 0};
+    double direction[CUDA_MAX_TRANSITION_LEGS] = {1.0, 0.0, 0.0, 0.0};
+    double influence[CUDA_MAX_TRANSITION_LEGS] = {1.0, 0.0, 0.0, 0.0};
+};
+
 // ── Variant fold helpers (shared with transition_volume.cu pattern) ──────────
 
 __device__ inline double real_projection_d(int v, double x2, double axis2) {
@@ -161,6 +168,153 @@ __global__ void transition_slice_escape_fp32(
     out_norm[idx] = static_cast<float>(esc_norm);
 }
 
+__global__ void transition_slice_multi_escape_fp64(
+    double center_re, double center_im, double scale,
+    int W, int H, int max_iter, double bail2,
+    SliceMultiArgs args,
+    bool julia, double jre, double jim,
+    uint32_t* __restrict__ out_iter, float* __restrict__ out_norm
+) {
+    const int px = blockIdx.x * blockDim.x + threadIdx.x;
+    const int py = blockIdx.y * blockDim.y + threadIdx.y;
+    if (px >= W || py >= H) return;
+
+    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
+    const double span_im = scale;
+    const double span_re = scale * aspect;
+    const double u = (center_re - span_re * 0.5) +
+                     (static_cast<double>(px) + 0.5) / W * span_re;
+    const double v = (center_im + span_im * 0.5) -
+                     (static_cast<double>(py) + 0.5) / H * span_im;
+
+    double axis[CUDA_MAX_TRANSITION_LEGS];
+    double axis2[CUDA_MAX_TRANSITION_LEGS];
+    double caxis[CUDA_MAX_TRANSITION_LEGS];
+    for (int k = 0; k < args.count; ++k) {
+        axis[k] = v * args.direction[k];
+        axis2[k] = axis[k] * axis[k];
+        caxis[k] = julia ? jim * args.direction[k] : axis[k];
+    }
+
+    const double cx = julia ? jre : u;
+    double x = u;
+    double x2 = x * x;
+    double esc_norm = 0.0;
+
+    int i = 0;
+    for (; i < max_iter; ++i) {
+        double real_sum = 0.0;
+        double influence_sum = 0.0;
+        double next_axis[CUDA_MAX_TRANSITION_LEGS];
+        for (int k = 0; k < args.count; ++k) {
+            const double influence = args.influence[k];
+            real_sum += influence * real_projection_d(args.variants[k], x2, axis2[k]);
+            influence_sum += influence;
+            next_axis[k] = influence * imag_projection_d(args.variants[k], x, axis[k]) + caxis[k];
+        }
+
+        const double nx = real_sum - (influence_sum - 1.0) * x2 + cx;
+        const bool finite_x = isfinite(nx);
+        const double nx2 = finite_x ? nx * nx : INFINITY;
+        bool finite_all = finite_x;
+        double n2 = finite_x ? nx2 : INFINITY;
+        for (int k = 0; k < args.count; ++k) {
+            if (!isfinite(next_axis[k])) {
+                finite_all = false;
+                n2 = INFINITY;
+                break;
+            }
+            n2 += next_axis[k] * next_axis[k];
+        }
+        if (!finite_all || n2 > bail2) { esc_norm = n2; break; }
+
+        x = nx;
+        x2 = nx2;
+        for (int k = 0; k < args.count; ++k) {
+            axis[k] = next_axis[k];
+            axis2[k] = axis[k] * axis[k];
+        }
+    }
+
+    const size_t idx = static_cast<size_t>(py) * W + px;
+    out_iter[idx] = static_cast<uint32_t>(i);
+    out_norm[idx] = static_cast<float>(esc_norm);
+}
+
+__global__ void transition_slice_multi_escape_fp32(
+    float center_re, float center_im, float scale,
+    int W, int H, int max_iter, float bail2,
+    SliceMultiArgs args,
+    bool julia, float jre, float jim,
+    uint32_t* __restrict__ out_iter, float* __restrict__ out_norm
+) {
+    const int px = blockIdx.x * blockDim.x + threadIdx.x;
+    const int py = blockIdx.y * blockDim.y + threadIdx.y;
+    if (px >= W || py >= H) return;
+
+    const float aspect  = static_cast<float>(W) / static_cast<float>(H);
+    const float span_im = scale;
+    const float span_re = scale * aspect;
+    const float u = (center_re - span_re * 0.5f) +
+                    (static_cast<float>(px) + 0.5f) / static_cast<float>(W) * span_re;
+    const float v = (center_im + span_im * 0.5f) -
+                    (static_cast<float>(py) + 0.5f) / static_cast<float>(H) * span_im;
+
+    float axis[CUDA_MAX_TRANSITION_LEGS];
+    float axis2[CUDA_MAX_TRANSITION_LEGS];
+    float caxis[CUDA_MAX_TRANSITION_LEGS];
+    for (int k = 0; k < args.count; ++k) {
+        const float direction = static_cast<float>(args.direction[k]);
+        axis[k] = v * direction;
+        axis2[k] = axis[k] * axis[k];
+        caxis[k] = julia ? jim * direction : axis[k];
+    }
+
+    const float cx = julia ? jre : u;
+    float x = u;
+    float x2 = x * x;
+    float esc_norm = 0.0f;
+
+    int i = 0;
+    for (; i < max_iter; ++i) {
+        float real_sum = 0.0f;
+        float influence_sum = 0.0f;
+        float next_axis[CUDA_MAX_TRANSITION_LEGS];
+        for (int k = 0; k < args.count; ++k) {
+            const float influence = static_cast<float>(args.influence[k]);
+            real_sum += influence * real_projection_f(args.variants[k], x2, axis2[k]);
+            influence_sum += influence;
+            next_axis[k] = influence * imag_projection_f(args.variants[k], x, axis[k]) + caxis[k];
+        }
+
+        const float nx = real_sum - (influence_sum - 1.0f) * x2 + cx;
+        const bool finite_x = isfinite(nx);
+        const float nx2 = finite_x ? nx * nx : INFINITY;
+        bool finite_all = finite_x;
+        float n2 = finite_x ? nx2 : INFINITY;
+        for (int k = 0; k < args.count; ++k) {
+            if (!isfinite(next_axis[k])) {
+                finite_all = false;
+                n2 = INFINITY;
+                break;
+            }
+            n2 += next_axis[k] * next_axis[k];
+        }
+        if (!finite_all || n2 > bail2) { esc_norm = n2; break; }
+
+        x = nx;
+        x2 = nx2;
+        for (int k = 0; k < args.count; ++k) {
+            axis[k] = next_axis[k];
+            axis2[k] = axis[k] * axis[k];
+        }
+    }
+
+    const size_t idx = static_cast<size_t>(py) * W + px;
+    out_iter[idx] = static_cast<uint32_t>(i);
+    out_norm[idx] = esc_norm;
+}
+
 // ── Non-escape metric kernels (MinAbs/MaxAbs/Envelope) ──────────────────────
 
 __global__ void transition_slice_metric_fp64(
@@ -217,6 +371,88 @@ __global__ void transition_slice_metric_fp64(
     out_field[idx] = static_cast<float>(val);
 }
 
+__global__ void transition_slice_multi_metric_fp64(
+    double center_re, double center_im, double scale,
+    int W, int H, int max_iter, double bail2,
+    SliceMultiArgs args,
+    int metric_id,
+    bool julia, double jre, double jim,
+    float* __restrict__ out_field
+) {
+    const int px = blockIdx.x * blockDim.x + threadIdx.x;
+    const int py = blockIdx.y * blockDim.y + threadIdx.y;
+    if (px >= W || py >= H) return;
+
+    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
+    const double span_im = scale;
+    const double span_re = scale * aspect;
+    const double u = (center_re - span_re * 0.5) +
+                     (static_cast<double>(px) + 0.5) / W * span_re;
+    const double v = (center_im + span_im * 0.5) -
+                     (static_cast<double>(py) + 0.5) / H * span_im;
+
+    double axis[CUDA_MAX_TRANSITION_LEGS];
+    double axis2[CUDA_MAX_TRANSITION_LEGS];
+    double caxis[CUDA_MAX_TRANSITION_LEGS];
+    double init_n2 = u * u;
+    for (int k = 0; k < args.count; ++k) {
+        axis[k] = v * args.direction[k];
+        axis2[k] = axis[k] * axis[k];
+        caxis[k] = julia ? jim * args.direction[k] : axis[k];
+        init_n2 += axis2[k];
+    }
+
+    const double cx = julia ? jre : u;
+    double x = u;
+    double x2 = x * x;
+    double min_abs_sq = init_n2;
+    double max_abs_sq = init_n2;
+
+    for (int i = 0; i < max_iter; ++i) {
+        double real_sum = 0.0;
+        double influence_sum = 0.0;
+        double next_axis[CUDA_MAX_TRANSITION_LEGS];
+        for (int k = 0; k < args.count; ++k) {
+            const double influence = args.influence[k];
+            real_sum += influence * real_projection_d(args.variants[k], x2, axis2[k]);
+            influence_sum += influence;
+            next_axis[k] = influence * imag_projection_d(args.variants[k], x, axis[k]) + caxis[k];
+        }
+
+        const double nx = real_sum - (influence_sum - 1.0) * x2 + cx;
+        const bool finite_x = isfinite(nx);
+        const double nx2 = finite_x ? nx * nx : INFINITY;
+        bool finite_all = finite_x;
+        double n2 = finite_x ? nx2 : INFINITY;
+        for (int k = 0; k < args.count; ++k) {
+            if (!isfinite(next_axis[k])) {
+                finite_all = false;
+                n2 = INFINITY;
+                break;
+            }
+            n2 += next_axis[k] * next_axis[k];
+        }
+        if (n2 < min_abs_sq) min_abs_sq = n2;
+        if (n2 > max_abs_sq) max_abs_sq = n2;
+        if (!finite_all || n2 > bail2) break;
+
+        x = nx;
+        x2 = nx2;
+        for (int k = 0; k < args.count; ++k) {
+            axis[k] = next_axis[k];
+            axis2[k] = axis[k] * axis[k];
+        }
+    }
+
+    double val = 0.0;
+    if      (metric_id == 1) val = sqrt(min_abs_sq);
+    else if (metric_id == 2) val = sqrt(max_abs_sq);
+    else if (metric_id == 3) val = 0.5 * (sqrt(min_abs_sq) + sqrt(max_abs_sq));
+
+    const size_t idx = static_cast<size_t>(py) * W + px;
+    out_field[idx] = static_cast<float>(val);
+}
+
 // ── Device buffer ───────────────────────────────────────────────────────────
 
 struct TransitionFieldDevBuf {
@@ -240,6 +476,17 @@ struct TransitionFieldDevBuf {
 
 static std::mutex g_transition_mutex;
 static TransitionFieldDevBuf g_transition_devbuf;
+
+SliceMultiArgs make_slice_multi_args(const CudaTransitionSliceParams& p) {
+    SliceMultiArgs args;
+    args.count = std::max(0, std::min(CUDA_MAX_TRANSITION_LEGS, p.multi_count));
+    for (int i = 0; i < CUDA_MAX_TRANSITION_LEGS; ++i) {
+        args.variants[i] = p.multi_variants[i];
+        args.direction[i] = p.multi_direction[i];
+        args.influence[i] = p.multi_influence[i];
+    }
+    return args;
+}
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -270,7 +517,25 @@ CudaTransitionSliceStats cuda_render_transition_slice_escape(
     CUDA_CHECK(cudaEventCreate(&ev1));
     CUDA_CHECK(cudaEventRecord(ev0));
 
-    if (use_fp32) {
+    if (p.multi_count > 0) {
+        const SliceMultiArgs args = make_slice_multi_args(p);
+        if (use_fp32) {
+            transition_slice_multi_escape_fp32<<<grid, block>>>(
+                static_cast<float>(p.center_re), static_cast<float>(p.center_im),
+                static_cast<float>(p.scale),
+                p.width, p.height, p.iterations, static_cast<float>(p.bailout_sq),
+                args,
+                p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im),
+                g_transition_devbuf.d_iter, g_transition_devbuf.d_norm);
+        } else {
+            transition_slice_multi_escape_fp64<<<grid, block>>>(
+                p.center_re, p.center_im, p.scale,
+                p.width, p.height, p.iterations, p.bailout_sq,
+                args,
+                p.julia, p.julia_re, p.julia_im,
+                g_transition_devbuf.d_iter, g_transition_devbuf.d_norm);
+        }
+    } else if (use_fp32) {
         transition_slice_escape_fp32<<<grid, block>>>(
             static_cast<float>(p.center_re), static_cast<float>(p.center_im),
             static_cast<float>(p.scale),
@@ -304,6 +569,7 @@ CudaTransitionSliceStats cuda_render_transition_slice_escape(
     CudaTransitionSliceStats s;
     s.elapsed_ms  = static_cast<double>(ms);
     s.scalar_used = use_fp32 ? "fp32" : "fp64";
+    s.engine_used = p.multi_count > 0 ? "cuda_multi" : "cuda";
     return s;
 }
 
@@ -328,13 +594,23 @@ CudaTransitionSliceStats cuda_render_transition_slice_metric(
     CUDA_CHECK(cudaEventRecord(ev0));
 
     // Reuse d_norm buffer for metric field (same size: float per pixel)
-    transition_slice_metric_fp64<<<grid, block>>>(
-        p.center_re, p.center_im, p.scale,
-        p.width, p.height, p.iterations, p.bailout_sq,
-        p.cos_theta, p.sin_theta,
-        p.from_variant, p.to_variant, p.metric_id,
-        p.julia, p.julia_re, p.julia_im,
-        g_transition_devbuf.d_norm);
+    if (p.multi_count > 0) {
+        const SliceMultiArgs args = make_slice_multi_args(p);
+        transition_slice_multi_metric_fp64<<<grid, block>>>(
+            p.center_re, p.center_im, p.scale,
+            p.width, p.height, p.iterations, p.bailout_sq,
+            args, p.metric_id,
+            p.julia, p.julia_re, p.julia_im,
+            g_transition_devbuf.d_norm);
+    } else {
+        transition_slice_metric_fp64<<<grid, block>>>(
+            p.center_re, p.center_im, p.scale,
+            p.width, p.height, p.iterations, p.bailout_sq,
+            p.cos_theta, p.sin_theta,
+            p.from_variant, p.to_variant, p.metric_id,
+            p.julia, p.julia_re, p.julia_im,
+            g_transition_devbuf.d_norm);
+    }
 
     CUDA_CHECK(cudaEventRecord(ev1));
     CUDA_CHECK(cudaEventSynchronize(ev1));
@@ -358,6 +634,7 @@ CudaTransitionSliceStats cuda_render_transition_slice_metric(
     CudaTransitionSliceStats s;
     s.elapsed_ms  = static_cast<double>(ms);
     s.scalar_used = "fp64";
+    s.engine_used = p.multi_count > 0 ? "cuda_multi" : "cuda";
     return s;
 }
 

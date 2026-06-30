@@ -32,6 +32,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace fsd::compute {
 
@@ -44,6 +45,10 @@ struct TransitionParams {
 
     Variant from_variant = Variant::Mandelbrot;
     Variant to_variant   = Variant::Boat;
+
+    // Optional N-way transition. Empty means use the legacy from/to bridge.
+    // weights are slice-direction components; non-positive weights are ignored.
+    std::vector<TransitionLeg> multi_legs;
 };
 
 MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo);

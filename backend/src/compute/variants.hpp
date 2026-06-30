@@ -51,6 +51,11 @@ enum class Variant {
     Custom      = 100, // user-compiled formula via dlopen; step fn in MapParams::custom_step_fn
 };
 
+struct TransitionLeg {
+    Variant variant = Variant::Mandelbrot;
+    double weight = 1.0;
+};
+
 // ─── complex trig helpers (double only) ──────────────────────────────────────
 // All identities use real-valued cmath functions to avoid <complex> dependency.
 

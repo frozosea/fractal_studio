@@ -9,6 +9,8 @@
 
 namespace fsd_cuda {
 
+constexpr int CUDA_MAX_TRANSITION_LEGS = 4;
+
 struct CudaTransitionSliceParams {
     double center_re = -0.75;
     double center_im =  0.0;
@@ -21,6 +23,10 @@ struct CudaTransitionSliceParams {
     double sin_theta = 0.0;
     int    from_variant = 0;
     int    to_variant   = 2;
+    int    multi_count  = 0;
+    int    multi_variants[CUDA_MAX_TRANSITION_LEGS] = {0, 0, 0, 0};
+    double multi_direction[CUDA_MAX_TRANSITION_LEGS] = {1.0, 0.0, 0.0, 0.0};
+    double multi_influence[CUDA_MAX_TRANSITION_LEGS] = {1.0, 0.0, 0.0, 0.0};
     int    metric_id    = 0;   // 0=Escape, 1=MinAbs, 2=MaxAbs, 3=Envelope
     bool   julia     = false;
     double julia_re  = 0.0;

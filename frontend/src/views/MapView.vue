@@ -2,12 +2,13 @@
 import { inject, onMounted, ref, watch, computed } from 'vue'
 import MapCanvas from '../components/MapCanvas.vue'
 import SpecialPointList from '../components/SpecialPointList.vue'
+import TransitionLegEditor from '../components/TransitionLegEditor.vue'
 import {
   api, VARIANTS, METRICS, COLORMAPS, VARIANT_LABELS,
   type Metric, type ColorMap, type SpecialPoint,
   type SpecialPointEnumResult,
   type VideoExportResponse, type VideoPreviewResponse, type RunProgress, type RunStatusResponse, type CustomVariant,
-  type LnMapColorMode,
+  type LnMapColorMode, type TransitionLegInput,
 } from '../api'
 import type { StatusState } from '../types'
 import { t, lang } from '../i18n'
@@ -416,6 +417,12 @@ const mapViewportW = ref(1200)
 const mapViewportH = ref(800)
 const transitionFrom = ref<string>('mandelbrot')
 const transitionTo   = ref<string>('burning_ship')
+const transitionMode = ref<'pair' | 'multi'>('pair')
+const transitionLegs = ref<TransitionLegInput[]>([
+  { variant: 'mandelbrot', weight: 1 },
+  { variant: 'burning_ship', weight: 1 },
+  { variant: 'tricorn', weight: 0.65 },
+])
 const AXIS_TRANSITION_VARIANTS = VARIANTS.slice(0, 10)
 const THETA_SCALE = 1000
 const THETA_HALF_TURN = 180 * THETA_SCALE
@@ -449,6 +456,25 @@ const thetaDeg = computed({
 })
 const transitionThetaMilliDeg = computed(() => normalizeThetaMilliDeg(thetaMilliDeg.value))
 const activeTransitionThetaMilliDeg = computed(() => transitionOn.value ? transitionThetaMilliDeg.value : null)
+const multiTransitionActive = computed(() => transitionOn.value && transitionMode.value === 'multi')
+const activeTransitionLegs = computed(() => {
+  const cleaned = transitionLegs.value
+    .map(leg => ({
+      variant: leg.variant,
+      weight: Number.isFinite(leg.weight) ? Math.max(0, Math.min(1, leg.weight)) : 0,
+    }))
+    .filter(leg => leg.weight > 0)
+    .slice(0, 4)
+  if (cleaned.length) return cleaned
+  return [{ variant: transitionLegs.value[0]?.variant ?? 'mandelbrot', weight: 1 }]
+})
+const transitionVariantIds = computed(() => activeTransitionLegs.value.map(leg => String(leg.variant)))
+const transitionWeights = computed(() => activeTransitionLegs.value.map(leg => leg.weight))
+const transitionSummary = computed(() => {
+  if (!transitionOn.value) return ''
+  if (!multiTransitionActive.value) return `${transitionFrom.value} -> ${transitionTo.value}`
+  return activeTransitionLegs.value.map(leg => `${String(leg.variant)}:${leg.weight.toFixed(2)}`).join(' + ')
+})
 
 const SPECIAL_POINT_VARIANT_BY_ID: Record<string, string> = {
   mandelbrot: 'Mandelbrot',
@@ -841,6 +867,8 @@ async function exportPng() {
       transitionThetaMilliDeg: transitionOn.value ? transitionThetaMilliDeg.value : undefined,
       transitionFrom:  transitionOn.value ? transitionFrom.value : undefined,
       transitionTo:    transitionOn.value ? transitionTo.value : undefined,
+      transitionVariants: multiTransitionActive.value ? transitionVariantIds.value : undefined,
+      transitionWeights:  multiTransitionActive.value ? transitionWeights.value : undefined,
       rotationDeg:     rotationDeg.value || undefined,
     }) as any
     if (localExportMode.value && resp.localPath) {
@@ -1434,21 +1462,25 @@ async function pollVideoExport(initial: VideoExportResponse) {
           <input type="checkbox" v-model="transitionOn" style="width:auto;margin-right:6px" />
           {{ t('transition') }}
         </label>
-        <div v-if="transitionOn" class="theta-row">
+        <div v-if="transitionOn" class="transition-mode-row">
+          <button :class="{ active: transitionMode === 'pair' }" @click="transitionMode = 'pair'">Pair</button>
+          <button :class="{ active: transitionMode === 'multi' }" @click="transitionMode = 'multi'">Multi</button>
+        </div>
+        <div v-if="transitionOn && transitionMode === 'pair'" class="theta-row">
           <button class="theta-loop-btn" @click="nudgeThetaDeg(-15)">−</button>
           <input type="range" min="-180" max="180" step="0.1" v-model.number="thetaDeg" />
           <button class="theta-loop-btn" @click="nudgeThetaDeg(15)">+</button>
           <input class="theta-input num" type="number" min="-180" max="180" step="0.1" :value="thetaDeg.toFixed(1)" @change="setThetaDeg(Number(($event.target as HTMLInputElement).value))" />
           <span class="num">°</span>
         </div>
-        <div v-if="transitionOn" class="theta-row theta-snaps">
+        <div v-if="transitionOn && transitionMode === 'pair'" class="theta-row theta-snaps">
           <button @click="setThetaDeg(-180)">−180</button>
           <button @click="setThetaDeg(-90)">−90</button>
           <button @click="setThetaDeg(0)">0</button>
           <button @click="setThetaDeg(90)">90</button>
           <button @click="setThetaDeg(180)">180</button>
         </div>
-        <div v-if="transitionOn" class="theta-row">
+        <div v-if="transitionOn && transitionMode === 'pair'" class="theta-row">
           <select v-model="transitionFrom">
             <option v-for="v in AXIS_TRANSITION_VARIANTS" :key="'from-' + v" :value="v">{{ VARIANT_LABELS[v][lang] }}</option>
           </select>
@@ -1457,6 +1489,11 @@ async function pollVideoExport(initial: VideoExportResponse) {
             <option v-for="v in AXIS_TRANSITION_VARIANTS" :key="'to-' + v" :value="v">{{ VARIANT_LABELS[v][lang] }}</option>
           </select>
         </div>
+        <TransitionLegEditor
+          v-if="transitionOn && transitionMode === 'multi'"
+          v-model="transitionLegs"
+          :min="1"
+          :max="4" />
       </div>
 
       <div class="group">
@@ -1521,7 +1558,12 @@ async function pollVideoExport(initial: VideoExportResponse) {
         ⌂ {{ juliaOn ? t('reset_julia') : t('reset') }}
       </button>
       <button @click="exportPng" :disabled="pngExportBusy">{{ pngExportBusy ? t('loading') : t('export_png') }}</button>
-      <button @click="openExportModal">{{ t('export_video') }}</button>
+      <button
+        @click="openExportModal"
+        :disabled="multiTransitionActive"
+        :title="multiTransitionActive ? (lang === 'en' ? 'Multi transition video paths are not enabled yet.' : '多变体 transition 暂未启用视频路径。') : t('export_video')">
+        {{ t('export_video') }}
+      </button>
       <progress v-if="pngExportBusy" class="png-export-progress"></progress>
       <span v-if="pngExportStatus" class="export-local-status mono">{{ pngExportStatus }}</span>
     </div>
@@ -1587,6 +1629,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
           :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
           :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
           :transitionFrom="transitionFrom" :transitionTo="transitionTo"
+          :transitionVariants="multiTransitionActive ? transitionVariantIds : undefined"
+          :transitionWeights="multiTransitionActive ? transitionWeights : undefined"
           :engine="engineMode" :scalarType="scalarMode"
           :rotationDeg="rotationDeg"
           :showExportFrame="showExportFrame"
@@ -1645,6 +1689,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
                 :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
                 :transitionFrom="transitionFrom" :transitionTo="transitionTo"
+                :transitionVariants="multiTransitionActive ? transitionVariantIds : undefined"
+                :transitionWeights="multiTransitionActive ? transitionWeights : undefined"
                 :engine="engineMode" :scalarType="scalarMode"
                 :rotationDeg="rotationDeg"
                 :special-points="renderedSpecialPoints"
@@ -1679,6 +1725,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
                 :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
                 :transitionFrom="transitionFrom" :transitionTo="transitionTo"
+                :transitionVariants="multiTransitionActive ? transitionVariantIds : undefined"
+                :transitionWeights="multiTransitionActive ? transitionWeights : undefined"
                 :julia="true" :juliaRe="juliaRe" :juliaIm="juliaIm"
                 :engine="engineMode" :scalarType="scalarMode"
                 :rotationDeg="rotationDeg"
@@ -1704,7 +1752,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
           <div class="modal-body">
             <div v-if="transitionOn" class="mrow">
               <label>{{ lang === 'en' ? 'Transition' : '变换' }}</label>
-              <span class="mono">{{ transitionFrom }} → {{ transitionTo }}</span>
+              <span class="mono">{{ transitionSummary }}</span>
             </div>
             <div v-if="transitionOn" class="mrow">
               <label>{{ lang === 'en' ? 'θ start (°)' : 'θ 起始 (°)' }}</label>
@@ -1938,7 +1986,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
   min-width: 100px;
 }
 
-.group.transition-group { min-width: 290px; }
+.group.transition-group { min-width: 340px; }
 .group.export-preset-group { min-width: 190px; }
 .group.viewport-edit-group {
   min-width: 392px;
@@ -1983,6 +2031,24 @@ async function pollVideoExport(initial: VideoExportResponse) {
   gap: 8px;
 }
 .theta-row input[type="range"] { flex: 1; }
+
+.transition-mode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 5px;
+}
+
+.transition-mode-row button {
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+.transition-mode-row button.active {
+  border-color: var(--accent-edge);
+  color: var(--accent);
+  background: var(--accent-weak);
+}
 
 .theta-loop-btn {
   width: 26px;
@@ -2592,8 +2658,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
   }
 
   .group.transition-group {
-    flex-basis: min(330px, calc(100vw - 24px));
-    min-width: min(330px, calc(100vw - 24px));
+    flex-basis: min(360px, calc(100vw - 24px));
+    min-width: min(360px, calc(100vw - 24px));
   }
 
   .group.export-preset-group {
