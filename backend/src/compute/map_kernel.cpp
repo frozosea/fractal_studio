@@ -351,7 +351,7 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
             for (int x = x0; x < x1; x++) {
                 double re_c, im_c;
                 if (has_rot) {
-                    const double dx = (static_cast<double>(x) + 0.5 - half_w) * pixel_step * aspect;
+                    const double dx = (static_cast<double>(x) + 0.5 - half_w) * pixel_step;
                     re_c = p.center_re + dx * cos_t - dy_base * sin_t;
                     im_c = p.center_im + dx * sin_t + dy_base * cos_t;
                 } else {
@@ -422,7 +422,6 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
     const S s_cos_t = scalar_from_double<S>(has_rot ? std::cos(rot_rad) : 1.0);
     const S s_sin_t = scalar_from_double<S>(has_rot ? std::sin(rot_rad) : 0.0);
     const S s_pixel_step = scalar_from_double<S>(p.scale / static_cast<double>(H));
-    const S s_aspect     = scalar_from_double<S>(aspect);
     const S s_half_w     = scalar_from_double<S>(static_cast<double>(W) * 0.5);
     const S s_half_h     = scalar_from_double<S>(static_cast<double>(H) * 0.5);
 
@@ -466,7 +465,7 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
                 for (int x = x0; x < x1; x++) {
                     S re, im;
                     if (has_rot) {
-                        const S dx = (scalar_from_double<S>(static_cast<double>(x) + 0.5) - s_half_w) * s_pixel_step * s_aspect;
+                        const S dx = (scalar_from_double<S>(static_cast<double>(x) + 0.5) - s_half_w) * s_pixel_step;
                         re = s_center_re + dx * s_cos_t - dy_base * s_sin_t;
                         im = s_center_im + dx * s_sin_t + dy_base * s_cos_t;
                     } else {

@@ -8,7 +8,7 @@ import {
   type Metric, type ColorMap, type SpecialPoint,
   type SpecialPointEnumResult,
   type VideoExportResponse, type VideoPreviewResponse, type RunProgress, type RunStatusResponse, type CustomVariant,
-  type LnMapColorMode, type TransitionLegInput,
+  type LnMapColorMode, type TransitionLegInput, type TransitionVideoMode,
 } from '../api'
 import type { StatusState } from '../types'
 import { t, lang } from '../i18n'
@@ -918,6 +918,7 @@ let lnPreviewRerun = false
 const exportJobId     = ref('')
 const exportProgress  = ref<RunProgress>({})
 const exportDepthDirty = ref(false)
+const transitionVideoMode = ref<TransitionVideoMode>('rotation')
 const transitionThetaStartDeg = ref(0)
 const transitionThetaEndDeg   = ref(180)
 const transitionDurationSec   = ref(6)
@@ -962,9 +963,13 @@ const exportProgressDetail = computed(() => {
   if (p.stage === 'final_frame') return `final frame ${p.current || 0}/${p.total || 1}${etaSuffix(p.estimatedRemainingMs)}`
   if (p.stage === 'transition_preview') return `transition preview ${p.current || 0}/2`
   if (p.stage === 'transition_render') {
+    if (p.details?.animationMode === 'zoom') {
+      const depth = typeof p.details?.depthOctave === 'number' ? p.details.depthOctave : (p.depthOctave || 0)
+      return `transition zoom ${p.current || 0}/${p.total || 0} frames · ${depth.toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)} oct${etaSuffix(p.estimatedRemainingMs)}`
+    }
     const theta = p.details?.thetaDeg
     const thetaStr = typeof theta === 'number' ? ` · θ=${theta.toFixed(1)}°` : ''
-    return `transition render ${p.current || 0}/${p.total || 0} frames${thetaStr}${etaSuffix(p.estimatedRemainingMs)}`
+    return `transition rotation ${p.current || 0}/${p.total || 0} frames${thetaStr}${etaSuffix(p.estimatedRemainingMs)}`
   }
   return p.stage
 })
@@ -983,7 +988,10 @@ const transitionEstimatedFrames = computed(() =>
 )
 
 function transitionVideoRequestBase() {
+  const fixedThetaDeg = transitionThetaMilliDeg.value / THETA_SCALE
+  const zoomMode = transitionVideoMode.value === 'zoom'
   return {
+    animationMode: transitionVideoMode.value,
     centerRe:     centerRe.value,
     centerIm:     centerIm.value,
     centerReStr:  bdToString(centerRePrecise.value),
@@ -996,9 +1004,14 @@ function transitionVideoRequestBase() {
     colorMap:     colorMap.value,
     iterations:   Math.max(iterations.value, 2048),
     scale:        scale.value,
-    thetaStartDeg: transitionThetaStartDeg.value,
-    thetaEndDeg:   transitionThetaEndDeg.value,
-    durationSec:   transitionDurationSec.value,
+    thetaStartDeg: zoomMode ? fixedThetaDeg : transitionThetaStartDeg.value,
+    thetaEndDeg:   zoomMode ? fixedThetaDeg : transitionThetaEndDeg.value,
+    thetaDeg:      fixedThetaDeg,
+    depthOctaves:  zoomMode ? exportDepth.value : undefined,
+    secondsPerOctave: zoomMode ? exportSecondsPerOctave.value : undefined,
+    targetScale:   zoomMode && !exportDepthDirty.value && exportDepth.value > 0.05 ? scale.value : undefined,
+    rotationDeg:   rotationDeg.value || undefined,
+    durationSec:   zoomMode ? exportEstimatedDuration.value : transitionDurationSec.value,
     fps:          exportFps.value,
     metric:       metric.value === 'escape' ? 'escape' :
                   metric.value === 'min_abs' ? 'min_abs' :
@@ -1116,6 +1129,7 @@ function videoRequestBase() {
     fps:          exportFps.value,
     secondsPerOctave: exportSecondsPerOctave.value,
     targetScale:  !exportDepthDirty.value && exportDepth.value > 0.05 ? scale.value : undefined,
+    rotationDeg:  rotationDeg.value || undefined,
     qualityPreset: exportQualityPreset.value,
     lnMapMode:    exportLnMapMode.value,
     lnMapScalar:  exportLnMapScalar.value,
@@ -1147,7 +1161,9 @@ async function runPreview() {
         ...previewSizeForExport(),
       })
       exportPreviewResult.value = resp as any
-      exportPreviewStatus.value = `${resp.width}×${resp.height} · θ ${resp.thetaStartDeg}°→${resp.thetaEndDeg}° · ${resp.generatedMs.toFixed(0)} ms`
+      exportPreviewStatus.value = transitionVideoMode.value === 'zoom'
+        ? `${resp.width}×${resp.height} · ${lang.value === 'en' ? 'depth' : '深度'} ${(resp.depthOctaves ?? exportDepth.value).toFixed(2)} · ${resp.generatedMs.toFixed(0)} ms`
+        : `${resp.width}×${resp.height} · θ ${resp.thetaStartDeg}°→${resp.thetaEndDeg}° · ${resp.generatedMs.toFixed(0)} ms`
     } else {
       const resp = await api.videoPreview({
         ...videoRequestBase(),
@@ -1219,7 +1235,9 @@ async function runExport() {
     if (transitionOn.value) {
       const resp = await api.transitionVideoExport(transitionVideoRequestBase())
       exportJobId.value = resp.runId
-      exportStatus.value = `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s · θ ${resp.thetaStartDeg}°→${resp.thetaEndDeg}°`
+      exportStatus.value = transitionVideoMode.value === 'zoom'
+        ? `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s · ${lang.value === 'en' ? 'zoom depth' : 'zoom 深度'} ${(resp.depthOctaves ?? exportDepth.value).toFixed(2)}`
+        : `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s · θ ${resp.thetaStartDeg}°→${resp.thetaEndDeg}°`
       await pollVideoExport(resp as any)
     } else {
       const req: Record<string, any> = { ...videoRequestBase() }
@@ -1755,18 +1773,29 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <span class="mono">{{ transitionSummary }}</span>
             </div>
             <div v-if="transitionOn" class="mrow">
+              <label>{{ lang === 'en' ? 'Video type' : '视频类型' }}</label>
+              <div class="transition-mode-row export-mode-row">
+                <button :class="{ active: transitionVideoMode === 'rotation' }" @click="transitionVideoMode = 'rotation'">Rotation</button>
+                <button :class="{ active: transitionVideoMode === 'zoom' }" @click="transitionVideoMode = 'zoom'">Zoom</button>
+              </div>
+            </div>
+            <div v-if="transitionOn && transitionVideoMode === 'rotation'" class="mrow">
               <label>{{ lang === 'en' ? 'θ start (°)' : 'θ 起始 (°)' }}</label>
               <input type="number" v-model.number="transitionThetaStartDeg" min="-180" max="180" step="1" />
             </div>
-            <div v-if="transitionOn" class="mrow">
+            <div v-if="transitionOn && transitionVideoMode === 'rotation'" class="mrow">
               <label>{{ lang === 'en' ? 'θ end (°)' : 'θ 终止 (°)' }}</label>
               <input type="number" v-model.number="transitionThetaEndDeg" min="-180" max="180" step="1" />
             </div>
-            <div v-if="transitionOn" class="mrow">
+            <div v-if="transitionOn && transitionVideoMode === 'zoom'" class="mrow">
+              <label>{{ lang === 'en' ? 'Fixed θ (°)' : '固定 θ (°)' }}</label>
+              <input type="number" v-model.number="thetaDeg" min="-180" max="180" step="1" />
+            </div>
+            <div v-if="transitionOn && transitionVideoMode === 'rotation'" class="mrow">
               <label>{{ lang === 'en' ? 'Duration (s)' : '时长 (s)' }}</label>
               <input type="number" v-model.number="transitionDurationSec" min="0.5" max="3600" step="0.5" />
             </div>
-            <div v-if="!transitionOn" class="mrow">
+            <div v-if="!transitionOn || transitionVideoMode === 'zoom'" class="mrow">
               <label>{{ t('video_depth') }}</label>
               <input type="number" v-model.number="exportDepth" min="0.05" max="120" step="0.05" @input="onExportDepthInput" />
             </div>
@@ -1774,13 +1803,17 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <label>{{ t('video_fps') }}</label>
               <input type="number" v-model.number="exportFps" min="1" max="120" step="1" />
             </div>
-            <div v-if="!transitionOn" class="mrow">
+            <div v-if="!transitionOn || transitionVideoMode === 'zoom'" class="mrow">
               <label>{{ t('video_seconds_per_octave') }}</label>
               <input type="number" v-model.number="exportSecondsPerOctave" min="0.05" max="60" step="0.05" />
             </div>
-            <div v-if="transitionOn" class="mrow estimate">
+            <div v-if="transitionOn && transitionVideoMode === 'rotation'" class="mrow estimate">
               <label>{{ t('video_estimate') }}</label>
               <span class="mono">{{ transitionDurationSec.toFixed(1) }}s · {{ transitionEstimatedFrames }} frames</span>
+            </div>
+            <div v-else-if="transitionOn && transitionVideoMode === 'zoom'" class="mrow estimate">
+              <label>{{ t('video_estimate') }}</label>
+              <span class="mono">{{ exportEstimatedDuration.toFixed(2) }}s · {{ exportEstimatedFrames }} frames</span>
             </div>
             <div v-if="!transitionOn" class="mrow estimate">
               <label>{{ t('video_estimate') }}</label>
@@ -2048,6 +2081,11 @@ async function pollVideoExport(initial: VideoExportResponse) {
   border-color: var(--accent-edge);
   color: var(--accent);
   background: var(--accent-weak);
+}
+
+.export-mode-row {
+  margin-bottom: 0;
+  min-width: 180px;
 }
 
 .theta-loop-btn {

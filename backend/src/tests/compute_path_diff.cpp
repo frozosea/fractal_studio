@@ -143,6 +143,18 @@ std::vector<RenderScene> quick_scenes() {
 
     {
         MapParams p = base_params();
+        p.center_re = -0.72;
+        p.center_im = 0.08;
+        p.scale = 2.35;
+        p.rotation_deg = 37.0;
+        p.variant = Variant::Mandelbrot;
+        p.metric = Metric::Escape;
+        p.colormap = Colormap::Mod17;
+        scenes.push_back({"mandelbrot_escape_rotated", p});
+    }
+
+    {
+        MapParams p = base_params();
         p.center_re = -0.3;
         p.center_im = 0.0;
         p.scale = 3.0;
@@ -516,6 +528,7 @@ std::vector<TransitionScene> transition_smoke_scenes() {
     {
         TransitionParams p = base_transition_params();
         p.theta_milli_deg = 45 * 1000;
+        p.base.rotation_deg = 31.0;
         p.from_variant = Variant::Mandelbrot;
         p.to_variant = Variant::Boat;
         p.base.metric = Metric::Escape;
@@ -916,6 +929,83 @@ void compare_field_engine_pair(
     if (!ok) ++runner.failed;
 }
 
+void compare_deep_perturbation_to_fp128(Runner& runner) {
+#if defined(FSD_HAS_FLOAT128)
+    RenderScene scene;
+    scene.name = "deep_mandelbrot_perturbation";
+    scene.params = base_params();
+    scene.params.width = 48;
+    scene.params.height = 36;
+    scene.params.iterations = 4096;
+    scene.params.center_re_str = "-1.747032286321746345";
+    scene.params.center_im_str = "0.008106888321491234";
+    scene.params.center_re = std::stod(scene.params.center_re_str);
+    scene.params.center_im = std::stod(scene.params.center_im_str);
+    scene.params.scale = 1.829149541201e-15;
+    scene.params.variant = Variant::Mandelbrot;
+    scene.params.metric = Metric::Escape;
+    scene.params.colormap = Colormap::Spectral1530;
+
+    FieldRendered perturb;
+    FieldRendered reference;
+    try {
+        perturb = render_field_scene(scene, "auto", "openmp");
+        reference = render_field_scene(scene, "fp128", "openmp");
+    } catch (const std::exception& ex) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << scene.name << " threw: " << ex.what() << "\n";
+        return;
+    }
+    remember_stats(runner, perturb.stats);
+    remember_stats(runner, reference.stats);
+
+    if (perturb.stats.scalar_used != "perturbation_fp64" ||
+        reference.stats.engine_used != "openmp" ||
+        !scalar_matches("fp128", reference.stats.scalar_used)) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << scene.name
+                  << " actual=" << perturb.stats.engine_used << "/" << perturb.stats.scalar_used
+                  << " reference=" << reference.stats.engine_used << "/" << reference.stats.scalar_used
+                  << "\n";
+        return;
+    }
+
+    const auto& a = perturb.field.iter_u32;
+    const auto& b = reference.field.iter_u32;
+    if (a.size() != b.size() || a.empty()) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << scene.name << " field size mismatch\n";
+        return;
+    }
+
+    int max_delta = 0;
+    int bad = 0;
+    long long sum_delta = 0;
+    constexpr int allowed_iter_delta = 2;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const int delta = std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i]));
+        max_delta = std::max(max_delta, delta);
+        sum_delta += delta;
+        if (delta > allowed_iter_delta) ++bad;
+    }
+    const double mean = static_cast<double>(sum_delta) / static_cast<double>(a.size());
+    const double bad_ratio = static_cast<double>(bad) / static_cast<double>(a.size());
+    const bool ok = mean <= 1.00 && bad_ratio <= 0.02;
+    ++runner.compared;
+    std::cout << (ok ? "[PASS] " : "[FAIL] ") << scene.name
+              << " perturbation vs fp128"
+              << " max_iter_delta=" << max_delta
+              << " mean=" << std::fixed << std::setprecision(4) << mean
+              << " bad=" << std::setprecision(4) << bad_ratio
+              << " elapsed_ms=" << std::setprecision(3) << perturb.stats.elapsed_ms
+              << "\n";
+    if (!ok) ++runner.failed;
+#else
+    ++runner.skipped;
+    std::cout << "[SKIP] deep_mandelbrot_perturbation needs FSD_HAS_FLOAT128\n";
+#endif
+}
+
 MapParams map_params_for_direct_transition(const TransitionParams& p) {
     MapParams mp = p.base;
     mp.variant = p.theta_milli_deg == 90 * 1000 ? p.to_variant : p.from_variant;
@@ -1100,6 +1190,8 @@ int main() {
     for (const TransitionScene& scene : transition_smoke_scenes()) {
         compare_transition_theta_encoding(runner, scene, exact_scalar_limits);
     }
+
+    compare_deep_perturbation_to_fp128(runner);
 
     for (const RenderScene& scene : fp32_equivalence_scenes()) {
         Rendered fp32_baseline = render_scene(scene, "openmp", "fp32");

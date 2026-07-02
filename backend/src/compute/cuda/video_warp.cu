@@ -38,7 +38,7 @@ __device__ inline unsigned char float_to_u8(float v) {
     return static_cast<unsigned char>(v * 255.0f + 0.5f);
 }
 
-__global__ void precompute_geom_kernel(WarpGeom* geom, int W, int H, int stripW) {
+__global__ void precompute_geom_kernel(WarpGeom* geom, int W, int H, int stripW, float cosRot, float sinRot) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     const int total = W * H;
     if (idx >= total) return;
@@ -53,7 +53,9 @@ __global__ void precompute_geom_kernel(WarpGeom* geom, int W, int H, int stripW)
     const float vy = -(2.0f * (static_cast<float>(y) + 0.5f) / static_cast<float>(H) - 1.0f);
     const float r2 = ux * ux + vy * vy;
 
-    float theta = atan2f(vy, ux);
+    const float rotUx = ux * cosRot - vy * sinRot;
+    const float rotVy = ux * sinRot + vy * cosRot;
+    float theta = atan2f(rotVy, rotUx);
     if (theta < 0.0f) theta += TAU_F;
 
     WarpGeom g{};
@@ -222,7 +224,7 @@ bool cuda_video_warp_available() noexcept {
     return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
 }
 
-void cuda_video_warp_init(const cv::Mat& stripWrap, const cv::Mat& finalImg, CudaVideoWarpContext& ctx) {
+void cuda_video_warp_init(const cv::Mat& stripWrap, const cv::Mat& finalImg, double rotationDeg, CudaVideoWarpContext& ctx) {
     if (!cuda_video_warp_available()) throw std::runtime_error("CUDA video warp not available");
     if (stripWrap.empty() || finalImg.empty() || stripWrap.type() != CV_8UC3 || finalImg.type() != CV_8UC3) {
         throw std::runtime_error("CUDA video warp expects CV_8UC3 inputs");
@@ -256,9 +258,12 @@ void cuda_video_warp_init(const cv::Mat& stripWrap, const cv::Mat& finalImg, Cud
         const int total = ctx.width * ctx.height;
         const int block = 256;
         const int grid = (total + block - 1) / block;
+        const double rotRad = rotationDeg * 3.14159265358979323846 / 180.0;
         precompute_geom_kernel<<<grid, block>>>(
             static_cast<WarpGeom*>(ctx.d_geom),
-            ctx.width, ctx.height, ctx.strip_width);
+            ctx.width, ctx.height, ctx.strip_width,
+            static_cast<float>(std::cos(rotRad)),
+            static_cast<float>(std::sin(rotRad)));
         CUDA_WARP_CHECK(cudaGetLastError());
         CUDA_WARP_CHECK(cudaDeviceSynchronize());
     } catch (...) {

@@ -38,7 +38,7 @@ struct CudaVideoWarpTiming {
 };
 
 bool cuda_video_warp_available() noexcept;
-void cuda_video_warp_init(const cv::Mat& stripWrap, const cv::Mat& finalImg, CudaVideoWarpContext& ctx);
+void cuda_video_warp_init(const cv::Mat& stripWrap, const cv::Mat& finalImg, double rotationDeg, CudaVideoWarpContext& ctx);
 void cuda_video_warp_frame_timed(CudaVideoWarpContext& ctx, double kTop, double kTopEnd, cv::Mat& frame, CudaVideoWarpTiming* timing);
 void cuda_video_warp_frame(CudaVideoWarpContext& ctx, double kTop, double kTopEnd, cv::Mat& frame);
 void* cuda_video_warp_alloc_pinned(size_t bytes);

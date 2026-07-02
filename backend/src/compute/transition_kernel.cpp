@@ -135,6 +135,34 @@ void flip_field_output_y(FieldOutput& fo) {
     }
 }
 
+inline void transition_viewport_point(
+    const MapParams& b,
+    int W,
+    int H,
+    int x,
+    int y,
+    double re_min,
+    double im_max,
+    double span_re,
+    double span_im,
+    bool has_rot,
+    double cos_t,
+    double sin_t,
+    double& u,
+    double& v
+) {
+    if (has_rot) {
+        const double pixel_step = b.scale / static_cast<double>(H);
+        const double dx = (static_cast<double>(x) + 0.5 - static_cast<double>(W) * 0.5) * pixel_step;
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        u = b.center_re + dx * cos_t - dy * sin_t;
+        v = b.center_im + dx * sin_t + dy * cos_t;
+    } else {
+        u = re_min + (static_cast<double>(x) + 0.5) / static_cast<double>(W) * span_re;
+        v = im_max - (static_cast<double>(y) + 0.5) / static_cast<double>(H) * span_im;
+    }
+}
+
 MapStats render_direct_slice_field(const TransitionParams& p, DirectSlice slice, FieldOutput& fo) {
     const bool flip_y = slice == DirectSlice::FromFlipY || slice == DirectSlice::ToFlipY;
     MapParams mp = p.base;
@@ -526,6 +554,10 @@ MapStats render_transition_metric_field(const TransitionParams& p, FieldOutput& 
     const double bail2   = b.bailout_sq;
     const double cth     = std::cos(p.theta);
     const double sth     = std::sin(p.theta);
+    const bool has_view_rot = b.rotation_deg != 0.0;
+    const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
+    const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
+    const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
     const int thread_count = resolve_render_threads(b.render_threads);
     constexpr int tile_size = 32;
     const int tiles_x = (W + tile_size - 1) / tile_size;
@@ -558,9 +590,13 @@ MapStats render_transition_metric_field(const TransitionParams& p, FieldOutput& 
         for (int y = y_begin; y < y_end; y++) {
             if (mark_cancelled_if_requested(p, cancelled)) break;
             const size_t row_off = static_cast<size_t>(y) * W;
-            const double v = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
             for (int x = x_begin; x < x_end; x++) {
-                const double u = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
+                double u = 0.0;
+                double v = 0.0;
+                transition_viewport_point(b, W, H, x, y,
+                                          re_min, im_max, span_re, span_im,
+                                          has_view_rot, view_cos, view_sin,
+                                          u, v);
 
                 const TransitionIterResult r =
                     iterate_transition<M, NeedMask>(u, v * cth, v * sth,
@@ -645,6 +681,10 @@ MapStats render_transition_multi_field(const TransitionParams& p, FieldOutput& f
     const double re_min  = b.center_re - span_re * 0.5;
     const double im_max  = b.center_im + span_im * 0.5;
     const double bail2   = b.bailout_sq;
+    const bool has_view_rot = b.rotation_deg != 0.0;
+    const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
+    const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
+    const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
     const int thread_count = resolve_render_threads(b.render_threads);
     constexpr int tile_size = 32;
     const int tiles_x = (W + tile_size - 1) / tile_size;
@@ -677,9 +717,13 @@ MapStats render_transition_multi_field(const TransitionParams& p, FieldOutput& f
         for (int y = y_begin; y < y_end; y++) {
             if (mark_cancelled_if_requested(p, cancelled)) break;
             const size_t row_off = static_cast<size_t>(y) * W;
-            const double v = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
             for (int x = x_begin; x < x_end; x++) {
-                const double u = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
+                double u = 0.0;
+                double v = 0.0;
+                transition_viewport_point(b, W, H, x, y,
+                                          re_min, im_max, span_re, span_im,
+                                          has_view_rot, view_cos, view_sin,
+                                          u, v);
 
                 std::array<double, MAX_TRANSITION_LEGS> axis0{};
                 std::array<double, MAX_TRANSITION_LEGS> jaxis{};
@@ -877,6 +921,13 @@ MapStats render_transition_scalar(const TransitionParams& p, FieldOutput& fo) {
     const S s_im_max    = s_center_im + s_span_im * s_half;
     const S s_inv_W     = scalar_from_double<S>(1.0 / W);
     const S s_inv_H     = scalar_from_double<S>(1.0 / H);
+    const bool has_view_rot = b.rotation_deg != 0.0;
+    const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
+    const S s_view_cos = scalar_from_double<S>(has_view_rot ? std::cos(view_rad) : 1.0);
+    const S s_view_sin = scalar_from_double<S>(has_view_rot ? std::sin(view_rad) : 0.0);
+    const S s_pixel_step = s_scale / scalar_from_double<S>(static_cast<double>(H));
+    const S s_half_w = scalar_from_double<S>(static_cast<double>(W) * 0.5);
+    const S s_half_h = scalar_from_double<S>(static_cast<double>(H) * 0.5);
     const double bail2  = b.bailout_sq;
 
     const int thread_count = resolve_render_threads(b.render_threads);
@@ -893,11 +944,21 @@ MapStats render_transition_scalar(const TransitionParams& p, FieldOutput& fo) {
     #pragma omp for schedule(dynamic, 4)
     for (int y = 0; y < H; y++) {
         if (mark_cancelled_if_requested(p, cancelled)) continue;
-        const S s_v = s_im_max - scalar_from_double<S>(static_cast<double>(y) + 0.5) * s_inv_H * s_span_im;
+        const S s_v_norot = s_im_max - scalar_from_double<S>(static_cast<double>(y) + 0.5) * s_inv_H * s_span_im;
+        const S s_dy = -(scalar_from_double<S>(static_cast<double>(y) + 0.5) - s_half_h) * s_pixel_step;
         const size_t row_off = static_cast<size_t>(y) * W;
 
         for (int x = 0; x < W; x++) {
-            const S s_u = s_re_min + scalar_from_double<S>(static_cast<double>(x) + 0.5) * s_inv_W * s_span_re;
+            S s_u;
+            S s_v;
+            if (has_view_rot) {
+                const S s_dx = (scalar_from_double<S>(static_cast<double>(x) + 0.5) - s_half_w) * s_pixel_step;
+                s_u = s_center_re + s_dx * s_view_cos - s_dy * s_view_sin;
+                s_v = s_center_im + s_dx * s_view_sin + s_dy * s_view_cos;
+            } else {
+                s_u = s_re_min + scalar_from_double<S>(static_cast<double>(x) + 0.5) * s_inv_W * s_span_re;
+                s_v = s_v_norot;
+            }
 
             const double u  = static_cast<double>(s_u);
             const double v  = static_cast<double>(s_v);

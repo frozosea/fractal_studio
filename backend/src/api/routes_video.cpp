@@ -50,6 +50,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -308,7 +309,7 @@ struct CpuWarpGeometry {
     cv::Mat strip_row_base; // CV_32FC1, (ln4 - ln(r)) * strip_period / tau
 };
 
-CpuWarpGeometry buildCpuWarpGeometry(int W, int H, int stripWrapW, int stripH) {
+CpuWarpGeometry buildCpuWarpGeometry(int W, int H, int stripWrapW, int stripH, double rotationDeg) {
     CpuWarpGeometry geom;
     geom.width = W;
     geom.height = H;
@@ -321,6 +322,9 @@ CpuWarpGeometry buildCpuWarpGeometry(int W, int H, int stripWrapW, int stripH) {
     const double aspect = static_cast<double>(W) / static_cast<double>(H);
     const double stripScale = static_cast<double>(geom.strip_period) / TAU;
     const float invalidRow = std::numeric_limits<float>::lowest();
+    const double rotRad = rotationDeg * PI / 180.0;
+    const double cosRot = std::cos(rotRad);
+    const double sinRot = std::sin(rotRad);
 
     cv::parallel_for_(cv::Range(0, H), [&](const cv::Range& range) {
         for (int y = range.start; y < range.end; ++y) {
@@ -330,7 +334,9 @@ CpuWarpGeometry buildCpuWarpGeometry(int W, int H, int stripWrapW, int stripH) {
             for (int x = 0; x < W; ++x) {
                 const double ux = (2.0 * (static_cast<double>(x) + 0.5) / static_cast<double>(W) - 1.0) * aspect;
                 const double r2 = ux * ux + vy * vy;
-                double theta = std::atan2(vy, ux);
+                const double rotUx = ux * cosRot - vy * sinRot;
+                const double rotVy = ux * sinRot + vy * cosRot;
+                double theta = std::atan2(rotVy, rotUx);
                 if (theta < 0.0) theta += TAU;
 
                 stripX[x] = static_cast<float>(theta * stripScale);
@@ -353,6 +359,19 @@ void ensureMat(cv::Mat& mat, int W, int H, int type) {
 double smoothstep01(double t) {
     t = std::clamp(t, 0.0, 1.0);
     return t * t * (3.0 - 2.0 * t);
+}
+
+std::string transitionVideoModeFromJson(const Json& j) {
+    std::string mode = j.value("animationMode",
+        j.value("transitionExportMode", std::string("rotation")));
+    std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    if (mode == "rotate" || mode == "theta") mode = "rotation";
+    if (mode != "rotation" && mode != "zoom") {
+        throw std::runtime_error("invalid transition video mode (rotation|zoom)");
+    }
+    return mode;
 }
 
 uint8_t blendByte(uint8_t a, uint8_t b, double t) {
@@ -486,10 +505,23 @@ double finalFrameAbs2At(const compute::MapParams& p, int x, int y) {
     const double aspect = static_cast<double>(p.width) / static_cast<double>(p.height);
     const double spanIm = p.scale;
     const double spanRe = p.scale * aspect;
-    const double reMin = p.center_re - spanRe * 0.5;
-    const double imMax = p.center_im + spanIm * 0.5;
-    const double re = reMin + (static_cast<double>(x) + 0.5) / static_cast<double>(p.width) * spanRe;
-    const double im = imMax - (static_cast<double>(y) + 0.5) / static_cast<double>(p.height) * spanIm;
+    double re = 0.0;
+    double im = 0.0;
+    if (p.rotation_deg != 0.0) {
+        const double rotRad = p.rotation_deg * PI / 180.0;
+        const double cosRot = std::cos(rotRad);
+        const double sinRot = std::sin(rotRad);
+        const double pixelStep = p.scale / static_cast<double>(p.height);
+        const double dx = (static_cast<double>(x) + 0.5 - static_cast<double>(p.width) * 0.5) * pixelStep;
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(p.height) * 0.5) * pixelStep;
+        re = p.center_re + dx * cosRot - dy * sinRot;
+        im = p.center_im + dx * sinRot + dy * cosRot;
+    } else {
+        const double reMin = p.center_re - spanRe * 0.5;
+        const double imMax = p.center_im + spanIm * 0.5;
+        re = reMin + (static_cast<double>(x) + 0.5) / static_cast<double>(p.width) * spanRe;
+        im = imMax - (static_cast<double>(y) + 0.5) / static_cast<double>(p.height) * spanIm;
+    }
     return re * re + im * im;
 }
 
@@ -709,6 +741,7 @@ cv::Mat renderZoomPreviewFrameSmart(
     int H,
     double kTop,
     double kTop_end,
+    double rotationDeg,
     bool preferCudaWarp
 ) {
     cv::Mat stripWrap;
@@ -722,7 +755,7 @@ cv::Mat renderZoomPreviewFrameSmart(
     if (preferCudaWarp && fsd_cuda::cuda_video_warp_available()) {
         fsd_cuda::CudaVideoWarpContext cudaWarp;
         try {
-            fsd_cuda::cuda_video_warp_init(stripWrap, finalImg, cudaWarp);
+            fsd_cuda::cuda_video_warp_init(stripWrap, finalImg, rotationDeg, cudaWarp);
             fsd_cuda::cuda_video_warp_frame(cudaWarp, kTop, kTop_end, frame);
             fsd_cuda::cuda_video_warp_release(cudaWarp);
             return frame;
@@ -734,7 +767,7 @@ cv::Mat renderZoomPreviewFrameSmart(
     (void)preferCudaWarp;
 #endif
 
-    const CpuWarpGeometry geom = buildCpuWarpGeometry(W, H, stripWrap.cols, stripWrap.rows);
+    const CpuWarpGeometry geom = buildCpuWarpGeometry(W, H, stripWrap.cols, stripWrap.rows, rotationDeg);
     if (remapSafe) {
         cv::Mat stripFrame(H, W, CV_8UC3);
         cv::Mat finalFrame(H, W, CV_8UC3);
@@ -755,6 +788,7 @@ static std::string generateZoomVideo(
     const cv::Mat& finalImg,
     int W, int H, int fps, int frameCount,
     double kTop_start, double kTop_end, double depthOctaves,
+    double rotationDeg,
     const std::filesystem::path& outDir, const std::string& baseName,
     const std::function<void(int)>& on_frame_done = nullptr,
     std::string* ffmpeg_stderr_out = nullptr,
@@ -787,7 +821,7 @@ static std::string generateZoomVideo(
     bool useCudaWarp = false;
     if (prefer_cuda_warp && fsd_cuda::cuda_video_warp_available()) {
         try {
-            fsd_cuda::cuda_video_warp_init(stripWrap, finalImg, cudaWarp);
+            fsd_cuda::cuda_video_warp_init(stripWrap, finalImg, rotationDeg, cudaWarp);
             useCudaWarp = true;
             selectedWarpMethod = "cuda_texture";
         } catch (...) {
@@ -819,7 +853,7 @@ static std::string generateZoomVideo(
     auto getCpuGeom = [&]() -> const CpuWarpGeometry& {
         if (!cpuGeom) {
             cpuGeom = std::make_unique<CpuWarpGeometry>(
-                buildCpuWarpGeometry(W, H, stripWrap.cols, stripWrap.rows));
+                buildCpuWarpGeometry(W, H, stripWrap.cols, stripWrap.rows, rotationDeg));
         }
         return *cpuGeom;
     };
@@ -1228,6 +1262,7 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     const int    iters        = lk.sidecar.value("iterations",  4096);
     const std::string variantStr  = lk.sidecar.value("variant",  std::string("mandelbrot"));
     const std::string colormapStr = lk.sidecar.value("colorMap", std::string("classic_cos"));
+    const double rotationDeg = j.value("rotationDeg", lk.sidecar.value("rotationDeg", 0.0));
 
     double depthOctaves = resolveDepthOctaves(j, kTopStartForFrame(W, H), sidecarDepth - 1.5);
     if (depthOctaves < 0.05 || depthOctaves > 120.0) {
@@ -1283,6 +1318,7 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     mp.smooth     = false;
     mp.engine     = "auto";
     mp.scalar_type = "auto";
+    mp.rotation_deg = std::isfinite(rotationDeg) ? rotationDeg : 0.0;
 
     auto run = runner.createRun("zoom-video", body);
     ResourceManager::Lease videoLeaseRaw;
@@ -1319,7 +1355,7 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
                          "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}});
         mp4Path = generateZoomVideo(
             strip, finalImg, W, H, fps, frameCount,
-            kTop_start, kTop_end, depthOctaves,
+            kTop_start, kTop_end, depthOctaves, mp.rotation_deg,
             std::filesystem::path(run.outputDir), "zoom",
             [&](int frameDone) {
                 setVideoProgress(runner, run.id, "video_warp_encode", frameDone, frameCount, depthOctaves, depthOctaves,
@@ -1370,6 +1406,7 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
         {"kTopStart",   kTop_start},
         {"kTopEnd",     kTop_end},
         {"depthOctaves",depthOctaves},
+        {"rotationDeg", mp.rotation_deg},
         {"warpMethod",  warpMethod},
         {"encoder",     encoderUsed},
         {"ffmpegStderr",ffmpegStderr},
@@ -1404,6 +1441,8 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
     const int    fps        = j.value("fps",       30);
     const int    W          = j.value("width",     720);
     const int    H          = j.value("height",    720);
+    double rotationDeg      = j.value("rotationDeg", 0.0);
+    if (!std::isfinite(rotationDeg)) rotationDeg = 0.0;
 
     if (fps < 1 || fps > 120) throw std::runtime_error("invalid fps (1..120)");
     if (iters < 1 || iters > 10000000) throw std::runtime_error("invalid iterations");
@@ -1460,6 +1499,7 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
             mp.julia_im   = jim;
             mp.engine     = "auto";
             mp.scalar_type = "auto";
+            mp.rotation_deg = rotationDeg;
 
             cv::Mat img(previewH, previewW, CV_8UC3);
             compute::render_map(mp, img);
@@ -1498,6 +1538,7 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
             {"secondsPerOctave",     secondsPerOctave},
             {"depthOctaves",         depth},
             {"targetScale",          2.0 * std::exp(kTop_end)},
+            {"rotationDeg",          rotationDeg},
             {"width",                previewW},
             {"height",               previewH},
             {"outputWidth",          W},
@@ -1544,6 +1585,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const int    W          = j.value("width",     720);
     const int    H          = j.value("height",    720);
     const bool   localExport = j.value("localExport", false);
+    double rotationDeg      = j.value("rotationDeg", 0.0);
+    if (!std::isfinite(rotationDeg)) rotationDeg = 0.0;
     if (fps < 1 || fps > 120) throw std::runtime_error("invalid fps (1..120)");
     validateVideoOutputSize(W, H);
     const double kTop_start = kTopStartForFrame(W, H);
@@ -1656,6 +1699,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         mp.julia_im   = jim;
         mp.engine     = "auto";
         mp.scalar_type = "auto";
+        mp.rotation_deg = rotationDeg;
 
         cv::Mat finalImg(H, W, CV_8UC3);
         compute::MapStats finalStats;
@@ -1807,6 +1851,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"centerRe", cr}, {"centerIm", ci},
                 {"centerReStr", crStr}, {"centerImStr", ciStr},
                 {"julia", julia}, {"juliaRe", jre}, {"juliaIm", jim},
+                {"rotationDeg", rotationDeg},
                 {"widthS", s}, {"actualWidthS", s}, {"fullWidthS", stripPlan.fullWidthS},
                 {"heightT", t}, {"depthOctaves", depth},
                 {"lnMapExtraOctaves", stripPlan.extraOctaves},
@@ -1838,8 +1883,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         // ── 3. Render first/last preview frames ───────────────────────────────
         throwIfCancelled(runner, run.id);
         const bool preferCudaWarp = j.value("cudaWarp", true);
-        const cv::Mat startPreview = renderZoomPreviewFrameSmart(strip, finalImg, W, H, kTop_start, kTop_end, preferCudaWarp);
-        const cv::Mat endPreview   = renderZoomPreviewFrameSmart(strip, finalImg, W, H, kTop_end,   kTop_end, preferCudaWarp);
+        const cv::Mat startPreview = renderZoomPreviewFrameSmart(strip, finalImg, W, H, kTop_start, kTop_end, rotationDeg, preferCudaWarp);
+        const cv::Mat endPreview   = renderZoomPreviewFrameSmart(strip, finalImg, W, H, kTop_end,   kTop_end, rotationDeg, preferCudaWarp);
         const std::filesystem::path startPreviewPath = std::filesystem::path(run.outputDir) / "start_frame.png";
         const std::filesystem::path endPreviewPath   = std::filesystem::path(run.outputDir) / "end_frame.png";
         compute::write_png(startPreviewPath.string(), startPreview);
@@ -1856,7 +1901,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         VideoWarpStats warpStats;
         const std::string videoPath = generateZoomVideo(
             strip, finalImg, W, H, fps, frameCount,
-            kTop_start, kTop_end, depth,
+            kTop_start, kTop_end, depth, rotationDeg,
             std::filesystem::path(run.outputDir), "zoom",
             [&](int frameDone) {
                 setVideoProgress(runner, run.id, "video_warp_encode", frameDone, frameCount, depth, depth,
@@ -1895,6 +1940,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"qualityScale", stripPlan.qualityScale},
             {"estimatedPeakMemory", stripPlan.estimatedPeakMemory},
             {"lnMapExtraOctaves", stripPlan.extraOctaves},
+            {"rotationDeg", rotationDeg},
         };
         mergeVideoWarpStats(renderLog, warpStats);
         const std::filesystem::path reportPath = std::filesystem::path(run.outputDir) / "video_export.json";
@@ -1944,6 +1990,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"secondsPerOctave",   secondsPerOctave},
             {"depthOctaves",       depth},
             {"targetScale",        2.0 * std::exp(kTop_end)},
+            {"rotationDeg",        rotationDeg},
             {"fullWidthS",         stripPlan.fullWidthS},
             {"actualWidthS",       s},
             {"heightT",            t},
@@ -2011,6 +2058,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"durationSec", durSec},
             {"secondsPerOctave", secondsPerOctave},
             {"depthOctaves", depth},
+            {"rotationDeg", rotationDeg},
             {"fullWidthS", stripPlan.fullWidthS},
             {"actualWidthS", s},
             {"heightT", stripPlan.heightT},
@@ -2057,17 +2105,48 @@ std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, J
     const std::string toStr   = j.value("transitionTo",   std::string("tri"));
     const std::string colormapStr = j.value("colorMap", std::string("classic_cos"));
     const int    iters      = j.value("iterations", 2048);
+    const int    fps        = j.value("fps",       30);
     const double scale      = j.value("scale", 3.0);
     const int    W          = j.value("width",  720);
     const int    H          = j.value("height", 720);
     const double thetaStartDeg = j.value("thetaStartDeg", 0.0);
     const double thetaEndDeg   = j.value("thetaEndDeg",   180.0);
+    const std::string animationMode = transitionVideoModeFromJson(j);
+    double thetaFixedDeg = j.contains("thetaDeg") && !j["thetaDeg"].is_null()
+        ? j.value("thetaDeg", thetaStartDeg)
+        : thetaStartDeg;
+    if (!std::isfinite(thetaFixedDeg)) thetaFixedDeg = thetaStartDeg;
     const std::string metricStr = j.value("metric", std::string("escape"));
     const std::string engineStr = j.value("engine", std::string("auto"));
     const std::string scalarStr = j.value("scalarType", std::string("auto"));
+    double rotationDeg = j.value("rotationDeg", 0.0);
+    if (!std::isfinite(rotationDeg)) rotationDeg = 0.0;
 
+    if (fps < 1 || fps > 120) throw std::runtime_error("invalid fps (1..120)");
     if (iters < 1 || iters > 10000000) throw std::runtime_error("invalid iterations");
+    validateVideoOutputSize(W, H);
     const auto [previewW, previewH] = resolvePreviewSize(j, W, H);
+
+    double zoomDepth = 0.0;
+    double zoomDurationSec = j.value("durationSec", 0.0);
+    double zoomSecondsPerOctave = 0.0;
+    int zoomFrameCount = 0;
+    double kTop_start = 0.0;
+    double kTop_end = 0.0;
+    double zoomStartScale = scale;
+    double zoomEndScale = scale;
+    if (animationMode == "zoom") {
+        kTop_start = kTopStartForFrame(W, H);
+        zoomDepth = resolveDepthOctaves(j, kTop_start, 20.0);
+        if (zoomDepth < 0.05 || zoomDepth > 120.0) throw std::runtime_error("invalid depthOctaves (0.05..120)");
+        kTop_end = kTop_start - zoomDepth * LN_TWO;
+        zoomSecondsPerOctave = resolveSecondsPerOctave(j, zoomDepth);
+        zoomFrameCount = frameCountFromSpeed(zoomDepth, zoomSecondsPerOctave, fps, zoomDurationSec);
+        zoomStartScale = 2.0 * std::exp(kTop_start);
+        zoomEndScale = 2.0 * std::exp(kTop_end);
+    } else {
+        zoomFrameCount = std::max(2, static_cast<int>(std::round(std::max(0.0, zoomDurationSec) * fps)));
+    }
 
     compute::Variant fromV, toV;
     if (!compute::variant_from_name(fromStr.c_str(), fromV)) fromV = compute::Variant::Mandelbrot;
@@ -2091,13 +2170,13 @@ std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, J
     try {
         const auto t0 = std::chrono::steady_clock::now();
 
-        auto renderFrame = [&](double thetaDeg) {
+        auto renderFrame = [&](double thetaDeg, double frameScale) {
             compute::TransitionParams tp;
             tp.base.center_re  = cr;
             tp.base.center_im  = ci;
             tp.base.center_re_str = crStr;
             tp.base.center_im_str = ciStr;
-            tp.base.scale      = scale;
+            tp.base.scale      = frameScale;
             tp.base.width      = previewW;
             tp.base.height     = previewH;
             tp.base.iterations = iters;
@@ -2111,6 +2190,7 @@ std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, J
             tp.base.julia_im   = jim;
             tp.base.engine     = engineStr;
             tp.base.scalar_type = scalarStr;
+            tp.base.rotation_deg = rotationDeg;
             tp.theta           = thetaDeg * PI / 180.0;
             tp.from_variant    = fromV;
             tp.to_variant      = toV;
@@ -2120,8 +2200,12 @@ std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, J
             return img;
         };
 
-        const cv::Mat startPreview = renderFrame(thetaStartDeg);
-        const cv::Mat endPreview   = renderFrame(thetaEndDeg);
+        const cv::Mat startPreview = animationMode == "zoom"
+            ? renderFrame(thetaFixedDeg, zoomStartScale)
+            : renderFrame(thetaStartDeg, scale);
+        const cv::Mat endPreview = animationMode == "zoom"
+            ? renderFrame(thetaFixedDeg, zoomEndScale)
+            : renderFrame(thetaEndDeg, scale);
 
         const std::filesystem::path startPath = std::filesystem::path(run.outputDir) / "start_frame.png";
         const std::filesystem::path endPath   = std::filesystem::path(run.outputDir) / "end_frame.png";
@@ -2145,8 +2229,17 @@ std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, J
             {"endFrameArtifactId",   endArtId},
             {"endFrameUrl",          "/api/artifacts/content?artifactId="  + endArtId},
             {"endFrameDownloadUrl",  "/api/artifacts/download?artifactId=" + endArtId},
+            {"animationMode",        animationMode},
             {"thetaStartDeg",        thetaStartDeg},
             {"thetaEndDeg",          thetaEndDeg},
+            {"thetaDeg",             thetaFixedDeg},
+            {"depthOctaves",         zoomDepth},
+            {"targetScale",          zoomEndScale},
+            {"frameCount",           zoomFrameCount},
+            {"fps",                  fps},
+            {"durationSec",          zoomDurationSec},
+            {"secondsPerOctave",     zoomSecondsPerOctave},
+            {"rotationDeg",          rotationDeg},
             {"width",                previewW},
             {"height",               previewH},
             {"outputWidth",          W},
@@ -2183,18 +2276,45 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
     const int    H          = j.value("height",    720);
     const double thetaStartDeg = j.value("thetaStartDeg", 0.0);
     const double thetaEndDeg   = j.value("thetaEndDeg",   180.0);
-    const double durationSec   = j.value("durationSec", 6.0);
+    const std::string animationMode = transitionVideoModeFromJson(j);
+    double thetaFixedDeg = j.contains("thetaDeg") && !j["thetaDeg"].is_null()
+        ? j.value("thetaDeg", thetaStartDeg)
+        : thetaStartDeg;
+    if (!std::isfinite(thetaFixedDeg)) thetaFixedDeg = thetaStartDeg;
+    double durationSec   = j.value("durationSec", 6.0);
     const bool   localExport   = j.value("localExport", false);
     const std::string metricStr = j.value("metric", std::string("escape"));
     const std::string engineStr = j.value("engine", std::string("auto"));
     const std::string scalarStr = j.value("scalarType", std::string("auto"));
+    double rotationDeg = j.value("rotationDeg", 0.0);
+    if (!std::isfinite(rotationDeg)) rotationDeg = 0.0;
 
     if (fps < 1 || fps > 120) throw std::runtime_error("invalid fps (1..120)");
-    if (!(durationSec > 0.0) || durationSec > MAX_VIDEO_DURATION_SEC)
-        throw std::runtime_error("invalid durationSec");
     if (iters < 1 || iters > 10000000) throw std::runtime_error("invalid iterations");
     validateVideoOutputSize(W, H);
-    const int frameCount = std::max(2, static_cast<int>(std::round(durationSec * fps)));
+
+    double zoomDepth = 0.0;
+    double zoomSecondsPerOctave = 0.0;
+    double kTop_start = 0.0;
+    double kTop_end = 0.0;
+    double zoomStartScale = scale;
+    double zoomEndScale = scale;
+    int frameCount = 0;
+    if (animationMode == "zoom") {
+        kTop_start = kTopStartForFrame(W, H);
+        zoomDepth = resolveDepthOctaves(j, kTop_start, 20.0);
+        if (zoomDepth < 0.05 || zoomDepth > 120.0) throw std::runtime_error("invalid depthOctaves (0.05..120)");
+        kTop_end = kTop_start - zoomDepth * LN_TWO;
+        zoomSecondsPerOctave = resolveSecondsPerOctave(j, zoomDepth);
+        frameCount = frameCountFromSpeed(zoomDepth, zoomSecondsPerOctave, fps, durationSec);
+        zoomStartScale = 2.0 * std::exp(kTop_start);
+        zoomEndScale = 2.0 * std::exp(kTop_end);
+    } else {
+        if (!(durationSec > 0.0) || durationSec > MAX_VIDEO_DURATION_SEC || !std::isfinite(durationSec)) {
+            throw std::runtime_error("invalid durationSec");
+        }
+        frameCount = std::max(2, static_cast<int>(std::round(durationSec * fps)));
+    }
 
     compute::Variant fromV, toV;
     if (!compute::variant_from_name(fromStr.c_str(), fromV)) fromV = compute::Variant::Mandelbrot;
@@ -2236,13 +2356,13 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
         throwIfCancelled(runner, run.id);
 
         // ── 1. Render start/end preview frames ──────────────────────────────
-        auto buildTp = [&](double thetaDeg) {
+        auto buildTp = [&](double thetaDeg, double frameScale) {
             compute::TransitionParams tp;
             tp.base.center_re  = cr;
             tp.base.center_im  = ci;
             tp.base.center_re_str = crStr;
             tp.base.center_im_str = ciStr;
-            tp.base.scale      = scale;
+            tp.base.scale      = frameScale;
             tp.base.width      = W;
             tp.base.height     = H;
             tp.base.iterations = iters;
@@ -2256,6 +2376,7 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
             tp.base.julia_im   = jim;
             tp.base.engine     = engineStr;
             tp.base.scalar_type = scalarStr;
+            tp.base.rotation_deg = rotationDeg;
             tp.base.should_cancel = [&runner, runId = run.id]() { return runner.isCancelRequested(runId); };
             tp.theta           = thetaDeg * PI / 180.0;
             tp.from_variant    = fromV;
@@ -2263,12 +2384,24 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
             return tp;
         };
 
-        setVideoProgress(runner, run.id, "transition_preview", 0, 2, thetaStartDeg, thetaEndDeg);
+        const double progressStart = animationMode == "zoom" ? 0.0 : thetaStartDeg;
+        const double progressEnd = animationMode == "zoom" ? zoomDepth : thetaEndDeg;
+
+        setVideoProgress(runner, run.id, "transition_preview", 0, 2, progressStart, progressEnd,
+                         "", "", Json{{"animationMode", animationMode}, {"thetaDeg", thetaFixedDeg}});
 
         cv::Mat startImg, endImg;
-        compute::render_transition(buildTp(thetaStartDeg), startImg);
+        if (animationMode == "zoom") {
+            compute::render_transition(buildTp(thetaFixedDeg, zoomStartScale), startImg);
+        } else {
+            compute::render_transition(buildTp(thetaStartDeg, scale), startImg);
+        }
         throwIfCancelled(runner, run.id);
-        compute::render_transition(buildTp(thetaEndDeg), endImg);
+        if (animationMode == "zoom") {
+            compute::render_transition(buildTp(thetaFixedDeg, zoomEndScale), endImg);
+        } else {
+            compute::render_transition(buildTp(thetaEndDeg, scale), endImg);
+        }
         throwIfCancelled(runner, run.id);
 
         const std::filesystem::path startPath = std::filesystem::path(run.outputDir) / "start_frame.png";
@@ -2277,16 +2410,20 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
         compute::write_png(endPath.string(), endImg);
         runner.addArtifact(run.id, Artifact{"start-frame", startPath.string(), "image"});
         runner.addArtifact(run.id, Artifact{"end-frame",   endPath.string(),   "image"});
-        setVideoProgress(runner, run.id, "transition_preview", 2, 2, thetaStartDeg, thetaEndDeg);
+        setVideoProgress(runner, run.id, "transition_preview", 2, 2, progressEnd, progressEnd,
+                         "", "", Json{{"animationMode", animationMode}, {"thetaDeg", thetaFixedDeg}});
 
         // ── 2. Generate video via FFmpeg pipe ────────────────────────────────
-        setVideoProgress(runner, run.id, "transition_render", 0, frameCount, thetaStartDeg, thetaEndDeg,
-                         "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}});
+        setVideoProgress(runner, run.id, "transition_render", 0, frameCount, progressStart, progressEnd,
+                         "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount},
+                                      {"animationMode", animationMode}, {"thetaDeg", thetaFixedDeg},
+                                      {"depthOctaves", zoomDepth}, {"secondsPerOctave", zoomSecondsPerOctave}});
 
-        const std::filesystem::path mp4 = std::filesystem::path(run.outputDir) / "transition.mp4";
-        const std::filesystem::path tmpMp4 = std::filesystem::path(run.outputDir) / "transition.tmp.mp4";
-        const std::filesystem::path ffmpegErrTmp = std::filesystem::path(run.outputDir) / "transition_ffmpeg.stderr.txt.tmp";
-        const std::filesystem::path ffmpegErrFile = std::filesystem::path(run.outputDir) / "transition_ffmpeg.stderr.txt";
+        const std::string baseFile = animationMode == "zoom" ? "transition_zoom" : "transition_rotation";
+        const std::filesystem::path mp4 = std::filesystem::path(run.outputDir) / (baseFile + ".mp4");
+        const std::filesystem::path tmpMp4 = std::filesystem::path(run.outputDir) / (baseFile + ".tmp.mp4");
+        const std::filesystem::path ffmpegErrTmp = std::filesystem::path(run.outputDir) / (baseFile + "_ffmpeg.stderr.txt.tmp");
+        const std::filesystem::path ffmpegErrFile = std::filesystem::path(run.outputDir) / (baseFile + "_ffmpeg.stderr.txt");
 
         const std::string inputArgs =
             "ffmpeg -y -f rawvideo -pix_fmt bgr24 -s " + std::to_string(W) + "x" + std::to_string(H) +
@@ -2319,13 +2456,20 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
 
             bool pipeOk = true;
             try {
-                const size_t rowBytes = static_cast<size_t>(W) * 3;
                 for (int f = 0; f < frameCount; f++) {
                     throwIfCancelled(runner, run.id);
                     const double t = (frameCount <= 1) ? 0.0 : static_cast<double>(f) / (frameCount - 1);
-                    const double thetaDeg = thetaStartDeg + t * (thetaEndDeg - thetaStartDeg);
+                    const double thetaDeg = animationMode == "zoom"
+                        ? thetaFixedDeg
+                        : thetaStartDeg + t * (thetaEndDeg - thetaStartDeg);
+                    const double frameScale = animationMode == "zoom"
+                        ? 2.0 * std::exp(kTop_start - t * zoomDepth * LN_TWO)
+                        : scale;
+                    const double progressValue = animationMode == "zoom"
+                        ? t * zoomDepth
+                        : thetaDeg;
 
-                    auto tp = buildTp(thetaDeg);
+                    auto tp = buildTp(thetaDeg, frameScale);
                     cv::Mat frame;
                     compute::render_transition(tp, frame);
 
@@ -2336,9 +2480,12 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
                     }
 
                     setVideoProgress(runner, run.id, "transition_render", f + 1, frameCount,
-                                     thetaDeg, thetaEndDeg, "", "",
+                                     progressValue, progressEnd, "", "",
                                      Json{{"currentFrame", f + 1}, {"totalFrames", frameCount},
-                                          {"thetaDeg", thetaDeg}});
+                                          {"animationMode", animationMode},
+                                          {"thetaDeg", thetaDeg},
+                                          {"scale", frameScale},
+                                          {"depthOctave", progressValue}});
                 }
             } catch (const std::exception& e) {
                 pclose(pipe);
@@ -2392,22 +2539,35 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
         }
 
         const std::string videoFile = std::filesystem::path(videoPath).filename().string();
-        runner.addArtifact(run.id, Artifact{"transition-video", videoPath, "video"});
+        runner.addArtifact(run.id, Artifact{
+            animationMode == "zoom" ? "transition-zoom-video" : "transition-rotation-video",
+            videoPath,
+            "video"
+        });
 
         setVideoProgress(runner, run.id, "transition_render", frameCount, frameCount,
-                         thetaEndDeg, thetaEndDeg, "", "",
-                         Json{{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"encoder", encoderUsed}});
+                         progressEnd, progressEnd, "", "",
+                         Json{{"currentFrame", frameCount}, {"totalFrames", frameCount},
+                              {"animationMode", animationMode}, {"thetaDeg", thetaFixedDeg},
+                              {"depthOctaves", zoomDepth}, {"targetScale", zoomEndScale},
+                              {"secondsPerOctave", zoomSecondsPerOctave}, {"encoder", encoderUsed}});
 
         const auto t1 = std::chrono::steady_clock::now();
         const double elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
         Json renderLog = {
+            {"animationMode", animationMode},
             {"encoder", encoderUsed},
             {"durationSec", durationSec},
             {"fps", fps},
             {"frameCount", frameCount},
             {"thetaStartDeg", thetaStartDeg},
             {"thetaEndDeg", thetaEndDeg},
+            {"thetaDeg", thetaFixedDeg},
+            {"depthOctaves", zoomDepth},
+            {"targetScale", zoomEndScale},
+            {"secondsPerOctave", zoomSecondsPerOctave},
+            {"rotationDeg", rotationDeg},
             {"transitionFrom", fromStr},
             {"transitionTo", toStr},
             {"engine", engineStr},
@@ -2440,11 +2600,17 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
             {"reportArtifactId",   reportArtId},
             {"reportDownloadUrl",  "/api/artifacts/download?artifactId=" + reportArtId},
             {"localExport",        localExport},
+            {"animationMode",      animationMode},
             {"frameCount",         frameCount},
             {"fps",                fps},
             {"durationSec",        durationSec},
             {"thetaStartDeg",      thetaStartDeg},
             {"thetaEndDeg",        thetaEndDeg},
+            {"thetaDeg",           thetaFixedDeg},
+            {"depthOctaves",       zoomDepth},
+            {"targetScale",        zoomEndScale},
+            {"secondsPerOctave",   zoomSecondsPerOctave},
+            {"rotationDeg",        rotationDeg},
             {"transitionFrom",     fromStr},
             {"transitionTo",       toStr},
             {"width",              W},
@@ -2458,11 +2624,12 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
         return resp;
 
     } catch (const std::exception& e) {
+        const double failedTotal = animationMode == "zoom" ? zoomDepth : thetaEndDeg;
         if (runner.isCancelRequested(run.id) || std::string(e.what()) == "cancelled") {
-            setVideoProgress(runner, run.id, "cancelled", 0, frameCount, 0.0, thetaEndDeg, "transition_video_export", "cancelled");
+            setVideoProgress(runner, run.id, "cancelled", 0, frameCount, 0.0, failedTotal, "transition_video_export", "cancelled");
             runner.setStatus(run.id, "cancelled");
         } else {
-            setVideoProgress(runner, run.id, "failed", 0, 0, 0.0, thetaEndDeg, "transition_video_export", e.what());
+            setVideoProgress(runner, run.id, "failed", 0, 0, 0.0, failedTotal, "transition_video_export", e.what());
             runner.setStatus(run.id, "failed");
         }
         throw;
@@ -2471,7 +2638,10 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
 
     const bool background = j.value("background", true);
     if (background) {
-        setVideoProgress(runner, run.id, "queued", 0, frameCount, thetaStartDeg, thetaEndDeg);
+        const double queuedStart = animationMode == "zoom" ? 0.0 : thetaStartDeg;
+        const double queuedEnd = animationMode == "zoom" ? zoomDepth : thetaEndDeg;
+        setVideoProgress(runner, run.id, "queued", 0, frameCount, queuedStart, queuedEnd,
+                         "", "", Json{{"animationMode", animationMode}, {"thetaDeg", thetaFixedDeg}});
         std::thread([execute]() mutable {
             try {
                 (void)execute();
@@ -2482,11 +2652,17 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
             {"runId", run.id},
             {"status", "queued"},
             {"localExport", localExport},
+            {"animationMode", animationMode},
             {"frameCount", frameCount},
             {"fps", fps},
             {"durationSec", durationSec},
             {"thetaStartDeg", thetaStartDeg},
             {"thetaEndDeg", thetaEndDeg},
+            {"thetaDeg", thetaFixedDeg},
+            {"depthOctaves", zoomDepth},
+            {"targetScale", zoomEndScale},
+            {"secondsPerOctave", zoomSecondsPerOctave},
+            {"rotationDeg", rotationDeg},
             {"transitionFrom", fromStr},
             {"transitionTo", toStr},
             {"width", W},

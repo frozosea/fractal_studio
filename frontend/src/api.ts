@@ -131,6 +131,7 @@ export const COLORMAPS: ColorMap[] = [
 ]
 
 export type LnMapColorMode = 'escape' | 'hist_eq' | 'row_eq' | 'log_lift' | 'bands' | 'frontier'
+export type TransitionVideoMode = 'rotation' | 'zoom'
 
 export interface MapRenderRequest {
   requestId?: string
@@ -569,6 +570,7 @@ export interface VideoExportRequest {
   localExport?: boolean
   width?: number
   height?: number
+  rotationDeg?: number
 }
 
 export interface VideoExportResponse {
@@ -602,6 +604,7 @@ export interface VideoExportResponse {
   secondsPerOctave?: number
   depthOctaves?: number
   targetScale?: number
+  rotationDeg?: number
   fullWidthS?: number
   actualWidthS?: number
   heightT?: number
@@ -726,6 +729,7 @@ export interface VideoPreviewResponse {
   secondsPerOctave: number
   depthOctaves: number
   targetScale: number
+  rotationDeg?: number
   width: number
   height: number
   outputWidth: number
@@ -734,6 +738,7 @@ export interface VideoPreviewResponse {
 }
 
 export interface TransitionVideoExportRequest {
+  animationMode?: TransitionVideoMode
   centerRe: number
   centerIm: number
   centerReStr?: string
@@ -750,6 +755,11 @@ export interface TransitionVideoExportRequest {
   scale?: number
   thetaStartDeg?: number
   thetaEndDeg?: number
+  thetaDeg?: number
+  depthOctaves?: number
+  secondsPerOctave?: number
+  targetScale?: number
+  rotationDeg?: number
   durationSec?: number
   fps?: number
   metric?: string
@@ -782,6 +792,7 @@ export interface TransitionVideoExportResponse {
   durationSec: number
   thetaStartDeg: number
   thetaEndDeg: number
+  rotationDeg?: number
   transitionFrom: string
   transitionTo: string
   width: number
@@ -791,6 +802,11 @@ export interface TransitionVideoExportResponse {
   encoder?: string
   ffmpegStderr?: string
   generatedMs?: number
+  animationMode?: TransitionVideoMode
+  thetaDeg?: number
+  depthOctaves?: number
+  targetScale?: number
+  secondsPerOctave?: number
 }
 
 export interface TransitionVideoPreviewRequest extends TransitionVideoExportRequest {
@@ -809,11 +825,20 @@ export interface TransitionVideoPreviewResponse {
   endFrameDownloadUrl: string
   thetaStartDeg: number
   thetaEndDeg: number
+  rotationDeg?: number
   width: number
   height: number
   outputWidth: number
   outputHeight: number
   generatedMs: number
+  animationMode?: TransitionVideoMode
+  thetaDeg?: number
+  frameCount?: number
+  fps?: number
+  durationSec?: number
+  depthOctaves?: number
+  targetScale?: number
+  secondsPerOctave?: number
 }
 
 export interface VideoZoomRequest {
@@ -828,6 +853,7 @@ export interface VideoZoomRequest {
   startLnRadius?: number
   depthOctaves?: number
   cudaWarp?: boolean
+  rotationDeg?: number
 }
 
 export interface VideoZoomResponse {
@@ -843,6 +869,7 @@ export interface VideoZoomResponse {
   durationSec: number
   secondsPerOctave?: number
   depthOctaves?: number
+  rotationDeg?: number
   width: number
   height: number
   warpMethod?: string

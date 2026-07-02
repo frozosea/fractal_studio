@@ -189,20 +189,21 @@ RefOrbit compute_reference_orbit_auto(
     const std::string& cre_str, const std::string& cim_str,
     int max_iter, double bailout_sq, double scale)
 {
-    // Tier 1: scale ≥ 1e-15 → double center is sufficient (fp64 has ~15 digits).
-    // __float128 iteration is still used when available (via compute_reference_orbit).
-    if (scale >= 1e-15 || cre_str.empty()) {
-        double cre = cre_str.empty() ? 0.0 : std::stod(cre_str);
-        double cim = cim_str.empty() ? 0.0 : std::stod(cim_str);
+    // If the UI supplied decimal center strings, keep them through the reference
+    // orbit. Perturbation starts at scale < 1e-13, where rounding the center to
+    // double can already move the reference by multiple screen pixels.
+    if (cre_str.empty() || cim_str.empty()) {
+        const double cre = cre_str.empty() ? 0.0 : std::stod(cre_str);
+        const double cim = cim_str.empty() ? 0.0 : std::stod(cim_str);
         return compute_reference_orbit(cre, cim, max_iter, bailout_sq);
     }
 
-    // Between 1e-15 and 1e-33: need more than double precision for the center.
-    // Fall through to Tier 2 (__float128 with strtoflt128) or Tier 3 (MPFR).
+    // Need more than double precision for the center. Use __float128 when it has
+    // enough range for the requested scale; use MPFR below that when available.
 
-    // Tier 2: scale ≥ 1e-33 → __float128 iteration with string-parsed center
+    // Tier 2: scale ≥ 1e-33, or unknown/non-positive scale → __float128 center.
 #if defined(FSD_HAS_FLOAT128)
-    if (scale >= 1e-33) {
+    if (!(scale > 0.0) || scale >= 1e-33) {
         const __float128 cr = strtoflt128(cre_str.c_str(), nullptr);
         const __float128 ci = strtoflt128(cim_str.c_str(), nullptr);
         const __float128 b2 = static_cast<__float128>(bailout_sq);
@@ -237,7 +238,9 @@ RefOrbit compute_reference_orbit_auto(
     // Tier 3: scale < 1e-33 → MPFR with dynamic precision
 #if defined(FSD_HAS_MPFR)
     {
-        int bits = static_cast<int>(std::ceil(-std::log2(scale))) + 64;
+        const double effective_scale =
+            (scale > 0.0 && std::isfinite(scale)) ? scale : 1e-33;
+        int bits = static_cast<int>(std::ceil(-std::log2(effective_scale))) + 64;
         if (bits < 128) bits = 128;
         return compute_reference_orbit_mpfr(cre_str, cim_str,
                                             max_iter, bailout_sq, bits);
@@ -349,15 +352,15 @@ RefOrbit compute_reference_orbit_julia_auto(
     double julia_re, double julia_im,
     int max_iter, double bailout_sq, double scale)
 {
-    if (scale >= 1e-15 || z0_re_str.empty()) {
-        double z0re = z0_re_str.empty() ? 0.0 : std::stod(z0_re_str);
-        double z0im = z0_im_str.empty() ? 0.0 : std::stod(z0_im_str);
+    if (z0_re_str.empty() || z0_im_str.empty()) {
+        const double z0re = z0_re_str.empty() ? 0.0 : std::stod(z0_re_str);
+        const double z0im = z0_im_str.empty() ? 0.0 : std::stod(z0_im_str);
         return compute_reference_orbit_julia(z0re, z0im, julia_re, julia_im,
                                              max_iter, bailout_sq);
     }
 
 #if defined(FSD_HAS_FLOAT128)
-    if (scale >= 1e-33) {
+    if (!(scale > 0.0) || scale >= 1e-33) {
         const __float128 zr0 = strtoflt128(z0_re_str.c_str(), nullptr);
         const __float128 zi0 = strtoflt128(z0_im_str.c_str(), nullptr);
         const __float128 cr = static_cast<__float128>(julia_re);
@@ -386,7 +389,9 @@ RefOrbit compute_reference_orbit_julia_auto(
 
 #if defined(FSD_HAS_MPFR)
     {
-        int bits = static_cast<int>(std::ceil(-std::log2(scale))) + 64;
+        const double effective_scale =
+            (scale > 0.0 && std::isfinite(scale)) ? scale : 1e-33;
+        int bits = static_cast<int>(std::ceil(-std::log2(effective_scale))) + 64;
         if (bits < 128) bits = 128;
         return compute_reference_orbit_julia_mpfr(z0_re_str, z0_im_str,
                                                    julia_re, julia_im,
@@ -495,7 +500,7 @@ MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
 
                     for (int x = x0; x < x1; ++x) {
                         const size_t px_idx = static_cast<size_t>(y) * W + x;
-                        if (only_glitched && !glitch_mask[px_idx]) continue;
+                        if (only_glitched && glitch_mask[px_idx] != 1) continue;
 
                         double dx = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5);
                         double dy = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5);
@@ -814,7 +819,7 @@ MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
                 for (int y = y0; y < y1; ++y) {
                     for (int x = x0; x < x1; ++x) {
                         const size_t px_idx = static_cast<size_t>(y) * W + x;
-                        if (only_glitched && !glitch_mask[px_idx]) continue;
+                        if (only_glitched && glitch_mask[px_idx] != 1) continue;
 
                         double dx = span_re * ((static_cast<double>(x) + 0.5) / W - 0.5);
                         double dy = -span_im * ((static_cast<double>(y) + 0.5) / H - 0.5);
