@@ -318,6 +318,10 @@ import { type BigDec, bdFromString, bdFromNumber, bdAddNumber, bdToString, bdToN
 
 const centerRePrecise = ref<BigDec>(bdFromString('-0.75'))
 const centerImPrecise = ref<BigDec>(bdFromString('0'))
+// Bumped on non-incremental center jumps (typed coordinates, imports, reset)
+// so the canvases drop their offset-space interaction state.
+const mapViewEpoch = ref(0)
+const juliaViewEpoch = ref(0)
 const centerRe   = ref(-0.75)
 const centerIm   = ref( 0.0)
 const scale      = ref( 3.0)
@@ -618,11 +622,13 @@ function formatViewportNumber(value: number, kind: 're' | 'im' | 'zoom'): string
 }
 
 function syncViewportInputs(force = false) {
+  // Show the full-precision center (the doubles quantize at ~17 digits, and
+  // committing a truncated display back would displace deep-zoom views).
   if (force || activeViewportInput.value !== 're') {
-    viewportReInput.value = formatViewportNumber(centerRe.value, 're')
+    viewportReInput.value = bdToString(centerRePrecise.value)
   }
   if (force || activeViewportInput.value !== 'im') {
-    viewportImInput.value = formatViewportNumber(centerIm.value, 'im')
+    viewportImInput.value = bdToString(centerImPrecise.value)
   }
   if (force || activeViewportInput.value !== 'zoom') {
     viewportZoomInput.value = formatViewportNumber(scale.value, 'zoom')
@@ -631,6 +637,9 @@ function syncViewportInputs(force = false) {
 
 function commitViewportInput(kind: 're' | 'im' | 'zoom') {
   const raw = (kind === 're' ? viewportReInput.value : kind === 'im' ? viewportImInput.value : viewportZoomInput.value).trim()
+  // Focus-then-blur without an edit must not touch the precise state.
+  if (kind === 're' && raw === bdToString(centerRePrecise.value)) { syncViewportInputs(true); return }
+  if (kind === 'im' && raw === bdToString(centerImPrecise.value)) { syncViewportInputs(true); return }
   const next = Number(raw)
   const valid = Number.isFinite(next) && (kind !== 'zoom' || next > 0)
   if (!valid) {
@@ -640,9 +649,11 @@ function commitViewportInput(kind: 're' | 'im' | 'zoom') {
   if (kind === 're') {
     centerRe.value = next
     centerRePrecise.value = bdFromString(raw)
+    mapViewEpoch.value++
   } else if (kind === 'im') {
     centerIm.value = next
     centerImPrecise.value = bdFromString(raw)
+    mapViewEpoch.value++
   } else {
     scale.value = Math.max(1e-300, next)
   }
@@ -667,6 +678,7 @@ function onPickJulia(pos: { re: number; im: number }) {
   centerIm.value = pos.im
   centerRePrecise.value = bdFromNumber(pos.re)
   centerImPrecise.value = bdFromNumber(pos.im)
+  mapViewEpoch.value++
 }
 
 function onJuliaViewport(v: { centerRe: number; centerIm: number; scale: number; deltaRe?: number; deltaIm?: number }) {
@@ -676,6 +688,7 @@ function onJuliaViewport(v: { centerRe: number; centerIm: number; scale: number;
   } else {
     jCenterRePrecise.value = bdFromNumber(v.centerRe)
     jCenterImPrecise.value = bdFromNumber(v.centerIm)
+    juliaViewEpoch.value++
   }
   jCenterRe.value = v.centerRe
   jCenterIm.value = v.centerIm
@@ -715,7 +728,8 @@ function syncStatus() {
 }
 
 watch([centerRe, centerIm, scale, iterations, variant, metric, lastMs], syncStatus, { immediate: true })
-watch([centerRe, centerIm, scale], () => syncViewportInputs(), { immediate: true })
+watch([centerRe, centerIm, scale, centerRePrecise, centerImPrecise],
+      () => syncViewportInputs(), { immediate: true })
 
 onMounted(() => {
   loadCustomVariants()
@@ -729,6 +743,7 @@ onMounted(() => {
         centerIm.value = c.im
         centerRePrecise.value = typeof c.reStr === 'string' ? bdFromString(c.reStr) : bdFromNumber(c.re)
         centerImPrecise.value = typeof c.imStr === 'string' ? bdFromString(c.imStr) : bdFromNumber(c.im)
+        mapViewEpoch.value++
         if (typeof c.scale === 'number' && Number.isFinite(c.scale) && c.scale > 0) {
           scale.value = c.scale
         }
@@ -745,6 +760,7 @@ function onViewportChange(v: { centerRe: number; centerIm: number; scale: number
   } else {
     centerRePrecise.value = bdFromNumber(v.centerRe)
     centerImPrecise.value = bdFromNumber(v.centerIm)
+    mapViewEpoch.value++
   }
   centerRe.value = v.centerRe
   centerIm.value = v.centerIm
@@ -771,6 +787,7 @@ function resetView() {
     jCenterRePrecise.value = bdFromString('0')
     jCenterImPrecise.value = bdFromString('0')
     jScale.value    = 4.0
+    juliaViewEpoch.value++
     return
   }
   centerRe.value = 0.0
@@ -778,6 +795,7 @@ function resetView() {
   centerRePrecise.value = bdFromString('0')
   centerImPrecise.value = bdFromString('0')
   scale.value    = 4.0
+  mapViewEpoch.value++
 }
 
 function onImportPoint(p: SpecialPoint | SpecialPointEnumResult) {
@@ -785,6 +803,7 @@ function onImportPoint(p: SpecialPoint | SpecialPointEnumResult) {
   centerIm.value = 'im' in p ? p.im : p.imag
   centerRePrecise.value = bdFromNumber(centerRe.value)
   centerImPrecise.value = bdFromNumber(centerIm.value)
+  mapViewEpoch.value++
 }
 
 const specialPointViewport = computed(() => ({
@@ -1663,6 +1682,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
         <MapCanvas
           :centerRe="centerRe" :centerIm="centerIm" :scale="scale"
           :centerReStr="bdToString(centerRePrecise)" :centerImStr="bdToString(centerImPrecise)"
+          :viewEpoch="mapViewEpoch"
           :iterations="iterations" :variant="variant" :metric="metric"
           :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
           :pairwise-cap="pairwiseCap"
@@ -1723,6 +1743,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <MapCanvas
                 :centerRe="centerRe" :centerIm="centerIm" :scale="scale"
                 :centerReStr="bdToString(centerRePrecise)" :centerImStr="bdToString(centerImPrecise)"
+                :viewEpoch="mapViewEpoch"
                 :iterations="iterations" :variant="variant" :metric="metric"
                 :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
                 :pairwise-cap="pairwiseCap"
@@ -1760,6 +1781,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <MapCanvas
                 :centerRe="jCenterRe" :centerIm="jCenterIm" :scale="jScale"
                 :centerReStr="bdToString(jCenterRePrecise)" :centerImStr="bdToString(jCenterImPrecise)"
+                :viewEpoch="juliaViewEpoch"
                 :iterations="iterations" :variant="variant" :metric="metric"
                 :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
                 :pairwise-cap="pairwiseCap"

@@ -35,6 +35,9 @@ const props = defineProps<{
   engine?: string
   scalarType?: string
   rotationDeg?: number
+  // Bumped by the parent on non-incremental center jumps (typed coordinates,
+  // imports, reset). Clears the offset-space interaction state below.
+  viewEpoch?: number
   showExportFrame?: boolean
   exportFrameWidth?: number
   exportFrameHeight?: number
@@ -81,13 +84,35 @@ let   glColorizer: GlColorizer | null = null
 let   cachedField: { iter: Uint32Array; norm: Float32Array; w: number; h: number; maxIter: number } | null = null
 
 type ViewportSnapshot = {
-  centerRe: number
-  centerIm: number
   scale: number
   rotationDeg: number
 }
 
 let renderedViewport: ViewportSnapshot | null = null
+
+// Offset of the current viewport center from the last rendered frame's
+// center, accumulated from the exact interaction deltas. Absolute double
+// centers quantize at ~2.2e-16 — useless for interaction below ~2e-13 scale —
+// so all preview math runs in this offset space instead (the same idea as
+// the backend's perturbation deltas). Refs so previewTransform is reactive
+// to pans even when the double center prop cannot change.
+const pendingOffsetRe = ref(0)
+const pendingOffsetIm = ref(0)
+let renderStartOffsetRe = 0   // pendingOffset snapshot when the render was issued
+let renderStartOffsetIm = 0
+
+function trackDelta(deltaRe: number, deltaIm: number) {
+  pendingOffsetRe.value += deltaRe
+  pendingOffsetIm.value += deltaIm
+}
+
+watch(() => props.viewEpoch, () => {
+  // Non-incremental jump: the offset chain is broken; drop the preview until
+  // a fresh frame arrives.
+  pendingOffsetRe.value = 0
+  pendingOffsetIm.value = 0
+  renderedViewport = null
+})
 
 // ── Full-frame render ─────────────────────────────────────────────────────────
 
@@ -192,8 +217,9 @@ function previewTransform(): string {
   const aspect = domW.value / domH.value
   const scaleRatio = renderedViewport.scale / props.scale
   const rotDelta = (props.rotationDeg ?? 0) - renderedViewport.rotationDeg
-  const dre = renderedViewport.centerRe - props.centerRe
-  const dim = renderedViewport.centerIm - props.centerIm
+  // rendered center − current center, in exact offset space
+  const dre = -pendingOffsetRe.value
+  const dim = -pendingOffsetIm.value
   const curRad = (props.rotationDeg ?? 0) * Math.PI / 180
   const cosR = Math.cos(curRad), sinR = Math.sin(curRad)
   const dx = (dre * cosR + dim * sinR) * domW.value / (props.scale * aspect)
@@ -292,6 +318,10 @@ async function renderFrame() {
   const requestId = `${renderClientId}-${seq}`
   const reqW = frameW.value
   const reqH = frameH.value
+  // This render is issued at the current viewport: once it lands, only the
+  // deltas accumulated after this point remain pending.
+  renderStartOffsetRe = pendingOffsetRe.value
+  renderStartOffsetIm = pendingOffsetIm.value
 
   if (shouldUseFieldPath()) {
     // ── WebGL field path: fetch raw iteration data, colorize client-side ──
@@ -335,9 +365,9 @@ async function renderFrame() {
       }
 
       if (seq !== renderSeq) return
+      pendingOffsetRe.value -= renderStartOffsetRe
+      pendingOffsetIm.value -= renderStartOffsetIm
       renderedViewport = {
-        centerRe: fieldReq.centerRe,
-        centerIm: fieldReq.centerIm,
         scale:    fieldReq.scale,
         rotationDeg: props.rotationDeg ?? 0,
       }
@@ -411,9 +441,9 @@ async function renderFrame() {
     const next = drawRgbaFrame(resp.data, frameW, frameH)
     if (next === null) return
     if (seq !== renderSeq) return
+    pendingOffsetRe.value -= renderStartOffsetRe
+    pendingOffsetIm.value -= renderStartOffsetIm
     renderedViewport = {
-      centerRe: req.centerRe,
-      centerIm: req.centerIm,
       scale: req.scale,
       rotationDeg: props.rotationDeg ?? 0,
     }
@@ -449,7 +479,7 @@ function scheduleRender(delay = 200) {
 // Compute watch — viewport, fractal parameters, frame size → full backend re-fetch
 watch(() => [
   props.centerRe, props.centerIm, props.scale,
-  props.centerReStr, props.centerImStr,
+  props.centerReStr, props.centerImStr, props.viewEpoch,
   props.variant, props.metric,
   props.colorMode, props.cyclesPerOctave,
   props.iterations, props.pairwiseCap, props.julia, props.juliaRe, props.juliaIm,
@@ -548,6 +578,7 @@ function onWheel(e: WheelEvent) {
   const cosR = Math.cos(rad), sinR = Math.sin(rad)
   const deltaRe = dx * cosR - dy * sinR
   const deltaIm = dx * sinR + dy * cosR
+  trackDelta(deltaRe, deltaIm)
   emit('viewport-change', {
     centerRe: props.centerRe + deltaRe,
     centerIm: props.centerIm + deltaIm,
@@ -665,6 +696,7 @@ function updatePinch() {
   const deltaIm = pinchStart.prevOffsetIm - offsetIm
   pinchStart.prevOffsetRe = offsetRe
   pinchStart.prevOffsetIm = offsetIm
+  trackDelta(deltaRe, deltaIm)
   emit('viewport-change', {
     centerRe: props.centerRe + deltaRe,
     centerIm: props.centerIm + deltaIm,
@@ -744,6 +776,7 @@ function onPointerMove(e: PointerEvent) {
   const rawTotIm =  (dy / rect.height) * dragStart.sc
   const totalRe = rawTotRe * cosR - rawTotIm * sinR
   const totalIm = rawTotRe * sinR + rawTotIm * cosR
+  trackDelta(deltaRe, deltaIm)
   emit('viewport-change', {
     centerRe: dragStart.cx + totalRe,
     centerIm: dragStart.cy + totalIm,
