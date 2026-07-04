@@ -2,6 +2,10 @@
 #include "compute/map_kernel.hpp"
 #include "compute/transition_kernel.hpp"
 
+#if defined(FSD_HAS_MPFR)
+#  include <mpfr.h>
+#endif
+
 #include <opencv2/core.hpp>
 
 #include <algorithm>
@@ -1107,6 +1111,150 @@ void compare_perturbation_scene_to_fp128(
 #endif
 }
 
+#if defined(FSD_HAS_MPFR)
+// Direct per-pixel MPFR iteration — the ground truth beyond fp128's ~34
+// significant digits (deep centers below ~1e-33 carry far more). Same
+// step-then-check escape convention as the render kernels.
+void mpfr_direct_field(const MapParams& p, std::vector<uint32_t>& out) {
+    const int W = p.width, H = p.height;
+    const int bits = std::max(128, static_cast<int>(std::ceil(-std::log2(p.scale))) + 64);
+    out.assign(static_cast<size_t>(W) * H, 0u);
+    const double span_im = p.scale;
+    const double span_re = p.scale * static_cast<double>(W) / H;
+
+    #pragma omp parallel for schedule(dynamic)
+    for (int idx = 0; idx < W * H; ++idx) {
+        const int x = idx % W, y = idx / W;
+        const double off_re = span_re * ((x + 0.5) / W - 0.5);
+        const double off_im = -span_im * ((y + 0.5) / H - 0.5);
+
+        mpfr_t cr, ci, zr, zi, zr2, zi2, mag, tmp;
+        mpfr_inits2(bits, cr, ci, zr, zi, zr2, zi2, mag, tmp, static_cast<mpfr_ptr>(nullptr));
+        mpfr_set_str(cr, p.center_re_str.c_str(), 10, MPFR_RNDN);
+        mpfr_add_d(cr, cr, off_re, MPFR_RNDN);
+        mpfr_set_str(ci, p.center_im_str.c_str(), 10, MPFR_RNDN);
+        mpfr_add_d(ci, ci, off_im, MPFR_RNDN);
+        mpfr_set_d(zr, 0.0, MPFR_RNDN);
+        mpfr_set_d(zi, 0.0, MPFR_RNDN);
+
+        int it = p.iterations;
+        for (int n = 0; n < p.iterations; ++n) {
+            mpfr_mul(zr2, zr, zr, MPFR_RNDN);
+            mpfr_mul(zi2, zi, zi, MPFR_RNDN);
+            mpfr_sub(tmp, zr2, zi2, MPFR_RNDN);
+            mpfr_add(tmp, tmp, cr, MPFR_RNDN);
+            mpfr_mul(zi, zr, zi, MPFR_RNDN);
+            mpfr_mul_ui(zi, zi, 2, MPFR_RNDN);
+            mpfr_add(zi, zi, ci, MPFR_RNDN);
+            mpfr_set(zr, tmp, MPFR_RNDN);
+            mpfr_mul(zr2, zr, zr, MPFR_RNDN);
+            mpfr_mul(zi2, zi, zi, MPFR_RNDN);
+            mpfr_add(mag, zr2, zi2, MPFR_RNDN);
+            if (mpfr_cmp_d(mag, p.bailout_sq) > 0) { it = n; break; }
+        }
+        out[idx] = static_cast<uint32_t>(it);
+        mpfr_clears(cr, ci, zr, zi, zr2, zi2, mag, tmp, static_cast<mpfr_ptr>(nullptr));
+    }
+}
+#endif // FSD_HAS_MPFR
+
+// Perturbation near the practical depth floor (scale is a double, so pixel
+// offsets stay normal down to ~1e-306): 1.8e-301 against an MPFR oracle.
+// Coordinates mined by MPFR boundary descent (escapes 35k..36k, structured).
+void compare_perturbation_1e301_to_mpfr(Runner& runner) {
+#if defined(FSD_HAS_MPFR)
+    constexpr const char* kDeepRe =
+        "-1.7470322863217475556160559269920680483993998877346704308252622068895883308"
+        "0623199091839741513162397878542014444667155077593447047661529106600323459749"
+        "2847219471994154075529179496211095993131201945758384823672278052553385137724"
+        "5979330403947280370455813775896738628778224798552663028595059476231384695610"
+        "003274438511866656377931559811665482145";
+    constexpr const char* kDeepIm =
+        "0.00810688832149185309460686083178576433964891867581208066647240721132065319"
+        "9581148680281771869927804634535591891848677939093125623857655640970053817778"
+        "7878061867510997705195397305803638355895830594516577795276243062528358469962"
+        "2877301351951527232076392608417343136463164149062629077715956486930763092311"
+        "20173749783703447743250677382084810596";
+
+    RenderScene scene;
+    scene.name = "perturb_deep_1p8e301";
+    scene.params = base_params();
+    scene.params.width = 24;
+    scene.params.height = 18;
+    scene.params.iterations = 40000;
+    scene.params.center_re_str = kDeepRe;
+    scene.params.center_im_str = kDeepIm;
+    scene.params.center_re = std::stod(scene.params.center_re_str);
+    scene.params.center_im = std::stod(scene.params.center_im_str);
+    scene.params.scale = 1.829149541201e-301;
+    scene.params.variant = Variant::Mandelbrot;
+    scene.params.metric = Metric::Escape;
+    scene.params.colormap = Colormap::Spectral1530;
+
+    // ~0.01 px conditioning probe: at 35k+ iterations the escape bands are
+    // dense enough that a 0.1 px nudge flips half the frame; 0.01 px still
+    // sits far above perturbation's own noise scale.
+    RenderScene probe = scene;
+    const int probe_place = static_cast<int>(std::ceil(
+        -std::log10(scene.params.scale / scene.params.height))) + 2;
+    probe.params.center_re_str = shift_decimal_at(scene.params.center_re_str, probe_place);
+    probe.params.center_im_str = shift_decimal_at(scene.params.center_im_str, probe_place);
+
+    FieldRendered perturb;
+    std::vector<uint32_t> b, c;
+    try {
+        perturb = render_field_scene(scene, "auto", "openmp");
+        mpfr_direct_field(scene.params, b);
+        mpfr_direct_field(probe.params, c);
+    } catch (const std::exception& ex) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << scene.name << " threw: " << ex.what() << "\n";
+        return;
+    }
+    remember_stats(runner, perturb.stats);
+
+    const auto& a = perturb.field.iter_u32;
+    if (perturb.stats.scalar_used != "perturbation_fp64" ||
+        a.size() != b.size() || a.size() != c.size() || a.empty()) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << scene.name << " scalar="
+                  << perturb.stats.scalar_used << " size=" << a.size() << "\n";
+        return;
+    }
+
+    constexpr int allowed_iter_delta = 2;
+    int max_delta = 0, bad = 0;
+    size_t stable = 0;
+    long long sum_delta = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const int wobble = std::abs(static_cast<int>(b[i]) - static_cast<int>(c[i]));
+        if (wobble > allowed_iter_delta) continue;
+        ++stable;
+        const int delta = std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i]));
+        max_delta = std::max(max_delta, delta);
+        sum_delta += delta;
+        if (delta > allowed_iter_delta) ++bad;
+    }
+    const double stable_ratio = static_cast<double>(stable) / static_cast<double>(a.size());
+    const double mean = stable ? static_cast<double>(sum_delta) / static_cast<double>(stable) : 0.0;
+    const double bad_ratio = stable ? static_cast<double>(bad) / static_cast<double>(stable) : 1.0;
+    const bool ok = stable_ratio >= 0.50 && mean <= 1.00 && bad_ratio <= 0.02;
+    ++runner.compared;
+    std::cout << (ok ? "[PASS] " : "[FAIL] ") << scene.name
+              << " perturbation vs mpfr"
+              << " max_iter_delta=" << max_delta
+              << " mean=" << std::fixed << std::setprecision(4) << mean
+              << " bad=" << std::setprecision(4) << bad_ratio
+              << " stable=" << std::setprecision(4) << stable_ratio
+              << " elapsed_ms=" << std::setprecision(3) << perturb.stats.elapsed_ms
+              << "\n";
+    if (!ok) ++runner.failed;
+#else
+    ++runner.skipped;
+    std::cout << "[SKIP] perturb_deep_1p8e301 needs FSD_HAS_MPFR\n";
+#endif
+}
+
 // Non-escape metric under perturbation: the Envelope field (min/max |z|
 // extrema) against direct fp128, on the same ~0.1 px conditioning mask.
 void compare_perturbation_envelope_to_fp128(Runner& runner) {
@@ -1423,6 +1571,7 @@ int main() {
 
     compare_deep_perturbation_scenes(runner);
     compare_perturbation_envelope_to_fp128(runner);
+    compare_perturbation_1e301_to_mpfr(runner);
 
     for (const RenderScene& scene : fp32_equivalence_scenes()) {
         Rendered fp32_baseline = render_scene(scene, "openmp", "fp32");

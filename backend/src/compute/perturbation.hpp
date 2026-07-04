@@ -23,6 +23,14 @@
 // Only the standard Mandelbrot map (z^2 + c) is supported. Other quadratic
 // variants break analyticity with abs-value folds, making the perturbation
 // formula piecewise and significantly more complex.
+//
+// Depth range: exact down to scale ~1e-305 (verified against an MPFR oracle
+// at 1.8e-301). fp64 deltas stay normal that deep because |dz| >= |dc| ~
+// scale and the flushed dz^2 underflow terms are genuinely negligible. The
+// remaining wall is representation, not arithmetic: pixel offsets denormalize
+// below ~1e-305, and MapParams::scale itself is a double (min normal
+// 2.2e-308) — going deeper needs an extended scale representation through
+// the API plus floatexp deltas.
 
 #pragma once
 
