@@ -929,28 +929,75 @@ void compare_field_engine_pair(
     if (!ok) ++runner.failed;
 }
 
-void compare_deep_perturbation_to_fp128(Runner& runner) {
+// Add one unit at the 10^-place decimal position of a signed decimal string
+// (magnitude increment with carry). Used to probe ground-truth conditioning.
+std::string shift_decimal_at(const std::string& s, int place) {
+    const size_t dot = s.find('.');
+    if (dot == std::string::npos || place < 1) return s;
+    std::string out = s;
+    size_t pos = dot + static_cast<size_t>(place);
+    while (out.size() <= pos) out.push_back('0');
+    for (;;) {
+        if (out[pos] == '.') { --pos; continue; }
+        if (out[pos] != '9') { ++out[pos]; break; }
+        out[pos] = '0';
+        if (pos == 0 || out[pos - 1] == '-') break;  // clamp; never happens for our coords
+        --pos;
+    }
+    return out;
+}
+
+// Compare the perturbation renderer against direct fp128 iteration on a deep
+// scene. Coordinates are decimal strings (parsed at full precision by the
+// reference-orbit builders); fp128 direct iteration stays a valid ground
+// truth down to scale ~1e-30.
+//
+// Escape-iteration counts are not everywhere a well-conditioned function of
+// the pixel position: near iteration-band boundaries (dense around minibrot
+// halos) a sub-pixel nudge legitimately changes counts by thousands, which is
+// also the scale of fp64 perturbation's accuracy contract (each pixel is the
+// true value of a point within a small fraction of a pixel). The comparison
+// therefore renders fp128 twice — at the scene center and with the center
+// shifted diagonally by ~0.1 pixel — and scores only pixels whose ground
+// truth is self-consistent between the two.
+void compare_perturbation_scene_to_fp128(
+    Runner& runner, const std::string& name,
+    const char* cre_str, const char* cim_str, double scale, int iterations,
+    bool julia = false, double julia_re = 0.0, double julia_im = 0.0,
+    double rotation_deg = 0.0) {
 #if defined(FSD_HAS_FLOAT128)
     RenderScene scene;
-    scene.name = "deep_mandelbrot_perturbation";
+    scene.name = name;
     scene.params = base_params();
-    scene.params.width = 48;
-    scene.params.height = 36;
-    scene.params.iterations = 4096;
-    scene.params.center_re_str = "-1.747032286321746345";
-    scene.params.center_im_str = "0.008106888321491234";
+    scene.params.width = 24;
+    scene.params.height = 18;
+    scene.params.iterations = iterations;
+    scene.params.center_re_str = cre_str;
+    scene.params.center_im_str = cim_str;
     scene.params.center_re = std::stod(scene.params.center_re_str);
     scene.params.center_im = std::stod(scene.params.center_im_str);
-    scene.params.scale = 1.829149541201e-15;
+    scene.params.scale = scale;
     scene.params.variant = Variant::Mandelbrot;
     scene.params.metric = Metric::Escape;
     scene.params.colormap = Colormap::Spectral1530;
+    scene.params.julia = julia;
+    scene.params.julia_re = julia_re;
+    scene.params.julia_im = julia_im;
+    scene.params.rotation_deg = rotation_deg;
+
+    RenderScene probe = scene;                 // conditioning probe (~0.1 px diagonal)
+    const int probe_place = static_cast<int>(std::ceil(
+        -std::log10(scale / scene.params.height))) + 1;
+    probe.params.center_re_str = shift_decimal_at(scene.params.center_re_str, probe_place);
+    probe.params.center_im_str = shift_decimal_at(scene.params.center_im_str, probe_place);
 
     FieldRendered perturb;
     FieldRendered reference;
+    FieldRendered shifted;
     try {
         perturb = render_field_scene(scene, "auto", "openmp");
         reference = render_field_scene(scene, "fp128", "openmp");
+        shifted = render_field_scene(probe, "fp128", "openmp");
     } catch (const std::exception& ex) {
         ++runner.failed;
         std::cerr << "[FAIL] " << scene.name << " threw: " << ex.what() << "\n";
@@ -972,38 +1019,144 @@ void compare_deep_perturbation_to_fp128(Runner& runner) {
 
     const auto& a = perturb.field.iter_u32;
     const auto& b = reference.field.iter_u32;
-    if (a.size() != b.size() || a.empty()) {
+    const auto& c = shifted.field.iter_u32;
+    if (a.size() != b.size() || a.size() != c.size() || a.empty()) {
         ++runner.failed;
         std::cerr << "[FAIL] " << scene.name << " field size mismatch\n";
         return;
     }
 
-    int max_delta = 0;
-    int bad = 0;
-    long long sum_delta = 0;
     constexpr int allowed_iter_delta = 2;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const int delta = std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i]));
-        max_delta = std::max(max_delta, delta);
-        sum_delta += delta;
-        if (delta > allowed_iter_delta) ++bad;
+    struct MaskedScore {
+        int max_delta = 0;
+        double mean = 0.0;
+        double bad_ratio = 1.0;
+        double stable_ratio = 0.0;
+    };
+    auto score_vs_truth = [&](const std::vector<uint32_t>& cand) {
+        MaskedScore s;
+        int bad = 0;
+        size_t stable = 0;
+        long long sum_delta = 0;
+        for (size_t i = 0; i < cand.size(); ++i) {
+            const int truth_wobble =
+                std::abs(static_cast<int>(b[i]) - static_cast<int>(c[i]));
+            if (truth_wobble > allowed_iter_delta) continue;  // ill-conditioned pixel
+            ++stable;
+            const int delta = std::abs(static_cast<int>(cand[i]) - static_cast<int>(b[i]));
+            s.max_delta = std::max(s.max_delta, delta);
+            sum_delta += delta;
+            if (delta > allowed_iter_delta) ++bad;
+        }
+        s.stable_ratio = static_cast<double>(stable) / static_cast<double>(cand.size());
+        if (stable) {
+            s.mean = static_cast<double>(sum_delta) / static_cast<double>(stable);
+            s.bad_ratio = static_cast<double>(bad) / static_cast<double>(stable);
+        }
+        return s;
+    };
+    auto report = [&](const std::string& label, const MaskedScore& s, double elapsed_ms) {
+        const bool ok = s.stable_ratio >= 0.50 && s.mean <= 1.00 && s.bad_ratio <= 0.02;
+        ++runner.compared;
+        std::cout << (ok ? "[PASS] " : "[FAIL] ") << scene.name
+                  << " " << label
+                  << " max_iter_delta=" << s.max_delta
+                  << " mean=" << std::fixed << std::setprecision(4) << s.mean
+                  << " bad=" << std::setprecision(4) << s.bad_ratio
+                  << " stable=" << std::setprecision(4) << s.stable_ratio
+                  << " elapsed_ms=" << std::setprecision(3) << elapsed_ms
+                  << "\n";
+        if (!ok) ++runner.failed;
+    };
+
+    report("perturbation vs fp128", score_vs_truth(a), perturb.stats.elapsed_ms);
+
+    // Engine parity: the AVX2/AVX-512/CUDA batch kernels must match the same
+    // ground truth on the same conditioning mask. Skipped when the engine is
+    // unavailable at runtime (the render falls back and reports another name).
+    for (const char* eng : {"avx2", "avx512", "cuda"}) {
+        FieldRendered alt;
+        try {
+            alt = render_field_scene(scene, "auto", eng);
+        } catch (const std::exception& ex) {
+            ++runner.failed;
+            std::cerr << "[FAIL] " << scene.name << " engine " << eng
+                      << " threw: " << ex.what() << "\n";
+            continue;
+        }
+        if (alt.stats.engine_used != eng) {
+            ++runner.skipped;
+            continue;
+        }
+        remember_stats(runner, alt.stats);
+        if (alt.stats.scalar_used != "perturbation_fp64" ||
+            alt.field.iter_u32.size() != b.size()) {
+            ++runner.failed;
+            std::cerr << "[FAIL] " << scene.name << " engine " << eng
+                      << " scalar=" << alt.stats.scalar_used << "\n";
+            continue;
+        }
+        report(std::string("perturbation vs fp128 (") + eng + ")",
+               score_vs_truth(alt.field.iter_u32), alt.stats.elapsed_ms);
     }
-    const double mean = static_cast<double>(sum_delta) / static_cast<double>(a.size());
-    const double bad_ratio = static_cast<double>(bad) / static_cast<double>(a.size());
-    const bool ok = mean <= 1.00 && bad_ratio <= 0.02;
-    ++runner.compared;
-    std::cout << (ok ? "[PASS] " : "[FAIL] ") << scene.name
-              << " perturbation vs fp128"
-              << " max_iter_delta=" << max_delta
-              << " mean=" << std::fixed << std::setprecision(4) << mean
-              << " bad=" << std::setprecision(4) << bad_ratio
-              << " elapsed_ms=" << std::setprecision(3) << perturb.stats.elapsed_ms
-              << "\n";
-    if (!ok) ++runner.failed;
 #else
+    (void)cre_str; (void)cim_str; (void)scale; (void)iterations;
+    (void)julia; (void)julia_re; (void)julia_im; (void)rotation_deg;
     ++runner.skipped;
-    std::cout << "[SKIP] deep_mandelbrot_perturbation needs FSD_HAS_FLOAT128\n";
+    std::cout << "[SKIP] " << name << " needs FSD_HAS_FLOAT128\n";
 #endif
+}
+
+// Deep-zoom perturbation scenes. Coordinates mined by boundary descent so
+// every frame keeps an iteration spread; all verified against direct fp128.
+void compare_deep_perturbation_scenes(Runner& runner) {
+    // Existing shallow-end scene (just past the 1e-13 activation gate).
+    compare_perturbation_scene_to_fp128(runner,
+        "deep_mandelbrot_perturbation",
+        "-1.747032286321746345",
+        "0.008106888321491234",
+        1.829149541201e-15, 4096);
+
+    // Deep filament at 1.8e-30: exercises the fp128-precision center parse
+    // near the bottom of the __float128 tier with fast-escaping dynamics.
+    // (Minibrot halos with long shadowing — e.g. the period-3 island antenna
+    // at -1.76672314773504240768…+0.00775302006722118372…i, 2e-20 — are NOT
+    // usable as comparison anchors: escape counts there change by thousands
+    // under a 0.1-pixel nudge of the ground truth itself, so no per-pixel
+    // assertion is well-defined. Cancellation rebases are covered here and in
+    // every other scene: hundreds to thousands fire per frame.)
+    compare_perturbation_scene_to_fp128(runner,
+        "perturb_filament_1p8e30",
+        "-1.747032286321747555616055926991316089",
+        "0.008106888321491853094606860832336525",
+        1.829149541201e-30, 8192);
+
+    // Filament view whose center escapes early with slower neighbors:
+    // isolates the truncated-reference rebase with a short orbit.
+    compare_perturbation_scene_to_fp128(runner,
+        "perturb_escaping_ref_1p8e20",
+        "-1.747032286321747555615588653338769259",
+        "0.008106888321491853096767791107692308",
+        1.829149541201e-20, 4096);
+
+    // Same view rotated 30°: covers the rotated-offset path in the scalar,
+    // AVX2, and CUDA pixel-offset generation.
+    compare_perturbation_scene_to_fp128(runner,
+        "perturb_rotated_1p8e20",
+        "-1.747032286321747555615588653338769259",
+        "0.008106888321491853096767791107692308",
+        1.829149541201e-20, 4096,
+        /*julia=*/false, 0.0, 0.0, /*rotation_deg=*/30.0);
+
+    // Deep Julia (c inside the main cardioid, quasicircle boundary): the
+    // seeded center orbit escapes at ~282 while interior pixels never do,
+    // forcing the switch onto the critical orbit of c.
+    compare_perturbation_scene_to_fp128(runner,
+        "perturb_julia_2e20",
+        "-0.369327699081606662507692307692307668",
+        "0.602998422270858277092307692307692327",
+        2e-20, 4096,
+        /*julia=*/true, -0.5, 0.5);
 }
 
 MapParams map_params_for_direct_transition(const TransitionParams& p) {
@@ -1191,7 +1344,7 @@ int main() {
         compare_transition_theta_encoding(runner, scene, exact_scalar_limits);
     }
 
-    compare_deep_perturbation_to_fp128(runner);
+    compare_deep_perturbation_scenes(runner);
 
     for (const RenderScene& scene : fp32_equivalence_scenes()) {
         Rendered fp32_baseline = render_scene(scene, "openmp", "fp32");

@@ -1,13 +1,26 @@
 // compute/perturbation.hpp
 //
-// Perturbation-theory renderer for deep-zoom Mandelbrot.
+// Perturbation-theory renderer for deep-zoom Mandelbrot and Julia.
 //
-// Computes a single reference orbit at __float128 precision, then uses fp64
-// perturbation deltas (delta_z) for all pixels. This enables rendering at
-// zoom depths far beyond fp64's ~1e-15 limit while keeping per-pixel work
-// in fast fp64 arithmetic.
+// Computes reference orbits at high precision (double / __float128 / MPFR
+// tiered by scale), then uses fp64 perturbation deltas (delta_z) for all
+// pixels. This enables rendering at zoom depths far beyond fp64's ~1e-15
+// limit while keeping per-pixel work in fast fp64 arithmetic.
 //
-// Only the standard Mandelbrot (z^2 + c) is supported. Other quadratic
+// Pixels use Zhuoran-style rebasing: whenever the full orbit |Z_m + dz|
+// drops below |dz|, or the reference orbit data runs out, the pixel is
+// re-expressed as a perturbation of the start of the *critical* orbit
+// (exact, since its Z_0 = 0 is the critical point). One pass, no glitch
+// heuristics, no correction passes:
+//
+//   Mandelbrot: the reference orbit at the viewport center starts at the
+//     critical point already, so it serves as both the primary and the
+//     rebase target (R == K below).
+//   Julia: pixels start against the seeded orbit R of the viewport center
+//     (Z_0 = center, tiny initial dz), and on the first rebase switch to the
+//     critical orbit K of c_julia (Z_0 = 0), rebasing within K thereafter.
+//
+// Only the standard Mandelbrot map (z^2 + c) is supported. Other quadratic
 // variants break analyticity with abs-value folds, making the perturbation
 // formula piecewise and significantly more complex.
 
@@ -17,6 +30,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -49,6 +63,91 @@ RefOrbit compute_reference_orbit_julia_auto(
     const std::string& z0_re_str, const std::string& z0_im_str,
     double julia_re, double julia_im,
     int max_iter, double bailout_sq, double scale);
+
+// ---------------------------------------------------------------------------
+// Per-pixel fp64 delta iteration with rebasing, shared by the cartesian and
+// ln-map renderers (and mirrored by the AVX2/CUDA kernels).
+// ---------------------------------------------------------------------------
+
+struct PerturbPixel {
+    int     iter        = 0;      // escape iteration; == max_iter if inside
+    bool    escaped     = false;
+    double  escape_mag2 = 0.0;    // |z|^2 at escape (smooth/equalized coloring)
+};
+
+// Iterate one pixel.
+//   R          primary reference orbit (Mandelbrot: center orbit; Julia:
+//              seeded orbit of the viewport center).
+//   K          rebase orbit whose Z_0 = 0 (Mandelbrot: same as R; Julia:
+//              critical orbit of c_julia). Pass R again for Mandelbrot.
+//   dz0        initial delta (Mandelbrot: 0; Julia: pixel offset from center).
+//   dc         pixel's c offset from the reference c (Mandelbrot: pixel
+//              offset; Julia: 0 — every pixel shares c_julia exactly).
+//
+// Glitch-free by construction: rebases onto K's start whenever significance
+// would be lost or the current orbit's data ends.
+inline PerturbPixel perturb_iterate(
+    const double* Rr, const double* Ri, int r_len,
+    const double* Kr, const double* Ki, int k_len,
+    double dz0_re, double dz0_im,
+    double dc_re, double dc_im,
+    int max_iter, double bail2) noexcept
+{
+    PerturbPixel out;
+    out.iter = max_iter;
+
+    const double* Or = Rr;
+    const double* Oi = Ri;
+    int olen = r_len;
+    int m = 0;  // reference orbit index, decoupled from pixel iteration n
+
+    double dz_re = dz0_re, dz_im = dz0_im;
+
+    if (olen < 2) {
+        // Degenerate primary orbit (its seed already escaped): rebase to K
+        // immediately. dz <- z_0 = R_0 + dz is exact since K_0 = 0.
+        dz_re = Rr[0] + dz_re;
+        dz_im = Ri[0] + dz_im;
+        Or = Kr; Oi = Ki; olen = k_len;
+        if (olen < 2) return out;
+    }
+
+    for (int n = 0; n < max_iter; ++n) {
+        const double two_Zr = 2.0 * Or[m];
+        const double two_Zi = 2.0 * Oi[m];
+
+        // dz' = 2*Z_m*dz + dz^2 + dc
+        const double new_dz_re = two_Zr * dz_re - two_Zi * dz_im
+                               + dz_re * dz_re - dz_im * dz_im + dc_re;
+        const double new_dz_im = two_Zr * dz_im + two_Zi * dz_re
+                               + 2.0 * dz_re * dz_im + dc_im;
+        dz_re = new_dz_re;
+        dz_im = new_dz_im;
+
+        const double z_re = Or[m + 1] + dz_re;
+        const double z_im = Oi[m + 1] + dz_im;
+        const double mag2 = z_re * z_re + z_im * z_im;
+
+        if (mag2 > bail2) {
+            out.iter = n;
+            out.escaped = true;
+            out.escape_mag2 = mag2;
+            return out;
+        }
+
+        ++m;
+        const double dz_mag2 = dz_re * dz_re + dz_im * dz_im;
+        if (mag2 < dz_mag2 || m + 1 >= olen) {
+            // Rebase: the full orbit is closer to K_0 = 0 than to Z_m, or the
+            // orbit data ends. dz <- z is exact because K_0 = 0.
+            dz_re = z_re;
+            dz_im = z_im;
+            Or = Kr; Oi = Ki; olen = k_len;
+            m = 0;
+        }
+    }
+    return out;
+}
 
 MapStats render_map_perturbation(const MapParams& p, cv::Mat& out);
 

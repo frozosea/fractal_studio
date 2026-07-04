@@ -9,12 +9,18 @@
 #include "map_kernel_avx512.hpp"
 #include "parallel.hpp"
 #include "perturbation.hpp"
+#include "perturbation_avx2.hpp"
+#include "perturbation_avx512.hpp"
 
 #if defined(HAS_CUDA_KERNEL)
 #  include "cuda/ln_map.cuh"
+#  include "cuda/map_kernel.cuh"      // cuda_available()
+#  include "cuda/perturb_kernel.cuh"
 #  define USE_CUDA_LN_MAP 1
+#  define USE_CUDA 1
 #else
 #  define USE_CUDA_LN_MAP 0
+#  define USE_CUDA 0
 #endif
 
 #include <opencv2/core.hpp>
@@ -2017,153 +2023,208 @@ static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
     const int max_iter = p.iterations;
     const bool is_julia = p.julia;
     const int thread_count = default_render_threads();
-    constexpr double GLITCH_TOL = 1e-3;
 
-    // Reference orbit at center
+    // The strip spans radii from LN_FOUR down to the innermost row; the
+    // innermost radius drives the reference-precision tier (fp128 vs MPFR).
+    const double k_min = LN_FOUR - static_cast<double>(T - 1) * TAU / static_cast<double>(S);
+    const double r_min = std::exp(std::max(k_min, -690.0));  // keep > 0 for log2
+
+    // Primary reference orbit at the viewport center; for Julia additionally
+    // the critical orbit of c_julia as the rebase target (see perturbation.hpp).
     RefOrbit ref;
+    RefOrbit crit;
     if (is_julia) {
         ref = compute_reference_orbit_julia_auto(
             p.center_re_str, p.center_im_str,
-            p.julia_re, p.julia_im, max_iter, bail2, 0.0);
+            p.julia_re, p.julia_im, max_iter, bail2, r_min);
+        crit = compute_reference_orbit(p.julia_re, p.julia_im, max_iter, bail2);
     } else {
         ref = compute_reference_orbit_auto(
-            p.center_re_str, p.center_im_str, max_iter, bail2, 0.0);
+            p.center_re_str, p.center_im_str, max_iter, bail2, r_min);
     }
+    const RefOrbit& kref = is_julia ? crit : ref;
 
-    const TrigColumns cols = make_trig_columns(S);
-    (void)ref; // used by render_rows lambda via captured reference
+    const double* Rr = ref.z_re.data();
+    const double* Ri = ref.z_im.data();
+    const int     Rlen = static_cast<int>(ref.z_re.size());
+    const double* Kr = kref.z_re.data();
+    const double* Ki = kref.z_im.data();
+    const int     Klen = static_cast<int>(kref.z_re.size());
 
-    std::vector<uint8_t> glitch(static_cast<size_t>(S) * T, 0);
-    std::atomic<int> rows_done{0};
+    // Combined orbit table for the batch kernels: R then K (Mandelbrot
+    // aliases both windows onto the same orbit; see perturbation.hpp).
+    std::vector<double> tab_re_store, tab_im_store;
+    const double* tab_re = Rr;
+    const double* tab_im = Ri;
+    int tab_len = Rlen;
+    int k_off = 0;
+    if (is_julia) {
+        tab_re_store.assign(ref.z_re.begin(), ref.z_re.end());
+        tab_re_store.insert(tab_re_store.end(), kref.z_re.begin(), kref.z_re.end());
+        tab_im_store.assign(ref.z_im.begin(), ref.z_im.end());
+        tab_im_store.insert(tab_im_store.end(), kref.z_im.begin(), kref.z_im.end());
+        tab_re = tab_re_store.data();
+        tab_im = tab_im_store.data();
+        tab_len = Rlen + Klen;
+        k_off = Rlen;
+    }
+    int start_off = 0, start_len = Rlen;
+    double dz_shift_re = 0.0, dz_shift_im = 0.0;
+    if (Rlen < 2) {
+        dz_shift_re = Rr[0];
+        dz_shift_im = Ri[0];
+        start_off = k_off;
+        start_len = Klen;
+    }
+    const bool batch_ok = start_len >= 2 && Klen >= 2;
 
-    auto render_rows = [&](const RefOrbit& orb, double ref_re, double ref_im,
-                           const uint8_t* glitch_mask, bool only_glitched) {
-        const int olen = static_cast<int>(orb.z_re.size());
-        const double* oR = orb.z_re.data();
-        const double* oI = orb.z_im.data();
+    // Explicit engine request, or auto → AVX-512, CUDA, AVX2, scalar
+    // (matching select_map_engine's no-benchmark preference order).
+    std::string want = p.engine;
+    if (want == "auto") {
+        if (perturb_avx512_available()) want = "avx512";
+#if USE_CUDA
+        else if (fsd_cuda::cuda_available()) want = "cuda";
+#endif
+        else if (perturb_avx2_available()) want = "avx2";
+        else want = "openmp";
+    }
+    [[maybe_unused]] const bool wants_cuda = want == "cuda" || want == "hybrid";
+    using PerturbBatchFn = void (*)(
+        const double*, const double*, int, int, int, int,
+        const double*, const double*, const double*, const double*,
+        int, int, double, int32_t*, double*) noexcept;
+    // Best CPU batch kernel — the primary path for the AVX engines and the
+    // fallback when a CUDA render fails.
+    PerturbBatchFn batch = nullptr;
+    const char* batch_engine = "openmp";
+    if (batch_ok && want != "openmp") {
+        if (want != "avx2" && perturb_avx512_available()) {
+            batch = perturb_iterate_batch_avx512;
+            batch_engine = "avx512";
+        } else if (perturb_avx2_available()) {
+            batch = perturb_iterate_batch_avx2;
+            batch_engine = "avx2";
+        }
+    }
+    std::string engine_used = "openmp";
+    bool rendered = false;
 
-        #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
-        for (int row = 0; row < T; ++row) {
-            uint8_t* rowp = out.ptr<uint8_t>(row);
-            const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(S);
-            const double r_mag = std::exp(k);
-
-            for (int x = 0; x < S; ++x) {
-                const size_t idx = static_cast<size_t>(row) * S + x;
-                if (only_glitched && !(glitch_mask && glitch_mask[idx])) continue;
-
-                const double px_off_re = r_mag * cols.cos_col[static_cast<size_t>(x)]
-                                        + (p.center_re - ref_re);
-                const double px_off_im = r_mag * cols.sin_col[static_cast<size_t>(x)]
-                                        + (p.center_im - ref_im);
-
-                double dc_re, dc_im, dz_re, dz_im;
-                if (is_julia) {
-                    dc_re = 0.0; dc_im = 0.0;
-                    dz_re = px_off_re; dz_im = px_off_im;
-                } else {
-                    dc_re = px_off_re; dc_im = px_off_im;
-                    dz_re = 0.0; dz_im = 0.0;
+#if USE_CUDA
+    if (!rendered && batch_ok && wants_cuda && fsd_cuda::cuda_available()) {
+        fsd_cuda::CudaPerturbParams cp;
+        cp.width = S; cp.height = T; cp.iterations = max_iter;
+        cp.bailout_sq = bail2;
+        cp.offset_mode = 1;
+        cp.ln_r0 = LN_FOUR;
+        cp.k_step = TAU / static_cast<double>(S);
+        cp.theta_step = TAU / static_cast<double>(S);
+        cp.julia = is_julia;
+        cp.dz_shift_re = dz_shift_re; cp.dz_shift_im = dz_shift_im;
+        cp.tab_re = tab_re; cp.tab_im = tab_im; cp.tab_len = tab_len;
+        cp.start_off = start_off; cp.start_len = start_len;
+        cp.k_off = k_off; cp.k_len = Klen;
+        std::vector<uint32_t> iters(static_cast<size_t>(S) * T);
+        std::vector<float> norms(static_cast<size_t>(S) * T);
+        if (fsd_cuda::cuda_render_perturb_field(cp, iters.data(), norms.data(), nullptr)) {
+            #pragma omp parallel for num_threads(thread_count) schedule(static)
+            for (int row = 0; row < T; ++row) {
+                uint8_t* rowp = out.ptr<uint8_t>(row);
+                for (int x = 0; x < S; ++x) {
+                    const uint32_t it = iters[static_cast<size_t>(row) * S + x];
+                    uint8_t* px = rowp + 3 * x;
+                    colorize_escape_bgr(static_cast<int>(it), max_iter, p.colormap,
+                                        0.0, false, px[0], px[1], px[2]);
                 }
-
-                int iter = max_iter;
-                bool escaped = false;
-                bool is_glitch = false;
-
-                const int limit = std::min(max_iter, olen - 1);
-                for (int n = 0; n < limit; ++n) {
-                    const double Zr = oR[n];
-                    const double Zi = oI[n];
-                    const double new_dz_re = 2.0 * Zr * dz_re - 2.0 * Zi * dz_im
-                                            + dz_re * dz_re - dz_im * dz_im + dc_re;
-                    const double new_dz_im = 2.0 * Zr * dz_im + 2.0 * Zi * dz_re
-                                            + 2.0 * dz_re * dz_im + dc_im;
-                    dz_re = new_dz_re;
-                    dz_im = new_dz_im;
-
-                    const double z_re = oR[n + 1] + dz_re;
-                    const double z_im = oI[n + 1] + dz_im;
-                    const double mag2 = z_re * z_re + z_im * z_im;
-
-                    if (mag2 > bail2) {
-                        iter = n; escaped = true; break;
-                    }
-                    if (!std::isfinite(dz_re) || !std::isfinite(dz_im)) {
-                        is_glitch = true; break;
-                    }
-                    const double dz_mag2 = dz_re * dz_re + dz_im * dz_im;
-                    if (dz_mag2 > 1e-4 && mag2 < GLITCH_TOL * dz_mag2) {
-                        is_glitch = true; break;
-                    }
-                }
-
-                if (is_glitch || (!escaped && limit < max_iter)) {
-                    glitch[idx] = is_glitch ? 1 : 2;
-                    continue;
-                }
-                glitch[idx] = 0;
-                uint8_t* px = rowp + 3 * x;
-                colorize_escape_bgr(escaped ? iter : max_iter, max_iter,
-                                    p.colormap, 0.0, false, px[0], px[1], px[2]);
             }
-            if (on_row_done) {
-                const int done = rows_done.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (done == T || (done % 16) == 0) on_row_done(done);
+            if (on_row_done) on_row_done(T);
+            engine_used = "cuda";
+            rendered = true;
+        }
+    }
+#endif
+
+    if (!rendered) {
+        const TrigColumns cols = make_trig_columns(S);
+        std::atomic<int> rows_done{0};
+
+        #pragma omp parallel num_threads(thread_count)
+        {
+            std::vector<double> bdz_re, bdz_im, bdc_re, bdc_im;
+            std::vector<int32_t> b_iter;
+            std::vector<double> b_mag2;
+            if (batch) {
+                bdz_re.resize(static_cast<size_t>(S));
+                bdz_im.resize(static_cast<size_t>(S));
+                bdc_re.resize(static_cast<size_t>(S));
+                bdc_im.resize(static_cast<size_t>(S));
+                b_iter.resize(static_cast<size_t>(S));
+                b_mag2.resize(static_cast<size_t>(S));
+            }
+
+            #pragma omp for schedule(dynamic, 8)
+            for (int row = 0; row < T; ++row) {
+                uint8_t* rowp = out.ptr<uint8_t>(row);
+                const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(S);
+                const double r_mag = std::exp(k);
+
+                if (batch) {
+                    for (int x = 0; x < S; ++x) {
+                        const double off_re = r_mag * cols.cos_col[static_cast<size_t>(x)];
+                        const double off_im = r_mag * cols.sin_col[static_cast<size_t>(x)];
+                        if (is_julia) {
+                            bdz_re[static_cast<size_t>(x)] = off_re + dz_shift_re;
+                            bdz_im[static_cast<size_t>(x)] = off_im + dz_shift_im;
+                            bdc_re[static_cast<size_t>(x)] = 0.0;
+                            bdc_im[static_cast<size_t>(x)] = 0.0;
+                        } else {
+                            bdz_re[static_cast<size_t>(x)] = dz_shift_re;
+                            bdz_im[static_cast<size_t>(x)] = dz_shift_im;
+                            bdc_re[static_cast<size_t>(x)] = off_re;
+                            bdc_im[static_cast<size_t>(x)] = off_im;
+                        }
+                    }
+                    batch(tab_re, tab_im, start_off, start_len, k_off, Klen,
+                          bdz_re.data(), bdz_im.data(), bdc_re.data(), bdc_im.data(),
+                          S, max_iter, bail2, b_iter.data(), b_mag2.data());
+                    for (int x = 0; x < S; ++x) {
+                        uint8_t* px = rowp + 3 * x;
+                        colorize_escape_bgr(b_iter[static_cast<size_t>(x)], max_iter,
+                                            p.colormap, 0.0, false, px[0], px[1], px[2]);
+                    }
+                } else {
+                    for (int x = 0; x < S; ++x) {
+                        const double off_re = r_mag * cols.cos_col[static_cast<size_t>(x)];
+                        const double off_im = r_mag * cols.sin_col[static_cast<size_t>(x)];
+
+                        const double dz0_re = is_julia ? off_re : 0.0;
+                        const double dz0_im = is_julia ? off_im : 0.0;
+                        const double dc_re  = is_julia ? 0.0 : off_re;
+                        const double dc_im  = is_julia ? 0.0 : off_im;
+
+                        const PerturbPixel res = perturb_iterate(
+                            Rr, Ri, Rlen, Kr, Ki, Klen,
+                            dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2);
+
+                        uint8_t* px = rowp + 3 * x;
+                        colorize_escape_bgr(res.iter, max_iter, p.colormap,
+                                            0.0, false, px[0], px[1], px[2]);
+                    }
+                }
+                if (on_row_done) {
+                    const int done = rows_done.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (done == T || (done % 16) == 0) on_row_done(done);
+                }
             }
         }
-    };
-
-    render_rows(ref, p.center_re, p.center_im, nullptr, false);
-
-    // Rebase for glitch pixels (up to 3 passes)
-    for (int rebase = 0; rebase < 3; ++rebase) {
-        double rb_re = p.center_re, rb_im = p.center_im;
-        bool found = false;
-        for (int row = 0; row < T && !found; ++row)
-            for (int x = 0; x < S && !found; ++x) {
-                const size_t idx = static_cast<size_t>(row) * S + x;
-                if (glitch[idx] == 1) {
-                    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(S);
-                    const double r_mag = std::exp(k);
-                    rb_re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
-                    rb_im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
-                    found = true;
-                }
-            }
-        if (!found) break;
-        RefOrbit rb_ref = is_julia
-            ? compute_reference_orbit_julia(rb_re, rb_im,
-                                             p.julia_re, p.julia_im, max_iter, bail2)
-            : compute_reference_orbit(rb_re, rb_im, max_iter, bail2);
-        rows_done.store(0, std::memory_order_relaxed);
-        render_rows(rb_ref, rb_re, rb_im, glitch.data(), true);
-    }
-
-    // Fallback: remaining glitch pixels use native double precision
-    for (size_t idx = 0; idx < static_cast<size_t>(S) * T; ++idx) {
-        if (!glitch[idx]) continue;
-        const int row = static_cast<int>(idx / S);
-        const int x   = static_cast<int>(idx % S);
-        const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(S);
-        const double r_mag = std::exp(k);
-        const double pre = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
-        const double pim = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
-        Cx<double> z0, c;
-        if (is_julia) { z0 = {pre, pim}; c = {p.julia_re, p.julia_im}; }
-        else          { z0 = {0.0, 0.0}; c = {pre, pim}; }
-        const auto ir = iterate_masked<
-            IterResultField::Iter | IterResultField::Escaped,
-            Variant::Mandelbrot, double>(z0, c, max_iter, p.bailout, bail2);
-        uint8_t* px = out.ptr<uint8_t>(row) + 3 * x;
-        const int it = ir.escaped ? ir.iter : max_iter;
-        colorize_escape_bgr(it, max_iter, p.colormap, 0.0, false, px[0], px[1], px[2]);
+        engine_used = batch_engine;
     }
 
     const auto t1 = std::chrono::steady_clock::now();
     LnMapStats stats;
     stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     stats.pixel_count = S * T;
-    stats.engine_used = "openmp";
+    stats.engine_used = engine_used;
     stats.scalar_used = "perturbation";
     stats.precision_mode = "standard";
     return stats;

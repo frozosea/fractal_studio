@@ -85,6 +85,8 @@ add_executable(fractal_studio_backend
     src/compute/newton/mandelbrot_sp.cpp
     src/compute/tile_scheduler.cpp
     src/compute/perturbation.cpp
+    src/compute/perturbation_avx2.cpp
+    src/compute/perturbation_avx512.cpp
 
     # Hardware probes
     src/adapters/cuda_probe.cpp
@@ -100,6 +102,7 @@ if(HAS_CUDA)
         src/compute/cuda/transition_volume.cu
         src/compute/cuda/transition_kernel.cu
         src/compute/cuda/special_points.cu
+        src/compute/cuda/perturb_kernel.cu
     )
     target_include_directories(fractal_cuda PRIVATE
         src
@@ -170,6 +173,8 @@ add_executable(compute_path_diff
     src/compute/transition_kernel_avx2.cpp
     src/compute/tile_scheduler.cpp
     src/compute/perturbation.cpp
+    src/compute/perturbation_avx2.cpp
+    src/compute/perturbation_avx512.cpp
 )
 target_include_directories(compute_path_diff PRIVATE
     src
@@ -241,6 +246,7 @@ if(COMPILER_HAS_AVX2 AND COMPILER_HAS_FMA)
         src/compute/ln_map_avx2.cpp
         src/compute/transition_volume_avx2.cpp
         src/compute/transition_kernel_avx2.cpp
+        src/compute/perturbation_avx2.cpp
         PROPERTIES COMPILE_FLAGS "-mavx2 -mfma")
     target_compile_definitions(fractal_studio_backend PRIVATE HAS_AVX2_KERNEL=1)
     target_compile_definitions(compute_path_diff PRIVATE HAS_AVX2_KERNEL=1)
@@ -254,6 +260,7 @@ if(COMPILER_HAS_AVX512F)
     set_source_files_properties(
         src/compute/map_kernel_avx512.cpp
         src/compute/ln_map_avx512.cpp
+        src/compute/perturbation_avx512.cpp
         PROPERTIES
         COMPILE_FLAGS "-mavx512f -mavx512dq -mavx512ifma")
     target_compile_definitions(fractal_studio_backend PRIVATE HAS_AVX512_KERNEL=1)
