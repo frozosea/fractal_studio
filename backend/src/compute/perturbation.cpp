@@ -208,7 +208,16 @@ RefOrbit compute_reference_orbit_auto(
 
     // Tier 2: scale ≥ 1e-33, or unknown/non-positive scale → __float128 center.
 #if defined(FSD_HAS_FLOAT128)
-    if (!(scale > 0.0) || scale >= 1e-33) {
+#  if defined(FSD_HAS_MPFR)
+    const bool use_fp128_tier = !(scale > 0.0) || scale >= 1e-33;
+#  else
+    // Without MPFR, __float128 is the deepest tier there is. Keep using it
+    // below its exact range — the center rounds by ≤ ~2e-34 (sub-frame down
+    // to ~1e-36) instead of collapsing to the double fallback, which renders
+    // a point ~1e17 frame-widths away.
+    const bool use_fp128_tier = true;
+#  endif
+    if (use_fp128_tier) {
         const __float128 cr = strtoflt128(cre_str.c_str(), nullptr);
         const __float128 ci = strtoflt128(cim_str.c_str(), nullptr);
         const __float128 b2 = static_cast<__float128>(bailout_sq);
@@ -365,7 +374,12 @@ RefOrbit compute_reference_orbit_julia_auto(
     }
 
 #if defined(FSD_HAS_FLOAT128)
-    if (!(scale > 0.0) || scale >= 1e-33) {
+#  if defined(FSD_HAS_MPFR)
+    const bool use_fp128_tier = !(scale > 0.0) || scale >= 1e-33;
+#  else
+    const bool use_fp128_tier = true;   // deepest available tier (see above)
+#  endif
+    if (use_fp128_tier) {
         const __float128 zr0 = strtoflt128(z0_re_str.c_str(), nullptr);
         const __float128 zi0 = strtoflt128(z0_im_str.c_str(), nullptr);
         const __float128 cr = static_cast<__float128>(julia_re);
