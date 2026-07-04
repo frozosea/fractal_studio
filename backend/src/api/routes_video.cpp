@@ -1620,7 +1620,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         throw std::runtime_error("invalid lnMapCyclesPerOctave (0..64)");
     }
     if (s < 128 || s > 65536)               throw std::runtime_error("invalid widthS (128..65536)");
-    if (depth < 0.05 || depth > 120.0)      throw std::runtime_error("invalid depthOctaves (0.05..120)");
+    if (depth < 0.05 || depth > 1024.0)      throw std::runtime_error("invalid depthOctaves (0.05..1024)");
     if (iters < 1 || iters > 10000000)      throw std::runtime_error("invalid iterations");
     if (lnMapMode != "standard" && lnMapMode != "fast") {
         throw std::runtime_error("invalid lnMapMode (standard|fast)");
