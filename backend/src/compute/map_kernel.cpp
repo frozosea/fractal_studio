@@ -890,12 +890,12 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
         return render_explore_field(p, fo);
     }
 
-    // Perturbation field path: deep zoom Mandelbrot+Escape (covers equalized mode).
+    // Perturbation field path: deep-zoom Mandelbrot/Julia for every metric it
+    // can serve (Escape incl. smooth/equalized coloring, MinAbs, MaxAbs,
+    // Envelope — MinPairwiseDist needs the whole orbit point set per pixel).
     // Only activate below fp64's useful range (~1e-13) so the fast SIMD/CUDA
-    // fp64 field path handles moderate deep zoom without perturbation glitches.
-    if (p.variant == Variant::Mandelbrot && p.metric == Metric::Escape
-        && !p.custom_step_fn && p.scale < 1e-13
-        && (map_scalar_type_is_auto(p.scalar_type) || p.scalar_type == "perturbation")) {
+    // fp64 field path handles moderate deep zoom.
+    if (perturbation_applicable(p)) {
         return render_map_field_perturbation(p, fo);
     }
 

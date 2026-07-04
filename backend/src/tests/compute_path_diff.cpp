@@ -1107,6 +1107,83 @@ void compare_perturbation_scene_to_fp128(
 #endif
 }
 
+// Non-escape metric under perturbation: the Envelope field (min/max |z|
+// extrema) against direct fp128, on the same ~0.1 px conditioning mask.
+void compare_perturbation_envelope_to_fp128(Runner& runner) {
+#if defined(FSD_HAS_FLOAT128)
+    RenderScene scene;
+    scene.name = "perturb_envelope_1p8e20";
+    scene.params = base_params();
+    scene.params.width = 24;
+    scene.params.height = 18;
+    scene.params.iterations = 4096;
+    scene.params.center_re_str = "-1.747032286321747555615588653338769259";
+    scene.params.center_im_str = "0.008106888321491853096767791107692308";
+    scene.params.center_re = std::stod(scene.params.center_re_str);
+    scene.params.center_im = std::stod(scene.params.center_im_str);
+    scene.params.scale = 1.829149541201e-20;
+    scene.params.variant = Variant::Mandelbrot;
+    scene.params.metric = Metric::Envelope;
+    scene.params.colormap = Colormap::Spectral1530;
+
+    RenderScene probe = scene;
+    const int probe_place = static_cast<int>(std::ceil(
+        -std::log10(scene.params.scale / scene.params.height))) + 1;
+    probe.params.center_re_str = shift_decimal_at(scene.params.center_re_str, probe_place);
+    probe.params.center_im_str = shift_decimal_at(scene.params.center_im_str, probe_place);
+
+    FieldRendered perturb, reference, shifted;
+    try {
+        perturb = render_field_scene(scene, "auto", "openmp");
+        reference = render_field_scene(scene, "fp128", "openmp");
+        shifted = render_field_scene(probe, "fp128", "openmp");
+    } catch (const std::exception& ex) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << scene.name << " threw: " << ex.what() << "\n";
+        return;
+    }
+    remember_stats(runner, perturb.stats);
+    remember_stats(runner, reference.stats);
+
+    const auto& a = perturb.field.field_f64;
+    const auto& b = reference.field.field_f64;
+    const auto& c = shifted.field.field_f64;
+    if (perturb.stats.scalar_used != "perturbation_fp64" ||
+        a.size() != b.size() || a.size() != c.size() || a.empty()) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << scene.name << " scalar="
+                  << perturb.stats.scalar_used << " size=" << a.size() << "\n";
+        return;
+    }
+
+    // The envelope value varies continuously with c (unlike escape counts),
+    // so a pixel's ground truth legitimately drifts under the 0.1 px probe
+    // shift. Perturbation passes when it lands closer to the truth than that
+    // reposition: per-pixel allowance = probe drift + small floor.
+    int bad = 0;
+    double max_err = 0.0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const double allowance = 1e-9 + 1e-6 * std::abs(b[i]) + std::abs(b[i] - c[i]);
+        const double err = std::abs(a[i] - b[i]);
+        max_err = std::max(max_err, err);
+        if (err > allowance) ++bad;
+    }
+    const double bad_ratio = static_cast<double>(bad) / static_cast<double>(a.size());
+    const bool ok = bad_ratio <= 0.02;
+    ++runner.compared;
+    std::cout << (ok ? "[PASS] " : "[FAIL] ") << scene.name
+              << " envelope vs fp128 max_err=" << std::scientific << std::setprecision(3) << max_err
+              << std::fixed
+              << " bad=" << std::setprecision(4) << bad_ratio
+              << " elapsed_ms=" << std::setprecision(3) << perturb.stats.elapsed_ms
+              << "\n";
+    if (!ok) ++runner.failed;
+#else
+    ++runner.skipped;
+    std::cout << "[SKIP] perturb_envelope_1p8e20 needs FSD_HAS_FLOAT128\n";
+#endif
+}
+
 // Deep-zoom perturbation scenes. Coordinates mined by boundary descent so
 // every frame keeps an iteration spread; all verified against direct fp128.
 void compare_deep_perturbation_scenes(Runner& runner) {
@@ -1345,6 +1422,7 @@ int main() {
     }
 
     compare_deep_perturbation_scenes(runner);
+    compare_perturbation_envelope_to_fp128(runner);
 
     for (const RenderScene& scene : fp32_equivalence_scenes()) {
         Rendered fp32_baseline = render_scene(scene, "openmp", "fp32");

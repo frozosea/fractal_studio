@@ -32,6 +32,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace fsd::compute {
@@ -73,6 +74,11 @@ struct PerturbPixel {
     int     iter        = 0;      // escape iteration; == max_iter if inside
     bool    escaped     = false;
     double  escape_mag2 = 0.0;    // |z|^2 at escape (smooth/equalized coloring)
+    // Populated only by perturb_iterate<true> (min/max metrics): extrema of
+    // |z_n|^2 over the post-step orbit values z_1..z_N, matching
+    // iterate_quadratic_cached_masked (z_0 excluded, escape step included).
+    double  min_mag2    = std::numeric_limits<double>::infinity();
+    double  max_mag2    = 0.0;
 };
 
 // Iterate one pixel.
@@ -84,8 +90,13 @@ struct PerturbPixel {
 //   dc         pixel's c offset from the reference c (Mandelbrot: pixel
 //              offset; Julia: 0 — every pixel shares c_julia exactly).
 //
+// TrackMinMax=true additionally records min/max |z|^2 over the orbit (the
+// MinAbs / MaxAbs / Envelope metrics — exact under perturbation because the
+// full orbit value z = Z_m + dz is reconstructed every step anyway).
+//
 // Glitch-free by construction: rebases onto K's start whenever significance
 // would be lost or the current orbit's data ends.
+template <bool TrackMinMax = false>
 inline PerturbPixel perturb_iterate(
     const double* Rr, const double* Ri, int r_len,
     const double* Kr, const double* Ki, int k_len,
@@ -127,6 +138,11 @@ inline PerturbPixel perturb_iterate(
         const double z_re = Or[m + 1] + dz_re;
         const double z_im = Oi[m + 1] + dz_im;
         const double mag2 = z_re * z_re + z_im * z_im;
+
+        if constexpr (TrackMinMax) {
+            if (mag2 < out.min_mag2) out.min_mag2 = mag2;
+            if (mag2 > out.max_mag2) out.max_mag2 = mag2;
+        }
 
         if (mag2 > bail2) {
             out.iter = n;

@@ -16,6 +16,7 @@
 #include "perturbation.hpp"
 #include "perturbation_avx2.hpp"
 #include "perturbation_avx512.hpp"
+#include "colorize.hpp"
 #include "colormap.hpp"
 #include "parallel.hpp"
 #include "scalar.hpp"
@@ -416,8 +417,11 @@ RefOrbit compute_reference_orbit_julia_auto(
 bool perturbation_applicable(const MapParams& p)
 {
     if (p.variant != Variant::Mandelbrot) return false;
-    if (p.metric  != Metric::Escape)      return false;
-    if (p.smooth)                          return false;
+    // MinPairwiseDist needs every orbit point per pixel (O(n^2) pairwise
+    // scan) — impractical at deep-zoom iteration counts on any engine. All
+    // other metrics and smooth coloring are served: the full orbit value
+    // z = Z_m + dz is reconstructed every step anyway.
+    if (p.metric == Metric::MinPairwiseDist) return false;
     if (p.custom_step_fn)                  return false;
     if (p.scale >= 1e-13)                  return false;
     if (p.scalar_type != "auto" && p.scalar_type != "perturbation")
@@ -532,11 +536,15 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
         const double*, const double*, int, int, int, int,
         const double*, const double*, const double*, const double*,
         int, int, double, int32_t*, double*) noexcept;
+    // Min/max metrics run scalar-only: the batch kernels track escape state
+    // per lane but not orbit extrema.
+    const bool track_minmax = p.metric != Metric::Escape;
+
     // Best CPU batch kernel — the primary path for the AVX engines and the
     // fallback when a CUDA render fails.
     BatchFn batch = nullptr;
     const char* batch_engine = "openmp";
-    if (batch_ok && want != "openmp") {
+    if (batch_ok && !track_minmax && want != "openmp") {
         if (want != "avx2" && perturb_avx512_available()) {
             batch = perturb_iterate_batch_avx512;
             batch_engine = "avx512";
@@ -549,7 +557,7 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
     bool rendered = false;
 
 #if defined(HAS_CUDA_KERNEL)
-    if (!rendered && batch_ok && wants_cuda && fsd_cuda::cuda_available()) {
+    if (!rendered && batch_ok && !track_minmax && wants_cuda && fsd_cuda::cuda_available()) {
         if (map_render_cancel_requested(p)) throw std::runtime_error("cancelled");
         fsd_cuda::CudaPerturbParams cp;
         cp.width = W; cp.height = H; cp.iterations = max_iter;
@@ -665,9 +673,13 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
                         const double dc_re  = is_julia ? 0.0 : off_re;
                         const double dc_im  = is_julia ? 0.0 : off_im;
 
-                        const PerturbPixel res = perturb_iterate(
-                            Rr, Ri, Rlen, Kr, Ki, Klen,
-                            dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2);
+                        const PerturbPixel res = track_minmax
+                            ? perturb_iterate<true>(
+                                  Rr, Ri, Rlen, Kr, Ki, Klen,
+                                  dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2)
+                            : perturb_iterate<false>(
+                                  Rr, Ri, Rlen, Kr, Ki, Klen,
+                                  dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2);
 
                         emit(static_cast<size_t>(y) * W + x, x, y, res);
                     }
@@ -698,28 +710,78 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
 
 MapStats render_map_perturbation(const MapParams& p, cv::Mat& out)
 {
+    if (p.metric != Metric::Escape) {
+        // Metric fields share the coloring pipeline with the plain engines.
+        FieldOutput fo;
+        MapStats stats = render_map_field_perturbation(p, fo);
+        out = colorize_direct(p, fo);
+        return stats;
+    }
     const int max_iter = p.iterations;
     return run_perturbation_driver(p,
         [&](size_t, int x, int y, const PerturbPixel& res) {
             uint8_t* px = out.ptr<uint8_t>(y) + 3 * x;
             colorize_escape_bgr(res.iter, max_iter, p.colormap,
-                                0.0, false, px[0], px[1], px[2]);
+                                res.escape_mag2, p.smooth, px[0], px[1], px[2]);
         });
 }
 
 MapStats render_map_field_perturbation(const MapParams& p, FieldOutput& fo)
 {
+    const size_t px_count = static_cast<size_t>(p.width) * p.height;
     fo.width  = p.width;
     fo.height = p.height;
-    fo.metric = Metric::Escape;
-    fo.iter_u32.assign(static_cast<size_t>(p.width) * p.height, 0u);
-    fo.norm_f32.assign(static_cast<size_t>(p.width) * p.height, 0.0f);
+    fo.metric = p.metric;
+
+    const bool is_escape = p.metric == Metric::Escape;
+    if (is_escape) {
+        fo.iter_u32.assign(px_count, 0u);
+        fo.norm_f32.assign(px_count, 0.0f);
+    } else {
+        fo.field_f64.assign(px_count, 0.0);
+    }
 
     MapStats stats = run_perturbation_driver(p,
         [&](size_t px_idx, int, int, const PerturbPixel& res) {
-            fo.iter_u32[px_idx] = static_cast<uint32_t>(res.iter);
-            fo.norm_f32[px_idx] = res.escaped ? static_cast<float>(res.escape_mag2) : 0.0f;
+            if (is_escape) {
+                fo.iter_u32[px_idx] = static_cast<uint32_t>(res.iter);
+                fo.norm_f32[px_idx] = res.escaped ? static_cast<float>(res.escape_mag2) : 0.0f;
+                return;
+            }
+            // Mirror iterate_quadratic_cached_masked's finalize +
+            // raw_field_value: sqrt at the end, unset extrema map to 0.
+            const double min_abs = std::sqrt(res.min_mag2);   // inf stays inf
+            const double max_abs = res.max_mag2 > 0.0 ? std::sqrt(res.max_mag2) : 0.0;
+            double v = 0.0;
+            switch (p.metric) {
+                case Metric::MinAbs:
+                    v = std::isfinite(min_abs) ? min_abs : 0.0;
+                    break;
+                case Metric::MaxAbs:
+                    v = max_abs;
+                    break;
+                case Metric::Envelope:
+                    v = std::isfinite(min_abs) ? 0.5 * (min_abs + max_abs) : 0.0;
+                    break;
+                default:
+                    break;
+            }
+            fo.field_f64[px_idx] = v;
         });
+
+    if (!is_escape) {
+        double lo =  std::numeric_limits<double>::infinity();
+        double hi = -std::numeric_limits<double>::infinity();
+        for (double v : fo.field_f64) {
+            if (std::isfinite(v)) {
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+            }
+        }
+        fo.field_min = std::isfinite(lo) ? lo : 0.0;
+        fo.field_max = std::isfinite(hi) ? hi : 1.0;
+    }
+
     fo.scalar_used = stats.scalar_used;
     fo.engine_used = stats.engine_used;
     return stats;

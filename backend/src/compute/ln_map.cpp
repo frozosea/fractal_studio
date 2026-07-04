@@ -37,6 +37,14 @@
 #include <vector>
 
 namespace fsd::compute {
+
+// Deep-zoom perturbation providers (defined with the perturbation renderer
+// near the bottom of this file, after the anonymous namespace).
+static bool lnmap_perturbation_applicable(const LnMapParams& p);
+static std::string compute_ln_perturb_iters(const LnMapParams& p,
+                                            std::vector<int>& iters,
+                                            const LnMapProgress& on_row_done);
+
 namespace {
 
 constexpr double TAU = 6.283185307179586;
@@ -909,6 +917,7 @@ struct LnFieldCache {
     bool valid = false;
     bool julia = false;
     double center_re = 0, center_im = 0, julia_re = 0, julia_im = 0, bailout = 0, bailout_sq = 0;
+    std::string center_re_str, center_im_str;  // deep-zoom identity beyond double
     int width_s = 0, height_t = 0, iterations = 0, variant = -1;
     std::string precision_mode;  // "standard" or "fast" — different precision → different field
     std::string engine;   // engine that produced the cached field (for UI reporting on reuse)
@@ -921,6 +930,7 @@ bool ln_field_cache_matches(const LnMapParams& p, const LnFieldCache& c, size_t 
     return c.valid && c.iters.size() == pixel_count &&
            c.precision_mode == p.precision_mode &&
            c.julia == p.julia && c.center_re == p.center_re && c.center_im == p.center_im &&
+           c.center_re_str == p.center_re_str && c.center_im_str == p.center_im_str &&
            c.julia_re == p.julia_re && c.julia_im == p.julia_im &&
            c.bailout == p.bailout && c.bailout_sq == p.bailout_sq &&
            c.width_s == p.width_s && c.height_t == p.height_t &&
@@ -997,17 +1007,21 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     } else {
         // The escape-count field is the expensive pass; compute it with the engine the
         // user selected (CUDA / AVX-512 / AVX2 / OpenMP, fp64 or fx64), not always scalar
-        // OpenMP. The "fast" precision mode layers fp32/fp64/fx64 bands just like the
-        // escape-mode fast path. The actual engine is surfaced via stats so the UI can
-        // show degradation.
-        if (ln_map_fast_mode(p)) {
+        // OpenMP. Deep strips (innermost radius below fp64's useful range) go through
+        // the perturbation renderer regardless of precision mode — it is both exact and
+        // fast at depth, replacing the fp32/fp64 band plan. The actual engine is
+        // surfaced via stats so the UI can show degradation.
+        if (lnmap_perturbation_applicable(p)) {
+            field_engine = compute_ln_perturb_iters(p, iters, on_row_done);
+        } else if (ln_map_fast_mode(p)) {
             field_engine = compute_ln_field_fast(p, iters, cols, on_row_done);
         } else {
             field_engine = compute_ln_field(p, iters, cols, on_row_done);
         }
         std::lock_guard<std::mutex> lk(g_ln_field_cache_mu);
         g_ln_field_cache = LnFieldCache{true, p.julia, p.center_re, p.center_im, p.julia_re,
-                                        p.julia_im, p.bailout, p.bailout_sq, s, h, p.iterations,
+                                        p.julia_im, p.bailout, p.bailout_sq,
+                                        p.center_re_str, p.center_im_str, s, h, p.iterations,
                                         static_cast<int>(p.variant), p.precision_mode,
                                         field_engine, iters};
     }
@@ -1178,9 +1192,13 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     LnMapStats stats;
     stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     stats.pixel_count = p.width_s * p.height_t;
-    stats.engine_used = field_engine + "_" + mode;   // e.g. "cuda_fp64_hist_eq" / "avx512_fp64_hist_eq"
-    stats.scalar_used = field_engine.find("fx64") != std::string::npos &&
-                        field_engine.find("->fp64") == std::string::npos ? "fx64" : "fp64";
+    stats.engine_used = field_engine + "_" + mode;   // e.g. "cuda_fp64_hist_eq" / "perturbation_avx512_hist_eq"
+    if (field_engine.find("perturbation") != std::string::npos) {
+        stats.scalar_used = "perturbation_fp64";
+    } else {
+        stats.scalar_used = field_engine.find("fx64") != std::string::npos &&
+                            field_engine.find("->fp64") == std::string::npos ? "fx64" : "fp64";
+    }
     stats.precision_mode = p.precision_mode;
     std::ostringstream layer;
     layer << "color=" << mode;
@@ -2004,19 +2022,30 @@ LnMapStats render_ln_map_openmp(const LnMapParams& p, cv::Mat& out, const LnMapP
 // where r_mag = exp(ln4 - row * 2π/s).
 // ---------------------------------------------------------------------------
 
+// Perturbation serves every color mode: escape colorizes directly, the
+// mapped modes (hist_eq / row_eq / log_lift / bands / frontier) consume the
+// raw iteration field. Gate on the innermost strip radius — above ~1e-13 the
+// plain fp64 SIMD paths are exact and faster.
+static double lnmap_innermost_radius(const LnMapParams& p) {
+    const double k_min = LN_FOUR - static_cast<double>(p.height_t - 1) * TAU
+                                   / static_cast<double>(p.width_s);
+    return std::exp(std::max(k_min, -690.0));  // keep > 0 for log2
+}
+
 static bool lnmap_perturbation_applicable(const LnMapParams& p) {
     if (p.variant != Variant::Mandelbrot) return false;
     if (p.center_re_str.empty())          return false;
-    if (p.color_mode != "escape")         return false;
-    return true;
+    return lnmap_innermost_radius(p) < 1e-13;
 }
 
-static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
-                                              const LnMapProgress& on_row_done)
+// Perturbation iteration for the whole strip. Calls sink(idx, iter) once per
+// pixel (from parallel regions, distinct pixels only) and returns the engine
+// actually used ("cuda" / "avx512" / "avx2" / "openmp").
+template <typename Sink>
+static std::string run_ln_perturbation_field(const LnMapParams& p,
+                                             const LnMapProgress& on_row_done,
+                                             Sink&& sink)
 {
-    ensure_ln_out(p, out);
-    const auto t0 = std::chrono::steady_clock::now();
-
     const int S       = p.width_s;
     const int T       = p.height_t;
     const double bail2 = p.bailout_sq;
@@ -2026,8 +2055,7 @@ static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
 
     // The strip spans radii from LN_FOUR down to the innermost row; the
     // innermost radius drives the reference-precision tier (fp128 vs MPFR).
-    const double k_min = LN_FOUR - static_cast<double>(T - 1) * TAU / static_cast<double>(S);
-    const double r_min = std::exp(std::max(k_min, -690.0));  // keep > 0 for log2
+    const double r_min = lnmap_innermost_radius(p);
 
     // Primary reference orbit at the viewport center; for Julia additionally
     // the critical orbit of c_julia as the rebase target (see perturbation.hpp).
@@ -2129,12 +2157,9 @@ static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
         if (fsd_cuda::cuda_render_perturb_field(cp, iters.data(), norms.data(), nullptr)) {
             #pragma omp parallel for num_threads(thread_count) schedule(static)
             for (int row = 0; row < T; ++row) {
-                uint8_t* rowp = out.ptr<uint8_t>(row);
                 for (int x = 0; x < S; ++x) {
-                    const uint32_t it = iters[static_cast<size_t>(row) * S + x];
-                    uint8_t* px = rowp + 3 * x;
-                    colorize_escape_bgr(static_cast<int>(it), max_iter, p.colormap,
-                                        0.0, false, px[0], px[1], px[2]);
+                    const size_t idx = static_cast<size_t>(row) * S + x;
+                    sink(idx, static_cast<int>(iters[idx]));
                 }
             }
             if (on_row_done) on_row_done(T);
@@ -2164,9 +2189,9 @@ static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
 
             #pragma omp for schedule(dynamic, 8)
             for (int row = 0; row < T; ++row) {
-                uint8_t* rowp = out.ptr<uint8_t>(row);
                 const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(S);
                 const double r_mag = std::exp(k);
+                const size_t row_base = static_cast<size_t>(row) * S;
 
                 if (batch) {
                     for (int x = 0; x < S; ++x) {
@@ -2188,9 +2213,7 @@ static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
                           bdz_re.data(), bdz_im.data(), bdc_re.data(), bdc_im.data(),
                           S, max_iter, bail2, b_iter.data(), b_mag2.data());
                     for (int x = 0; x < S; ++x) {
-                        uint8_t* px = rowp + 3 * x;
-                        colorize_escape_bgr(b_iter[static_cast<size_t>(x)], max_iter,
-                                            p.colormap, 0.0, false, px[0], px[1], px[2]);
+                        sink(row_base + x, b_iter[static_cast<size_t>(x)]);
                     }
                 } else {
                     for (int x = 0; x < S; ++x) {
@@ -2206,9 +2229,7 @@ static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
                             Rr, Ri, Rlen, Kr, Ki, Klen,
                             dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2);
 
-                        uint8_t* px = rowp + 3 * x;
-                        colorize_escape_bgr(res.iter, max_iter, p.colormap,
-                                            0.0, false, px[0], px[1], px[2]);
+                        sink(row_base + x, res.iter);
                     }
                 }
                 if (on_row_done) {
@@ -2220,25 +2241,58 @@ static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
         engine_used = batch_engine;
     }
 
+    return engine_used;
+}
+
+// Escape color mode: colorize straight from the iteration counts.
+static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
+                                              const LnMapProgress& on_row_done)
+{
+    ensure_ln_out(p, out);
+    const auto t0 = std::chrono::steady_clock::now();
+    const int S = p.width_s;
+    const int max_iter = p.iterations;
+
+    const std::string engine_used = run_ln_perturbation_field(
+        p, on_row_done,
+        [&](size_t idx, int iter) {
+            uint8_t* px = out.ptr<uint8_t>(static_cast<int>(idx / S))
+                        + 3 * static_cast<int>(idx % S);
+            colorize_escape_bgr(iter, max_iter, p.colormap,
+                                0.0, false, px[0], px[1], px[2]);
+        });
+
     const auto t1 = std::chrono::steady_clock::now();
     LnMapStats stats;
     stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    stats.pixel_count = S * T;
+    stats.pixel_count = p.width_s * p.height_t;
     stats.engine_used = engine_used;
     stats.scalar_used = "perturbation";
     stats.precision_mode = "standard";
     return stats;
 }
 
+// Raw iteration field for the mapped color modes (hist_eq/global CDF, row_eq,
+// log_lift, bands, frontier) — declared above render_ln_map_mapped.
+static std::string compute_ln_perturb_iters(const LnMapParams& p,
+                                            std::vector<int>& iters,
+                                            const LnMapProgress& on_row_done)
+{
+    return "perturbation_" + run_ln_perturbation_field(
+        p, on_row_done,
+        [&](size_t idx, int iter) { iters[idx] = iter; });
+}
+
 LnMapStats render_ln_map(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done) {
     if (!ln_map_color_mode_supported(p.color_mode)) {
         throw std::runtime_error("invalid ln-map color mode");
     }
+    if (p.color_mode != "escape") {
+        // Mapped modes route deep strips through perturbation internally.
+        return render_ln_map_mapped(p, out, on_row_done);
+    }
     if (lnmap_perturbation_applicable(p)) {
         return render_ln_map_perturbation(p, out, on_row_done);
-    }
-    if (p.color_mode != "escape") {
-        return render_ln_map_mapped(p, out, on_row_done);
     }
     if (ln_map_fast_mode(p)) {
         return render_ln_map_fast(p, out, on_row_done);
