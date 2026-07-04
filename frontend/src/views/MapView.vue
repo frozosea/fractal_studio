@@ -566,6 +566,10 @@ const juliaIm  = ref(0.27)
 const jCenterRe = ref(0.0)
 const jCenterIm = ref(0.0)
 const jScale    = ref(4.0)
+// Arbitrary-precision julia-pane center — without it, deep julia zooms send
+// no center strings and the backend cannot use perturbation.
+const jCenterRePrecise = ref<BigDec>(bdFromString('0'))
+const jCenterImPrecise = ref<BigDec>(bdFromString('0'))
 
 // Julia c input state
 const juliaCReInput = ref('')
@@ -600,7 +604,7 @@ watch([juliaRe, juliaIm], () => syncJuliaCInputs(), { immediate: true })
 // equalization uses). Grows by 1 for every factor-of-2 zoom-in.
 const ZOOM_BASE_SCALE = 4
 const zoomOctaves = computed(() => {
-  const s = scale.value
+  const s = juliaOn.value ? jScale.value : scale.value
   return (s > 0 && Number.isFinite(s)) ? Math.log2(ZOOM_BASE_SCALE / s) : 0
 })
 
@@ -665,11 +669,27 @@ function onPickJulia(pos: { re: number; im: number }) {
   centerImPrecise.value = bdFromNumber(pos.im)
 }
 
-function onJuliaViewport(v: { centerRe: number; centerIm: number; scale: number }) {
+function onJuliaViewport(v: { centerRe: number; centerIm: number; scale: number; deltaRe?: number; deltaIm?: number }) {
+  if (v.deltaRe !== undefined && v.deltaIm !== undefined) {
+    jCenterRePrecise.value = bdAddNumber(jCenterRePrecise.value, v.deltaRe)
+    jCenterImPrecise.value = bdAddNumber(jCenterImPrecise.value, v.deltaIm)
+  } else {
+    jCenterRePrecise.value = bdFromNumber(v.centerRe)
+    jCenterImPrecise.value = bdFromNumber(v.centerIm)
+  }
   jCenterRe.value = v.centerRe
   jCenterIm.value = v.centerIm
   jScale.value    = v.scale
 }
+
+// The viewport being exported / measured: the julia pane when julia mode is on.
+const activeScale = () => juliaOn.value ? jScale.value : scale.value
+const activeCenterRe = () => juliaOn.value ? jCenterRe.value : centerRe.value
+const activeCenterIm = () => juliaOn.value ? jCenterIm.value : centerIm.value
+const activeCenterReStr = () =>
+  bdToString(juliaOn.value ? jCenterRePrecise.value : centerRePrecise.value)
+const activeCenterImStr = () =>
+  bdToString(juliaOn.value ? jCenterImPrecise.value : centerImPrecise.value)
 
 // ── Engine / scalar ───────────────────────────────────────────────────────────
 const engineMode = ref<'auto' | 'openmp' | 'avx2' | 'avx512' | 'cuda' | 'hybrid'>('auto')
@@ -748,6 +768,8 @@ function resetView() {
   if (juliaOn.value) {
     jCenterRe.value = 0.0
     jCenterIm.value = 0.0
+    jCenterRePrecise.value = bdFromString('0')
+    jCenterImPrecise.value = bdFromString('0')
     jScale.value    = 4.0
     return
   }
@@ -843,11 +865,11 @@ async function exportPng() {
     const resp = await api.mapRender({
       taskType:   'still_export',
       localExport: localExportMode.value,
-      centerRe:   centerRe.value,
-      centerIm:   centerIm.value,
-      centerReStr: bdToString(centerRePrecise.value),
-      centerImStr: bdToString(centerImPrecise.value),
-      scale:      scale.value,
+      centerRe:   activeCenterRe(),
+      centerIm:   activeCenterIm(),
+      centerReStr: activeCenterReStr(),
+      centerImStr: activeCenterImStr(),
+      scale:      activeScale(),
       width:      pngPreset.value.width,
       height:     pngPreset.value.height,
       iterations: iterations.value,
@@ -992,10 +1014,10 @@ function transitionVideoRequestBase() {
   const zoomMode = transitionVideoMode.value === 'zoom'
   return {
     animationMode: transitionVideoMode.value,
-    centerRe:     centerRe.value,
-    centerIm:     centerIm.value,
-    centerReStr:  bdToString(centerRePrecise.value),
-    centerImStr:  bdToString(centerImPrecise.value),
+    centerRe:     activeCenterRe(),
+    centerIm:     activeCenterIm(),
+    centerReStr:  activeCenterReStr(),
+    centerImStr:  activeCenterImStr(),
     julia:        juliaOn.value,
     juliaRe:      juliaRe.value,
     juliaIm:      juliaIm.value,
@@ -1003,13 +1025,13 @@ function transitionVideoRequestBase() {
     transitionTo:   transitionTo.value,
     colorMap:     colorMap.value,
     iterations:   Math.max(iterations.value, 2048),
-    scale:        scale.value,
+    scale:        activeScale(),
     thetaStartDeg: zoomMode ? fixedThetaDeg : transitionThetaStartDeg.value,
     thetaEndDeg:   zoomMode ? fixedThetaDeg : transitionThetaEndDeg.value,
     thetaDeg:      fixedThetaDeg,
     depthOctaves:  zoomMode ? exportDepth.value : undefined,
     secondsPerOctave: zoomMode ? exportSecondsPerOctave.value : undefined,
-    targetScale:   zoomMode && !exportDepthDirty.value && exportDepth.value > 0.05 ? scale.value : undefined,
+    targetScale:   zoomMode && !exportDepthDirty.value && exportDepth.value > 0.05 ? activeScale() : undefined,
     rotationDeg:   rotationDeg.value || undefined,
     durationSec:   zoomMode ? exportEstimatedDuration.value : transitionDurationSec.value,
     fps:          exportFps.value,
@@ -1069,10 +1091,10 @@ function defaultExportDepthForView() {
   const aspect = Math.max(1e-9, exportW.value / Math.max(1, exportH.value))
   const rMax = Math.sqrt(aspect * aspect + 1)
   const kTopStart = Math.log(4) - Math.log(rMax)
-  const kTopEnd = Math.log(Math.max(scale.value, 1e-300) * 0.5)
+  const kTopEnd = Math.log(Math.max(activeScale(), 1e-300) * 0.5)
   const depth = (kTopStart - kTopEnd) / Math.LN2
   if (!Number.isFinite(depth)) return 20
-  return Math.min(120, Math.max(0.05, depth))
+  return Math.min(200, Math.max(0.05, depth))
 }
 
 function syncExportDepthToCurrentView() {
@@ -1113,10 +1135,10 @@ function openExportModal() {
 
 function videoRequestBase() {
   return {
-    centerRe:     centerRe.value,
-    centerIm:     centerIm.value,
-    centerReStr:  bdToString(centerRePrecise.value),
-    centerImStr:  bdToString(centerImPrecise.value),
+    centerRe:     activeCenterRe(),
+    centerIm:     activeCenterIm(),
+    centerReStr:  activeCenterReStr(),
+    centerImStr:  activeCenterImStr(),
     julia:        juliaOn.value,
     juliaRe:      juliaRe.value,
     juliaIm:      juliaIm.value,
@@ -1128,7 +1150,7 @@ function videoRequestBase() {
     depthOctaves: exportDepth.value,
     fps:          exportFps.value,
     secondsPerOctave: exportSecondsPerOctave.value,
-    targetScale:  !exportDepthDirty.value && exportDepth.value > 0.05 ? scale.value : undefined,
+    targetScale:  !exportDepthDirty.value && exportDepth.value > 0.05 ? activeScale() : undefined,
     rotationDeg:  rotationDeg.value || undefined,
     qualityPreset: exportQualityPreset.value,
     lnMapMode:    exportLnMapMode.value,
@@ -1737,6 +1759,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
             <div class="pane-canvas">
               <MapCanvas
                 :centerRe="jCenterRe" :centerIm="jCenterIm" :scale="jScale"
+                :centerReStr="bdToString(jCenterRePrecise)" :centerImStr="bdToString(jCenterImPrecise)"
                 :iterations="iterations" :variant="variant" :metric="metric"
                 :colorMap="colorMap" :smooth="smooth" :colorMode="mapColorMode" :cyclesPerOctave="cyclesPerOctave"
                 :pairwise-cap="pairwiseCap"

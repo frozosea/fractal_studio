@@ -561,8 +561,8 @@ type PointerPoint = { x: number; y: number }
 type PinchStart = {
   distance: number
   scale: number
-  worldRe: number
-  worldIm: number
+  prevOffsetRe: number
+  prevOffsetIm: number
 }
 
 const activePointers = new Map<number, PointerPoint>()
@@ -611,18 +611,32 @@ function startPinch() {
     pinchStart = null
     return
   }
-  const midpoint = pointerMidpoint(points)
-  const world = screenToWorld(midpoint.x, midpoint.y)
-  const distance = pointerDistance(points)
-  if (!world || distance <= 0) {
+  if (!wrapper.value) {
     pinchStart = null
     return
   }
+  const rect = wrapper.value.getBoundingClientRect()
+  const midpoint = pointerMidpoint(points)
+  const distance = pointerDistance(points)
+  if (distance <= 0) {
+    pinchStart = null
+    return
+  }
+  // Track the pinch anchor as a rotated OFFSET from the center (offset-space
+  // stays exact in doubles at any zoom depth, unlike absolute coordinates),
+  // so the emitted deltas preserve the BigDec center precision upstream.
+  const px = (midpoint.x - rect.left) / rect.width
+  const py = (midpoint.y - rect.top) / rect.height
+  const aspect = rect.width / rect.height
+  const dx = (px - 0.5) * props.scale * aspect
+  const dy = -(py - 0.5) * props.scale
+  const rad = (props.rotationDeg ?? 0) * Math.PI / 180
+  const cosR = Math.cos(rad), sinR = Math.sin(rad)
   pinchStart = {
     distance,
     scale: props.scale,
-    worldRe: world.re,
-    worldIm: world.im,
+    prevOffsetRe: dx * cosR - dy * sinR,
+    prevOffsetIm: dx * sinR + dy * cosR,
   }
 }
 
@@ -643,12 +657,20 @@ function updatePinch() {
   const dy = -(py - 0.5) * newScale
   const rad = (props.rotationDeg ?? 0) * Math.PI / 180
   const cosR = Math.cos(rad), sinR = Math.sin(rad)
-  const newRe = pinchStart.worldRe - (dx * cosR - dy * sinR)
-  const newIm = pinchStart.worldIm - (dx * sinR + dy * cosR)
+  const offsetRe = dx * cosR - dy * sinR
+  const offsetIm = dx * sinR + dy * cosR
+  // Keeping the anchor's world point fixed on screen:
+  //   center_new = center_old + (offset_prev - offset_new)
+  const deltaRe = pinchStart.prevOffsetRe - offsetRe
+  const deltaIm = pinchStart.prevOffsetIm - offsetIm
+  pinchStart.prevOffsetRe = offsetRe
+  pinchStart.prevOffsetIm = offsetIm
   emit('viewport-change', {
-    centerRe: newRe,
-    centerIm: newIm,
+    centerRe: props.centerRe + deltaRe,
+    centerIm: props.centerIm + deltaIm,
     scale: newScale,
+    deltaRe,
+    deltaIm,
   })
 }
 

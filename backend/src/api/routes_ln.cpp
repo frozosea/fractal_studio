@@ -129,7 +129,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         throw std::runtime_error("invalid lnMapCyclesPerOctave (0..64)");
     }
     if (s < 128 || s > 65536)              throw std::runtime_error("invalid widthS (128..65536)");
-    if (depthOctaves < 1.0 || depthOctaves > 80.0) throw std::runtime_error("invalid depthOctaves (1..80)");
+    if (depthOctaves < 1.0 || depthOctaves > 200.0) throw std::runtime_error("invalid depthOctaves (1..200)");
     if (iters < 1 || iters > 10000000)     throw std::runtime_error("invalid iterations");
     if (precisionMode != "standard" && precisionMode != "fast") {
         throw std::runtime_error("invalid precisionMode (standard|fast)");

@@ -1,4 +1,5 @@
 #include "compute/engine_select.hpp"
+#include "compute/ln_map.hpp"
 #include "compute/map_kernel.hpp"
 #include "compute/transition_kernel.hpp"
 
@@ -1332,6 +1333,84 @@ void compare_perturbation_envelope_to_fp128(Runner& runner) {
 #endif
 }
 
+// Deep ln-map strip crossing the 1e-33 reference-precision tier (the video
+// route derives depthOctaves from targetScale with no 80-octave cap, so
+// 112-octave viewpoints produce strips whose innermost radius needs the MPFR
+// reference). Renders escape and hist_eq strips at ~119 total octaves and
+// checks the deep rows carry structure (not a flat/black band).
+void verify_deep_lnmap_strip(Runner& runner, const std::string& engine) {
+#if defined(FSD_HAS_FLOAT128) && defined(FSD_HAS_MPFR)
+    fsd::compute::LnMapParams lp;
+    lp.center_re_str =
+        "-1.7470322863217475556160559269920680483993998877346704308252622068895883308"
+        "0623199091839741513162397878542014444667155077593447047661529106600323459749"
+        "2847219471994154075529179496211095993131201945758384823672278052553385137724"
+        "5979330403947280370455813775896738628778224798552663028595059476231384695610"
+        "003274438511866656377931559811665482145";
+    lp.center_im_str =
+        "0.00810688832149185309460686083178576433964891867581208066647240721132065319"
+        "9581148680281771869927804634535591891848677939093125623857655640970053817778"
+        "7878061867510997705195397305803638355895830594516577795276243062528358469962"
+        "2877301351951527232076392608417343136463164149062629077715956486930763092311"
+        "20173749783703447743250677382084810596";
+    lp.center_re = std::stod(lp.center_re_str);
+    lp.center_im = std::stod(lp.center_im_str);
+    lp.width_s = 128;
+    lp.height_t = static_cast<int>(std::ceil(
+        119.0 * 0.6931471805599453 / 6.283185307179586 * lp.width_s));
+    lp.iterations = 8192;
+    lp.variant = Variant::Mandelbrot;
+    lp.colormap = Colormap::Spectral1530;
+    lp.engine = engine;
+
+    for (const char* mode : {"escape", "hist_eq"}) {
+        lp.color_mode = mode;
+        cv::Mat strip;
+        fsd::compute::LnMapStats stats;
+        try {
+            stats = fsd::compute::render_ln_map(lp, strip);
+        } catch (const std::exception& ex) {
+            ++runner.failed;
+            std::cerr << "[FAIL] lnmap_deep_119oct_" << mode << "_" << engine
+                      << " threw: " << ex.what() << "\n";
+            continue;
+        }
+        // Deep fifth of the strip (below the 1e-33 crossing at ~112 octaves).
+        const int y0 = lp.height_t * 4 / 5;
+        cv::Mat deep = strip.rowRange(y0, lp.height_t);
+        double lum_sum = 0.0;
+        size_t dark = 0;
+        for (int y = 0; y < deep.rows; ++y) {
+            const uint8_t* row = deep.ptr<uint8_t>(y);
+            for (int x = 0; x < deep.cols; ++x) {
+                const int m = std::max({row[3 * x], row[3 * x + 1], row[3 * x + 2]});
+                lum_sum += m;
+                if (m < 8) ++dark;
+            }
+        }
+        const double dark_ratio = static_cast<double>(dark) /
+            (static_cast<double>(deep.rows) * deep.cols);
+        const bool perturb = stats.scalar_used.find("perturbation") != std::string::npos;
+        const bool ok = perturb && dark_ratio < 0.90;
+        ++runner.compared;
+        std::cout << (ok ? "[PASS] " : "[FAIL] ") << "lnmap_deep_119oct_" << mode
+                  << "_" << engine
+                  << " engine=" << stats.engine_used
+                  << " scalar=" << stats.scalar_used
+                  << " deep_dark=" << std::fixed << std::setprecision(4) << dark_ratio
+                  << " elapsed_ms=" << std::setprecision(3) << stats.elapsed_ms
+                  << "\n";
+        if (!ok) ++runner.failed;
+        runner.seen_engines.insert(stats.engine_used);
+        runner.seen_scalars.insert(stats.scalar_used);
+    }
+#else
+    (void)engine;
+    ++runner.skipped;
+    std::cout << "[SKIP] lnmap_deep_119oct needs FSD_HAS_FLOAT128 + FSD_HAS_MPFR\n";
+#endif
+}
+
 // Deep-zoom perturbation scenes. Coordinates mined by boundary descent so
 // every frame keeps an iteration spread; all verified against direct fp128.
 void compare_deep_perturbation_scenes(Runner& runner) {
@@ -1572,6 +1651,8 @@ int main() {
     compare_deep_perturbation_scenes(runner);
     compare_perturbation_envelope_to_fp128(runner);
     compare_perturbation_1e301_to_mpfr(runner);
+    verify_deep_lnmap_strip(runner, "openmp");
+    verify_deep_lnmap_strip(runner, "auto");
 
     for (const RenderScene& scene : fp32_equivalence_scenes()) {
         Rendered fp32_baseline = render_scene(scene, "openmp", "fp32");
