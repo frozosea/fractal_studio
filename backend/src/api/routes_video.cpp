@@ -1265,8 +1265,8 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     const double rotationDeg = j.value("rotationDeg", lk.sidecar.value("rotationDeg", 0.0));
 
     double depthOctaves = resolveDepthOctaves(j, kTopStartForFrame(W, H), sidecarDepth - 1.5);
-    if (depthOctaves < 0.05 || depthOctaves > 200.0) {
-        throw std::runtime_error("invalid depthOctaves (0.05..200)");
+    if (depthOctaves < 0.05 || depthOctaves > 1024.0) {
+        throw std::runtime_error("invalid depthOctaves (0.05..1024)");
     }
     const double secondsPerOctave = resolveSecondsPerOctave(j, depthOctaves);
     double durationSec = 0.0;
@@ -1451,7 +1451,7 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
 
     const double kTop_start = kTopStartForFrame(W, H);
     const double depth      = resolveDepthOctaves(j, kTop_start, 20.0);
-    if (depth < 0.05 || depth > 200.0) throw std::runtime_error("invalid depthOctaves (0.05..200)");
+    if (depth < 0.05 || depth > 1024.0) throw std::runtime_error("invalid depthOctaves (0.05..1024)");
     const double kTop_end   = kTop_start - depth * LN_TWO;
     const double secondsPerOctave = resolveSecondsPerOctave(j, depth);
     double durSec = 0.0;
@@ -2138,7 +2138,7 @@ std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, J
     if (animationMode == "zoom") {
         kTop_start = kTopStartForFrame(W, H);
         zoomDepth = resolveDepthOctaves(j, kTop_start, 20.0);
-        if (zoomDepth < 0.05 || zoomDepth > 200.0) throw std::runtime_error("invalid depthOctaves (0.05..200)");
+        if (zoomDepth < 0.05 || zoomDepth > 1024.0) throw std::runtime_error("invalid depthOctaves (0.05..1024)");
         kTop_end = kTop_start - zoomDepth * LN_TWO;
         zoomSecondsPerOctave = resolveSecondsPerOctave(j, zoomDepth);
         zoomFrameCount = frameCountFromSpeed(zoomDepth, zoomSecondsPerOctave, fps, zoomDurationSec);
@@ -2303,7 +2303,7 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
     if (animationMode == "zoom") {
         kTop_start = kTopStartForFrame(W, H);
         zoomDepth = resolveDepthOctaves(j, kTop_start, 20.0);
-        if (zoomDepth < 0.05 || zoomDepth > 200.0) throw std::runtime_error("invalid depthOctaves (0.05..200)");
+        if (zoomDepth < 0.05 || zoomDepth > 1024.0) throw std::runtime_error("invalid depthOctaves (0.05..1024)");
         kTop_end = kTop_start - zoomDepth * LN_TWO;
         zoomSecondsPerOctave = resolveSecondsPerOctave(j, zoomDepth);
         frameCount = frameCountFromSpeed(zoomDepth, zoomSecondsPerOctave, fps, durationSec);

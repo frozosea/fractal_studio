@@ -1113,7 +1113,7 @@ function defaultExportDepthForView() {
   const kTopEnd = Math.log(Math.max(activeScale(), 1e-300) * 0.5)
   const depth = (kTopStart - kTopEnd) / Math.LN2
   if (!Number.isFinite(depth)) return 20
-  return Math.min(200, Math.max(0.05, depth))
+  return Math.min(1024, Math.max(0.05, depth))
 }
 
 function syncExportDepthToCurrentView() {
