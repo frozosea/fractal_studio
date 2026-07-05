@@ -58,6 +58,10 @@ The chunk videos are encoded independently and concatenated into the usual
 `lnMapSegmentCount`, `lnMapMaxSegmentHeight`, `lnMapTotalSegmentRows`,
 `estimatedPeakMemory` (bounded segment peak), and
 `estimatedSingleStripMemory` (what the old one-piece strip would have needed).
+For `lnMapColorMode="hist_eq"`, segmented export first streams the logical
+one-piece strip in bounded chunks to build one global equalization/periodic
+coloring table, then renders every segment with that shared table. This avoids
+per-segment direct-color discontinuities without allocating the full strip.
 The legacy `/api/video/zoom` route intentionally rejects segmented ln-map
 artifacts because it only knows how to warp a single strip.
 
@@ -67,13 +71,13 @@ Ln-map coloring:
 
 - `lnMapColorMode="escape"` 保持原来的逐像素 escape-time 映射。
 - `lnMapColorMode="hist_eq"` 做**周期性离散上色**，直接以逃逸次数为浮点相位（不做直方图均衡、不做平滑）：`phase = (count − count_min) / period`。`period` 由整张 strip 的逃逸次数分布定：取**中位数**逃逸次数 `median`（避免被单个深层 minibrot 拉偏导致整体偏绿），令 `count_max = count_min + 2·(median − count_min)`，`period = (count_max − count_min) / (total_octaves · lnMapCyclesPerOctave)`，`total_octaves = heightT·2π/(widthS·ln2) ≈ log2(放大倍率)`。每个逃逸次数 = 一条实色带。循环型调色板（`classic_cos`/`hsv_wheel`/`tri765`/`twilight`/`spectral1530`）用 `frac`，非循环型用三角波反射避免接缝。开场（相位最低、即 zoom 起始的最浅层）的前 1/6 周期从 `(0,0,0)` 渐变到调色板起点色（`spectral1530` 为绿 `(0,255,0)`），随后接 1530 色环。`lnMapCyclesPerOctave` 默认 `1.0`（每倍频 1 个周期，即「放大倍率的对数为周期数」），密度可调。
-  逃逸次数 field 按几何（center/depth/widthS/iterations/variant…）缓存，重新上色（改 `colorMap`/`lnMapCyclesPerOctave`）会复用已算的 field，只走一遍上色（≈50ms），不重算迭代——适合导出视频前调色。`spectral1530` 在 escape 模式也用同一调色板：iter<255 走黑→绿，之后走 1530 色环。最终 cartesian 帧复用 strip 的同一套均衡 LUT，使 strip↔final-frame 的 warp 混合无色彩接缝。`escape` 之外的旧模式（`row_eq`/`log_lift`/`bands`/`frontier`）行为不变。
+  逃逸次数 field 按几何（center/depth/widthS/iterations/variant…）缓存，重新上色（改 `colorMap`/`lnMapCyclesPerOctave`）会复用已算的 field，只走一遍上色（≈50ms），不重算迭代——适合导出视频前调色。`spectral1530` 在 escape 模式也用同一调色板：iter<255 走黑→绿，之后走 1530 色环。最终 cartesian 帧复用 strip 的同一套均衡 LUT，使 strip↔final-frame 的 warp 混合无色彩接缝；分段视频导出也复用同一套全局 LUT，避免段边界跳色。`escape` 之外的旧模式（`row_eq`/`log_lift`/`bands`/`frontier`）行为不变。
 - `lnMapColorMode="row_eq"` 对每个 ln-radius 行单独做 escape iteration 秩映射。它强化每个深度切片内部的角向细节，代价是弱化全局 escape-time 尺度。
 - `lnMapColorMode="log_lift"` 对归一化 escape iteration 做 `log1p` 拉伸，不依赖直方图。低迭代差异会更明显，高迭代区域会被压缩，适合柔和预览或避免统计闪动。
 - `lnMapColorMode="bands"` 混合全局 CDF 与粗/细周期色带，把逃逸时间变化转成更可读的等值轮廓。
 - `lnMapColorMode="frontier"` 以全局 CDF 为基础，再根据邻域 escape-rank 梯度提亮边界，适合突出细丝、小轮廓和分界脉络。
 
-除 `escape` 外，这些映射都需要先计算整张 ln-map iteration field，目前走 OpenMP fp64 路径。
+除 `escape` 外，这些映射都需要先计算 ln-map iteration field；分段视频导出会把 field 限制在当前统计或渲染 chunk 内。
 
 ## Preview Flow / 预览流程
 

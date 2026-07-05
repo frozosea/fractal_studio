@@ -29,6 +29,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -856,6 +857,76 @@ LnMapEqualization finalize_equalization(
     return eq;
 }
 
+struct LnEqHistogram {
+    std::vector<double> hist;
+    double total = 0.0;
+    double first_row = std::numeric_limits<double>::infinity();
+    double last_row = -std::numeric_limits<double>::infinity();
+
+    explicit LnEqHistogram(int iterations = 0)
+        : hist(static_cast<size_t>(std::max(0, iterations)), 0.0) {}
+
+    void add(int iter, double row) {
+        if (iter < 0 || iter >= static_cast<int>(hist.size())) return;
+        hist[static_cast<size_t>(iter)] += 1.0;
+        total += 1.0;
+        first_row = std::min(first_row, row);
+        last_row = std::max(last_row, row);
+    }
+
+    bool valid() const {
+        return total > 0.0 && std::isfinite(first_row) && std::isfinite(last_row);
+    }
+};
+
+void accumulate_ln_map_equalization_histograms(
+    const LnMapParams& p,
+    const std::vector<int>& iters,
+    const TrigColumns& cols,
+    LnEqHistogram& disk_hist,
+    LnEqHistogram& all_hist
+) {
+    const int s = p.width_s;
+    const int h = p.height_t;
+    if (s <= 0 || h <= 0 || p.iterations <= 0) return;
+    if (iters.size() != static_cast<size_t>(s) * static_cast<size_t>(h)) return;
+
+    for (int row = 0; row < h; ++row) {
+        const double global_row = p.row_offset + static_cast<double>(row);
+        const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
+        const double r_mag = std::exp(k);
+        const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
+        for (int x = 0; x < s; ++x) {
+            const int it = iters[row_offset + static_cast<size_t>(x)];
+            if (it < 0 || it >= p.iterations) continue;
+
+            all_hist.add(it, global_row);
+
+            const double re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
+            const double im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
+            if (re * re + im * im <= 4.0) {
+                disk_hist.add(it, global_row);
+            }
+        }
+    }
+}
+
+LnMapEqualization finalize_ln_map_equalization_histogram(
+    const LnMapParams& p,
+    const LnEqHistogram& hist
+) {
+    if (!hist.valid()) return LnMapEqualization{};
+    double cpo = p.color_cycles_per_octave;
+    if (!(cpo > 0.0) || !std::isfinite(cpo)) cpo = 1.0;
+
+    const double participating_rows = std::max(1.0, hist.last_row - hist.first_row + 1.0);
+    const double total_octaves =
+        participating_rows * TAU / (static_cast<double>(p.width_s) * LN_TWO);
+
+    return finalize_equalization(hist.hist, hist.total, total_octaves, cpo,
+                                 p.colormap, ln_map_colormap_wraps_phase(p.colormap));
+}
+
 LnMapEqualization build_ln_map_equalization(
     const LnMapParams& p,
     const std::vector<int>& iters,
@@ -865,56 +936,18 @@ LnMapEqualization build_ln_map_equalization(
     const int h = p.height_t;
     if (s <= 0 || h <= 0 || p.iterations <= 0) return LnMapEqualization{};
 
-    double cpo = p.color_cycles_per_octave;
-    if (!(cpo > 0.0) || !std::isfinite(cpo)) cpo = 1.0;
-
     // Histogram escape counts over the pixels that actually carry fractal structure: the
     // origin disk |c| <= 2 (the Mandelbrot bounding disk). The shallow lead-in rows
     // (r_mag in (2,4]) and off-disk columns escape at count ~0; counting them would spike
     // count_min/median and corrupt the period. Restricting to |c|<=2 also lets the octave
     // span reflect the *participating* pixel range instead of the strip's padding — so the
     // coloring no longer depends on how many extra lead-in/lead-out octaves the strip has.
-    std::vector<double> hist(static_cast<size_t>(p.iterations), 0.0);
-    double total = 0.0;
-    int first_row = h, last_row = -1;
-    auto accumulate = [&](bool disk_only) {
-        for (int row = 0; row < h; ++row) {
-            const double global_row = p.row_offset + static_cast<double>(row);
-            const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
-            const double r_mag = std::exp(k);
-            const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
-            bool row_participated = false;
-            for (int x = 0; x < s; ++x) {
-                if (disk_only) {
-                    const double re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
-                    const double im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
-                    if (re * re + im * im > 4.0) continue;
-                }
-                const int it = iters[row_offset + static_cast<size_t>(x)];
-                if (it >= 0 && it < p.iterations) {
-                    hist[static_cast<size_t>(it)] += 1.0;
-                    total += 1.0;
-                    row_participated = true;
-                }
-            }
-            if (row_participated) { if (row < first_row) first_row = row; last_row = row; }
-        }
-    };
-    accumulate(/*disk_only=*/true);
-    if (total == 0.0) {  // center sits entirely outside |c|<=2 → fall back to the whole strip
-        std::fill(hist.begin(), hist.end(), 0.0);
-        first_row = h; last_row = -1;
-        accumulate(/*disk_only=*/false);
-    }
-    if (total == 0.0) return LnMapEqualization{};  // degenerate strip → eq.valid stays false
+    LnEqHistogram disk_hist(p.iterations);
+    LnEqHistogram all_hist(p.iterations);
+    accumulate_ln_map_equalization_histograms(p, iters, cols, disk_hist, all_hist);
 
-    // Octaves spanned by the participating pixel rows (not the full padded strip height).
-    const int participating_rows = std::max(1, last_row - first_row + 1);
-    const double total_octaves =
-        static_cast<double>(participating_rows) * TAU / (static_cast<double>(s) * LN_TWO);
-
-    return finalize_equalization(hist, total, total_octaves, cpo,
-                                 p.colormap, ln_map_colormap_wraps_phase(p.colormap));
+    const LnEqHistogram& selected = disk_hist.valid() ? disk_hist : all_hist;
+    return finalize_ln_map_equalization_histogram(p, selected);
 }
 
 // Single-entry cache of the (expensive) escape-count field, keyed by geometry only —
@@ -1042,8 +1075,9 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     // global-CDF blend below.
     const bool is_hist_eq = mode == "hist_eq";
     LnMapEqualization eq;
+    const bool using_external_eq = is_hist_eq && p.equalization_override && p.equalization_override->valid;
     if (is_hist_eq) {
-        eq = build_ln_map_equalization(p, iters, cols);
+        eq = using_external_eq ? *p.equalization_override : build_ln_map_equalization(p, iters, cols);
     }
 
     const bool needs_global_cdf = mode == "bands" || mode == "frontier";
@@ -1215,6 +1249,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     std::ostringstream layer;
     layer << "color=" << mode;
     if (is_hist_eq || needs_global_cdf) layer << ",histDomain=|c|<=2";
+    if (using_external_eq) layer << ",eq=external";
     if (needs_global_cdf) layer << ",histPixels=" << total;
     if (needs_global_cdf) layer << ",underflowTail=raw";
     if (is_hist_eq && eq.valid) {
@@ -1892,6 +1927,45 @@ LnMapEqualization reconstructEqualization(
     eq.colormap       = colormap;
     eq.valid          = true;
     return eq;
+}
+
+LnMapEqualization build_ln_map_equalization_streamed(
+    const LnMapParams& p, int max_rows, const LnMapProgress& on_row_done)
+{
+    const int s = p.width_s;
+    const int h = p.height_t;
+    if (s <= 0 || h <= 0 || p.iterations <= 0) return LnMapEqualization{};
+
+    const int chunk_rows = std::clamp(max_rows, 1, h);
+    const TrigColumns cols = make_trig_columns(s);
+    LnEqHistogram disk_hist(p.iterations);
+    LnEqHistogram all_hist(p.iterations);
+
+    for (int row0 = 0; row0 < h; row0 += chunk_rows) {
+        const int rows = std::min(chunk_rows, h - row0);
+        LnMapParams chunk = p;
+        chunk.height_t = rows;
+        chunk.row_offset = p.row_offset + static_cast<double>(row0);
+        chunk.equalization_override = nullptr;
+
+        std::vector<int> iters(static_cast<size_t>(s) * static_cast<size_t>(rows), p.iterations);
+        auto report_chunk_progress = [&](int rows_done) {
+            if (on_row_done) on_row_done(std::min(h, row0 + std::clamp(rows_done, 0, rows)));
+        };
+
+        if (lnmap_perturbation_applicable(chunk)) {
+            compute_ln_perturb_iters(chunk, iters, report_chunk_progress);
+        } else if (ln_map_fast_mode(chunk)) {
+            compute_ln_field_fast(chunk, iters, cols, report_chunk_progress);
+        } else {
+            compute_ln_field(chunk, iters, cols, report_chunk_progress);
+        }
+        accumulate_ln_map_equalization_histograms(chunk, iters, cols, disk_hist, all_hist);
+        if (on_row_done) on_row_done(row0 + rows);
+    }
+
+    const LnEqHistogram& selected = disk_hist.valid() ? disk_hist : all_hist;
+    return finalize_ln_map_equalization_histogram(p, selected);
 }
 
 LnMapEqualization build_map_equalization(

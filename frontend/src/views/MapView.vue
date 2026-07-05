@@ -996,7 +996,8 @@ const exportProgressDetail = computed(() => {
   if (!p.stage) return ''
   if (p.stage === 'ln_map') {
     const colorMode = p.lnMapColorMode ? ` · ${p.lnMapColorMode}` : ''
-    return `ln-map ${p.current || 0}/${p.total || 0} rows${colorMode} · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
+    const pass = p.details?.lnMapPass === 'equalization' ? ' equalization' : ''
+    return `ln-map${pass} ${p.current || 0}/${p.total || 0} rows${colorMode} · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
   }
   if (p.stage === 'video_warp_encode') {
     return `encode ${p.current || 0}/${p.total || 0} frames${etaSuffix(p.estimatedRemainingMs)}`

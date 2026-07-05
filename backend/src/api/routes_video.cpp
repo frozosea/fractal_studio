@@ -1984,8 +1984,29 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 return lp;
             };
 
+            compute::LnMapEqualization segmentedEq;
+            if (lnMapColorMode == "hist_eq") {
+                compute::LnMapParams eqParams = makeLnParams(stripPlan.heightT, 0.0);
+                setVideoProgress(runner, run.id, "ln_map", 0, stripPlan.heightT, 0.0, depth,
+                                 "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "equalization"}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
+                throwIfCancelled(runner, run.id);
+                segmentedEq = compute::build_ln_map_equalization_streamed(
+                    eqParams,
+                    stripPlan.maxSegmentHeightT,
+                    [&](int rowsDone) {
+                        throwIfCancelled(runner, run.id);
+                        const double octave = depth * static_cast<double>(rowsDone) / std::max(1, stripPlan.heightT);
+                        setVideoProgress(runner, run.id, "ln_map", rowsDone, stripPlan.heightT, octave, depth,
+                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "equalization"}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
+                    });
+                if (segmentedEq.valid) {
+                    setVideoProgress(runner, run.id, "ln_map", stripPlan.heightT, stripPlan.heightT, depth, depth,
+                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "equalization"}, {"currentLnMapRow", stripPlan.heightT}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"eqCountMin", segmentedEq.count_min}, {"eqPeriod", segmentedEq.period}});
+                }
+            }
+
             setVideoProgress(runner, run.id, "ln_map", 0, stripPlan.totalSegmentRows, 0.0, depth,
-                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"lnMapSegmentCount", stripPlan.segmentCount}});
+                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"lnMapSegmentCount", stripPlan.segmentCount}});
             for (const VideoSegmentPlan& seg : videoSegments) {
                 throwIfCancelled(runner, run.id);
                 const std::string suffix = segmentSuffix(seg.index);
@@ -2025,6 +2046,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
 
                 cv::Mat segStrip(seg.heightT, s, CV_8UC3);
                 compute::LnMapParams lp = makeLnParams(seg.heightT, seg.rowOffset);
+                if (segmentedEq.valid) lp.equalization_override = &segmentedEq;
                 const int rowBase = rowsDoneTotal;
                 compute::LnMapStats segStats = compute::render_ln_map(
                     lp, segStrip,
@@ -2036,14 +2058,16 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                             0.0, 1.0);
                         const double currentDepth = std::min(depth, seg.startDepthOctaves + seg.depthOctaves * local);
                         setVideoProgress(runner, run.id, "ln_map", currentRows, stripPlan.totalSegmentRows, currentDepth, depth,
-                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"currentLnMapRow", currentRows}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
+                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"currentLnMapRow", currentRows}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
                     });
                 throwIfCancelled(runner, run.id);
                 compute::write_png(segStripPath.string(), segStrip);
                 runner.addArtifact(run.id, Artifact{isFirst ? "ln-map" : "ln-map-segment", segStripPath.string(), "image"});
 
                 if (chunkFinalDeferred) {
-                    colorizeFinalFrameWithLnMapMode(chunkMp, chunkField, lnMapColorMode, segStats.equalization, chunkFinal);
+                    const compute::LnMapEqualization& chunkEq =
+                        segmentedEq.valid ? segmentedEq : segStats.equalization;
+                    colorizeFinalFrameWithLnMapMode(chunkMp, chunkField, lnMapColorMode, chunkEq, chunkFinal);
                     chunkField = compute::FieldOutput{};
                     if (isLast) finalImg = chunkFinal;
                 }
@@ -2075,8 +2099,9 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 }
                 renderedSegments.push_back(RenderedSegment{seg, segStripPath, segFinalPath, segStats, chunkFinalStats});
                 setVideoProgress(runner, run.id, "ln_map", rowsDoneTotal, stripPlan.totalSegmentRows, seg.endDepthOctaves, depth,
-                                 "", "", Json{{"engine", segStats.engine_used}, {"scalar", segStats.scalar_used}, {"lnMapEngine", segStats.engine_used}, {"lnMapScalar", segStats.scalar_used}, {"lnMapMode", segStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", segStats.layer_summary}, {"lnMapValidationSummary", segStats.validation_summary}, {"currentLnMapRow", rowsDoneTotal}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
+                                 "", "", Json{{"engine", segStats.engine_used}, {"scalar", segStats.scalar_used}, {"lnMapEngine", segStats.engine_used}, {"lnMapScalar", segStats.scalar_used}, {"lnMapMode", segStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapLayerSummary", segStats.layer_summary}, {"lnMapValidationSummary", segStats.validation_summary}, {"currentLnMapRow", rowsDoneTotal}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
             }
+            if (segmentedEq.valid) lnStats.equalization = segmentedEq;
             lnStats.engine_used = "segmented(" + std::to_string(stripPlan.segmentCount) + " parts,last=" + lnStats.engine_used + ")";
             if (!lnStats.scalar_used.empty()) {
                 lnStats.scalar_used = "segmented(" + lnStats.scalar_used + ")";
@@ -2127,6 +2152,12 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"validationSummary", lnStats.validation_summary},
                 {"segments", segJson},
             };
+            if (lnStats.equalization.valid) {
+                sc["eqCountMin"]      = lnStats.equalization.count_min;
+                sc["eqPeriod"]        = lnStats.equalization.period;
+                sc["eqOnsetCycles"]   = lnStats.equalization.onset_cycles;
+                sc["eqColormapWraps"] = lnStats.equalization.colormap_wraps;
+            }
             const std::filesystem::path scPath = std::filesystem::path(run.outputDir) / "ln_map.json";
             atomicWriteText(scPath, sc.dump(2));
 
