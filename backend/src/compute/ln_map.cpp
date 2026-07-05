@@ -163,7 +163,8 @@ void render_ln_variant_openmp_rows_impl(
 
     auto render_row = [&](int row) {
         uint8_t* rowp = out.ptr<uint8_t>(row);
-        const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
+        const double global_row = p.row_offset + static_cast<double>(row);
+        const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
         const double r_mag = std::exp(k);
         for (int x = 0; x < s; x++) {
             const double pre = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
@@ -253,7 +254,8 @@ void render_ln_variant_fixed_rows_impl(
 
     auto render_row = [&](int row) {
         uint8_t* rowp = out.ptr<uint8_t>(row);
-        const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
+        const double global_row = p.row_offset + static_cast<double>(row);
+        const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
         const double r_mag = std::exp(k);
         for (int x = 0; x < s; x++) {
             const double pre = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
@@ -365,6 +367,7 @@ fsd_cuda::CudaLnMapParams make_cuda_params(const LnMapParams& p) {
     cp.julia_im = p.julia_im;
     cp.width_s = p.width_s;
     cp.height_t = p.height_t;
+    cp.row_offset = p.row_offset;
     cp.iterations = p.iterations;
     cp.bailout = p.bailout;
     cp.bailout_sq = p.bailout_sq;
@@ -639,7 +642,8 @@ void color_for_iter(const LnMapParams& p, int iter, uint8_t bgr[3]) {
 template <Variant V>
 int sample_ln_iter_fp64(const LnMapParams& p, int row, int col) {
     const double th = TAU * static_cast<double>(col) / static_cast<double>(p.width_s);
-    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(p.width_s);
+    const double global_row = p.row_offset + static_cast<double>(row);
+    const double k = LN_FOUR - global_row * TAU / static_cast<double>(p.width_s);
     const double r_mag = std::exp(k);
     const double pre = p.center_re + r_mag * std::cos(th);
     const double pim = p.center_im + r_mag * std::sin(th);
@@ -663,7 +667,8 @@ int sample_ln_iter_fp32(const LnMapParams& p, int row, int col) {
     constexpr float ln_four = static_cast<float>(LN_FOUR);
     const float width_s = static_cast<float>(p.width_s);
     const float th = tau * static_cast<float>(col) / width_s;
-    const float k = ln_four - static_cast<float>(row) * tau / width_s;
+    const float global_row = static_cast<float>(p.row_offset + static_cast<double>(row));
+    const float k = ln_four - global_row * tau / width_s;
     const float r_mag = std::exp(k);
     const float pre = static_cast<float>(p.center_re) + r_mag * std::cos(th);
     const float pim = static_cast<float>(p.center_im) + r_mag * std::sin(th);
@@ -685,7 +690,8 @@ template <Variant V>
 int sample_ln_iter_fx64(const LnMapParams& p, int row, int col) {
     using S = Fixed64<57>;
     const double th = TAU * static_cast<double>(col) / static_cast<double>(p.width_s);
-    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(p.width_s);
+    const double global_row = p.row_offset + static_cast<double>(row);
+    const double k = LN_FOUR - global_row * TAU / static_cast<double>(p.width_s);
     const double r_mag = std::exp(k);
     const double pre = p.center_re + r_mag * std::cos(th);
     const double pim = p.center_im + r_mag * std::sin(th);
@@ -749,7 +755,8 @@ void compute_ln_iters_fp64_variant(
     std::atomic<int> rows_done{0};
 
     auto compute_row = [&](int row) {
-        const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
+        const double global_row = p.row_offset + static_cast<double>(row);
+        const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
         const double r_mag = std::exp(k);
         const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
         for (int x = 0; x < s; x++) {
@@ -872,7 +879,8 @@ LnMapEqualization build_ln_map_equalization(
     int first_row = h, last_row = -1;
     auto accumulate = [&](bool disk_only) {
         for (int row = 0; row < h; ++row) {
-            const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
+            const double global_row = p.row_offset + static_cast<double>(row);
+            const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
             const double r_mag = std::exp(k);
             const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
             bool row_participated = false;
@@ -917,6 +925,7 @@ struct LnFieldCache {
     bool valid = false;
     bool julia = false;
     double center_re = 0, center_im = 0, julia_re = 0, julia_im = 0, bailout = 0, bailout_sq = 0;
+    double row_offset = 0.0;
     std::string center_re_str, center_im_str;  // deep-zoom identity beyond double
     int width_s = 0, height_t = 0, iterations = 0, variant = -1;
     std::string precision_mode;  // "standard" or "fast" — different precision → different field
@@ -933,6 +942,7 @@ bool ln_field_cache_matches(const LnMapParams& p, const LnFieldCache& c, size_t 
            c.center_re_str == p.center_re_str && c.center_im_str == p.center_im_str &&
            c.julia_re == p.julia_re && c.julia_im == p.julia_im &&
            c.bailout == p.bailout && c.bailout_sq == p.bailout_sq &&
+           c.row_offset == p.row_offset &&
            c.width_s == p.width_s && c.height_t == p.height_t &&
            c.iterations == p.iterations && c.variant == static_cast<int>(p.variant);
 }
@@ -1021,7 +1031,8 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
         std::lock_guard<std::mutex> lk(g_ln_field_cache_mu);
         g_ln_field_cache = LnFieldCache{true, p.julia, p.center_re, p.center_im, p.julia_re,
                                         p.julia_im, p.bailout, p.bailout_sq,
-                                        p.center_re_str, p.center_im_str, s, h, p.iterations,
+                                        p.row_offset, p.center_re_str, p.center_im_str,
+                                        s, h, p.iterations,
                                         static_cast<int>(p.variant), p.precision_mode,
                                         field_engine, iters};
     }
@@ -1042,7 +1053,8 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     if (needs_global_cdf) {
         hist.assign(static_cast<size_t>(p.iterations), 0ULL);
         for (int row = 0; row < h; ++row) {
-            const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
+            const double global_row = p.row_offset + static_cast<double>(row);
+            const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
             const double r_mag = std::exp(k);
             const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
             for (int x = 0; x < s; ++x) {
@@ -2027,7 +2039,8 @@ LnMapStats render_ln_map_openmp(const LnMapParams& p, cv::Mat& out, const LnMapP
 // raw iteration field. Gate on the innermost strip radius — above ~1e-13 the
 // plain fp64 SIMD paths are exact and faster.
 static double lnmap_innermost_radius(const LnMapParams& p) {
-    const double k_min = LN_FOUR - static_cast<double>(p.height_t - 1) * TAU
+    const double global_bottom = p.row_offset + static_cast<double>(p.height_t - 1);
+    const double k_min = LN_FOUR - global_bottom * TAU
                                    / static_cast<double>(p.width_s);
     return std::exp(std::max(k_min, -690.0));  // keep > 0 for log2
 }
@@ -2144,7 +2157,7 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
         cp.width = S; cp.height = T; cp.iterations = max_iter;
         cp.bailout_sq = bail2;
         cp.offset_mode = 1;
-        cp.ln_r0 = LN_FOUR;
+        cp.ln_r0 = LN_FOUR - p.row_offset * TAU / static_cast<double>(S);
         cp.k_step = TAU / static_cast<double>(S);
         cp.theta_step = TAU / static_cast<double>(S);
         cp.julia = is_julia;
@@ -2189,7 +2202,8 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
 
             #pragma omp for schedule(dynamic, 8)
             for (int row = 0; row < T; ++row) {
-                const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(S);
+                const double global_row = p.row_offset + static_cast<double>(row);
+                const double k = LN_FOUR - global_row * TAU / static_cast<double>(S);
                 const double r_mag = std::exp(k);
                 const size_t row_base = static_cast<size_t>(row) * S;
 

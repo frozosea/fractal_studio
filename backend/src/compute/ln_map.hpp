@@ -27,6 +27,9 @@ struct LnMapParams {
     double julia_im = 0.0;
     int width_s = 1024;
     int height_t = 4096;
+    // Global ln-map row offset for segmented video export. A row at local y
+    // samples the same location as global row row_offset + y.
+    double row_offset = 0.0;
     int iterations = 2048;
     double bailout = 2.0;
     double bailout_sq = 4.0;

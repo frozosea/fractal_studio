@@ -403,7 +403,8 @@ __global__ void ln_map_kernel_templated(CudaLnMapParams p, int row_start, int ro
     const int row = row_start + local_row;
 
     const double th = TAU * static_cast<double>(x) / static_cast<double>(p.width_s);
-    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(p.width_s);
+    const double global_row = p.row_offset + static_cast<double>(row);
+    const double k = LN_FOUR - global_row * TAU / static_cast<double>(p.width_s);
     const double r_mag = exp(k);
     const double pre = p.center_re + r_mag * cos(th);
     const double pim = p.center_im + r_mag * sin(th);
@@ -446,7 +447,8 @@ __global__ void ln_map_kernel_fp32_templated(CudaLnMapParams p, int row_start, i
     constexpr float ln_four = static_cast<float>(LN_FOUR);
     const float width_s = static_cast<float>(p.width_s);
     const float th = tau * static_cast<float>(x) / width_s;
-    const float k = ln_four - static_cast<float>(row) * tau / width_s;
+    const float global_row = static_cast<float>(p.row_offset + static_cast<double>(row));
+    const float k = ln_four - global_row * tau / width_s;
     const float r_mag = expf(k);
     const float pre = static_cast<float>(p.center_re) + r_mag * cosf(th);
     const float pim = static_cast<float>(p.center_im) + r_mag * sinf(th);
@@ -487,7 +489,8 @@ __global__ void ln_map_kernel_fx64_templated(CudaLnMapParams p, int row_start, i
     const int row = row_start + local_row;
 
     const double th = TAU * static_cast<double>(x) / static_cast<double>(p.width_s);
-    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(p.width_s);
+    const double global_row = p.row_offset + static_cast<double>(row);
+    const double k = LN_FOUR - global_row * TAU / static_cast<double>(p.width_s);
     const double r_mag = exp(k);
     const double pre = p.center_re + r_mag * cos(th);
     const double pim = p.center_im + r_mag * sin(th);
@@ -534,7 +537,8 @@ __global__ void ln_map_iters_kernel_fp32(CudaLnMapParams p, int row_start, int r
     constexpr float ln_four = static_cast<float>(LN_FOUR);
     const float width_s = static_cast<float>(p.width_s);
     const float th = tau * static_cast<float>(x) / width_s;
-    const float k = ln_four - static_cast<float>(row) * tau / width_s;
+    const float global_row = static_cast<float>(p.row_offset + static_cast<double>(row));
+    const float k = ln_four - global_row * tau / width_s;
     const float r_mag = expf(k);
     const float pre = static_cast<float>(p.center_re) + r_mag * cosf(th);
     const float pim = static_cast<float>(p.center_im) + r_mag * sinf(th);
@@ -565,7 +569,8 @@ __global__ void ln_map_iters_kernel(CudaLnMapParams p, int row_start, int row_co
     const int x = idx % p.width_s;
     const int row = row_start + idx / p.width_s;
     const double th = TAU * static_cast<double>(x) / static_cast<double>(p.width_s);
-    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(p.width_s);
+    const double global_row = p.row_offset + static_cast<double>(row);
+    const double k = LN_FOUR - global_row * TAU / static_cast<double>(p.width_s);
     const double r_mag = exp(k);
     const double pre = p.center_re + r_mag * cos(th);
     const double pim = p.center_im + r_mag * sin(th);
@@ -595,7 +600,8 @@ __global__ void ln_map_iters_kernel_fx64(CudaLnMapParams p, int row_start, int r
     const int x = idx % p.width_s;
     const int row = row_start + idx / p.width_s;
     const double th = TAU * static_cast<double>(x) / static_cast<double>(p.width_s);
-    const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(p.width_s);
+    const double global_row = p.row_offset + static_cast<double>(row);
+    const double k = LN_FOUR - global_row * TAU / static_cast<double>(p.width_s);
     const double r_mag = exp(k);
     const double pre = p.center_re + r_mag * cos(th);
     const double pim = p.center_im + r_mag * sin(th);

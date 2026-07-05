@@ -1018,9 +1018,17 @@ const exportMemoryEstimateMiB = computed(() => {
   const fullWidth = Math.ceil(Math.sqrt(exportW.value * exportW.value + exportH.value * exportH.value) * Math.PI)
   const scaleByPreset: Record<string, number> = { draft: 0.35, balanced: 0.55, high: 0.75, full: 1.0 }
   const actualWidth = Math.ceil(fullWidth * (scaleByPreset[exportQualityPreset.value] ?? 0.55))
-  const heightT = Math.ceil((2 + exportDepth.value) * Math.LN2 / (Math.PI * 2) * actualWidth)
+  const extraOctaves = exportLnMapColorMode.value === 'escape' ? 2 : 7
+  const rowsPerOctave = Math.LN2 / (Math.PI * 2) * actualWidth
+  const extraRows = Math.max(1, Math.ceil(extraOctaves * rowsPerOctave))
+  const logicalHeightT = Math.ceil((extraOctaves + exportDepth.value) * rowsPerOctave)
+  const defaultMaxSegmentHeight = 8192
+  const maxSegmentHeight = Math.min(logicalHeightT, Math.max(defaultMaxSegmentHeight, extraRows + 512))
   const pixels = exportW.value * exportH.value
-  const bytes = actualWidth * heightT * 3 + pixels * (3 * 4 + 4 * 5 + 1)
+  const mappedFieldBytes = exportLnMapColorMode.value === 'escape'
+    ? 0
+    : actualWidth * maxSegmentHeight * 4
+  const bytes = actualWidth * maxSegmentHeight * 3 + mappedFieldBytes + pixels * (3 * 4 + 4 * 5 + 1)
   return bytes / 1024 / 1024
 })
 

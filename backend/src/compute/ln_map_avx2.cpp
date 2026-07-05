@@ -287,7 +287,8 @@ void render_rows_impl(
     auto render_row = [&](int row) {
         uint8_t* rowp = iters_out ? nullptr : out.ptr<uint8_t>(row);
         int* iters_rowp = iters_out ? iters_out + static_cast<size_t>(row) * static_cast<size_t>(s) : nullptr;
-        const double k = LN_FOUR - static_cast<double>(row) * TAU / static_cast<double>(s);
+        const double global_row = p.row_offset + static_cast<double>(row);
+        const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
         const double r_mag = std::exp(k);
 
         for (int col = 0; col < s; col += 4) {
@@ -391,7 +392,8 @@ void render_rows_fp32_impl(
     auto render_row = [&](int row) {
         uint8_t* rowp = iters_out ? nullptr : out.ptr<uint8_t>(row);
         int* iters_rowp = iters_out ? iters_out + static_cast<size_t>(row) * static_cast<size_t>(s) : nullptr;
-        const float k = ln_four - static_cast<float>(row) * tau / static_cast<float>(s);
+        const float global_row = static_cast<float>(p.row_offset + static_cast<double>(row));
+        const float k = ln_four - global_row * tau / static_cast<float>(s);
         const float r_mag = std::exp(k);
 
         for (int col = 0; col < s; col += 8) {

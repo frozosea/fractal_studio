@@ -44,6 +44,23 @@ t = ceil((2 + depthOctaves) * ln(2) / (2*pi) * widthS)
 
 `2` 个额外 octave 是为了覆盖视频首帧边缘和采样安全区。
 
+Video export no longer has to allocate this whole strip as one image. If the
+logical `heightT` is larger than `lnMapMaxSegmentHeight` (default `8192` rows),
+`/api/video/export` splits the zoom into multiple ln-map segments. Each segment
+has:
+
+- a bounded-height strip (`ln_map.png`, `ln_map_001.png`, ...)
+- its own local final frame for the center fallback (`final_frame_000.png`, ...)
+- a row offset recorded in `ln_map.json`
+
+The chunk videos are encoded independently and concatenated into the usual
+`zoom.mp4`. Responses and reports include `lnMapSegmented`,
+`lnMapSegmentCount`, `lnMapMaxSegmentHeight`, `lnMapTotalSegmentRows`,
+`estimatedPeakMemory` (bounded segment peak), and
+`estimatedSingleStripMemory` (what the old one-piece strip would have needed).
+The legacy `/api/video/zoom` route intentionally rejects segmented ln-map
+artifacts because it only knows how to warp a single strip.
+
 Ln-map coloring:
 
 `colorMap` 选择实际调色板；`lnMapColorMode` 选择 escape iteration 到调色板坐标的映射方式。

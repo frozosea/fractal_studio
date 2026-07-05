@@ -15,6 +15,7 @@ struct CudaLnMapParams {
     double julia_im = 0.0;
     int width_s = 1024;
     int height_t = 4096;
+    double row_offset = 0.0;
     int iterations = 2048;
     double bailout = 2.0;
     double bailout_sq = 4.0;

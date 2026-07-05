@@ -564,6 +564,7 @@ export interface VideoExportRequest {
   lnMapFastValidationMaxP99IterDelta?: number
   lnMapFastValidationMaxMeanColorDelta?: number
   lnMapExtraOctaves?: number
+  lnMapMaxSegmentHeight?: number
   lnMapRunId?: string
   cudaWarp?: boolean
   background?: boolean
@@ -609,9 +610,14 @@ export interface VideoExportResponse {
   actualWidthS?: number
   heightT?: number
   lnMapExtraOctaves?: number
+  lnMapSegmented?: boolean
+  lnMapSegmentCount?: number
+  lnMapMaxSegmentHeight?: number
+  lnMapTotalSegmentRows?: number
   qualityPreset?: string
   qualityScale?: number
   estimatedPeakMemory?: number
+  estimatedSingleStripMemory?: number
   finalFrameEngine?: string
   finalFrameScalar?: string
   lnMapEngine?: string
@@ -646,6 +652,9 @@ export interface RunProgress {
   totalFrames?: number
   currentLnMapRow?: number
   totalLnMapRows?: number
+  currentLnMapSegment?: number
+  lnMapSegmentCount?: number
+  lnMapSegmentHeight?: number
   finalFrameEngine?: string
   finalFrameScalar?: string
   lnMapEngine?: string
