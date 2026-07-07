@@ -30,6 +30,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -515,10 +516,10 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
         return cancelledMapRenderJson(run.id, in).dump();
     }
 
-    ResourceManager::Lease heavyLease;
+    ResourceManager::Lease heavyLeaseRaw;
     if (in.stillExport) {
         std::string conflictLock, activeRunId;
-        if (!resourceManager().tryAcquire(run.id, "still_export", {"cuda_heavy", "cpu_heavy"}, heavyLease, conflictLock, activeRunId)) {
+        if (!resourceManager().tryAcquire(run.id, "still_export", {"cuda_heavy", "cpu_heavy"}, heavyLeaseRaw, conflictLock, activeRunId)) {
             runner.setStatus(run.id, "failed");
             throw HttpError(409, Json{
                 {"error", "heavy render already running"},
@@ -542,59 +543,111 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
             {"details", Json::object()},
         }.dump());
     }
-    (void)heavyLease;
-    runner.setStatus(run.id, "running");
+    auto heavyLease = std::make_shared<ResourceManager::Lease>(std::move(heavyLeaseRaw));
 
-    MapRenderImage rendered;
-    std::filesystem::path imagePath;
-    try {
-        rendered = renderMapImage(repoRoot, in, shouldCancel);
-        throwIfMapRenderCancelled(shouldCancel);
-        imagePath = std::filesystem::path(run.outputDir) / rendered.artifactName;
-        compute::write_png(imagePath.string(), rendered.image);
-        runner.addArtifact(run.id, Artifact{"map", imagePath.string(), "image"});
-        if (in.stillExport) {
-            runner.setProgress(run.id, Json{
-                {"taskType", "map_export"},
-                {"stage", "completed"},
-                {"current", 1},
-                {"total", 1},
-                {"percent", 100.0},
-                {"engine", rendered.engineUsed},
-                {"scalar", rendered.scalarUsed},
-                {"elapsedMs", runner.runElapsedMs(run.id)},
-                {"cancelable", false},
-                {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
-                {"details", Json::object()},
-            }.dump());
+    auto execute = [=, &runner]() mutable -> Json {
+        (void)heavyLease;
+        runner.setStatus(run.id, "running");
+
+        MapRenderImage rendered;
+        std::filesystem::path imagePath;
+        try {
+            rendered = renderMapImage(repoRoot, in, shouldCancel);
+            throwIfMapRenderCancelled(shouldCancel);
+            imagePath = std::filesystem::path(run.outputDir) / rendered.artifactName;
+            compute::write_png(imagePath.string(), rendered.image);
+            runner.addArtifact(run.id, Artifact{"map", imagePath.string(), "image"});
+            if (in.stillExport) {
+                runner.setProgress(run.id, Json{
+                    {"taskType", "map_export"},
+                    {"stage", "completed"},
+                    {"current", 1},
+                    {"total", 1},
+                    {"percent", 100.0},
+                    {"engine", rendered.engineUsed},
+                    {"scalar", rendered.scalarUsed},
+                    {"elapsedMs", runner.runElapsedMs(run.id)},
+                    {"cancelable", false},
+                    {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
+                    {"details", Json::object()},
+                }.dump());
+            }
+            runner.setStatus(run.id, "completed");
+        } catch (const std::exception& ex) {
+            if (isCancelledException(ex)) {
+                runner.setStatus(run.id, "cancelled");
+                return cancelledMapRenderJson(run.id, in);
+            }
+            if (in.stillExport) {
+                runner.setProgress(run.id, Json{
+                    {"taskType", "map_export"},
+                    {"stage", "failed"},
+                    {"current", 0},
+                    {"total", 1},
+                    {"percent", 0.0},
+                    {"engine", in.engine},
+                    {"scalar", in.scalarType},
+                    {"elapsedMs", runner.runElapsedMs(run.id)},
+                    {"cancelable", false},
+                    {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
+                    {"errorMessage", ex.what()},
+                    {"details", Json::object()},
+                }.dump());
+            }
+            runner.setStatus(run.id, "failed");
+            throw;
         }
-        runner.setStatus(run.id, "completed");
-    } catch (const std::exception& ex) {
-        if (isCancelledException(ex)) {
-            runner.setStatus(run.id, "cancelled");
-            return cancelledMapRenderJson(run.id, in).dump();
-        }
-        runner.setStatus(run.id, "failed");
-        throw;
+
+        const std::string artifactId = run.id + ":" + rendered.artifactName;
+        return Json{
+            {"runId", run.id},
+            {"status", "completed"},
+            {"artifactId", artifactId},
+            {"imagePath", "/api/artifacts/content?artifactId=" + artifactId},
+            {"localPath", imagePath.string()},
+            {"localExport", in.localExport},
+            {"generatedMs", rendered.elapsed},
+            {"width", in.width},
+            {"height", in.height},
+            {"scalarUsed", rendered.scalarUsed},
+            {"engineUsed", rendered.engineUsed},
+            {"requestId", in.requestId},
+            {"effective", mapRenderEffectiveJson(in, rendered)},
+        };
+    };
+
+    const bool background = in.stillExport && in.j.value("background", false);
+    if (background) {
+        runner.setProgress(run.id, Json{
+            {"taskType", "map_export"},
+            {"stage", "queued"},
+            {"current", 0},
+            {"total", 1},
+            {"percent", 0.0},
+            {"engine", in.engine},
+            {"scalar", in.scalarType},
+            {"elapsedMs", runner.runElapsedMs(run.id)},
+            {"cancelable", false},
+            {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
+            {"details", Json::object()},
+        }.dump());
+        std::thread([execute]() mutable {
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+        return Json{
+            {"runId", run.id},
+            {"status", "queued"},
+            {"localExport", in.localExport},
+            {"width", in.width},
+            {"height", in.height},
+            {"requestId", in.requestId},
+            {"effective", Json{{"centerRe", in.cRe}, {"centerIm", in.cIm}, {"scale", in.scale}}},
+        }.dump();
     }
 
-    const std::string artifactId = run.id + ":" + rendered.artifactName;
-    Json resp = {
-        {"runId", run.id},
-        {"status", "completed"},
-        {"artifactId", artifactId},
-        {"imagePath", "/api/artifacts/content?artifactId=" + artifactId},
-        {"localPath", imagePath.string()},
-        {"localExport", in.localExport},
-        {"generatedMs", rendered.elapsed},
-        {"width", in.width},
-        {"height", in.height},
-        {"scalarUsed", rendered.scalarUsed},
-        {"engineUsed", rendered.engineUsed},
-        {"requestId", in.requestId},
-        {"effective", mapRenderEffectiveJson(in, rendered)},
-    };
-    return resp.dump();
+    return execute().dump();
 }
 
 std::string mapRenderInlineRoute(const std::filesystem::path& repoRoot,

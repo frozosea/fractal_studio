@@ -18,6 +18,7 @@
 namespace fsd::compute {
 
 struct LnMapEqualization;
+struct LnMapGlobalCdf;
 
 struct LnMapParams {
     bool julia = false;
@@ -39,6 +40,7 @@ struct LnMapParams {
     Colormap colormap = Colormap::ClassicCos;
     std::string color_mode = "escape"; // escape, hist_eq, row_eq, log_lift, bands, frontier
     const LnMapEqualization* equalization_override = nullptr; // optional shared hist_eq LUT for segmented export
+    const LnMapGlobalCdf* global_cdf_override = nullptr; // optional shared bands/frontier CDF for segmented export
     std::string engine = "auto"; // auto, hybrid, cuda, avx512, avx2, openmp
     std::string precision_mode = "standard"; // standard, fast
     std::string scalar_type = "auto"; // auto, fp64, fx64
@@ -79,6 +81,16 @@ struct LnMapEqualization {
     void colorize(int it, uint8_t& b, uint8_t& g, uint8_t& r) const;
 };
 
+struct LnMapGlobalCdf {
+    std::vector<unsigned long long> cumulative;
+    unsigned long long total = 0;
+    int first_iter = 0;
+
+    bool valid() const {
+        return total > 0 && !cumulative.empty();
+    }
+};
+
 struct LnMapStats {
     double elapsed_ms = 0.0;
     int pixel_count = 0;
@@ -88,6 +100,7 @@ struct LnMapStats {
     std::string layer_summary;
     std::string validation_summary;
     LnMapEqualization equalization;        // populated only for color_mode == "hist_eq"
+    LnMapGlobalCdf global_cdf;             // populated for color_mode == "bands"/"frontier"
 };
 
 LnMapEqualization reconstructEqualization(
@@ -132,6 +145,8 @@ LnMapStats render_ln_map_avx2_rows(const LnMapParams& p, cv::Mat& out, int row_s
 LnMapStats render_ln_map_avx2_fp32_rows(const LnMapParams& p, cv::Mat& out, int row_start, int row_count, const LnMapProgress& on_row_done = nullptr);
 LnMapStats render_ln_map(const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done = nullptr);
 LnMapEqualization build_ln_map_equalization_streamed(
+    const LnMapParams& p, int max_rows, const LnMapProgress& on_row_done = nullptr);
+LnMapGlobalCdf build_ln_map_global_cdf_streamed(
     const LnMapParams& p, int max_rows, const LnMapProgress& on_row_done = nullptr);
 
 } // namespace fsd::compute

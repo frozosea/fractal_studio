@@ -881,37 +881,12 @@ async function exportPng() {
   pngExportStatus.value = ''
   pngExportBusy.value = true
   try {
-    const resp = await api.mapRender({
-      taskType:   'still_export',
-      localExport: localExportMode.value,
-      centerRe:   activeCenterRe(),
-      centerIm:   activeCenterIm(),
-      centerReStr: activeCenterReStr(),
-      centerImStr: activeCenterImStr(),
-      scale:      activeScale(),
-      width:      pngPreset.value.width,
-      height:     pngPreset.value.height,
-      iterations: iterations.value,
-      variant:    variant.value,
-      metric:     metric.value,
-      colorMap:   colorMap.value,
-      smooth:     smooth.value,
-      colorMode:  mapColorMode.value,
-      cyclesPerOctave: cyclesPerOctave.value,
-      pairwiseCap: pairwiseCap.value,
-      engine:     engineMode.value,
-      scalarType: scalarMode.value,
-      julia:      juliaOn.value,
-      juliaRe:    juliaRe.value,
-      juliaIm:    juliaIm.value,
-      transitionTheta: transitionOn.value ? transitionThetaMilliDeg.value * Math.PI / (180 * THETA_SCALE) : undefined,
-      transitionThetaMilliDeg: transitionOn.value ? transitionThetaMilliDeg.value : undefined,
-      transitionFrom:  transitionOn.value ? transitionFrom.value : undefined,
-      transitionTo:    transitionOn.value ? transitionTo.value : undefined,
-      transitionVariants: multiTransitionActive.value ? transitionVariantIds.value : undefined,
-      transitionWeights:  multiTransitionActive.value ? transitionWeights.value : undefined,
-      rotationDeg:     rotationDeg.value || undefined,
-    }) as any
+    const resp = await api.mapRender(pngRequestBase(localExportMode.value)) as any
+    if (resp.status === 'queued' && resp.runId) {
+      pngExportStatus.value = `${resp.runId} · ${lang.value === 'en' ? 'rendering…' : '渲染中…'}`
+      await pollPngExport(resp.runId)
+      return
+    }
     if (localExportMode.value && resp.localPath) {
       pngExportStatus.value = `${lang.value === 'en' ? 'saved locally' : '已保存到本地'} · ${resp.localPath}`
       status.message = pngExportStatus.value
@@ -923,6 +898,38 @@ async function exportPng() {
     console.error('export PNG failed:', e?.data?.error ?? e)
   } finally {
     pngExportBusy.value = false
+  }
+}
+
+async function pollPngExport(runId: string) {
+  for (;;) {
+    await new Promise(resolve => setTimeout(resolve, 700))
+    const run = await api.runStatus(runId)
+    const p = run.progress || {}
+    if (run.status === 'failed') {
+      pngExportStatus.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (p.errorMessage || 'map_export')
+      return
+    }
+    if (run.status === 'cancelled') {
+      pngExportStatus.value = lang.value === 'en' ? 'cancelled' : '已取消'
+      return
+    }
+    if (run.status !== 'completed') {
+      const pct = typeof p.percent === 'number' ? ` · ${p.percent.toFixed(0)}%` : ''
+      pngExportStatus.value = `${runId} · ${p.stage || 'render'}${pct}`
+      continue
+    }
+    const image = run.artifacts.find(a => a.kind === 'image')
+    if (localExportMode.value && image?.localPath) {
+      pngExportStatus.value = `${lang.value === 'en' ? 'saved locally' : '已保存到本地'} · ${image.localPath}`
+      status.message = pngExportStatus.value
+    } else if (image?.artifactId) {
+      window.open(api.artifactDownloadUrl(image.artifactId), '_blank')
+      pngExportStatus.value = lang.value === 'en' ? 'completed' : '已完成'
+    } else {
+      pngExportStatus.value = lang.value === 'en' ? 'completed' : '已完成'
+    }
+    return
   }
 }
 
@@ -943,6 +950,7 @@ const exportPreviewBusy = ref(false)
 const exportStatus    = ref('')
 const exportPreviewStatus = ref('')
 const exportResult    = ref<VideoExportResponse | null>(null)
+const exportQueuedResult = ref<VideoExportResponse | null>(null)
 const exportPreviewResult = ref<VideoPreviewResponse | null>(null)
 const lnMapPreviewBusy = ref(false)
 const lnMapPreviewStatus = ref('')
@@ -974,6 +982,60 @@ const visiblePreview = computed(() => exportPreviewResult.value ?? exportResult.
 const selectedColorMapInfo = computed(() => colorMapInfo(colorMap.value))
 const selectedLnMapColorModeInfo = computed(() => lnMapColorModeInfo(exportLnMapColorMode.value))
 
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`
+}
+
+function compositionScaleForOutput(outputW: number, outputH: number, baseScale = activeScale()): number {
+  const viewportW = Math.max(1, mapViewportW.value)
+  const viewportH = Math.max(1, mapViewportH.value)
+  const viewportAspect = viewportW / viewportH
+  const outputAspect = Math.max(1e-9, outputW / Math.max(1, outputH))
+  const frameHeightRatio = outputAspect > viewportAspect
+    ? viewportAspect / outputAspect
+    : 1
+  return Math.max(1e-300, baseScale * frameHeightRatio)
+}
+
+function pngRequestBase(background = false) {
+  return {
+    taskType:   'still_export',
+    localExport: localExportMode.value,
+    background,
+    centerRe:   activeCenterRe(),
+    centerIm:   activeCenterIm(),
+    centerReStr: activeCenterReStr(),
+    centerImStr: activeCenterImStr(),
+    scale:      compositionScaleForOutput(pngPreset.value.width, pngPreset.value.height),
+    width:      pngPreset.value.width,
+    height:     pngPreset.value.height,
+    iterations: iterations.value,
+    variant:    variant.value,
+    metric:     metric.value,
+    colorMap:   colorMap.value,
+    smooth:     smooth.value,
+    colorMode:  mapColorMode.value,
+    cyclesPerOctave: cyclesPerOctave.value,
+    pairwiseCap: pairwiseCap.value,
+    engine:     engineMode.value,
+    scalarType: scalarMode.value,
+    julia:      juliaOn.value,
+    juliaRe:    juliaRe.value,
+    juliaIm:    juliaIm.value,
+    transitionTheta: transitionOn.value ? transitionThetaMilliDeg.value * Math.PI / (180 * THETA_SCALE) : undefined,
+    transitionThetaMilliDeg: transitionOn.value ? transitionThetaMilliDeg.value : undefined,
+    transitionFrom:  transitionOn.value ? transitionFrom.value : undefined,
+    transitionTo:    transitionOn.value ? transitionTo.value : undefined,
+    transitionVariants: multiTransitionActive.value ? transitionVariantIds.value : undefined,
+    transitionWeights:  multiTransitionActive.value ? transitionWeights.value : undefined,
+    rotationDeg:     rotationDeg.value || undefined,
+  }
+}
+
+const pngCliCommand = computed(() =>
+  `./backend/build/fractal_studio_backend export-map --json ${shellQuote(JSON.stringify(pngRequestBase(false)))}`
+)
+
 function fmtDurationMs(ms?: number | null): string {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return ''
   if (ms < 1000) return '<1s'
@@ -991,13 +1053,62 @@ function etaSuffix(ms?: number | null): string {
   return eta ? ` · ETA ${eta}` : ''
 }
 
+const exportEstimatedLnMapSegmented = computed(() => {
+  const fullWidth = Math.ceil(Math.sqrt(exportW.value * exportW.value + exportH.value * exportH.value) * Math.PI)
+  const scaleByPreset: Record<string, number> = { draft: 0.35, balanced: 0.55, high: 0.75, full: 1.0 }
+  const actualWidth = Math.ceil(fullWidth * (scaleByPreset[exportQualityPreset.value] ?? 0.55))
+  const extraOctaves = exportLnMapColorMode.value === 'escape' ? 2 : 7
+  const rowsPerOctave = Math.LN2 / (Math.PI * 2) * actualWidth
+  const extraRows = Math.max(1, Math.ceil(extraOctaves * rowsPerOctave))
+  const totalDepthRows = Math.max(1, Math.ceil(exportDepth.value * rowsPerOctave))
+  const logicalHeightT = extraRows + totalDepthRows
+  const defaultMaxSegmentHeight = 8192
+  const maxSegmentHeight = Math.min(logicalHeightT, Math.max(defaultMaxSegmentHeight, extraRows + 512))
+  return logicalHeightT > maxSegmentHeight
+})
+
+const exportShowsSeparateLnMapPass = computed(() => {
+  const stage = exportProgress.value.stage
+  if (stage === 'ln_map_equalization' || stage === 'ln_map_render') return true
+  const globalModes = new Set<LnMapColorMode>(['hist_eq', 'bands', 'frontier'])
+  const meta = exportResult.value ?? exportQueuedResult.value
+  if (meta?.lnMapSegmented !== undefined || meta?.lnMapColorMode) {
+    return !!meta.lnMapSegmented && globalModes.has(meta.lnMapColorMode as LnMapColorMode)
+  }
+  return globalModes.has(exportLnMapColorMode.value) && exportEstimatedLnMapSegmented.value
+})
+
+const lnMapRenderProgressStage = computed(() =>
+  exportShowsSeparateLnMapPass.value ? 'ln_map_render' : 'ln_map'
+)
+
+function activeProgressStage(): string {
+  const stage = exportProgress.value.stage || ''
+  if (stage === 'ln_map' && exportShowsSeparateLnMapPass.value) {
+    const pass = exportProgress.value.lnMapPass ?? exportProgress.value.details?.lnMapPass
+    if (pass === 'equalization') return 'ln_map_equalization'
+    if (pass === 'render') return 'ln_map_render'
+  }
+  return stage
+}
+
+function exportStageOrder(): string[] {
+  if (transitionOn.value) return ['transition_preview', 'transition_render']
+  return exportShowsSeparateLnMapPass.value
+    ? ['final_frame', 'ln_map_equalization', 'ln_map_render', 'video_warp_encode']
+    : ['final_frame', 'ln_map', 'video_warp_encode']
+}
+
 const exportProgressDetail = computed(() => {
   const p = exportProgress.value
   if (!p.stage) return ''
-  if (p.stage === 'ln_map') {
+  if (p.stage === 'ln_map_equalization') {
     const colorMode = p.lnMapColorMode ? ` · ${p.lnMapColorMode}` : ''
-    const pass = p.details?.lnMapPass === 'equalization' ? ' equalization' : ''
-    return `ln-map${pass} ${p.current || 0}/${p.total || 0} rows${colorMode} · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
+    return `ln-map stats ${p.current || 0}/${p.total || 0} rows${colorMode} · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
+  }
+  if (p.stage === 'ln_map' || p.stage === 'ln_map_render') {
+    const colorMode = p.lnMapColorMode ? ` · ${p.lnMapColorMode}` : ''
+    return `ln-map render ${p.current || 0}/${p.total || 0} rows${colorMode} · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
   }
   if (p.stage === 'video_warp_encode') {
     return `encode ${p.current || 0}/${p.total || 0} frames${etaSuffix(p.estimatedRemainingMs)}`
@@ -1040,6 +1151,7 @@ const transitionEstimatedFrames = computed(() =>
 function transitionVideoRequestBase() {
   const fixedThetaDeg = transitionThetaMilliDeg.value / THETA_SCALE
   const zoomMode = transitionVideoMode.value === 'zoom'
+  const framedScale = compositionScaleForOutput(exportW.value, exportH.value)
   return {
     animationMode: transitionVideoMode.value,
     centerRe:     activeCenterRe(),
@@ -1059,7 +1171,7 @@ function transitionVideoRequestBase() {
     thetaDeg:      fixedThetaDeg,
     depthOctaves:  zoomMode ? exportDepth.value : undefined,
     secondsPerOctave: zoomMode ? exportSecondsPerOctave.value : undefined,
-    targetScale:   zoomMode && !exportDepthDirty.value && exportDepth.value > 0.05 ? activeScale() : undefined,
+    targetScale:   zoomMode && !exportDepthDirty.value && exportDepth.value > 0.05 ? framedScale : undefined,
     rotationDeg:   rotationDeg.value || undefined,
     durationSec:   zoomMode ? exportEstimatedDuration.value : transitionDurationSec.value,
     fps:          exportFps.value,
@@ -1119,7 +1231,8 @@ function defaultExportDepthForView() {
   const aspect = Math.max(1e-9, exportW.value / Math.max(1, exportH.value))
   const rMax = Math.sqrt(aspect * aspect + 1)
   const kTopStart = Math.log(4) - Math.log(rMax)
-  const kTopEnd = Math.log(Math.max(activeScale(), 1e-300) * 0.5)
+  const framedScale = compositionScaleForOutput(exportW.value, exportH.value)
+  const kTopEnd = Math.log(Math.max(framedScale, 1e-300) * 0.5)
   const depth = (kTopStart - kTopEnd) / Math.LN2
   if (!Number.isFinite(depth)) return 20
   return Math.min(1024, Math.max(0.05, depth))
@@ -1135,9 +1248,12 @@ function clearExportPreview() {
 }
 
 function progressRatio(stage: string) {
-  if (exportProgress.value.stage !== stage) {
-    if (stage === 'final_frame' && ['ln_map', 'video_warp_encode'].includes(exportProgress.value.stage || '')) return 1
-    if (stage === 'ln_map' && exportProgress.value.stage === 'video_warp_encode') return 1
+  const currentStage = activeProgressStage()
+  if (currentStage !== stage) {
+    const order = exportStageOrder()
+    const currentIndex = order.indexOf(currentStage)
+    const targetIndex = order.indexOf(stage)
+    if (currentIndex >= 0 && targetIndex >= 0 && currentIndex > targetIndex) return 1
     return 0
   }
   const total = Math.max(1, exportProgress.value.total || 1)
@@ -1156,12 +1272,14 @@ function openExportModal() {
   exportStatus.value    = ''
   exportPreviewStatus.value = ''
   exportResult.value    = null
+  exportQueuedResult.value = null
   exportPreviewResult.value = null
   exportJobId.value = ''
   exportProgress.value = {}
 }
 
 function videoRequestBase() {
+  const framedScale = compositionScaleForOutput(exportW.value, exportH.value)
   return {
     centerRe:     activeCenterRe(),
     centerIm:     activeCenterIm(),
@@ -1178,17 +1296,26 @@ function videoRequestBase() {
     depthOctaves: exportDepth.value,
     fps:          exportFps.value,
     secondsPerOctave: exportSecondsPerOctave.value,
-    targetScale:  !exportDepthDirty.value && exportDepth.value > 0.05 ? activeScale() : undefined,
+    targetScale:  !exportDepthDirty.value && exportDepth.value > 0.05 ? framedScale : undefined,
     rotationDeg:  rotationDeg.value || undefined,
     qualityPreset: exportQualityPreset.value,
     lnMapMode:    exportLnMapMode.value,
     lnMapScalar:  exportLnMapScalar.value,
+    lnMapStatsRunId: exportLnMapColorMode.value === 'hist_eq' && lnMapPreviewRunId.value ? lnMapPreviewRunId.value : undefined,
     background: true,
     localExport:  localExportMode.value,
     width:        exportW.value,
     height:       exportH.value,
   }
 }
+
+const videoCliCommand = computed(() =>
+  `./backend/build/fractal_studio_backend export-video --json ${shellQuote(JSON.stringify({
+    ...videoRequestBase(),
+    localExport: true,
+    background: true,
+  }))}`
+)
 
 function previewSizeForExport() {
   const maxSide = 720
@@ -1280,9 +1407,11 @@ async function runExport() {
   exportBusy.value   = true
   exportStatus.value = lang.value === 'en' ? 'queued…' : '排队中…'
   exportResult.value = null
+  exportQueuedResult.value = null
   exportProgress.value = {}
   try {
     if (transitionOn.value) {
+      exportQueuedResult.value = null
       const resp = await api.transitionVideoExport(transitionVideoRequestBase())
       exportJobId.value = resp.runId
       exportStatus.value = transitionVideoMode.value === 'zoom'
@@ -1292,6 +1421,7 @@ async function runExport() {
     } else {
       const req: Record<string, any> = { ...videoRequestBase() }
       const resp = await api.videoExport(req as any)
+      exportQueuedResult.value = resp
       exportJobId.value = resp.runId
       exportStatus.value = `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s`
       await pollVideoExport(resp)
@@ -1634,6 +1764,10 @@ async function pollVideoExport(initial: VideoExportResponse) {
       </button>
       <progress v-if="pngExportBusy" class="png-export-progress"></progress>
       <span v-if="pngExportStatus" class="export-local-status mono">{{ pngExportStatus }}</span>
+      <details v-if="localExportMode" class="cli-details">
+        <summary>CLI</summary>
+        <textarea class="cli-command mono" readonly :value="pngCliCommand"></textarea>
+      </details>
     </div>
 
     <!-- ── Custom formula editor ─────────────────────────────────────────── -->
@@ -1877,6 +2011,10 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <label>{{ lang === 'en' ? 'Output' : '输出' }}</label>
               <span class="mono">{{ lang === 'en' ? 'local mode: save to backend runtime/runs, no browser download by default' : '本地模式：默认写入后端 runtime/runs，不走浏览器下载' }}</span>
             </div>
+            <div v-if="localExportMode && !transitionOn" class="mrow cli-row">
+              <label>CLI</label>
+              <textarea class="cli-command mono" readonly :value="videoCliCommand"></textarea>
+            </div>
             <div v-if="!transitionOn" class="mrow">
               <label>{{ lang === 'en' ? 'Quality' : '质量' }}</label>
               <select v-model="exportQualityPreset">
@@ -1990,9 +2128,13 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <span>{{ lang === 'en' ? 'final' : '终帧' }}</span>
               <progress :value="progressRatio('final_frame')" max="1"></progress>
             </div>
+            <div v-if="exportShowsSeparateLnMapPass" class="progress-row">
+              <span>{{ lang === 'en' ? 'stats' : '统计' }}</span>
+              <progress :value="progressRatio('ln_map_equalization')" max="1"></progress>
+            </div>
             <div class="progress-row">
               <span>ln-map</span>
-              <progress :value="progressRatio('ln_map')" max="1"></progress>
+              <progress :value="progressRatio(lnMapRenderProgressStage)" max="1"></progress>
             </div>
             <div class="progress-row">
               <span>{{ lang === 'en' ? 'encode' : '编码' }}</span>
@@ -2110,6 +2252,37 @@ async function pollVideoExport(initial: VideoExportResponse) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.cli-details {
+  min-width: 220px;
+  max-width: min(520px, 100%);
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.cli-details summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.cli-command {
+  width: 100%;
+  min-height: 52px;
+  resize: vertical;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cli-row {
+  align-items: stretch;
+}
+.cli-row .cli-command {
+  flex: 1;
+  min-height: 74px;
 }
 
 .theta-row {

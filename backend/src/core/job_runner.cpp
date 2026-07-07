@@ -30,6 +30,18 @@ std::string categoryForModule(const std::string& m) {
     if (m.empty())                                                                      return "misc";
     return m;  // unknown module → its own folder
 }
+
+bool runIdExistsAnywhere(const fs::path& runtimeRoot, const std::string& runId) {
+    const fs::path runsRoot = runtimeRoot / "runs";
+    std::error_code ec;
+    if (fs::exists(runsRoot / runId, ec)) return true;
+    for (fs::directory_iterator it(runsRoot, ec), end; it != end; it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_directory(ec)) continue;
+        if (fs::exists(it->path() / runId, ec)) return true;
+    }
+    return false;
+}
 } // namespace
 
 JobRunner::JobRunner(fs::path runtimeRoot, Db* db)
@@ -49,6 +61,7 @@ RunRecord JobRunner::createRun(const std::string& module, const std::string& par
     }
     for (int attempt = 0; attempt < 1000; ++attempt) {
         run.id = makeRunId();
+        if (runIdExistsAnywhere(runtimeRoot_, run.id)) continue;
         const fs::path outputDir = categoryDir / run.id;
         std::error_code ec;
         if (fs::create_directory(outputDir, ec)) {

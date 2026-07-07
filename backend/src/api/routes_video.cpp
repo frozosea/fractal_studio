@@ -61,6 +61,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -371,6 +372,11 @@ struct VideoSegmentPlan {
     double rowOffset = 0.0;
     double startDepthOctaves = 0.0;
     double endDepthOctaves = 0.0;
+    double finalFrameDepthOctaves = 0.0;
+    int globalFrameStart = 0;
+    int globalFrameEnd = 0;
+    double firstFrameDepthOctaves = 0.0;
+    double lastFrameDepthOctaves = 0.0;
     double depthOctaves = 0.0;
     int heightT = 0;
     int frameCount = 0;
@@ -391,13 +397,22 @@ std::vector<VideoSegmentPlan> buildVideoSegmentPlans(
     const StripPlan& plan,
     double depthOctaves,
     double secondsPerOctave,
-    int fps
+    int fps,
+    int globalFrameCount
 ) {
     std::vector<VideoSegmentPlan> segments;
     const double octavesPerRow = lnMapOctavesPerRow(plan.actualWidthS);
+    auto depthForFrame = [&](int frameIndex) {
+        if (globalFrameCount <= 1) return 0.0;
+        const double t = static_cast<double>(std::clamp(frameIndex, 0, globalFrameCount - 1)) /
+                         static_cast<double>(globalFrameCount - 1);
+        return depthOctaves * t;
+    };
+    int nextFrame = 0;
     int index = 0;
     for (int row0 = 0; row0 < plan.totalDepthRows; row0 += plan.segmentDepthRows) {
         const int depthRows = std::min(plan.segmentDepthRows, plan.totalDepthRows - row0);
+        const bool isLastRowSegment = row0 + depthRows >= plan.totalDepthRows;
         VideoSegmentPlan seg;
         seg.index = index++;
         seg.depthRowStart = row0;
@@ -410,11 +425,35 @@ std::vector<VideoSegmentPlan> buildVideoSegmentPlans(
         if (!(seg.endDepthOctaves > seg.startDepthOctaves)) {
             seg.endDepthOctaves = std::min(depthOctaves, seg.startDepthOctaves + static_cast<double>(depthRows) * octavesPerRow);
         }
-        seg.depthOctaves = std::max(1e-9, seg.endDepthOctaves - seg.startDepthOctaves);
+        seg.finalFrameDepthOctaves = isLastRowSegment
+            ? depthOctaves
+            : std::min(depthOctaves, seg.endDepthOctaves + plan.extraOctaves);
         seg.heightT = depthRows + plan.extraRows;
-        seg.frameCount = frameCountFromSpeed(seg.depthOctaves, secondsPerOctave, fps, seg.durationSec);
+
+        const int frameStart = nextFrame;
+        if (isLastRowSegment) {
+            nextFrame = globalFrameCount;
+        } else {
+            while (nextFrame < globalFrameCount &&
+                   depthForFrame(nextFrame) < seg.endDepthOctaves - 1e-12) {
+                ++nextFrame;
+            }
+        }
+        if (nextFrame <= frameStart && nextFrame < globalFrameCount) {
+            ++nextFrame;
+        }
+        if (nextFrame <= frameStart) continue;
+
+        seg.globalFrameStart = frameStart;
+        seg.globalFrameEnd = nextFrame;
+        seg.frameCount = seg.globalFrameEnd - seg.globalFrameStart;
+        seg.firstFrameDepthOctaves = depthForFrame(seg.globalFrameStart);
+        seg.lastFrameDepthOctaves = depthForFrame(seg.globalFrameEnd - 1);
+        seg.depthOctaves = std::max(1e-9, seg.lastFrameDepthOctaves - seg.firstFrameDepthOctaves);
+        seg.durationSec = static_cast<double>(seg.frameCount) / static_cast<double>(std::max(1, fps));
         segments.push_back(seg);
     }
+    (void)secondsPerOctave;
     return segments;
 }
 
@@ -516,6 +555,10 @@ uint8_t blendByte(uint8_t a, uint8_t b, double t) {
     return static_cast<uint8_t>(v + 0.5);
 }
 
+bool lnMapColorModeNeedsSharedStats(const std::string& mode) {
+    return mode == "hist_eq" || mode == "bands" || mode == "frontier";
+}
+
 void renderWarpFrameShared(
     const cv::Mat& stripWrap,
     const cv::Mat& finalImg,
@@ -539,6 +582,7 @@ void renderWarpFrameShared(
     const float kTopStripScale = static_cast<float>(kTop * static_cast<double>(s) / TAU);
     const double S      = std::exp(kTop - kTop_end);
 
+    #pragma omp parallel for schedule(static)
     for (int y = 0; y < H; ++y) {
         const float* rowBase = geom.strip_row_base.ptr<float>(y);
         float* rowMap = mapY.ptr<float>(y);
@@ -558,6 +602,7 @@ void renderWarpFrameShared(
     cv::remap(stripWrap, stripFrame, geom.strip_x, mapY,  cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0,0,0));
     cv::remap(finalImg,  finalFrame, fmapX, fmapY, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0,0,0));
 
+    #pragma omp parallel for schedule(static)
     for (int y = 0; y < H; ++y) {
         const uint8_t* sp = stripFrame.ptr<uint8_t>(y);
         const uint8_t* fp = finalFrame.ptr<uint8_t>(y);
@@ -666,6 +711,7 @@ void colorizeFinalFrameWithLnMapMode(
     const compute::FieldOutput& field,
     const std::string& mode,
     const compute::LnMapEqualization& eq,
+    const compute::LnMapGlobalCdf* sharedCdf,
     cv::Mat& out
 ) {
     if (field.metric != compute::Metric::Escape ||
@@ -677,7 +723,7 @@ void colorizeFinalFrameWithLnMapMode(
         out.create(p.height, p.width, CV_8UC3);
     }
 
-    // hist_eq reuses the strip's shared equalization so the warp blend is seamless;
+    // Whole-strip stats are reused here so the strip/final-frame warp blend is seamless;
     // every escaped pixel is then a pure function of its iteration count.
     const bool usePeriodicEq = mode == "hist_eq" && eq.valid;
     if (usePeriodicEq) {
@@ -690,28 +736,35 @@ void colorizeFinalFrameWithLnMapMode(
     unsigned long long total = 0;
     int firstHistIter = p.iterations;
     if (needsGlobalCdf) {
-        hist.assign(static_cast<size_t>(p.iterations), 0ULL);
-        for (int y = 0; y < p.height; ++y) {
-            const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(p.width);
-            for (int x = 0; x < p.width; ++x) {
-                if (finalFrameAbs2At(p, x, y) > 4.0) continue;
-                const int it = static_cast<int>(field.iter_u32[rowOffset + static_cast<size_t>(x)]);
-                if (it >= 0 && it < p.iterations) {
-                    hist[static_cast<size_t>(it)] += 1ULL;
-                    total += 1ULL;
+        if (sharedCdf && sharedCdf->valid() &&
+            sharedCdf->cumulative.size() == static_cast<size_t>(p.iterations)) {
+            hist = sharedCdf->cumulative;
+            total = sharedCdf->total;
+            firstHistIter = sharedCdf->first_iter;
+        } else {
+            hist.assign(static_cast<size_t>(p.iterations), 0ULL);
+            for (int y = 0; y < p.height; ++y) {
+                const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(p.width);
+                for (int x = 0; x < p.width; ++x) {
+                    if (finalFrameAbs2At(p, x, y) > 4.0) continue;
+                    const int it = static_cast<int>(field.iter_u32[rowOffset + static_cast<size_t>(x)]);
+                    if (it >= 0 && it < p.iterations) {
+                        hist[static_cast<size_t>(it)] += 1ULL;
+                        total += 1ULL;
+                    }
                 }
             }
-        }
-        for (int i = 0; i < p.iterations; ++i) {
-            if (hist[static_cast<size_t>(i)] > 0ULL) {
-                firstHistIter = i;
-                break;
+            for (int i = 0; i < p.iterations; ++i) {
+                if (hist[static_cast<size_t>(i)] > 0ULL) {
+                    firstHistIter = i;
+                    break;
+                }
             }
-        }
-        unsigned long long cumulative = 0;
-        for (auto& count : hist) {
-            cumulative += count;
-            count = cumulative;
+            unsigned long long cumulative = 0;
+            for (auto& count : hist) {
+                cumulative += count;
+                count = cumulative;
+            }
         }
     }
 
@@ -746,6 +799,7 @@ void colorizeFinalFrameWithLnMapMode(
     };
 
     constexpr double depth01 = 1.0;
+    #pragma omp parallel for schedule(static)
     for (int y = 0; y < p.height; ++y) {
         uint8_t* row = out.ptr<uint8_t>(y);
         std::vector<int> rowIters;
@@ -838,6 +892,7 @@ void renderWarpFrameManualCpu(
     const float kTopStripScale = static_cast<float>(kTop * static_cast<double>(s) / TAU);
     const double S = std::exp(kTop - kTop_end);
 
+    #pragma omp parallel for schedule(static)
     for (int y = 0; y < H; ++y) {
         const float* stripX = geom.strip_x.ptr<float>(y);
         const float* rowBase = geom.strip_row_base.ptr<float>(y);
@@ -890,11 +945,11 @@ cv::Mat renderZoomPreviewFrameSmart(
         && opencv_remap_size_safe(finalImg, W, H);
 
 #if USE_CUDA_VIDEO_WARP
-    if (preferCudaWarp && std::abs(stripRowOffset) < 1e-9 && fsd_cuda::cuda_video_warp_available()) {
+    if (preferCudaWarp && fsd_cuda::cuda_video_warp_available()) {
         fsd_cuda::CudaVideoWarpContext cudaWarp;
         try {
             fsd_cuda::cuda_video_warp_init(stripWrap, finalImg, rotationDeg, cudaWarp);
-            fsd_cuda::cuda_video_warp_frame(cudaWarp, kTop, kTop_end, frame);
+            fsd_cuda::cuda_video_warp_frame(cudaWarp, kTop, kTop_end, stripRowOffset, frame);
             fsd_cuda::cuda_video_warp_release(cudaWarp);
             return frame;
         } catch (...) {
@@ -959,7 +1014,7 @@ static std::string generateZoomVideo(
         ~CudaWarpGuard() { if (ctx) fsd_cuda::cuda_video_warp_release(*ctx); }
     } cudaWarpGuard{&cudaWarp};
     bool useCudaWarp = false;
-    if (prefer_cuda_warp && std::abs(stripRowOffset) < 1e-9 && fsd_cuda::cuda_video_warp_available()) {
+    if (prefer_cuda_warp && fsd_cuda::cuda_video_warp_available()) {
         try {
             fsd_cuda::cuda_video_warp_init(stripWrap, finalImg, rotationDeg, cudaWarp);
             useCudaWarp = true;
@@ -1029,7 +1084,7 @@ static std::string generateZoomVideo(
             const double tNorm = static_cast<double>(f) / std::max(1, frameCount - 1);
             const double kTop  = kTop_start - tNorm * depthOctaves * LN_TWO;
             const int buffer = f & 1;
-            fsd_cuda::cuda_video_warp_frame_async(cudaWarp, kTop, kTop_end, buffer, pinned.ptr[buffer]);
+            fsd_cuda::cuda_video_warp_frame_async(cudaWarp, kTop, kTop_end, stripRowOffset, buffer, pinned.ptr[buffer]);
             pending[buffer] = true;
         };
 
@@ -1082,7 +1137,7 @@ static std::string generateZoomVideo(
 #if USE_CUDA_VIDEO_WARP
             if (useCudaWarp) {
                 fsd_cuda::CudaVideoWarpTiming timing;
-                fsd_cuda::cuda_video_warp_frame_timed(cudaWarp, kTop, kTop_end, frame, &timing);
+                fsd_cuda::cuda_video_warp_frame_timed(cudaWarp, kTop, kTop_end, stripRowOffset, frame, &timing);
                 stats.warpTotalMs += timing.kernel_ms;
                 stats.copyTotalMs += timing.copy_ms;
             } else
@@ -1344,6 +1399,42 @@ LnMapLookup resolveLnMap(const std::filesystem::path& repoRoot, const std::strin
     return { png, Json::parse(ss.str()) };
 }
 
+std::optional<compute::LnMapEqualization> loadPreviewEqualizationOverride(
+    const std::filesystem::path& repoRoot,
+    const std::string& runId,
+    const std::string& variantStr,
+    const std::string& colormapStr,
+    int iterations,
+    double depthOctaves,
+    double cyclesPerOctave,
+    compute::Colormap colormap
+) {
+    if (runId.empty()) return std::nullopt;
+    try {
+        const std::filesystem::path sidecar = resolveRunDir(repoRoot, runId) / "ln_map.json";
+        if (!std::filesystem::exists(sidecar)) return std::nullopt;
+        std::ifstream in(sidecar);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        const Json saved = Json::parse(ss.str());
+        if (saved.value("lnMapColorMode", std::string("")) != "hist_eq") return std::nullopt;
+        if (!saved.contains("eqCountMin") || !saved.contains("eqPeriod")) return std::nullopt;
+        if (saved.value("variant", std::string("")) != variantStr) return std::nullopt;
+        if (saved.value("colorMap", std::string("")) != colormapStr) return std::nullopt;
+        if (saved.value("iterations", iterations) != iterations) return std::nullopt;
+        if (std::abs(saved.value("depthOctaves", depthOctaves) - depthOctaves) > 0.25) return std::nullopt;
+        if (std::abs(saved.value("lnMapCyclesPerOctave", cyclesPerOctave) - cyclesPerOctave) > 1e-9) return std::nullopt;
+        return compute::reconstructEqualization(
+            saved.value("eqCountMin", 0.0),
+            saved.value("eqPeriod", 1.0),
+            saved.value("eqOnsetCycles", 1.0 / 6.0),
+            saved.value("eqColormapWraps", false),
+            colormap);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 struct VideoEtaState {
     std::string stage;
     int total = 0;
@@ -1424,7 +1515,7 @@ void setVideoProgress(
         {"errorMessage", errorMessage},
         {"details", details},
     };
-    for (const char* key : {"engine", "scalar", "finalFrameEngine", "finalFrameScalar", "lnMapEngine", "lnMapScalar", "lnMapMode", "lnMapColorMode", "lnMapLayerSummary", "lnMapValidationSummary", "currentLnMapSegment", "lnMapSegmentCount", "lnMapSegmentHeight", "warpMethod", "encoder", "currentFrame", "totalFrames", "currentLnMapRow", "totalLnMapRows", "warpTotalMs", "copyTotalMs", "writeTotalMs", "encodeCloseMs", "avgWarpMs", "avgCopyMs", "avgWriteMs", "rawVideoBytes", "stripWidth", "stripHeight", "opencvRemapSafe"}) {
+    for (const char* key : {"engine", "scalar", "finalFrameEngine", "finalFrameScalar", "lnMapEngine", "lnMapScalar", "lnMapMode", "lnMapColorMode", "lnMapPass", "lnMapStatsSource", "lnMapLayerSummary", "lnMapValidationSummary", "currentLnMapSegment", "lnMapSegmentCount", "lnMapSegmentHeight", "warpMethod", "encoder", "currentFrame", "totalFrames", "currentLnMapRow", "totalLnMapRows", "warpTotalMs", "copyTotalMs", "writeTotalMs", "encodeCloseMs", "avgWarpMs", "avgCopyMs", "avgWriteMs", "rawVideoBytes", "stripWidth", "stripHeight", "opencvRemapSafe"}) {
         if (details.contains(key)) j[key] = details[key];
     }
     runner.setProgress(runId, j.dump());
@@ -1638,6 +1729,10 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
     const double jim        = j.value("juliaIm",  0.0);
     const std::string variantStr  = j.value("variant",  std::string("mandelbrot"));
     const std::string colormapStr = j.value("colorMap", std::string("classic_cos"));
+    std::string lnMapColorMode = j.value("lnMapColorMode", std::string("escape"));
+    if (!j.contains("lnMapColorMode") && j.contains("colorMode") && !j["colorMode"].is_null()) {
+        lnMapColorMode = j.value("colorMode", lnMapColorMode);
+    }
     const int    iters      = j.value("iterations", 2048);
     const int    fps        = j.value("fps",       30);
     const int    W          = j.value("width",     720);
@@ -1647,6 +1742,9 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
 
     if (fps < 1 || fps > 120) throw std::runtime_error("invalid fps (1..120)");
     if (iters < 1 || iters > 10000000) throw std::runtime_error("invalid iterations");
+    if (!compute::ln_map_color_mode_supported(lnMapColorMode)) {
+        throw std::runtime_error("invalid lnMapColorMode (escape|hist_eq|row_eq|log_lift|bands|frontier)");
+    }
     validateVideoOutputSize(W, H);
     const auto [previewW, previewH] = resolvePreviewSize(j, W, H);
 
@@ -1672,6 +1770,24 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
     if (!(bailoutSq > 0.0) || !std::isfinite(bailoutSq)) throw std::runtime_error("invalid bailoutSq");
     compute::Colormap cm;
     if (!compute::colormap_from_name(colormapStr.c_str(), cm)) cm = compute::Colormap::ClassicCos;
+    const std::string lnMapMode = j.value("lnMapMode", std::string("standard"));
+    const std::string lnMapScalar = j.value("lnMapScalar", std::string("auto"));
+    const double lnMapCyclesPerOctave = j.value("lnMapCyclesPerOctave", 0.5);
+    const double lnMapFastFp32Depth = j.value("lnMapFastFp32DepthOctaves", 18.0);
+    const double lnMapFastFp64Depth = j.value("lnMapFastFp64DepthOctaves", 34.0);
+    const bool lnMapFastValidate = j.value("lnMapFastValidate", true);
+    const double lnMapFastValidationBandOctaves = j.value("lnMapFastValidationBandOctaves", 4.0);
+    const int lnMapFastValidationSampleRows = j.value("lnMapFastValidationSampleRows", 5);
+    const int lnMapFastValidationSampleCols = j.value("lnMapFastValidationSampleCols", 24);
+    const double lnMapFastValidationMaxMismatchRatio = j.value("lnMapFastValidationMaxMismatchRatio", 0.01);
+    const int lnMapFastValidationMaxP99IterDelta = j.value("lnMapFastValidationMaxP99IterDelta", 16);
+    const double lnMapFastValidationMaxMeanColorDelta = j.value("lnMapFastValidationMaxMeanColorDelta", 8.0);
+    if (lnMapMode != "standard" && lnMapMode != "fast") {
+        throw std::runtime_error("invalid lnMapMode (standard|fast)");
+    }
+    if (!(lnMapCyclesPerOctave > 0.0) || lnMapCyclesPerOctave > 64.0 || !std::isfinite(lnMapCyclesPerOctave)) {
+        throw std::runtime_error("invalid lnMapCyclesPerOctave (0..64)");
+    }
 
     auto run = runner.createRun("video-preview", body);
     runner.setStatus(run.id, "running");
@@ -1679,43 +1795,134 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
     try {
         const auto t0 = std::chrono::steady_clock::now();
 
-        auto renderPreview = [&](double kTop) {
-            compute::MapParams mp;
-            mp.center_re  = cr;
-            mp.center_im  = ci;
-            mp.center_re_str = crStr;
-            mp.center_im_str = ciStr;
-            mp.scale      = 2.0 * std::exp(kTop);
-            mp.width      = previewW;
-            mp.height     = previewH;
-            mp.iterations = iters;
-            mp.bailout    = bailout;
-            mp.bailout_sq = bailoutSq;
-            mp.variant    = v;
-            mp.metric     = compute::Metric::Escape;
-            mp.colormap   = cm;
-            mp.smooth     = false;
-            mp.julia      = julia;
-            mp.julia_re   = jre;
-            mp.julia_im   = jim;
-            mp.engine     = "auto";
-            mp.scalar_type = "auto";
-            mp.rotation_deg = rotationDeg;
+        Json previewPlanJson = j;
+        if (!previewPlanJson.contains("widthS") || previewPlanJson["widthS"].is_null()) {
+            previewPlanJson["widthS"] = j.value("previewLnMapWidthS", 512);
+        }
+        const StripPlan previewStripPlan = resolveStripPlan(previewPlanJson, previewW, previewH, depth, lnMapColorMode);
+        const int s = previewStripPlan.actualWidthS;
+        const int t = previewStripPlan.heightT;
 
-            cv::Mat img(previewH, previewW, CV_8UC3);
-            compute::render_map(mp, img);
-            return img;
-        };
+        compute::MapParams mp;
+        mp.center_re  = cr;
+        mp.center_im  = ci;
+        mp.center_re_str = crStr;
+        mp.center_im_str = ciStr;
+        mp.scale      = 2.0 * std::exp(kTop_end);
+        mp.width      = previewW;
+        mp.height     = previewH;
+        mp.iterations = iters;
+        mp.bailout    = bailout;
+        mp.bailout_sq = bailoutSq;
+        mp.variant    = v;
+        mp.metric     = compute::Metric::Escape;
+        mp.colormap   = cm;
+        mp.smooth     = false;
+        mp.julia      = julia;
+        mp.julia_re   = jre;
+        mp.julia_im   = jim;
+        mp.engine     = "auto";
+        mp.scalar_type = "auto";
+        mp.rotation_deg = rotationDeg;
 
-        const cv::Mat startPreview = renderPreview(kTop_start);
-        const cv::Mat endPreview   = renderPreview(kTop_end);
+        cv::Mat finalImg(previewH, previewW, CV_8UC3);
+        compute::MapStats finalStats;
+        compute::FieldOutput finalField;
+        if (lnMapColorMode == "escape") {
+            finalStats = compute::render_map(mp, finalImg);
+        } else {
+            finalStats = compute::render_map_field(mp, finalField);
+            finalStats.engine_used += "_ln_" + lnMapColorMode;
+        }
+
+        cv::Mat strip(t, s, CV_8UC3);
+        compute::LnMapParams lp;
+        lp.julia = julia;
+        lp.center_re = cr;
+        lp.center_im = ci;
+        lp.center_re_str = crStr;
+        lp.center_im_str = ciStr;
+        lp.julia_re = jre;
+        lp.julia_im = jim;
+        lp.width_s = s;
+        lp.height_t = t;
+        lp.iterations = iters;
+        lp.bailout = bailout;
+        lp.bailout_sq = bailoutSq;
+        lp.variant = v;
+        lp.colormap = cm;
+        lp.color_mode = lnMapColorMode;
+        lp.color_cycles_per_octave = lnMapCyclesPerOctave;
+        lp.engine = j.value("lnMapEngine", std::string("auto"));
+        lp.precision_mode = lnMapMode;
+        lp.scalar_type = lnMapScalar;
+        lp.fast_fp32_depth_octaves = lnMapFastFp32Depth;
+        lp.fast_fp64_depth_octaves = lnMapFastFp64Depth;
+        lp.fast_validate = lnMapFastValidate;
+        lp.fast_validation_band_octaves = lnMapFastValidationBandOctaves;
+        lp.fast_validation_sample_rows = lnMapFastValidationSampleRows;
+        lp.fast_validation_sample_cols = lnMapFastValidationSampleCols;
+        lp.fast_validation_max_mismatch_ratio = lnMapFastValidationMaxMismatchRatio;
+        lp.fast_validation_max_p99_iter_delta = lnMapFastValidationMaxP99IterDelta;
+        lp.fast_validation_max_mean_color_delta = lnMapFastValidationMaxMeanColorDelta;
+        const compute::LnMapStats lnStats = compute::render_ln_map(lp, strip);
+        if (lnMapColorMode != "escape") {
+            colorizeFinalFrameWithLnMapMode(
+                mp, finalField, lnMapColorMode, lnStats.equalization,
+                lnStats.global_cdf.valid() ? &lnStats.global_cdf : nullptr,
+                finalImg);
+        }
+
+        const bool preferCudaWarp = j.value("cudaWarp", true);
+        const cv::Mat startPreview = renderZoomPreviewFrameSmart(
+            strip, finalImg, previewW, previewH, kTop_start, kTop_end, 0.0, rotationDeg, preferCudaWarp);
+        const cv::Mat endPreview = renderZoomPreviewFrameSmart(
+            strip, finalImg, previewW, previewH, kTop_end, kTop_end, 0.0, rotationDeg, preferCudaWarp);
 
         const std::filesystem::path startPath = std::filesystem::path(run.outputDir) / "start_frame.png";
         const std::filesystem::path endPath   = std::filesystem::path(run.outputDir) / "end_frame.png";
+        const std::filesystem::path stripPath = std::filesystem::path(run.outputDir) / "ln_map.png";
+        const std::filesystem::path finalPath = std::filesystem::path(run.outputDir) / "final_frame.png";
+        const std::filesystem::path sidecarPath = std::filesystem::path(run.outputDir) / "ln_map.json";
         compute::write_png(startPath.string(), startPreview);
         compute::write_png(endPath.string(), endPreview);
+        compute::write_png(stripPath.string(), strip);
+        compute::write_png(finalPath.string(), finalImg);
         runner.addArtifact(run.id, Artifact{"start-frame", startPath.string(), "image"});
         runner.addArtifact(run.id, Artifact{"end-frame",   endPath.string(),   "image"});
+        runner.addArtifact(run.id, Artifact{"ln-map",      stripPath.string(), "image"});
+        runner.addArtifact(run.id, Artifact{"final-frame", finalPath.string(), "image"});
+        Json sidecar = {
+            {"centerRe", cr}, {"centerIm", ci},
+            {"centerReStr", crStr}, {"centerImStr", ciStr},
+            {"julia", julia}, {"juliaRe", jre}, {"juliaIm", jim},
+            {"rotationDeg", rotationDeg},
+            {"widthS", s}, {"actualWidthS", s}, {"fullWidthS", previewStripPlan.fullWidthS},
+            {"heightT", t}, {"depthOctaves", depth},
+            {"lnMapExtraOctaves", previewStripPlan.extraOctaves},
+            {"qualityPreset", "preview"},
+            {"qualityScale", previewStripPlan.qualityScale},
+            {"lnRadiusTop", LN_FOUR}, {"variant", variantStr},
+            {"colorMap", colormapStr}, {"iterations", iters},
+            {"lnMapColorMode", lnMapColorMode},
+            {"lnMapStatsSource", "preview"},
+            {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
+            {"bailout", bailout},
+            {"bailoutSq", bailoutSq},
+            {"engine", lnStats.engine_used},
+            {"scalar", lnStats.scalar_used},
+            {"precisionMode", lnStats.precision_mode},
+            {"layerSummary", lnStats.layer_summary},
+            {"validationSummary", lnStats.validation_summary},
+        };
+        if (lnStats.equalization.valid) {
+            sidecar["eqCountMin"]      = lnStats.equalization.count_min;
+            sidecar["eqPeriod"]        = lnStats.equalization.period;
+            sidecar["eqOnsetCycles"]   = lnStats.equalization.onset_cycles;
+            sidecar["eqColormapWraps"] = lnStats.equalization.colormap_wraps;
+        }
+        atomicWriteText(sidecarPath, sidecar.dump(2));
+        runner.addArtifact(run.id, Artifact{"ln-map", sidecarPath.string(), "report"});
 
         const auto t1 = std::chrono::steady_clock::now();
         const double elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -1724,6 +1931,8 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
 
         const std::string startArtId = run.id + ":start_frame.png";
         const std::string endArtId   = run.id + ":end_frame.png";
+        const std::string lnArtId    = run.id + ":ln_map.png";
+        const std::string finalArtId = run.id + ":final_frame.png";
         Json resp = {
             {"runId",                run.id},
             {"status",               "completed"},
@@ -1733,6 +1942,10 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
             {"endFrameArtifactId",   endArtId},
             {"endFrameUrl",          "/api/artifacts/content?artifactId="  + endArtId},
             {"endFrameDownloadUrl",  "/api/artifacts/download?artifactId=" + endArtId},
+            {"lnMapArtifactId",      lnArtId},
+            {"lnMapDownloadUrl",     "/api/artifacts/download?artifactId=" + lnArtId},
+            {"finalFrameArtifactId", finalArtId},
+            {"finalFrameDownloadUrl","/api/artifacts/download?artifactId=" + finalArtId},
             {"frameCount",           frameCount},
             {"fps",                  fps},
             {"durationSec",          durSec},
@@ -1744,6 +1957,18 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
             {"height",               previewH},
             {"outputWidth",          W},
             {"outputHeight",         H},
+            {"actualWidthS",         s},
+            {"heightT",              t},
+            {"finalFrameEngine",     finalStats.engine_used},
+            {"finalFrameScalar",     finalStats.scalar_used},
+            {"lnMapEngine",          lnStats.engine_used},
+            {"lnMapScalar",          lnStats.scalar_used},
+            {"lnMapMode",            lnStats.precision_mode},
+            {"lnMapColorMode",       lnMapColorMode},
+            {"lnMapStatsSource",     "preview"},
+            {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
+            {"lnMapLayerSummary",    lnStats.layer_summary},
+            {"lnMapValidationSummary", lnStats.validation_summary},
             {"generatedMs",          elapsed},
         };
         return resp.dump();
@@ -1805,8 +2030,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const StripPlan stripPlan = resolveStripPlan(j, W, H, depth, lnMapColorMode);
     const int s = stripPlan.actualWidthS;
     const std::vector<VideoSegmentPlan> videoSegments =
-        buildVideoSegmentPlans(stripPlan, depth, secondsPerOctave, fps);
-    if (stripPlan.segmentCount > 1) {
+        buildVideoSegmentPlans(stripPlan, depth, secondsPerOctave, fps, frameCount);
+    if (stripPlan.segmentCount > 1 && totalFramesForSegments(videoSegments) != frameCount) {
         frameCount = totalFramesForSegments(videoSegments);
         durSec = static_cast<double>(frameCount) / static_cast<double>(fps);
     }
@@ -1822,6 +2047,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const int lnMapFastValidationMaxP99IterDelta = j.value("lnMapFastValidationMaxP99IterDelta", 16);
     const double lnMapFastValidationMaxMeanColorDelta = j.value("lnMapFastValidationMaxMeanColorDelta", 8.0);
     const double lnMapCyclesPerOctave = j.value("lnMapCyclesPerOctave", 0.5);
+    const std::string lnMapStatsRunId = j.value("lnMapStatsRunId", j.value("lnMapPreviewRunId", std::string("")));
 
     if (!(lnMapCyclesPerOctave > 0.0) || lnMapCyclesPerOctave > 64.0 || !std::isfinite(lnMapCyclesPerOctave)) {
         throw std::runtime_error("invalid lnMapCyclesPerOctave (0..64)");
@@ -1862,6 +2088,15 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     if (!(bailoutSq > 0.0) || !std::isfinite(bailoutSq)) throw std::runtime_error("invalid bailoutSq");
     compute::Colormap cm;
     if (!compute::colormap_from_name(colormapStr.c_str(), cm)) cm = compute::Colormap::ClassicCos;
+    const std::optional<compute::LnMapEqualization> previewEqualizationOverride =
+        lnMapColorMode == "hist_eq"
+            ? loadPreviewEqualizationOverride(
+                  repoRoot, lnMapStatsRunId, variantStr, colormapStr,
+                  iters, depth, lnMapCyclesPerOctave, cm)
+            : std::nullopt;
+    const std::string lnMapStatsSource = previewEqualizationOverride.has_value()
+        ? ("preview:" + lnMapStatsRunId)
+        : std::string("export");
 
     auto run = runner.createRun("video-export", body);
     ResourceManager::Lease videoLeaseRaw;
@@ -1919,7 +2154,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             finalStats = compute::render_map(mp, finalImg);
         } else {
             // Compute the iteration field now, but defer coloring until after the strip:
-            // hist_eq reuses the strip's shared equalization for a seamless warp blend.
+            // Global color modes reuse strip-wide stats for a seamless warp blend.
             finalStats = compute::render_map_field(mp, finalField);
             finalStats.engine_used += "_ln_" + lnMapColorMode;
             finalFrameDeferred = true;
@@ -1935,6 +2170,10 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                          "", "", Json{{"engine", finalStats.engine_used}, {"scalar", finalStats.scalar_used}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
 
         if (stripPlan.segmentCount > 1) {
+            const bool separateLnMapStatsProgress = lnMapColorModeNeedsSharedStats(lnMapColorMode);
+            const std::string lnMapRenderStage =
+                separateLnMapStatsProgress ? "ln_map_render" : "ln_map";
+
             struct RenderedSegment {
                 VideoSegmentPlan plan;
                 std::filesystem::path stripPath;
@@ -1985,28 +2224,38 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             };
 
             compute::LnMapEqualization segmentedEq;
-            if (lnMapColorMode == "hist_eq") {
-                compute::LnMapParams eqParams = makeLnParams(stripPlan.heightT, 0.0);
-                setVideoProgress(runner, run.id, "ln_map", 0, stripPlan.heightT, 0.0, depth,
-                                 "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "equalization"}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
+            compute::LnMapGlobalCdf segmentedCdf;
+            if (separateLnMapStatsProgress) {
+                const std::string statsPass = lnMapColorMode == "hist_eq" ? "equalization" : "global_cdf";
+                setVideoProgress(runner, run.id, "ln_map_equalization", 0, stripPlan.heightT, 0.0, depth,
+                                 "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
                 throwIfCancelled(runner, run.id);
-                segmentedEq = compute::build_ln_map_equalization_streamed(
-                    eqParams,
-                    stripPlan.maxSegmentHeightT,
-                    [&](int rowsDone) {
+                if (previewEqualizationOverride && lnMapColorMode == "hist_eq") {
+                    segmentedEq = *previewEqualizationOverride;
+                } else {
+                    compute::LnMapParams eqParams = makeLnParams(stripPlan.heightT, 0.0);
+                    auto reportStatsRows = [&](int rowsDone) {
                         throwIfCancelled(runner, run.id);
                         const double octave = depth * static_cast<double>(rowsDone) / std::max(1, stripPlan.heightT);
-                        setVideoProgress(runner, run.id, "ln_map", rowsDone, stripPlan.heightT, octave, depth,
-                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "equalization"}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
-                    });
-                if (segmentedEq.valid) {
-                    setVideoProgress(runner, run.id, "ln_map", stripPlan.heightT, stripPlan.heightT, depth, depth,
-                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "equalization"}, {"currentLnMapRow", stripPlan.heightT}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"eqCountMin", segmentedEq.count_min}, {"eqPeriod", segmentedEq.period}});
+                        setVideoProgress(runner, run.id, "ln_map_equalization", rowsDone, stripPlan.heightT, octave, depth,
+                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
+                    };
+                    if (lnMapColorMode == "hist_eq") {
+                        segmentedEq = compute::build_ln_map_equalization_streamed(
+                            eqParams, stripPlan.maxSegmentHeightT, reportStatsRows);
+                    } else {
+                        segmentedCdf = compute::build_ln_map_global_cdf_streamed(
+                            eqParams, stripPlan.maxSegmentHeightT, reportStatsRows);
+                    }
+                }
+                if (segmentedEq.valid || segmentedCdf.valid()) {
+                    setVideoProgress(runner, run.id, "ln_map_equalization", stripPlan.heightT, stripPlan.heightT, depth, depth,
+                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", stripPlan.heightT}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"eqCountMin", segmentedEq.count_min}, {"eqPeriod", segmentedEq.period}, {"cdfTotal", segmentedCdf.total}});
                 }
             }
 
-            setVideoProgress(runner, run.id, "ln_map", 0, stripPlan.totalSegmentRows, 0.0, depth,
-                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"lnMapSegmentCount", stripPlan.segmentCount}});
+            setVideoProgress(runner, run.id, lnMapRenderStage, 0, stripPlan.totalSegmentRows, 0.0, depth,
+                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"lnMapSegmentCount", stripPlan.segmentCount}});
             for (const VideoSegmentPlan& seg : videoSegments) {
                 throwIfCancelled(runner, run.id);
                 const std::string suffix = segmentSuffix(seg.index);
@@ -2019,7 +2268,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     : (std::filesystem::path(run.outputDir) / ("final_frame_" + suffix + ".png"));
 
                 compute::MapParams chunkMp = mp;
-                const double chunkKTopEnd = kTop_start - seg.endDepthOctaves * LN_TWO;
+                const double chunkKTopEnd = kTop_start - seg.finalFrameDepthOctaves * LN_TWO;
                 chunkMp.scale = 2.0 * std::exp(chunkKTopEnd);
                 cv::Mat chunkFinal(H, W, CV_8UC3);
                 compute::MapStats chunkFinalStats;
@@ -2047,6 +2296,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 cv::Mat segStrip(seg.heightT, s, CV_8UC3);
                 compute::LnMapParams lp = makeLnParams(seg.heightT, seg.rowOffset);
                 if (segmentedEq.valid) lp.equalization_override = &segmentedEq;
+                if (segmentedCdf.valid()) lp.global_cdf_override = &segmentedCdf;
                 const int rowBase = rowsDoneTotal;
                 compute::LnMapStats segStats = compute::render_ln_map(
                     lp, segStrip,
@@ -2057,8 +2307,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                             static_cast<double>(rowsDone) / static_cast<double>(std::max(1, seg.heightT)),
                             0.0, 1.0);
                         const double currentDepth = std::min(depth, seg.startDepthOctaves + seg.depthOctaves * local);
-                        setVideoProgress(runner, run.id, "ln_map", currentRows, stripPlan.totalSegmentRows, currentDepth, depth,
-                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"currentLnMapRow", currentRows}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
+                        setVideoProgress(runner, run.id, lnMapRenderStage, currentRows, stripPlan.totalSegmentRows, currentDepth, depth,
+                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", currentRows}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
                     });
                 throwIfCancelled(runner, run.id);
                 compute::write_png(segStripPath.string(), segStrip);
@@ -2067,7 +2317,10 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 if (chunkFinalDeferred) {
                     const compute::LnMapEqualization& chunkEq =
                         segmentedEq.valid ? segmentedEq : segStats.equalization;
-                    colorizeFinalFrameWithLnMapMode(chunkMp, chunkField, lnMapColorMode, chunkEq, chunkFinal);
+                    const compute::LnMapGlobalCdf* chunkCdf =
+                        segmentedCdf.valid() ? &segmentedCdf :
+                        (segStats.global_cdf.valid() ? &segStats.global_cdf : nullptr);
+                    colorizeFinalFrameWithLnMapMode(chunkMp, chunkField, lnMapColorMode, chunkEq, chunkCdf, chunkFinal);
                     chunkField = compute::FieldOutput{};
                     if (isLast) finalImg = chunkFinal;
                 }
@@ -2090,18 +2343,21 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     lnStats.layer_summary = segStats.layer_summary;
                     lnStats.validation_summary = segStats.validation_summary;
                     lnStats.equalization = segStats.equalization;
+                    lnStats.global_cdf = segStats.global_cdf;
                 } else {
                     lnStats.engine_used = segStats.engine_used;
                     lnStats.scalar_used = segStats.scalar_used;
                     lnStats.layer_summary = segStats.layer_summary;
                     if (!segStats.validation_summary.empty()) lnStats.validation_summary = segStats.validation_summary;
                     if (segStats.equalization.valid) lnStats.equalization = segStats.equalization;
+                    if (segStats.global_cdf.valid()) lnStats.global_cdf = segStats.global_cdf;
                 }
                 renderedSegments.push_back(RenderedSegment{seg, segStripPath, segFinalPath, segStats, chunkFinalStats});
-                setVideoProgress(runner, run.id, "ln_map", rowsDoneTotal, stripPlan.totalSegmentRows, seg.endDepthOctaves, depth,
-                                 "", "", Json{{"engine", segStats.engine_used}, {"scalar", segStats.scalar_used}, {"lnMapEngine", segStats.engine_used}, {"lnMapScalar", segStats.scalar_used}, {"lnMapMode", segStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapLayerSummary", segStats.layer_summary}, {"lnMapValidationSummary", segStats.validation_summary}, {"currentLnMapRow", rowsDoneTotal}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
+                setVideoProgress(runner, run.id, lnMapRenderStage, rowsDoneTotal, stripPlan.totalSegmentRows, seg.endDepthOctaves, depth,
+                                 "", "", Json{{"engine", segStats.engine_used}, {"scalar", segStats.scalar_used}, {"lnMapEngine", segStats.engine_used}, {"lnMapScalar", segStats.scalar_used}, {"lnMapMode", segStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", segStats.layer_summary}, {"lnMapValidationSummary", segStats.validation_summary}, {"currentLnMapRow", rowsDoneTotal}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
             }
             if (segmentedEq.valid) lnStats.equalization = segmentedEq;
+            if (segmentedCdf.valid()) lnStats.global_cdf = segmentedCdf;
             lnStats.engine_used = "segmented(" + std::to_string(stripPlan.segmentCount) + " parts,last=" + lnStats.engine_used + ")";
             if (!lnStats.scalar_used.empty()) {
                 lnStats.scalar_used = "segmented(" + lnStats.scalar_used + ")";
@@ -2120,6 +2376,11 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     {"depthRows", seg.plan.depthRows},
                     {"startDepthOctaves", seg.plan.startDepthOctaves},
                     {"endDepthOctaves", seg.plan.endDepthOctaves},
+                    {"finalFrameDepthOctaves", seg.plan.finalFrameDepthOctaves},
+                    {"globalFrameStart", seg.plan.globalFrameStart},
+                    {"globalFrameEnd", seg.plan.globalFrameEnd},
+                    {"firstFrameDepthOctaves", seg.plan.firstFrameDepthOctaves},
+                    {"lastFrameDepthOctaves", seg.plan.lastFrameDepthOctaves},
                     {"frameCount", seg.plan.frameCount},
                 });
             }
@@ -2142,6 +2403,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"lnRadiusTop", LN_FOUR}, {"variant", variantStr},
                 {"colorMap", colormapStr}, {"iterations", iters},
                 {"lnMapColorMode", lnMapColorMode},
+                {"lnMapStatsSource", lnMapStatsSource},
                 {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
                 {"bailout", bailout},
                 {"bailoutSq", bailoutSq},
@@ -2166,8 +2428,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             const cv::Mat firstFinal = compute::read_png(renderedSegments.front().finalPath.string());
             const cv::Mat startPreview = renderZoomPreviewFrameSmart(
                 firstStrip, firstFinal, W, H,
-                kTop_start - renderedSegments.front().plan.startDepthOctaves * LN_TWO,
-                kTop_start - renderedSegments.front().plan.endDepthOctaves * LN_TWO,
+                kTop_start - renderedSegments.front().plan.firstFrameDepthOctaves * LN_TWO,
+                kTop_start - renderedSegments.front().plan.finalFrameDepthOctaves * LN_TWO,
                 renderedSegments.front().plan.rowOffset,
                 rotationDeg, preferCudaWarp);
             const cv::Mat lastStrip = compute::read_png(renderedSegments.back().stripPath.string());
@@ -2183,7 +2445,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             runner.addArtifact(run.id, Artifact{"end-frame",   endPreviewPath.string(),   "image"});
 
             setVideoProgress(runner, run.id, "video_warp_encode", 0, frameCount, depth, depth,
-                             "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+                             "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
             std::vector<std::filesystem::path> partPaths;
             partPaths.reserve(renderedSegments.size());
             VideoWarpStats warpStats;
@@ -2208,8 +2470,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 const std::string partBase = "zoom_part_" + segmentSuffix(seg.plan.index);
                 const std::string partPath = generateZoomVideo(
                     segStrip, segFinal, W, H, fps, seg.plan.frameCount,
-                    kTop_start - seg.plan.startDepthOctaves * LN_TWO,
-                    kTop_start - seg.plan.endDepthOctaves * LN_TWO,
+                    kTop_start - seg.plan.firstFrameDepthOctaves * LN_TWO,
+                    kTop_start - seg.plan.finalFrameDepthOctaves * LN_TWO,
                     seg.plan.depthOctaves,
                     seg.plan.rowOffset,
                     rotationDeg,
@@ -2217,7 +2479,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     [&](int frameDone) {
                         const int current = framesDoneBase + frameDone;
                         setVideoProgress(runner, run.id, "video_warp_encode", current, frameCount, depth, depth,
-                                         "", "", Json{{"currentFrame", current}, {"totalFrames", frameCount}, {"currentLnMapSegment", seg.plan.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+                                         "", "", Json{{"currentFrame", current}, {"totalFrames", frameCount}, {"currentLnMapSegment", seg.plan.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
                     },
                     &partStderr,
                     &partEncoder,
@@ -2246,7 +2508,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             encoderUsed = warpStats.encoder;
             throwIfCancelled(runner, run.id);
 
-            Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
+            Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
             mergeVideoWarpStats(doneDetails, warpStats);
             setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, depth, depth,
                              "", "", doneDetails);
@@ -2260,6 +2522,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"lnMapScalar", lnStats.scalar_used},
                 {"lnMapMode", lnStats.precision_mode},
                 {"lnMapColorMode", lnMapColorMode},
+                {"lnMapStatsSource", lnMapStatsSource},
                 {"lnMapLayerSummary", lnStats.layer_summary},
                 {"lnMapValidationSummary", lnStats.validation_summary},
                 {"warpMethod", warpMethod},
@@ -2346,6 +2609,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"lnMapScalar",        lnStats.scalar_used},
                 {"lnMapMode",          lnStats.precision_mode},
                 {"lnMapColorMode",     lnMapColorMode},
+                {"lnMapStatsSource",   lnMapStatsSource},
                 {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
                 {"lnMapLayerSummary",  lnStats.layer_summary},
                 {"lnMapValidationSummary", lnStats.validation_summary},
@@ -2439,6 +2703,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             lp.colormap = cm;
             lp.color_mode = lnMapColorMode;
             lp.color_cycles_per_octave = lnMapCyclesPerOctave;
+            if (previewEqualizationOverride) lp.equalization_override = &*previewEqualizationOverride;
             lp.engine = j.value("lnMapEngine", std::string("auto"));
             lp.precision_mode = lnMapMode;
             lp.scalar_type = lnMapScalar;
@@ -2452,7 +2717,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             lp.fast_validation_max_p99_iter_delta = lnMapFastValidationMaxP99IterDelta;
             lp.fast_validation_max_mean_color_delta = lnMapFastValidationMaxMeanColorDelta;
             setVideoProgress(runner, run.id, "ln_map", 0, t, 0.0, depth,
-                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"currentLnMapRow", 0}, {"totalLnMapRows", t}});
+                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", 0}, {"totalLnMapRows", t}});
             throwIfCancelled(runner, run.id);
             lnStats = compute::render_ln_map(
                 lp, strip,
@@ -2460,22 +2725,25 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     throwIfCancelled(runner, run.id);
                     const double octave = depth * static_cast<double>(rowsDone) / std::max(1, t);
                     setVideoProgress(runner, run.id, "ln_map", rowsDone, t, octave, depth,
-                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", t}});
+                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", t}});
                 });
             throwIfCancelled(runner, run.id);
             setVideoProgress(runner, run.id, "ln_map", t, t, depth, depth,
-                             "", "", Json{{"engine", lnStats.engine_used}, {"scalar", lnStats.scalar_used}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"currentLnMapRow", t}, {"totalLnMapRows", t}});
+                             "", "", Json{{"engine", lnStats.engine_used}, {"scalar", lnStats.scalar_used}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"currentLnMapRow", t}, {"totalLnMapRows", t}});
 
             compute::write_png(stripPath.string(), strip);
             runner.addArtifact(run.id, Artifact{"ln-map", stripPath.string(), "image"});
         }
         throwIfCancelled(runner, run.id);
 
-        // Colorize the deferred final frame now that the strip's shared equalization
-        // is available (hist_eq), so the strip↔final-frame warp blend is seamless.
+        // Colorize the deferred final frame now that strip-wide stats are available,
+        // so the strip/final-frame warp blend is seamless.
         if (finalFrameDeferred) {
             throwIfCancelled(runner, run.id);
-            colorizeFinalFrameWithLnMapMode(mp, finalField, lnMapColorMode, lnStats.equalization, finalImg);
+            colorizeFinalFrameWithLnMapMode(
+                mp, finalField, lnMapColorMode, lnStats.equalization,
+                lnStats.global_cdf.valid() ? &lnStats.global_cdf : nullptr,
+                finalImg);
             finalField = compute::FieldOutput{};
             compute::write_png(finalPath.string(), finalImg);
             runner.addArtifact(run.id, Artifact{"final-frame", finalPath.string(), "image"});
@@ -2501,6 +2769,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"lnRadiusTop", LN_FOUR}, {"variant", variantStr},
                 {"colorMap", colormapStr}, {"iterations", iters},
                 {"lnMapColorMode", lnMapColorMode},
+                {"lnMapStatsSource", lnMapStatsSource},
                 {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
                 {"bailout", bailout},
                 {"bailoutSq", bailoutSq},
@@ -2534,7 +2803,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
 
         // ── 4. Generate video ──────────────────────────────────────────────────
         setVideoProgress(runner, run.id, "video_warp_encode", 0, frameCount, depth, depth,
-                         "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+                         "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
         std::string ffmpegStderr;
         std::string encoderUsed;
         std::string warpMethod;
@@ -2545,7 +2814,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             std::filesystem::path(run.outputDir), "zoom",
             [&](int frameDone) {
                 setVideoProgress(runner, run.id, "video_warp_encode", frameDone, frameCount, depth, depth,
-                                 "", "", Json{{"currentFrame", frameDone}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+                                 "", "", Json{{"currentFrame", frameDone}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
             },
             &ffmpegStderr,
             &encoderUsed,
@@ -2555,7 +2824,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             [&]() { return runner.isCancelRequested(run.id); }
         );
         throwIfCancelled(runner, run.id);
-        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
+        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
         mergeVideoWarpStats(doneDetails, warpStats);
         setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, depth, depth,
                          "", "", doneDetails);
@@ -2569,6 +2838,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnMapScalar", lnStats.scalar_used},
             {"lnMapMode", lnStats.precision_mode},
             {"lnMapColorMode", lnMapColorMode},
+            {"lnMapStatsSource", lnMapStatsSource},
             {"lnMapLayerSummary", lnStats.layer_summary},
             {"lnMapValidationSummary", lnStats.validation_summary},
             {"warpMethod", warpMethod},
@@ -2656,6 +2926,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnMapScalar",        lnStats.scalar_used},
             {"lnMapMode",          lnStats.precision_mode},
             {"lnMapColorMode",     lnMapColorMode},
+            {"lnMapStatsSource",   lnMapStatsSource},
             {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
             {"lnMapLayerSummary",  lnStats.layer_summary},
             {"lnMapValidationSummary", lnStats.validation_summary},
@@ -2693,7 +2964,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             && H < OPENCV_REMAP_DIM_LIMIT;
         std::string queuedWarpMethod = queuedRemapSafe ? "opencv_cpu_remap_precomputed" : "manual_cpu_bilinear_precomputed";
 #if USE_CUDA_VIDEO_WARP
-        if (stripPlan.segmentCount <= 1 && j.value("cudaWarp", true) && fsd_cuda::cuda_video_warp_available()) {
+        if (j.value("cudaWarp", true) && fsd_cuda::cuda_video_warp_available()) {
             queuedWarpMethod = "cuda_texture";
         }
 #endif
@@ -2729,6 +3000,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnMapScalar", "fp64"},
             {"lnMapMode", lnMapMode},
             {"lnMapColorMode", lnMapColorMode},
+            {"lnMapStatsSource", lnMapStatsSource},
             {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
             {"lnMapLayerSummary", ""},
             {"lnMapValidationSummary", ""},

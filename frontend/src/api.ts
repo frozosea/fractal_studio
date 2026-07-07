@@ -139,6 +139,7 @@ export interface MapRenderRequest {
   preemptSeq?: number
   taskType?: string
   localExport?: boolean
+  background?: boolean
   centerRe: number
   centerIm: number
   centerReStr?: string
@@ -566,6 +567,8 @@ export interface VideoExportRequest {
   lnMapExtraOctaves?: number
   lnMapMaxSegmentHeight?: number
   lnMapRunId?: string
+  lnMapStatsRunId?: string
+  lnMapPreviewRunId?: string
   cudaWarp?: boolean
   background?: boolean
   localExport?: boolean
@@ -624,6 +627,7 @@ export interface VideoExportResponse {
   lnMapScalar?: string
   lnMapMode?: string
   lnMapColorMode?: LnMapColorMode
+  lnMapStatsSource?: string
   lnMapCyclesPerOctave?: number
   lnMapLayerSummary?: string
   lnMapValidationSummary?: string
@@ -661,6 +665,8 @@ export interface RunProgress {
   lnMapScalar?: string
   lnMapMode?: string
   lnMapColorMode?: LnMapColorMode
+  lnMapPass?: 'equalization' | 'render' | string
+  lnMapStatsSource?: string
   lnMapCyclesPerOctave?: number
   lnMapLayerSummary?: string
   lnMapValidationSummary?: string
@@ -743,6 +749,18 @@ export interface VideoPreviewResponse {
   height: number
   outputWidth: number
   outputHeight: number
+  actualWidthS?: number
+  heightT?: number
+  lnMapArtifactId?: string
+  lnMapDownloadUrl?: string
+  finalFrameArtifactId?: string
+  finalFrameDownloadUrl?: string
+  lnMapColorMode?: LnMapColorMode
+  lnMapStatsSource?: string
+  lnMapCyclesPerOctave?: number
+  lnMapEngine?: string
+  lnMapScalar?: string
+  lnMapMode?: string
   generatedMs: number
 }
 

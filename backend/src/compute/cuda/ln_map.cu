@@ -674,6 +674,70 @@ void launch_ln_map_iters_fp32(const CudaLnMapParams& p, int row_start, int row_c
     }
 }
 
+__global__ void ln_map_disk_row_modes_kernel(
+    CudaLnMapParams p,
+    int row_start,
+    int row_count,
+    unsigned char* row_modes
+) {
+    const int local_row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (local_row >= row_count) return;
+    const int row = row_start + local_row;
+    const double center_abs = sqrt(p.center_re * p.center_re + p.center_im * p.center_im);
+    const double global_row = p.row_offset + static_cast<double>(row);
+    const double k = LN_FOUR - global_row * TAU / static_cast<double>(p.width_s);
+    const double r_mag = exp(k);
+    const double eps = 32.0 * 2.22044604925031308085e-16 * fmax(1.0, center_abs) * (1.0 + r_mag);
+    if (center_abs + r_mag <= 2.0 - eps) {
+        row_modes[local_row] = 1; // full row inside |c|<=2
+    } else if (fabs(center_abs - r_mag) > 2.0 + eps) {
+        row_modes[local_row] = 0; // full row outside |c|<=2
+    } else {
+        row_modes[local_row] = 2; // boundary row, test per column
+    }
+}
+
+__global__ void ln_map_histogram_kernel(
+    CudaLnMapParams p,
+    int row_start,
+    int row_count,
+    const int* iters,
+    const unsigned char* row_modes,
+    uint32_t* disk_hist,
+    uint32_t* all_hist,
+    uint32_t* disk_rows,
+    uint32_t* all_rows
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = p.width_s * row_count;
+    if (idx >= total) return;
+
+    const int it = iters[idx];
+    if (it < 0 || it >= p.iterations) return;
+
+    atomicAdd(&all_hist[it], 1u);
+    const int local_row = idx / p.width_s;
+    atomicOr(&all_rows[local_row], 1u);
+
+    const unsigned char mode = row_modes[local_row];
+    bool in_disk = mode == 1;
+    if (mode == 2) {
+        const int x = idx % p.width_s;
+        const int row = row_start + local_row;
+        const double th = TAU * static_cast<double>(x) / static_cast<double>(p.width_s);
+        const double global_row = p.row_offset + static_cast<double>(row);
+        const double k = LN_FOUR - global_row * TAU / static_cast<double>(p.width_s);
+        const double r_mag = exp(k);
+        const double re = p.center_re + r_mag * cos(th);
+        const double im = p.center_im + r_mag * sin(th);
+        in_disk = re * re + im * im <= 4.0;
+    }
+    if (in_disk) {
+        atomicAdd(&disk_hist[it], 1u);
+        atomicOr(&disk_rows[local_row], 1u);
+    }
+}
+
 template <int VariantId>
 void launch_ln_map_variant(const CudaLnMapParams& p, int row_start, int row_count, unsigned char* d_out) {
     const int block = 256;
@@ -875,6 +939,116 @@ CudaLnMapStats cuda_render_ln_map_iters_fp32_rows(const CudaLnMapParams& p, int*
     CudaLnMapStats stats;
     stats.elapsed_ms = static_cast<double>(ms);
     return stats;
+}
+
+CudaLnMapStats cuda_accumulate_ln_map_histograms_impl(
+    const CudaLnMapParams& p,
+    uint32_t* disk_hist,
+    uint32_t* all_hist,
+    uint32_t* disk_rows,
+    uint32_t* all_rows,
+    int row_start,
+    int row_count,
+    bool fx64,
+    bool fp32
+) {
+    if (!cuda_ln_map_available()) throw std::runtime_error("CUDA ln-map not available");
+    if (p.variant_id < 0 || p.variant_id > 9) throw std::runtime_error("CUDA ln-map unsupported variant");
+    if (p.iterations <= 0) throw std::runtime_error("invalid CUDA ln-map histogram iterations");
+    if (row_start < 0 || row_count <= 0 || row_start + row_count > p.height_t) {
+        throw std::runtime_error("invalid CUDA ln-map histogram row range");
+    }
+    std::lock_guard<std::mutex> lock(g_ln_mu);
+
+    const size_t count = static_cast<size_t>(p.width_s) * static_cast<size_t>(row_count);
+    const size_t iter_bytes = count * sizeof(int);
+    const size_t hist_bytes = static_cast<size_t>(p.iterations) * sizeof(uint32_t);
+    const size_t row_bytes = static_cast<size_t>(row_count) * sizeof(uint32_t);
+    const size_t mode_bytes = static_cast<size_t>(row_count) * sizeof(unsigned char);
+
+    ScopedDevicePtr iters_mem;
+    ScopedDevicePtr disk_hist_mem;
+    ScopedDevicePtr all_hist_mem;
+    ScopedDevicePtr disk_rows_mem;
+    ScopedDevicePtr all_rows_mem;
+    ScopedDevicePtr row_modes_mem;
+    CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&iters_mem.ptr), iter_bytes));
+    CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&disk_hist_mem.ptr), hist_bytes));
+    CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&all_hist_mem.ptr), hist_bytes));
+    CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&disk_rows_mem.ptr), row_bytes));
+    CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&all_rows_mem.ptr), row_bytes));
+    CUDA_LN_CHECK(cudaMalloc(reinterpret_cast<void**>(&row_modes_mem.ptr), mode_bytes));
+
+    int* d_iters = reinterpret_cast<int*>(iters_mem.ptr);
+    uint32_t* d_disk_hist = reinterpret_cast<uint32_t*>(disk_hist_mem.ptr);
+    uint32_t* d_all_hist = reinterpret_cast<uint32_t*>(all_hist_mem.ptr);
+    uint32_t* d_disk_rows = reinterpret_cast<uint32_t*>(disk_rows_mem.ptr);
+    uint32_t* d_all_rows = reinterpret_cast<uint32_t*>(all_rows_mem.ptr);
+    unsigned char* d_row_modes = reinterpret_cast<unsigned char*>(row_modes_mem.ptr);
+
+    g_ln_events.ensure();
+    CUDA_LN_CHECK(cudaEventRecord(g_ln_events.start));
+    CUDA_LN_CHECK(cudaMemset(d_disk_hist, 0, hist_bytes));
+    CUDA_LN_CHECK(cudaMemset(d_all_hist, 0, hist_bytes));
+    CUDA_LN_CHECK(cudaMemset(d_disk_rows, 0, row_bytes));
+    CUDA_LN_CHECK(cudaMemset(d_all_rows, 0, row_bytes));
+
+    if (fp32) launch_ln_map_iters_fp32(p, row_start, row_count, d_iters);
+    else      launch_ln_map_iters(p, row_start, row_count, d_iters, fx64);
+    CUDA_LN_CHECK(cudaGetLastError());
+
+    const int row_block = 128;
+    const int row_grid = (row_count + row_block - 1) / row_block;
+    ln_map_disk_row_modes_kernel<<<row_grid, row_block>>>(p, row_start, row_count, d_row_modes);
+    CUDA_LN_CHECK(cudaGetLastError());
+
+    const int block = 256;
+    const int grid = (static_cast<int>(count) + block - 1) / block;
+    ln_map_histogram_kernel<<<grid, block>>>(
+        p, row_start, row_count, d_iters, d_row_modes,
+        d_disk_hist, d_all_hist, d_disk_rows, d_all_rows);
+    CUDA_LN_CHECK(cudaGetLastError());
+
+    CUDA_LN_CHECK(cudaEventRecord(g_ln_events.stop));
+    CUDA_LN_CHECK(cudaEventSynchronize(g_ln_events.stop));
+    float ms = 0.0f;
+    CUDA_LN_CHECK(cudaEventElapsedTime(&ms, g_ln_events.start, g_ln_events.stop));
+
+    CUDA_LN_CHECK(cudaMemcpy(disk_hist, d_disk_hist, hist_bytes, cudaMemcpyDeviceToHost));
+    CUDA_LN_CHECK(cudaMemcpy(all_hist, d_all_hist, hist_bytes, cudaMemcpyDeviceToHost));
+    CUDA_LN_CHECK(cudaMemcpy(disk_rows, d_disk_rows, row_bytes, cudaMemcpyDeviceToHost));
+    CUDA_LN_CHECK(cudaMemcpy(all_rows, d_all_rows, row_bytes, cudaMemcpyDeviceToHost));
+
+    CudaLnMapStats stats;
+    stats.elapsed_ms = static_cast<double>(ms);
+    return stats;
+}
+
+CudaLnMapStats cuda_accumulate_ln_map_histograms(
+    const CudaLnMapParams& p,
+    uint32_t* disk_hist,
+    uint32_t* all_hist,
+    uint32_t* disk_rows,
+    uint32_t* all_rows,
+    int row_start,
+    int row_count,
+    bool fx64
+) {
+    return cuda_accumulate_ln_map_histograms_impl(
+        p, disk_hist, all_hist, disk_rows, all_rows, row_start, row_count, fx64, false);
+}
+
+CudaLnMapStats cuda_accumulate_ln_map_histograms_fp32(
+    const CudaLnMapParams& p,
+    uint32_t* disk_hist,
+    uint32_t* all_hist,
+    uint32_t* disk_rows,
+    uint32_t* all_rows,
+    int row_start,
+    int row_count
+) {
+    return cuda_accumulate_ln_map_histograms_impl(
+        p, disk_hist, all_hist, disk_rows, all_rows, row_start, row_count, false, true);
 }
 
 CudaLnMapStats cuda_render_ln_map_fp32_rows(const CudaLnMapParams& p, cv::Mat& out, int row_start, int row_count) {

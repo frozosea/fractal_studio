@@ -38,5 +38,25 @@ CudaLnMapStats cuda_render_ln_map_fx64_rows(const CudaLnMapParams& p, cv::Mat& o
 CudaLnMapStats cuda_render_ln_map_iters_rows(const CudaLnMapParams& p, int* iters, int row_start, int row_count, bool fx64);
 // Raw escape-count field at fp32 precision (for the fast mode's shallow rows).
 CudaLnMapStats cuda_render_ln_map_iters_fp32_rows(const CudaLnMapParams& p, int* iters, int row_start, int row_count);
+// GPU-side escape-count histogram accumulation for ln-map equalization. These
+// compute a temporary device escape-count field and return only compact
+// histograms/row flags to the host.
+CudaLnMapStats cuda_accumulate_ln_map_histograms(
+    const CudaLnMapParams& p,
+    uint32_t* disk_hist,
+    uint32_t* all_hist,
+    uint32_t* disk_rows,
+    uint32_t* all_rows,
+    int row_start,
+    int row_count,
+    bool fx64);
+CudaLnMapStats cuda_accumulate_ln_map_histograms_fp32(
+    const CudaLnMapParams& p,
+    uint32_t* disk_hist,
+    uint32_t* all_hist,
+    uint32_t* disk_rows,
+    uint32_t* all_rows,
+    int row_start,
+    int row_count);
 
 } // namespace fsd_cuda

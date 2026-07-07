@@ -29,8 +29,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -403,7 +405,13 @@ LnMapStats render_ln_map_cuda_with_progress(
         if (on_row_done) on_row_done(row0 + rows);
     }
 
-    return {elapsed_ms, p.width_s * p.height_t, "cuda", "fp64", p.precision_mode, "", ""};
+    LnMapStats stats;
+    stats.elapsed_ms = elapsed_ms;
+    stats.pixel_count = p.width_s * p.height_t;
+    stats.engine_used = "cuda";
+    stats.scalar_used = "fp64";
+    stats.precision_mode = p.precision_mode;
+    return stats;
 }
 
 double render_cuda_fp32_rows_with_progress(
@@ -459,7 +467,13 @@ LnMapStats render_ln_map_cuda_fx64_with_progress(
         if (on_row_done) on_row_done(std::min(rows_done, p.height_t));
     };
     const double elapsed_ms = render_cuda_fx64_rows_with_progress(p, out, 0, p.height_t, notify);
-    return {elapsed_ms, p.width_s * p.height_t, "cuda", "fx64", p.precision_mode, "", ""};
+    LnMapStats stats;
+    stats.elapsed_ms = elapsed_ms;
+    stats.pixel_count = p.width_s * p.height_t;
+    stats.engine_used = "cuda";
+    stats.scalar_used = "fx64";
+    stats.precision_mode = p.precision_mode;
+    return stats;
 }
 #endif
 
@@ -866,18 +880,51 @@ struct LnEqHistogram {
     explicit LnEqHistogram(int iterations = 0)
         : hist(static_cast<size_t>(std::max(0, iterations)), 0.0) {}
 
-    void add(int iter, double row) {
+    void add_iter(int iter) {
         if (iter < 0 || iter >= static_cast<int>(hist.size())) return;
         hist[static_cast<size_t>(iter)] += 1.0;
         total += 1.0;
+    }
+
+    void include_row(double row) {
         first_row = std::min(first_row, row);
         last_row = std::max(last_row, row);
+    }
+
+    void add(int iter, double row) {
+        const double before = total;
+        add_iter(iter);
+        if (total > before) include_row(row);
+    }
+
+    void merge_from(const LnEqHistogram& other) {
+        if (hist.size() != other.hist.size()) return;
+        for (size_t i = 0; i < hist.size(); ++i) {
+            hist[i] += other.hist[i];
+        }
+        total += other.total;
+        if (other.valid()) {
+            first_row = std::min(first_row, other.first_row);
+            last_row = std::max(last_row, other.last_row);
+        }
     }
 
     bool valid() const {
         return total > 0.0 && std::isfinite(first_row) && std::isfinite(last_row);
     }
 };
+
+int histogram_accum_threads(int iterations, int rows) {
+    if (iterations <= 0 || rows <= 1) return 1;
+    const int desired = std::min(default_render_threads(), rows);
+    const uint64_t bytes_per_worker =
+        static_cast<uint64_t>(iterations) * sizeof(double) * 2u;
+    if (bytes_per_worker == 0) return desired;
+    constexpr uint64_t max_local_hist_bytes = 256ull * 1024ull * 1024ull;
+    const int memory_limited = static_cast<int>(
+        std::max<uint64_t>(1u, max_local_hist_bytes / bytes_per_worker));
+    return std::max(1, std::min(desired, memory_limited));
+}
 
 void accumulate_ln_map_equalization_histograms(
     const LnMapParams& p,
@@ -891,24 +938,180 @@ void accumulate_ln_map_equalization_histograms(
     if (s <= 0 || h <= 0 || p.iterations <= 0) return;
     if (iters.size() != static_cast<size_t>(s) * static_cast<size_t>(h)) return;
 
-    for (int row = 0; row < h; ++row) {
-        const double global_row = p.row_offset + static_cast<double>(row);
-        const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
-        const double r_mag = std::exp(k);
-        const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
-        for (int x = 0; x < s; ++x) {
-            const int it = iters[row_offset + static_cast<size_t>(x)];
-            if (it < 0 || it >= p.iterations) continue;
+    const double center_abs = std::hypot(p.center_re, p.center_im);
+    const double disk_eps = 32.0 * std::numeric_limits<double>::epsilon() *
+        std::max(1.0, center_abs);
 
-            all_hist.add(it, global_row);
+    auto accumulate_rows = [&](int row_begin, int row_end, LnEqHistogram& local_disk, LnEqHistogram& local_all) {
+        for (int row = row_begin; row < row_end; ++row) {
+            const double global_row = p.row_offset + static_cast<double>(row);
+            const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
+            const double r_mag = std::exp(k);
+            const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
 
-            const double re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
-            const double im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
-            if (re * re + im * im <= 4.0) {
-                disk_hist.add(it, global_row);
+            // Conservative whole-row tests for the |center + r*e^(i theta)| <= 2 disk.
+            // Most deep rows are fully inside this disk, so this avoids a geometry check
+            // per pixel while preserving the exact per-column path near the boundary.
+            const bool disk_all =
+                center_abs + r_mag <= 2.0 - disk_eps * (1.0 + r_mag);
+            const bool disk_none =
+                !disk_all && std::fabs(center_abs - r_mag) > 2.0 + disk_eps * (1.0 + r_mag);
+
+            bool all_row_used = false;
+            bool disk_row_used = false;
+
+            if (disk_all) {
+                for (int x = 0; x < s; ++x) {
+                    const int it = iters[row_offset + static_cast<size_t>(x)];
+                    if (it < 0 || it >= p.iterations) continue;
+                    local_all.add_iter(it);
+                    local_disk.add_iter(it);
+                    all_row_used = true;
+                    disk_row_used = true;
+                }
+            } else if (disk_none) {
+                for (int x = 0; x < s; ++x) {
+                    const int it = iters[row_offset + static_cast<size_t>(x)];
+                    if (it < 0 || it >= p.iterations) continue;
+                    local_all.add_iter(it);
+                    all_row_used = true;
+                }
+            } else {
+                for (int x = 0; x < s; ++x) {
+                    const int it = iters[row_offset + static_cast<size_t>(x)];
+                    if (it < 0 || it >= p.iterations) continue;
+                    local_all.add_iter(it);
+                    all_row_used = true;
+
+                    const double re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
+                    const double im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
+                    if (re * re + im * im <= 4.0) {
+                        local_disk.add_iter(it);
+                        disk_row_used = true;
+                    }
+                }
             }
+
+            if (all_row_used) local_all.include_row(global_row);
+            if (disk_row_used) local_disk.include_row(global_row);
+        }
+    };
+
+    const int thread_count = histogram_accum_threads(p.iterations, h);
+    if (thread_count <= 1) {
+        accumulate_rows(0, h, disk_hist, all_hist);
+        return;
+    }
+
+    std::vector<LnEqHistogram> local_disk;
+    std::vector<LnEqHistogram> local_all;
+    local_disk.reserve(static_cast<size_t>(thread_count));
+    local_all.reserve(static_cast<size_t>(thread_count));
+    for (int i = 0; i < thread_count; ++i) {
+        local_disk.emplace_back(p.iterations);
+        local_all.emplace_back(p.iterations);
+    }
+
+    std::atomic<int> next_row{0};
+    const int batch_rows = std::max(1, std::min(32, (h + thread_count * 4 - 1) / (thread_count * 4)));
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<size_t>(thread_count));
+    for (int tid = 0; tid < thread_count; ++tid) {
+        workers.emplace_back([&, tid]() {
+            while (true) {
+                const int row0 = next_row.fetch_add(batch_rows, std::memory_order_relaxed);
+                if (row0 >= h) break;
+                accumulate_rows(row0, std::min(h, row0 + batch_rows),
+                                local_disk[static_cast<size_t>(tid)],
+                                local_all[static_cast<size_t>(tid)]);
+            }
+        });
+    }
+    for (auto& worker : workers) worker.join();
+
+    for (int tid = 0; tid < thread_count; ++tid) {
+        disk_hist.merge_from(local_disk[static_cast<size_t>(tid)]);
+        all_hist.merge_from(local_all[static_cast<size_t>(tid)]);
+    }
+}
+
+void merge_u32_histogram(
+    LnEqHistogram& dst,
+    const std::vector<uint32_t>& counts,
+    const std::vector<uint32_t>& row_flags,
+    double row_offset
+) {
+    if (counts.size() != dst.hist.size()) return;
+    double added = 0.0;
+    for (size_t i = 0; i < counts.size(); ++i) {
+        const uint32_t count = counts[i];
+        if (count == 0u) continue;
+        dst.hist[i] += static_cast<double>(count);
+        added += static_cast<double>(count);
+    }
+    if (added <= 0.0) return;
+    dst.total += added;
+
+    for (size_t r = 0; r < row_flags.size(); ++r) {
+        if (row_flags[r] != 0u) {
+            dst.include_row(row_offset + static_cast<double>(r));
+            break;
         }
     }
+    for (size_t r = row_flags.size(); r > 0; --r) {
+        if (row_flags[r - 1] != 0u) {
+            dst.include_row(row_offset + static_cast<double>(r - 1));
+            break;
+        }
+    }
+}
+
+bool try_accumulate_ln_map_equalization_histograms_cuda(
+    const LnMapParams& p,
+    LnEqHistogram& disk_hist,
+    LnEqHistogram& all_hist
+) {
+#if USE_CUDA_LN_MAP
+    if (ln_map_fast_mode(p)) return false;
+    if (lnmap_perturbation_applicable(p)) return false;
+    if (!ln_map_variant_supported_by_simd(p.variant)) return false;
+    if (!engine_allows_cuda(p) || !fsd_cuda::cuda_ln_map_available()) return false;
+
+    const size_t iter_count = static_cast<size_t>(p.iterations);
+    const size_t row_count = static_cast<size_t>(p.height_t);
+    if (iter_count == 0 || row_count == 0) return false;
+    const size_t pixel_count = static_cast<size_t>(p.width_s) * row_count;
+    if (pixel_count > static_cast<size_t>(std::numeric_limits<int>::max())) return false;
+
+    std::vector<uint32_t> disk_counts(iter_count, 0u);
+    std::vector<uint32_t> all_counts(iter_count, 0u);
+    std::vector<uint32_t> disk_rows(row_count, 0u);
+    std::vector<uint32_t> all_rows(row_count, 0u);
+
+    try {
+        const fsd_cuda::CudaLnMapParams cp = make_cuda_params(p);
+        fsd_cuda::cuda_accumulate_ln_map_histograms(
+            cp,
+            disk_counts.data(),
+            all_counts.data(),
+            disk_rows.data(),
+            all_rows.data(),
+            0,
+            p.height_t,
+            ln_map_scalar_is_fx64(p));
+        merge_u32_histogram(disk_hist, disk_counts, disk_rows, p.row_offset);
+        merge_u32_histogram(all_hist, all_counts, all_rows, p.row_offset);
+        return true;
+    } catch (...) {
+        if (p.engine == "cuda") throw;
+        return false;
+    }
+#else
+    (void)p;
+    (void)disk_hist;
+    (void)all_hist;
+    return false;
+#endif
 }
 
 LnMapEqualization finalize_ln_map_equalization_histogram(
@@ -925,6 +1128,28 @@ LnMapEqualization finalize_ln_map_equalization_histogram(
 
     return finalize_equalization(hist.hist, hist.total, total_octaves, cpo,
                                  p.colormap, ln_map_colormap_wraps_phase(p.colormap));
+}
+
+LnMapGlobalCdf finalize_ln_map_global_cdf_histogram(const LnEqHistogram& hist) {
+    LnMapGlobalCdf cdf;
+    if (!hist.valid()) return cdf;
+    cdf.cumulative.assign(hist.hist.size(), 0ULL);
+    unsigned long long cumulative = 0ULL;
+    cdf.first_iter = static_cast<int>(hist.hist.size());
+    for (size_t i = 0; i < hist.hist.size(); ++i) {
+        const double count_d = hist.hist[i];
+        const unsigned long long count = count_d > 0.0
+            ? static_cast<unsigned long long>(std::llround(count_d))
+            : 0ULL;
+        if (count > 0ULL && cdf.first_iter == static_cast<int>(hist.hist.size())) {
+            cdf.first_iter = static_cast<int>(i);
+        }
+        cumulative += count;
+        cdf.cumulative[i] = cumulative;
+    }
+    cdf.total = cumulative;
+    if (cdf.first_iter == static_cast<int>(hist.hist.size())) cdf.first_iter = 0;
+    return cdf;
 }
 
 LnMapEqualization build_ln_map_equalization(
@@ -1084,36 +1309,51 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     std::vector<unsigned long long> hist;
     unsigned long long total = 0;
     int first_hist_iter = p.iterations;
+    LnMapGlobalCdf local_global_cdf;
+    const bool using_external_cdf =
+        needs_global_cdf &&
+        p.global_cdf_override &&
+        p.global_cdf_override->valid() &&
+        p.global_cdf_override->cumulative.size() == static_cast<size_t>(p.iterations);
     if (needs_global_cdf) {
-        hist.assign(static_cast<size_t>(p.iterations), 0ULL);
-        for (int row = 0; row < h; ++row) {
-            const double global_row = p.row_offset + static_cast<double>(row);
-            const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
-            const double r_mag = std::exp(k);
-            const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
-            for (int x = 0; x < s; ++x) {
-                const double re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
-                const double im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
-                if (re * re + im * im > 4.0) continue;
-                const int it = iters[row_offset + static_cast<size_t>(x)];
-                if (it >= 0 && it < p.iterations) {
-                    hist[static_cast<size_t>(it)] += 1ULL;
-                    total += 1ULL;
+        if (using_external_cdf) {
+            hist = p.global_cdf_override->cumulative;
+            total = p.global_cdf_override->total;
+            first_hist_iter = p.global_cdf_override->first_iter;
+        } else {
+            hist.assign(static_cast<size_t>(p.iterations), 0ULL);
+            for (int row = 0; row < h; ++row) {
+                const double global_row = p.row_offset + static_cast<double>(row);
+                const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
+                const double r_mag = std::exp(k);
+                const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(s);
+                for (int x = 0; x < s; ++x) {
+                    const double re = p.center_re + r_mag * cols.cos_col[static_cast<size_t>(x)];
+                    const double im = p.center_im + r_mag * cols.sin_col[static_cast<size_t>(x)];
+                    if (re * re + im * im > 4.0) continue;
+                    const int it = iters[row_offset + static_cast<size_t>(x)];
+                    if (it >= 0 && it < p.iterations) {
+                        hist[static_cast<size_t>(it)] += 1ULL;
+                        total += 1ULL;
+                    }
                 }
             }
-        }
 
-        for (int i = 0; i < p.iterations; ++i) {
-            if (hist[static_cast<size_t>(i)] > 0ULL) {
-                first_hist_iter = i;
-                break;
+            for (int i = 0; i < p.iterations; ++i) {
+                if (hist[static_cast<size_t>(i)] > 0ULL) {
+                    first_hist_iter = i;
+                    break;
+                }
             }
-        }
 
-        unsigned long long cumulative = 0;
-        for (auto& count : hist) {
-            cumulative += count;
-            count = cumulative;
+            unsigned long long cumulative = 0;
+            for (auto& count : hist) {
+                cumulative += count;
+                count = cumulative;
+            }
+            local_global_cdf.cumulative = hist;
+            local_global_cdf.total = total;
+            local_global_cdf.first_iter = first_hist_iter == p.iterations ? 0 : first_hist_iter;
         }
     }
 
@@ -1250,6 +1490,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     layer << "color=" << mode;
     if (is_hist_eq || needs_global_cdf) layer << ",histDomain=|c|<=2";
     if (using_external_eq) layer << ",eq=external";
+    if (using_external_cdf) layer << ",cdf=external";
     if (needs_global_cdf) layer << ",histPixels=" << total;
     if (needs_global_cdf) layer << ",underflowTail=raw";
     if (is_hist_eq && eq.valid) {
@@ -1264,6 +1505,9 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     if (mode == "frontier") layer << ",edge=gradient";
     stats.layer_summary = layer.str();
     if (is_hist_eq) stats.equalization = std::move(eq);
+    if (needs_global_cdf) {
+        stats.global_cdf = using_external_cdf ? *p.global_cdf_override : std::move(local_global_cdf);
+    }
     return stats;
 }
 
@@ -1682,8 +1926,14 @@ LnMapStats render_ln_map_standard(const LnMapParams& p, cv::Mat& out, const LnMa
                     stats.precision_mode = "standard";
                     return stats;
                 }
-                const auto stats = fsd_cuda::cuda_render_ln_map_fx64(make_cuda_params(p), out);
-                return {stats.elapsed_ms, p.width_s * p.height_t, "cuda", "fx64", "standard", "", ""};
+                const auto cudaStats = fsd_cuda::cuda_render_ln_map_fx64(make_cuda_params(p), out);
+                LnMapStats stats;
+                stats.elapsed_ms = cudaStats.elapsed_ms;
+                stats.pixel_count = p.width_s * p.height_t;
+                stats.engine_used = "cuda";
+                stats.scalar_used = "fx64";
+                stats.precision_mode = "standard";
+                return stats;
             } catch (...) {
                 if (p.engine == "cuda") throw;
             }
@@ -1708,8 +1958,14 @@ LnMapStats render_ln_map_standard(const LnMapParams& p, cv::Mat& out, const LnMa
                 stats.precision_mode = "standard";
                 return stats;
             }
-            const auto stats = fsd_cuda::cuda_render_ln_map(make_cuda_params(p), out);
-            return {stats.elapsed_ms, p.width_s * p.height_t, "cuda", "fp64", "standard", "", ""};
+            const auto cudaStats = fsd_cuda::cuda_render_ln_map(make_cuda_params(p), out);
+            LnMapStats stats;
+            stats.elapsed_ms = cudaStats.elapsed_ms;
+            stats.pixel_count = p.width_s * p.height_t;
+            stats.engine_used = "cuda";
+            stats.scalar_used = "fp64";
+            stats.precision_mode = "standard";
+            return stats;
         } catch (...) {
             if (p.engine == "cuda") throw;
         }
@@ -1929,26 +2185,38 @@ LnMapEqualization reconstructEqualization(
     return eq;
 }
 
-LnMapEqualization build_ln_map_equalization_streamed(
-    const LnMapParams& p, int max_rows, const LnMapProgress& on_row_done)
-{
+static bool accumulate_ln_map_histograms_streamed(
+    const LnMapParams& p,
+    int max_rows,
+    const LnMapProgress& on_row_done,
+    LnEqHistogram& disk_hist,
+    LnEqHistogram& all_hist
+) {
     const int s = p.width_s;
     const int h = p.height_t;
-    if (s <= 0 || h <= 0 || p.iterations <= 0) return LnMapEqualization{};
+    if (s <= 0 || h <= 0 || p.iterations <= 0) return false;
 
     const int chunk_rows = std::clamp(max_rows, 1, h);
-    const TrigColumns cols = make_trig_columns(s);
-    LnEqHistogram disk_hist(p.iterations);
-    LnEqHistogram all_hist(p.iterations);
-
+    std::optional<TrigColumns> cols;
+    auto get_cols = [&]() -> const TrigColumns& {
+        if (!cols) cols = make_trig_columns(s);
+        return *cols;
+    };
     for (int row0 = 0; row0 < h; row0 += chunk_rows) {
         const int rows = std::min(chunk_rows, h - row0);
         LnMapParams chunk = p;
         chunk.height_t = rows;
         chunk.row_offset = p.row_offset + static_cast<double>(row0);
         chunk.equalization_override = nullptr;
+        chunk.global_cdf_override = nullptr;
+
+        if (try_accumulate_ln_map_equalization_histograms_cuda(chunk, disk_hist, all_hist)) {
+            if (on_row_done) on_row_done(row0 + rows);
+            continue;
+        }
 
         std::vector<int> iters(static_cast<size_t>(s) * static_cast<size_t>(rows), p.iterations);
+        const TrigColumns& chunk_cols = get_cols();
         auto report_chunk_progress = [&](int rows_done) {
             if (on_row_done) on_row_done(std::min(h, row0 + std::clamp(rows_done, 0, rows)));
         };
@@ -1956,16 +2224,40 @@ LnMapEqualization build_ln_map_equalization_streamed(
         if (lnmap_perturbation_applicable(chunk)) {
             compute_ln_perturb_iters(chunk, iters, report_chunk_progress);
         } else if (ln_map_fast_mode(chunk)) {
-            compute_ln_field_fast(chunk, iters, cols, report_chunk_progress);
+            compute_ln_field_fast(chunk, iters, chunk_cols, report_chunk_progress);
         } else {
-            compute_ln_field(chunk, iters, cols, report_chunk_progress);
+            compute_ln_field(chunk, iters, chunk_cols, report_chunk_progress);
         }
-        accumulate_ln_map_equalization_histograms(chunk, iters, cols, disk_hist, all_hist);
+        accumulate_ln_map_equalization_histograms(chunk, iters, chunk_cols, disk_hist, all_hist);
         if (on_row_done) on_row_done(row0 + rows);
+    }
+    return true;
+}
+
+LnMapEqualization build_ln_map_equalization_streamed(
+    const LnMapParams& p, int max_rows, const LnMapProgress& on_row_done)
+{
+    LnEqHistogram disk_hist(p.iterations);
+    LnEqHistogram all_hist(p.iterations);
+    if (!accumulate_ln_map_histograms_streamed(p, max_rows, on_row_done, disk_hist, all_hist)) {
+        return LnMapEqualization{};
     }
 
     const LnEqHistogram& selected = disk_hist.valid() ? disk_hist : all_hist;
     return finalize_ln_map_equalization_histogram(p, selected);
+}
+
+LnMapGlobalCdf build_ln_map_global_cdf_streamed(
+    const LnMapParams& p, int max_rows, const LnMapProgress& on_row_done)
+{
+    LnEqHistogram disk_hist(p.iterations);
+    LnEqHistogram all_hist(p.iterations);
+    if (!accumulate_ln_map_histograms_streamed(p, max_rows, on_row_done, disk_hist, all_hist)) {
+        return LnMapGlobalCdf{};
+    }
+
+    const LnEqHistogram& selected = disk_hist.valid() ? disk_hist : all_hist;
+    return finalize_ln_map_global_cdf_histogram(selected);
 }
 
 LnMapEqualization build_map_equalization(

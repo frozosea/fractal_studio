@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -81,6 +82,7 @@ __global__ void warp_texture_kernel(
     int stripW,
     int stripH,
     float kTopStripScale,
+    float stripRowOffset,
     float finalScale
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -88,7 +90,7 @@ __global__ void warp_texture_kernel(
     if (idx >= total) return;
 
     const WarpGeom g = geom[idx];
-    const float stripY = g.strip_row_base - kTopStripScale;
+    const float stripY = g.strip_row_base - kTopStripScale - stripRowOffset;
     const float finalX = g.final_x_base * finalScale + 0.5f * static_cast<float>(W);
     const float finalY = g.final_y_base * finalScale + 0.5f * static_cast<float>(H);
     const float featherRows = fmaxf(4.0f, static_cast<float>(stripW - 1) / 128.0f);
@@ -196,10 +198,15 @@ void launch_warp_kernel(
     CudaVideoWarpContext& ctx,
     double kTop,
     double kTopEnd,
+    double stripRowOffset,
     unsigned char* dOut,
     cudaStream_t stream
 ) {
-    const int total = ctx.width * ctx.height;
+    const size_t totalSize = static_cast<size_t>(ctx.width) * static_cast<size_t>(ctx.height);
+    if (totalSize > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error("CUDA video warp frame too large");
+    }
+    const int total = static_cast<int>(totalSize);
     const int block = 256;
     const int grid = (total + block - 1) / block;
 
@@ -213,7 +220,7 @@ void launch_warp_kernel(
         static_cast<const WarpGeom*>(ctx.d_geom),
         dOut,
         ctx.width, ctx.height, ctx.strip_width, ctx.strip_height,
-        kTopStripScale, finalScale);
+        kTopStripScale, static_cast<float>(stripRowOffset), finalScale);
     CUDA_WARP_CHECK(cudaGetLastError());
 }
 
@@ -255,7 +262,11 @@ void cuda_video_warp_init(const cv::Mat& stripWrap, const cv::Mat& finalImg, dou
         init_events(ctx);
         init_async_streams(ctx);
 
-        const int total = ctx.width * ctx.height;
+        const size_t totalSize = static_cast<size_t>(ctx.width) * static_cast<size_t>(ctx.height);
+        if (totalSize > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            throw std::runtime_error("CUDA video warp frame too large");
+        }
+        const int total = static_cast<int>(totalSize);
         const int block = 256;
         const int grid = (total + block - 1) / block;
         const double rotRad = rotationDeg * 3.14159265358979323846 / 180.0;
@@ -272,7 +283,7 @@ void cuda_video_warp_init(const cv::Mat& stripWrap, const cv::Mat& finalImg, dou
     }
 }
 
-void cuda_video_warp_frame_timed(CudaVideoWarpContext& ctx, double kTop, double kTopEnd, cv::Mat& frame, CudaVideoWarpTiming* timing) {
+void cuda_video_warp_frame_timed(CudaVideoWarpContext& ctx, double kTop, double kTopEnd, double stripRowOffset, cv::Mat& frame, CudaVideoWarpTiming* timing) {
     if (!ctx.d_geom || !ctx.d_out || !ctx.strip_tex || !ctx.final_tex) {
         throw std::runtime_error("CUDA video warp context not initialized");
     }
@@ -282,7 +293,7 @@ void cuda_video_warp_frame_timed(CudaVideoWarpContext& ctx, double kTop, double 
     cudaEvent_t kernelStart = static_cast<cudaEvent_t>(ctx.kernel_start_event);
     cudaEvent_t kernelStop = static_cast<cudaEvent_t>(ctx.kernel_stop_event);
     CUDA_WARP_CHECK(cudaEventRecord(kernelStart, 0));
-    launch_warp_kernel(ctx, kTop, kTopEnd, static_cast<unsigned char*>(ctx.d_out), 0);
+    launch_warp_kernel(ctx, kTop, kTopEnd, stripRowOffset, static_cast<unsigned char*>(ctx.d_out), 0);
     CUDA_WARP_CHECK(cudaEventRecord(kernelStop, 0));
     CUDA_WARP_CHECK(cudaEventSynchronize(kernelStop));
 
@@ -300,8 +311,8 @@ void cuda_video_warp_frame_timed(CudaVideoWarpContext& ctx, double kTop, double 
     }
 }
 
-void cuda_video_warp_frame(CudaVideoWarpContext& ctx, double kTop, double kTopEnd, cv::Mat& frame) {
-    cuda_video_warp_frame_timed(ctx, kTop, kTopEnd, frame, nullptr);
+void cuda_video_warp_frame(CudaVideoWarpContext& ctx, double kTop, double kTopEnd, double stripRowOffset, cv::Mat& frame) {
+    cuda_video_warp_frame_timed(ctx, kTop, kTopEnd, stripRowOffset, frame, nullptr);
 }
 
 void* cuda_video_warp_alloc_pinned(size_t bytes) {
@@ -314,7 +325,7 @@ void cuda_video_warp_free_pinned(void* ptr) noexcept {
     if (ptr) cudaFreeHost(ptr);
 }
 
-void cuda_video_warp_frame_async(CudaVideoWarpContext& ctx, double kTop, double kTopEnd, int bufferIndex, void* hostPtr) {
+void cuda_video_warp_frame_async(CudaVideoWarpContext& ctx, double kTop, double kTopEnd, double stripRowOffset, int bufferIndex, void* hostPtr) {
     if (!ctx.d_geom || !ctx.d_out || !ctx.d_out_alt || !ctx.strip_tex || !ctx.final_tex) {
         throw std::runtime_error("CUDA video warp context not initialized");
     }
@@ -332,7 +343,7 @@ void cuda_video_warp_frame_async(CudaVideoWarpContext& ctx, double kTop, double 
 
     unsigned char* dOut = static_cast<unsigned char*>(bufferIndex == 0 ? ctx.d_out : ctx.d_out_alt);
     CUDA_WARP_CHECK(cudaEventRecord(kernelStart, stream));
-    launch_warp_kernel(ctx, kTop, kTopEnd, dOut, stream);
+    launch_warp_kernel(ctx, kTop, kTopEnd, stripRowOffset, dOut, stream);
     CUDA_WARP_CHECK(cudaEventRecord(kernelStop, stream));
     CUDA_WARP_CHECK(cudaEventRecord(copyStart, stream));
     const size_t bytes = static_cast<size_t>(ctx.width) * ctx.height * 3u;
