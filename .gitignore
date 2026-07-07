@@ -26,8 +26,6 @@
 /.codex
 /.codex/
 
-# Local helper scripts
-/dev.sh
 
 # Frontend deps/build
 /frontend/node_modules/
