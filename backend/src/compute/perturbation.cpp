@@ -432,10 +432,11 @@ bool perturbation_applicable(const MapParams& p)
 {
     if (p.variant != Variant::Mandelbrot) return false;
     // MinPairwiseDist needs every orbit point per pixel (O(n^2) pairwise
-    // scan) — impractical at deep-zoom iteration counts on any engine. All
-    // other metrics and smooth coloring are served: the full orbit value
-    // z = Z_m + dz is reconstructed every step anyway.
-    if (p.metric == Metric::MinPairwiseDist) return false;
+    // scan). MandelShipAgree is not a Mandelbrot orbit metric at all: it
+    // compares the selected variant's orbit against z^2+c and needs the
+    // selected variant step to run explicitly.
+    if (p.metric == Metric::MinPairwiseDist ||
+        p.metric == Metric::MandelShipAgree) return false;
     if (p.custom_step_fn)                  return false;
     if (p.scale >= 1e-13)                  return false;
     if (p.scalar_type != "auto" && p.scalar_type != "perturbation")

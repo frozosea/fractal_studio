@@ -1,6 +1,8 @@
 #include "compute/engine_select.hpp"
 #include "compute/ln_map.hpp"
 #include "compute/map_kernel.hpp"
+#include "compute/colorize.hpp"
+#include "compute/perturbation.hpp"
 #include "compute/transition_kernel.hpp"
 
 #if defined(FSD_HAS_MPFR)
@@ -11,6 +13,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
@@ -934,6 +937,111 @@ void compare_field_engine_pair(
     if (!ok) ++runner.failed;
 }
 
+int count_unique_bgr(const cv::Mat& image) {
+    if (image.empty() || image.type() != CV_8UC3) return 0;
+    std::set<int> colors;
+    for (int y = 0; y < image.rows; ++y) {
+        const uint8_t* row = image.ptr<uint8_t>(y);
+        for (int x = 0; x < image.cols; ++x) {
+            const int key = static_cast<int>(row[3 * x])
+                          | (static_cast<int>(row[3 * x + 1]) << 8)
+                          | (static_cast<int>(row[3 * x + 2]) << 16);
+            colors.insert(key);
+        }
+    }
+    return static_cast<int>(colors.size());
+}
+
+void check_mandelbrot_compare_overlay(Runner& runner) {
+    {
+        MapParams deep = base_params();
+        deep.width = 16;
+        deep.height = 12;
+        deep.iterations = 512;
+        deep.center_re_str =
+            "-1.76526611720061270724703428790405209320896702624611953902327263";
+        deep.center_im_str =
+            "0.01321543629471747625471748763193155388170530590908552047994656";
+        deep.center_re = std::stod(deep.center_re_str);
+        deep.center_im = std::stod(deep.center_im_str);
+        deep.scale = 1.439943461486e-43;
+        deep.variant = Variant::Mandelbrot;
+        deep.metric = Metric::MandelShipAgree;
+        deep.scalar_type = "auto";
+
+        const bool ok = !fsd::compute::perturbation_applicable(deep);
+        ++runner.compared;
+        std::cout << (ok ? "[PASS] " : "[FAIL] ")
+                  << "mandel_ship_agree excludes perturbation\n";
+        if (!ok) ++runner.failed;
+    }
+
+    RenderScene scene;
+    scene.name = "mandel_ship_agree_overlay";
+    scene.params = base_params();
+    scene.params.width = 72;
+    scene.params.height = 54;
+    scene.params.iterations = 96;
+    scene.params.center_re = -0.45;
+    scene.params.center_im = -0.55;
+    scene.params.scale = 2.4;
+    scene.params.variant = Variant::Boat;
+    scene.params.metric = Metric::MandelShipAgree;
+    scene.params.colormap = Colormap::Mod17;
+    scene.compare_engines = false;
+    scene.expect_fx64 = false;
+
+    Rendered overlay;
+    FieldRendered raw_field;
+    cv::Mat raw_colored;
+    try {
+        overlay = render_scene(scene, "openmp", "fp64");
+        raw_field = render_field_scene(scene, "fp64", "openmp");
+        raw_colored = fsd::compute::colorize_direct(scene.params, raw_field.field);
+    } catch (const std::exception& ex) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << scene.name << " threw: " << ex.what() << "\n";
+        return;
+    }
+    remember(runner, overlay);
+    remember_stats(runner, raw_field.stats);
+    require_actual_or_fail(runner, scene.name + " overlay", overlay, "openmp", "fp64");
+    require_actual_stats_or_fail(runner, scene.name + " raw field", raw_field.stats, "openmp", "fp64");
+    if (overlay.stats.engine_used != "openmp" || !scalar_matches("fp64", overlay.stats.scalar_used) ||
+        raw_field.stats.engine_used != "openmp" || !scalar_matches("fp64", raw_field.stats.scalar_used)) {
+        return;
+    }
+
+    int agreed = 0;
+    int diverged = 0;
+    for (double v : raw_field.field.field_f64) {
+        if (v >= 0.5) ++agreed;
+        else ++diverged;
+    }
+    const int overlay_colors = count_unique_bgr(overlay.image);
+    const int raw_colors = count_unique_bgr(raw_colored);
+    const DiffStats diff = diff_images(overlay.image, raw_colored, 0);
+    const bool ok =
+        overlay.image.type() == CV_8UC3 &&
+        overlay_colors > 16 &&
+        raw_colors <= 2 &&
+        agreed > 0 &&
+        diverged > 0 &&
+        diff.bad_pixel_ratio > 0.20;
+
+    ++runner.compared;
+    std::cout << (ok ? "[PASS] " : "[FAIL] ") << scene.name
+              << " overlay_colors=" << overlay_colors
+              << " raw_colors=" << raw_colors
+              << " agreed=" << agreed
+              << " diverged=" << diverged
+              << " overlay_vs_raw_bad=" << std::fixed << std::setprecision(4)
+              << diff.bad_pixel_ratio
+              << " elapsed_ms=" << std::setprecision(3) << overlay.stats.elapsed_ms
+              << "\n";
+    if (!ok) ++runner.failed;
+}
+
 // Add one unit at the 10^-place decimal position of a signed decimal string
 // (magnitude increment with carry). Used to probe ground-truth conditioning.
 std::string shift_decimal_at(const std::string& s, int place) {
@@ -1603,6 +1711,8 @@ int main() {
         std::vector<RenderScene> matrix = julia_variant_matrix_scenes();
         render_scenes.insert(render_scenes.end(), matrix.begin(), matrix.end());
     }
+
+    check_mandelbrot_compare_overlay(runner);
 
     for (const RenderScene& scene : render_scenes) {
         Rendered fp64_baseline = render_scene(scene, "openmp", "fp64");

@@ -619,6 +619,8 @@ void field_variant_scalar(const MapParams& p, FieldOutput& out) {
             field_variant_impl<V, S, Metric::Envelope, NeedEnvelope>(p, out); break;
         case Metric::MinPairwiseDist:
             field_variant_impl<V, S, Metric::MinPairwiseDist, IterResultField::Extra>(p, out); break;
+        case Metric::MandelShipAgree:
+            break;  // Handled by render_explore_field() before scalar dispatch.
     }
 }
 
@@ -659,6 +661,8 @@ void field_variant_fixed(const MapParams& p, FieldOutput& out) {
             field_variant_fixed_impl<FRAC, V, Metric::Envelope, NeedEnvelope>(p, out); break;
         case Metric::MinPairwiseDist:
             field_variant_impl<V, double, Metric::MinPairwiseDist, IterResultField::Extra>(p, out); break;
+        case Metric::MandelShipAgree:
+            break;  // Handled by render_explore_field() before fixed dispatch.
     }
 }
 
@@ -783,8 +787,8 @@ void dispatch_field_fixed(const MapParams& p, FieldOutput& out) {
 // Every polynomial variant is the Mandelbrot step z²+c with an extra fold (abs / negate /
 // conjugate of some part), so its orbit coincides with the plain Mandelbrot's until the first
 // iterate where that fold actually changes the result. This mode renders the *selected* variant
-// and applies a uniform (x+128)%256 channel shift to the pixels whose orbit ever diverges from
-// the Mandelbrot — the structure unique to the variant stands out, while the regions it
+// and inverts the pixels whose orbit ever diverges from the Mandelbrot — the structure unique to
+// the variant stands out, while the regions it
 // reproduces from the Mandelbrot keep their colour. Generic over all variants (Boat = Burning
 // Ship, plus Celtic, Buffalo, Heart, … and the trig variants, which simply differ everywhere).
 // Scalar-OpenMP — an analysis overlay, not a hot path.
@@ -844,6 +848,36 @@ void explore_pixels(const MapParams& p, Write&& write) {
 }
 
 template <Variant V>
+MapStats render_variant_explore_mat(const MapParams& p, cv::Mat& out) {
+    if (out.empty() || out.rows != p.height || out.cols != p.width || out.type() != CV_8UC3) {
+        out.create(p.height, p.width, CV_8UC3);
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    explore_pixels<V>(p, [&](int y, int x, int it, bool fully) {
+        uint8_t b, g, r;
+        colorize_escape_bgr(it, p.iterations, p.colormap, 0.0, false, b, g, r);
+        uint8_t* px = out.ptr<uint8_t>(y) + 3 * x;
+        if (fully) {
+            px[0] = b;
+            px[1] = g;
+            px[2] = r;
+        } else {
+            px[0] = static_cast<uint8_t>(255 - static_cast<int>(b));
+            px[1] = static_cast<uint8_t>(255 - static_cast<int>(g));
+            px[2] = static_cast<uint8_t>(255 - static_cast<int>(r));
+        }
+    });
+    if (map_render_cancel_requested(p)) throw_render_cancelled();
+    const auto t1 = std::chrono::steady_clock::now();
+    MapStats s;
+    s.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    s.pixel_count = p.width * p.height;
+    s.scalar_used = "fp64";
+    s.engine_used = "openmp";
+    return s;
+}
+
+template <Variant V>
 MapStats render_variant_explore_field(const MapParams& p, FieldOutput& fo) {
     fo.width = p.width;
     fo.height = p.height;
@@ -867,6 +901,18 @@ MapStats render_variant_explore_field(const MapParams& p, FieldOutput& fo) {
 }
 
 } // anonymous namespace
+
+static MapStats render_explore(const MapParams& p, cv::Mat& out) {
+#define FSD_EXPLORE(VV) case Variant::VV: return render_variant_explore_mat<Variant::VV>(p, out);
+    switch (p.variant) {
+        FSD_EXPLORE(Mandelbrot) FSD_EXPLORE(Tri)   FSD_EXPLORE(Boat)  FSD_EXPLORE(Duck)
+        FSD_EXPLORE(Bell)       FSD_EXPLORE(Fish)  FSD_EXPLORE(Vase)  FSD_EXPLORE(Bird)
+        FSD_EXPLORE(Mask)       FSD_EXPLORE(Ship)  FSD_EXPLORE(SinZ)  FSD_EXPLORE(CosZ)
+        FSD_EXPLORE(ExpZ)       FSD_EXPLORE(SinhZ) FSD_EXPLORE(CoshZ) FSD_EXPLORE(TanZ)
+        default: return render_variant_explore_mat<Variant::Boat>(p, out);
+    }
+#undef FSD_EXPLORE
+}
 
 
 static MapStats render_explore_field(const MapParams& p, FieldOutput& fo) {
@@ -1037,6 +1083,9 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
 
 MapStats render_map(const MapParams& p, cv::Mat& out) {
     if (map_render_cancel_requested(p)) throw_render_cancelled();
+    if (p.metric == Metric::MandelShipAgree) {
+        return render_explore(p, out);
+    }
     FieldOutput fo;
     auto stats = render_map_field(p, fo);
     out = colorize_direct(p, fo);

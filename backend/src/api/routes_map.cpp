@@ -466,10 +466,15 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
     p.julia_re = in.juliaRe;
     p.julia_im = in.juliaIm;
 
-    compute::FieldOutput fo;
-    auto stats = compute::render_map_field(p, fo);
-    throwIfMapRenderCancelled(shouldCancel);
-    rendered.image = compute::colorize_field(p, fo, in.colorMode, in.cyclesPerOctave);
+    compute::MapStats stats;
+    if (p.metric == compute::Metric::MandelShipAgree) {
+        stats = compute::render_map(p, rendered.image);
+    } else {
+        compute::FieldOutput fo;
+        stats = compute::render_map_field(p, fo);
+        throwIfMapRenderCancelled(shouldCancel);
+        rendered.image = compute::colorize_field(p, fo, in.colorMode, in.cyclesPerOctave);
+    }
     throwIfMapRenderCancelled(shouldCancel);
     rendered.elapsed = stats.elapsed_ms;
     rendered.scalarUsed = stats.scalar_used;
