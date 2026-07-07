@@ -1067,15 +1067,31 @@ const exportEstimatedLnMapSegmented = computed(() => {
   return logicalHeightT > maxSegmentHeight
 })
 
+function statsSourceIsPreview(source?: string | null) {
+  return !!source && source.startsWith('preview:')
+}
+
+const exportReusesPreviewStats = computed(() => {
+  const p = exportProgress.value
+  const meta = exportResult.value ?? exportQueuedResult.value
+  if (p.lnMapStatsReused || p.details?.lnMapStatsReused) return true
+  if (meta?.lnMapStatsReused) return true
+  if (statsSourceIsPreview(p.lnMapStatsSource || p.details?.lnMapStatsSource)) return true
+  if (statsSourceIsPreview(meta?.lnMapStatsSource)) return true
+  return exportLnMapColorMode.value === 'hist_eq' && !!lnMapPreviewRunId.value
+})
+
 const exportShowsSeparateLnMapPass = computed(() => {
   const stage = exportProgress.value.stage
   if (stage === 'ln_map_equalization' || stage === 'ln_map_render') return true
   const globalModes = new Set<LnMapColorMode>(['hist_eq', 'bands', 'frontier'])
   const meta = exportResult.value ?? exportQueuedResult.value
+  const mode = (meta?.lnMapColorMode as LnMapColorMode | undefined) ?? exportLnMapColorMode.value
+  if (mode === 'hist_eq' && exportReusesPreviewStats.value) return false
   if (meta?.lnMapSegmented !== undefined || meta?.lnMapColorMode) {
-    return !!meta.lnMapSegmented && globalModes.has(meta.lnMapColorMode as LnMapColorMode)
+    return !!meta.lnMapSegmented && globalModes.has(mode)
   }
-  return globalModes.has(exportLnMapColorMode.value) && exportEstimatedLnMapSegmented.value
+  return globalModes.has(mode) && exportEstimatedLnMapSegmented.value
 })
 
 const lnMapRenderProgressStage = computed(() =>
@@ -1108,7 +1124,8 @@ const exportProgressDetail = computed(() => {
   }
   if (p.stage === 'ln_map' || p.stage === 'ln_map_render') {
     const colorMode = p.lnMapColorMode ? ` · ${p.lnMapColorMode}` : ''
-    return `ln-map render ${p.current || 0}/${p.total || 0} rows${colorMode} · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
+    const stats = p.lnMapStatsReused || statsSourceIsPreview(p.lnMapStatsSource) ? ' · stats preview' : ''
+    return `ln-map render ${p.current || 0}/${p.total || 0} rows${colorMode}${stats} · octave ${(p.depthOctave || 0).toFixed(2)}/${(p.totalDepthOctaves || 0).toFixed(2)}${etaSuffix(p.estimatedRemainingMs)}`
   }
   if (p.stage === 'video_warp_encode') {
     return `encode ${p.current || 0}/${p.total || 0} frames${etaSuffix(p.estimatedRemainingMs)}`

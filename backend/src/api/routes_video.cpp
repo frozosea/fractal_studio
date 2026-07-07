@@ -144,27 +144,6 @@ bool commandSucceeds(const std::string& command) {
     return std::system(command.c_str()) == 0;
 }
 
-std::string shellQuote(const std::string& s) {
-    std::string out = "'";
-    for (char ch : s) {
-        if (ch == '\'') out += "'\\''";
-        else out += ch;
-    }
-    out += "'";
-    return out;
-}
-
-std::string ffmpegConcatFileLine(const std::filesystem::path& path) {
-    std::string s = path.string();
-    std::string escaped;
-    escaped.reserve(s.size());
-    for (char ch : s) {
-        if (ch == '\'') escaped += "'\\''";
-        else escaped += ch;
-    }
-    return "file '" + escaped + "'\n";
-}
-
 struct VideoWarpStats {
     double warpTotalMs = 0.0;
     double copyTotalMs = 0.0;
@@ -977,34 +956,49 @@ cv::Mat renderZoomPreviewFrameSmart(
 }
 
 // ─── Shared video generation helper ──────────────────────────────────────────
-static std::string generateZoomVideo(
-    const cv::Mat& strip,
-    const cv::Mat& finalImg,
-    int W, int H, int fps, int frameCount,
-    double kTop_start, double kTop_end, double depthOctaves,
-    double stripRowOffset,
+struct ZoomRenderSource {
+    const cv::Mat* strip = nullptr;
+    const cv::Mat* finalImg = nullptr;
+    int frameCount = 0;
+    double kTopStart = 0.0;
+    double kTopEnd = 0.0;
+    double depthOctaves = 0.0;
+    double stripRowOffset = 0.0;
+    std::function<void(int)> onFrameDone;
+};
+
+struct ZoomSegmentVideoInput {
+    VideoSegmentPlan plan;
+    std::filesystem::path stripPath;
+    std::filesystem::path finalPath;
+};
+
+void renderZoomFramesToWriter(
+    const ZoomRenderSource& source,
+    int W,
+    int H,
     double rotationDeg,
-    const std::filesystem::path& outDir, const std::string& baseName,
-    const std::function<void(int)>& on_frame_done = nullptr,
-    std::string* ffmpeg_stderr_out = nullptr,
-    std::string* encoder_out = nullptr,
-    bool prefer_cuda_warp = true,
-    std::string* warp_method_out = nullptr,
-    VideoWarpStats* stats_out = nullptr,
-    const std::function<bool()>& should_cancel = nullptr
+    bool preferCudaWarp,
+    const std::function<void(const cv::Mat&)>& writeFrame,
+    VideoWarpStats& stats,
+    std::string* warpMethodOut,
+    const std::function<bool()>& shouldCancel
 ) {
-    if (encoder_out) *encoder_out = "";
+    if (!source.strip || source.strip->empty()) throw std::runtime_error("missing ln-map strip for video warp");
+    if (!source.finalImg || source.finalImg->empty()) throw std::runtime_error("missing final frame for video warp");
+    if (source.frameCount <= 0) return;
+
+    const cv::Mat& strip = *source.strip;
+    const cv::Mat& finalImg = *source.finalImg;
+    stats.stripWidth = std::max(stats.stripWidth, strip.cols);
+    stats.stripHeight = std::max(stats.stripHeight, strip.rows);
 
     cv::Mat stripWrap;
     cv::copyMakeBorder(strip, stripWrap, 0, 0, 0, 1, cv::BORDER_WRAP);
 
     const bool remapSafe = opencv_remap_size_safe(stripWrap, W, H)
         && opencv_remap_size_safe(finalImg, W, H);
-    VideoWarpStats baseStats;
-    baseStats.frameCount = frameCount;
-    baseStats.stripWidth = strip.cols;
-    baseStats.stripHeight = strip.rows;
-    baseStats.opencvRemapSafe = remapSafe;
+    stats.opencvRemapSafe = stats.opencvRemapSafe && remapSafe;
     std::string selectedWarpMethod;
 
 #if USE_CUDA_VIDEO_WARP
@@ -1014,7 +1008,7 @@ static std::string generateZoomVideo(
         ~CudaWarpGuard() { if (ctx) fsd_cuda::cuda_video_warp_release(*ctx); }
     } cudaWarpGuard{&cudaWarp};
     bool useCudaWarp = false;
-    if (prefer_cuda_warp && fsd_cuda::cuda_video_warp_available()) {
+    if (preferCudaWarp && fsd_cuda::cuda_video_warp_available()) {
         try {
             fsd_cuda::cuda_video_warp_init(stripWrap, finalImg, rotationDeg, cudaWarp);
             useCudaWarp = true;
@@ -1025,18 +1019,17 @@ static std::string generateZoomVideo(
         }
     }
 #else
-    (void)prefer_cuda_warp;
+    (void)preferCudaWarp;
 #endif
     if (selectedWarpMethod.empty()) {
         selectedWarpMethod = remapSafe ? "opencv_cpu_remap_precomputed" : "manual_cpu_bilinear_precomputed";
     }
-    baseStats.warpMethod = selectedWarpMethod;
-    if (warp_method_out) *warp_method_out = selectedWarpMethod;
-
-    const std::filesystem::path mp4 = outDir / (baseName + ".mp4");
-    const std::filesystem::path avi = outDir / (baseName + ".avi");
-    const std::filesystem::path tmpMp4 = outDir / (baseName + ".tmp.mp4");
-    const std::filesystem::path tmpAvi = outDir / (baseName + ".tmp.avi");
+    if (stats.warpMethod.empty()) {
+        stats.warpMethod = selectedWarpMethod;
+    } else if (stats.warpMethod != selectedWarpMethod && stats.warpMethod != "mixed") {
+        stats.warpMethod = "mixed";
+    }
+    if (warpMethodOut) *warpMethodOut = selectedWarpMethod;
 
     cv::Mat frame;
     cv::Mat stripFrame;
@@ -1053,7 +1046,14 @@ static std::string generateZoomVideo(
         return *cpuGeom;
     };
 
-    auto renderCudaFramesAsync = [&](auto&& writeFrame, VideoWarpStats& stats) -> bool {
+    auto reportFrame = [&](int frameIndex) {
+        if (source.onFrameDone &&
+            (frameIndex + 1 == source.frameCount || ((frameIndex + 1) % 8) == 0)) {
+            source.onFrameDone(frameIndex + 1);
+        }
+    };
+
+    auto renderCudaFramesAsync = [&]() -> bool {
 #if USE_CUDA_VIDEO_WARP
         if (!useCudaWarp) return false;
         const size_t frameBytes = static_cast<size_t>(W) * static_cast<size_t>(H) * 3u;
@@ -1080,11 +1080,11 @@ static std::string generateZoomVideo(
         bool pending[2] = {false, false};
 
         auto scheduleFrame = [&](int f) {
-            if (should_cancel && should_cancel()) throw std::runtime_error("cancelled");
-            const double tNorm = static_cast<double>(f) / std::max(1, frameCount - 1);
-            const double kTop  = kTop_start - tNorm * depthOctaves * LN_TWO;
+            if (shouldCancel && shouldCancel()) throw std::runtime_error("cancelled");
+            const double tNorm = static_cast<double>(f) / std::max(1, source.frameCount - 1);
+            const double kTop = source.kTopStart - tNorm * source.depthOctaves * LN_TWO;
             const int buffer = f & 1;
-            fsd_cuda::cuda_video_warp_frame_async(cudaWarp, kTop, kTop_end, stripRowOffset, buffer, pinned.ptr[buffer]);
+            fsd_cuda::cuda_video_warp_frame_async(cudaWarp, kTop, source.kTopEnd, source.stripRowOffset, buffer, pinned.ptr[buffer]);
             pending[buffer] = true;
         };
 
@@ -1101,17 +1101,17 @@ static std::string generateZoomVideo(
             const auto writeEnd = std::chrono::steady_clock::now();
             stats.writeTotalMs += std::chrono::duration<double, std::milli>(writeEnd - writeStart).count();
             stats.rawVideoBytes += static_cast<uint64_t>(frameBytes);
-            if (should_cancel && should_cancel()) throw std::runtime_error("cancelled");
-            if (on_frame_done && (f + 1 == frameCount || ((f + 1) % 8) == 0)) on_frame_done(f + 1);
+            if (shouldCancel && shouldCancel()) throw std::runtime_error("cancelled");
+            reportFrame(f);
         };
 
         try {
             scheduleFrame(0);
-            for (int f = 1; f < frameCount; ++f) {
+            for (int f = 1; f < source.frameCount; ++f) {
                 scheduleFrame(f);
                 finishFrame(f - 1);
             }
-            finishFrame(frameCount - 1);
+            finishFrame(source.frameCount - 1);
         } catch (...) {
             for (int i = 0; i < 2; ++i) {
                 if (!pending[i]) continue;
@@ -1121,59 +1121,75 @@ static std::string generateZoomVideo(
         }
         return true;
 #else
-        (void)writeFrame;
-        (void)stats;
         return false;
 #endif
     };
 
-    auto renderFrames = [&](auto&& writeFrame, VideoWarpStats& stats) {
-        if (renderCudaFramesAsync(writeFrame, stats)) return;
+    if (renderCudaFramesAsync()) return;
 
-        for (int f = 0; f < frameCount; f++) {
-            if (should_cancel && should_cancel()) throw std::runtime_error("cancelled");
-            const double tNorm = static_cast<double>(f) / std::max(1, frameCount - 1);
-            const double kTop  = kTop_start - tNorm * depthOctaves * LN_TWO;
+    for (int f = 0; f < source.frameCount; f++) {
+        if (shouldCancel && shouldCancel()) throw std::runtime_error("cancelled");
+        const double tNorm = static_cast<double>(f) / std::max(1, source.frameCount - 1);
+        const double kTop = source.kTopStart - tNorm * source.depthOctaves * LN_TWO;
 #if USE_CUDA_VIDEO_WARP
-            if (useCudaWarp) {
-                fsd_cuda::CudaVideoWarpTiming timing;
-                fsd_cuda::cuda_video_warp_frame_timed(cudaWarp, kTop, kTop_end, stripRowOffset, frame, &timing);
-                stats.warpTotalMs += timing.kernel_ms;
-                stats.copyTotalMs += timing.copy_ms;
-            } else
+        if (useCudaWarp) {
+            fsd_cuda::CudaVideoWarpTiming timing;
+            fsd_cuda::cuda_video_warp_frame_timed(cudaWarp, kTop, source.kTopEnd, source.stripRowOffset, frame, &timing);
+            stats.warpTotalMs += timing.kernel_ms;
+            stats.copyTotalMs += timing.copy_ms;
+        } else
 #endif
-            {
-                const auto warpStart = std::chrono::steady_clock::now();
-                const CpuWarpGeometry& geom = getCpuGeom();
-                if (selectedWarpMethod == "opencv_cpu_remap_precomputed") {
-                    ensureMat(frame, W, H, CV_8UC3);
-                    ensureMat(stripFrame, W, H, CV_8UC3);
-                    ensureMat(finalFrame, W, H, CV_8UC3);
-                    ensureMat(mapY, W, H, CV_32FC1);
-                    ensureMat(fmapX, W, H, CV_32FC1);
-                    ensureMat(fmapY, W, H, CV_32FC1);
-                    renderWarpFrameShared(stripWrap, finalImg, geom, W, H, kTop, kTop_end,
-                                          stripRowOffset,
-                                          frame, stripFrame, finalFrame, mapY, fmapX, fmapY);
-                } else {
-                    renderWarpFrameManualCpu(stripWrap, finalImg, geom, W, H, kTop, kTop_end, stripRowOffset, frame);
-                }
-                const auto warpEnd = std::chrono::steady_clock::now();
-                stats.warpTotalMs += std::chrono::duration<double, std::milli>(warpEnd - warpStart).count();
+        {
+            const auto warpStart = std::chrono::steady_clock::now();
+            const CpuWarpGeometry& geom = getCpuGeom();
+            if (selectedWarpMethod == "opencv_cpu_remap_precomputed") {
+                ensureMat(frame, W, H, CV_8UC3);
+                ensureMat(stripFrame, W, H, CV_8UC3);
+                ensureMat(finalFrame, W, H, CV_8UC3);
+                ensureMat(mapY, W, H, CV_32FC1);
+                ensureMat(fmapX, W, H, CV_32FC1);
+                ensureMat(fmapY, W, H, CV_32FC1);
+                renderWarpFrameShared(stripWrap, finalImg, geom, W, H, kTop, source.kTopEnd,
+                                      source.stripRowOffset,
+                                      frame, stripFrame, finalFrame, mapY, fmapX, fmapY);
+            } else {
+                renderWarpFrameManualCpu(stripWrap, finalImg, geom, W, H, kTop, source.kTopEnd, source.stripRowOffset, frame);
             }
-            const size_t bytes = static_cast<size_t>(frame.rows) * frame.step;
-            const auto writeStart = std::chrono::steady_clock::now();
-            writeFrame(frame);
-            const auto writeEnd = std::chrono::steady_clock::now();
-            stats.writeTotalMs += std::chrono::duration<double, std::milli>(writeEnd - writeStart).count();
-            stats.rawVideoBytes += static_cast<uint64_t>(bytes);
-            if (should_cancel && should_cancel()) throw std::runtime_error("cancelled");
-            if (on_frame_done && (f + 1 == frameCount || ((f + 1) % 8) == 0)) on_frame_done(f + 1);
+            const auto warpEnd = std::chrono::steady_clock::now();
+            stats.warpTotalMs += std::chrono::duration<double, std::milli>(warpEnd - warpStart).count();
         }
-    };
+        const size_t bytes = static_cast<size_t>(frame.rows) * frame.step;
+        const auto writeStart = std::chrono::steady_clock::now();
+        writeFrame(frame);
+        const auto writeEnd = std::chrono::steady_clock::now();
+        stats.writeTotalMs += std::chrono::duration<double, std::milli>(writeEnd - writeStart).count();
+        stats.rawVideoBytes += static_cast<uint64_t>(bytes);
+        if (shouldCancel && shouldCancel()) throw std::runtime_error("cancelled");
+        reportFrame(f);
+    }
+}
 
+using ZoomRenderDriver = std::function<void(const std::function<void(const cv::Mat&)>&, VideoWarpStats&)>;
+
+static std::string encodeZoomVideoFrames(
+    int W,
+    int H,
+    int fps,
+    const std::filesystem::path& outDir,
+    const std::string& baseName,
+    const ZoomRenderDriver& renderFrames,
+    const VideoWarpStats& baseStats,
+    std::string* ffmpeg_stderr_out,
+    std::string* encoder_out,
+    VideoWarpStats* stats_out
+) {
+    if (encoder_out) *encoder_out = "";
     const std::filesystem::path ffmpegErr = outDir / (baseName + "_ffmpeg.stderr.txt");
     const std::filesystem::path ffmpegErrTmp = outDir / (baseName + "_ffmpeg.stderr.txt.tmp");
+    const std::filesystem::path mp4 = outDir / (baseName + ".mp4");
+    const std::filesystem::path avi = outDir / (baseName + ".avi");
+    const std::filesystem::path tmpMp4 = outDir / (baseName + ".tmp.mp4");
+    const std::filesystem::path tmpAvi = outDir / (baseName + ".tmp.avi");
     std::vector<std::pair<std::string, std::string>> ffmpegCmds;
     const std::string inputArgs =
         "ffmpeg -y -f rawvideo -pix_fmt bgr24 -s " + std::to_string(W) + "x" + std::to_string(H) +
@@ -1318,61 +1334,107 @@ static std::string generateZoomVideo(
     return mp4.string();
 }
 
-std::string concatenateVideoParts(
-    const std::vector<std::filesystem::path>& parts,
+static std::string generateZoomVideo(
+    const cv::Mat& strip,
+    const cv::Mat& finalImg,
+    int W, int H, int fps, int frameCount,
+    double kTop_start, double kTop_end, double depthOctaves,
+    double stripRowOffset,
+    double rotationDeg,
+    const std::filesystem::path& outDir, const std::string& baseName,
+    const std::function<void(int)>& on_frame_done = nullptr,
+    std::string* ffmpeg_stderr_out = nullptr,
+    std::string* encoder_out = nullptr,
+    bool prefer_cuda_warp = true,
+    std::string* warp_method_out = nullptr,
+    VideoWarpStats* stats_out = nullptr,
+    const std::function<bool()>& should_cancel = nullptr
+) {
+    ZoomRenderSource source;
+    source.strip = &strip;
+    source.finalImg = &finalImg;
+    source.frameCount = frameCount;
+    source.kTopStart = kTop_start;
+    source.kTopEnd = kTop_end;
+    source.depthOctaves = depthOctaves;
+    source.stripRowOffset = stripRowOffset;
+    source.onFrameDone = on_frame_done;
+
+    VideoWarpStats baseStats;
+    baseStats.frameCount = frameCount;
+    baseStats.opencvRemapSafe = true;
+
+    auto renderFrames = [&](const std::function<void(const cv::Mat&)>& writeFrame, VideoWarpStats& stats) {
+        std::string method;
+        renderZoomFramesToWriter(
+            source, W, H, rotationDeg, prefer_cuda_warp, writeFrame,
+            stats, &method, should_cancel);
+        if (warp_method_out) *warp_method_out = stats.warpMethod.empty() ? method : stats.warpMethod;
+    };
+
+    return encodeZoomVideoFrames(
+        W, H, fps, outDir, baseName, renderFrames, baseStats,
+        ffmpeg_stderr_out, encoder_out, stats_out);
+}
+
+static std::string generateZoomVideoSequence(
+    const std::vector<ZoomSegmentVideoInput>& segments,
+    int W,
+    int H,
+    int fps,
+    int frameCount,
+    double kTopStart,
+    double rotationDeg,
     const std::filesystem::path& outDir,
     const std::string& baseName,
-    std::string* ffmpeg_stderr_out
+    const std::function<void(int)>& on_frame_done = nullptr,
+    std::string* ffmpeg_stderr_out = nullptr,
+    std::string* encoder_out = nullptr,
+    bool prefer_cuda_warp = true,
+    std::string* warp_method_out = nullptr,
+    VideoWarpStats* stats_out = nullptr,
+    const std::function<bool()>& should_cancel = nullptr
 ) {
-    if (parts.empty()) throw std::runtime_error("no segmented video parts were produced");
-    const std::filesystem::path finalPath = outDir / (baseName + ".mp4");
-    if (parts.size() == 1) {
-        std::error_code ec;
-        std::filesystem::copy_file(parts.front(), finalPath, std::filesystem::copy_options::overwrite_existing, ec);
-        if (ec) {
-            std::filesystem::remove(finalPath, ec);
-            ec.clear();
-            std::filesystem::rename(parts.front(), finalPath, ec);
+    if (segments.empty()) throw std::runtime_error("no segmented video frames were produced");
+
+    VideoWarpStats baseStats;
+    baseStats.frameCount = frameCount;
+    baseStats.opencvRemapSafe = true;
+
+    auto renderFrames = [&](const std::function<void(const cv::Mat&)>& writeFrame, VideoWarpStats& stats) {
+        int framesDoneBase = 0;
+        for (const auto& seg : segments) {
+            if (should_cancel && should_cancel()) throw std::runtime_error("cancelled");
+            cv::Mat strip = compute::read_png(seg.stripPath.string());
+            cv::Mat finalImg = compute::read_png(seg.finalPath.string());
+
+            ZoomRenderSource source;
+            source.strip = &strip;
+            source.finalImg = &finalImg;
+            source.frameCount = seg.plan.frameCount;
+            source.kTopStart = kTopStart - seg.plan.firstFrameDepthOctaves * LN_TWO;
+            source.kTopEnd = kTopStart - seg.plan.finalFrameDepthOctaves * LN_TWO;
+            source.depthOctaves = seg.plan.depthOctaves;
+            source.stripRowOffset = seg.plan.rowOffset;
+            source.onFrameDone = [&](int frameDone) {
+                if (on_frame_done) on_frame_done(framesDoneBase + frameDone);
+            };
+
+            renderZoomFramesToWriter(
+                source, W, H, rotationDeg, prefer_cuda_warp, writeFrame,
+                stats, nullptr, should_cancel);
+            framesDoneBase += seg.plan.frameCount;
         }
-        if (ec) throw std::runtime_error("failed to finalize segmented video: " + ec.message());
-        return finalPath.string();
-    }
 
-    const std::filesystem::path listPath = outDir / (baseName + "_parts.txt");
-    const std::filesystem::path tmpPath = outDir / (baseName + ".tmp.mp4");
-    const std::filesystem::path errPath = outDir / (baseName + "_concat_ffmpeg.stderr.txt");
-    {
-        std::ofstream list(listPath);
-        if (!list) throw std::runtime_error("failed to write ffmpeg concat list");
-        for (const auto& part : parts) {
-            list << ffmpegConcatFileLine(std::filesystem::absolute(part));
+        if (!stats.warpMethod.empty()) {
+            stats.warpMethod = "segmented_stream(" + stats.warpMethod + ")";
+            if (warp_method_out) *warp_method_out = stats.warpMethod;
         }
-    }
+    };
 
-    const std::string cmd =
-        "ffmpeg -y -f concat -safe 0 -i " + shellQuote(listPath.string()) +
-        " -c copy " + shellQuote(tmpPath.string()) +
-        " 2>" + shellQuote(errPath.string());
-    const int rc = std::system(cmd.c_str());
-    if (ffmpeg_stderr_out) {
-        std::ifstream errIn(errPath);
-        std::ostringstream ss;
-        ss << errIn.rdbuf();
-        *ffmpeg_stderr_out = ss.str();
-    }
-    if (rc != 0 || !std::filesystem::exists(tmpPath)) {
-        throw std::runtime_error("ffmpeg concat failed");
-    }
-
-    std::error_code ec;
-    std::filesystem::rename(tmpPath, finalPath, ec);
-    if (ec) {
-        std::filesystem::remove(finalPath, ec);
-        ec.clear();
-        std::filesystem::rename(tmpPath, finalPath, ec);
-    }
-    if (ec) throw std::runtime_error("failed to finalize concatenated video: " + ec.message());
-    return finalPath.string();
+    return encodeZoomVideoFrames(
+        W, H, fps, outDir, baseName, renderFrames, baseStats,
+        ffmpeg_stderr_out, encoder_out, stats_out);
 }
 
 struct LnMapLookup {
@@ -1515,7 +1577,7 @@ void setVideoProgress(
         {"errorMessage", errorMessage},
         {"details", details},
     };
-    for (const char* key : {"engine", "scalar", "finalFrameEngine", "finalFrameScalar", "lnMapEngine", "lnMapScalar", "lnMapMode", "lnMapColorMode", "lnMapPass", "lnMapStatsSource", "lnMapLayerSummary", "lnMapValidationSummary", "currentLnMapSegment", "lnMapSegmentCount", "lnMapSegmentHeight", "warpMethod", "encoder", "currentFrame", "totalFrames", "currentLnMapRow", "totalLnMapRows", "warpTotalMs", "copyTotalMs", "writeTotalMs", "encodeCloseMs", "avgWarpMs", "avgCopyMs", "avgWriteMs", "rawVideoBytes", "stripWidth", "stripHeight", "opencvRemapSafe"}) {
+    for (const char* key : {"engine", "scalar", "finalFrameEngine", "finalFrameScalar", "lnMapEngine", "lnMapScalar", "lnMapMode", "lnMapColorMode", "lnMapPass", "lnMapStatsSource", "lnMapStatsReused", "lnMapLayerSummary", "lnMapValidationSummary", "currentLnMapSegment", "lnMapSegmentCount", "lnMapSegmentHeight", "warpMethod", "encoder", "currentFrame", "totalFrames", "currentLnMapRow", "totalLnMapRows", "warpTotalMs", "copyTotalMs", "writeTotalMs", "encodeCloseMs", "avgWarpMs", "avgCopyMs", "avgWriteMs", "rawVideoBytes", "stripWidth", "stripHeight", "opencvRemapSafe"}) {
         if (details.contains(key)) j[key] = details[key];
     }
     runner.setProgress(runId, j.dump());
@@ -2097,6 +2159,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const std::string lnMapStatsSource = previewEqualizationOverride.has_value()
         ? ("preview:" + lnMapStatsRunId)
         : std::string("export");
+    const bool lnMapStatsReused = previewEqualizationOverride.has_value() && lnMapColorMode == "hist_eq";
 
     auto run = runner.createRun("video-export", body);
     ResourceManager::Lease videoLeaseRaw;
@@ -2170,9 +2233,22 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                          "", "", Json{{"engine", finalStats.engine_used}, {"scalar", finalStats.scalar_used}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
 
         if (stripPlan.segmentCount > 1) {
-            const bool separateLnMapStatsProgress = lnMapColorModeNeedsSharedStats(lnMapColorMode);
+            const bool separateLnMapStatsProgress =
+                lnMapColorModeNeedsSharedStats(lnMapColorMode) && !lnMapStatsReused;
             const std::string lnMapRenderStage =
                 separateLnMapStatsProgress ? "ln_map_render" : "ln_map";
+            const bool keepSegmentFiles = j.value("keepIntermediateVideoFiles", false);
+            const std::filesystem::path segmentTmpDir = std::filesystem::path(run.outputDir) / "_segments_tmp";
+            std::filesystem::create_directories(segmentTmpDir);
+            struct SegmentTempCleaner {
+                std::filesystem::path dir;
+                bool keep = false;
+                ~SegmentTempCleaner() {
+                    if (keep || dir.empty()) return;
+                    std::error_code ec;
+                    std::filesystem::remove_all(dir, ec);
+                }
+            } segmentTempCleaner{segmentTmpDir, keepSegmentFiles};
 
             struct RenderedSegment {
                 VideoSegmentPlan plan;
@@ -2225,47 +2301,46 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
 
             compute::LnMapEqualization segmentedEq;
             compute::LnMapGlobalCdf segmentedCdf;
+            if (lnMapStatsReused) {
+                segmentedEq = *previewEqualizationOverride;
+            }
             if (separateLnMapStatsProgress) {
                 const std::string statsPass = lnMapColorMode == "hist_eq" ? "equalization" : "global_cdf";
                 setVideoProgress(runner, run.id, "ln_map_equalization", 0, stripPlan.heightT, 0.0, depth,
-                                 "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
+                                 "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
                 throwIfCancelled(runner, run.id);
-                if (previewEqualizationOverride && lnMapColorMode == "hist_eq") {
-                    segmentedEq = *previewEqualizationOverride;
+                compute::LnMapParams eqParams = makeLnParams(stripPlan.heightT, 0.0);
+                auto reportStatsRows = [&](int rowsDone) {
+                    throwIfCancelled(runner, run.id);
+                    const double octave = depth * static_cast<double>(rowsDone) / std::max(1, stripPlan.heightT);
+                    setVideoProgress(runner, run.id, "ln_map_equalization", rowsDone, stripPlan.heightT, octave, depth,
+                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
+                };
+                if (lnMapColorMode == "hist_eq") {
+                    segmentedEq = compute::build_ln_map_equalization_streamed(
+                        eqParams, stripPlan.maxSegmentHeightT, reportStatsRows);
                 } else {
-                    compute::LnMapParams eqParams = makeLnParams(stripPlan.heightT, 0.0);
-                    auto reportStatsRows = [&](int rowsDone) {
-                        throwIfCancelled(runner, run.id);
-                        const double octave = depth * static_cast<double>(rowsDone) / std::max(1, stripPlan.heightT);
-                        setVideoProgress(runner, run.id, "ln_map_equalization", rowsDone, stripPlan.heightT, octave, depth,
-                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
-                    };
-                    if (lnMapColorMode == "hist_eq") {
-                        segmentedEq = compute::build_ln_map_equalization_streamed(
-                            eqParams, stripPlan.maxSegmentHeightT, reportStatsRows);
-                    } else {
-                        segmentedCdf = compute::build_ln_map_global_cdf_streamed(
-                            eqParams, stripPlan.maxSegmentHeightT, reportStatsRows);
-                    }
+                    segmentedCdf = compute::build_ln_map_global_cdf_streamed(
+                        eqParams, stripPlan.maxSegmentHeightT, reportStatsRows);
                 }
                 if (segmentedEq.valid || segmentedCdf.valid()) {
                     setVideoProgress(runner, run.id, "ln_map_equalization", stripPlan.heightT, stripPlan.heightT, depth, depth,
-                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", stripPlan.heightT}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"eqCountMin", segmentedEq.count_min}, {"eqPeriod", segmentedEq.period}, {"cdfTotal", segmentedCdf.total}});
+                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", stripPlan.heightT}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"eqCountMin", segmentedEq.count_min}, {"eqPeriod", segmentedEq.period}, {"cdfTotal", segmentedCdf.total}});
                 }
             }
 
             setVideoProgress(runner, run.id, lnMapRenderStage, 0, stripPlan.totalSegmentRows, 0.0, depth,
-                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"lnMapSegmentCount", stripPlan.segmentCount}});
+                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", 0}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"lnMapSegmentCount", stripPlan.segmentCount}});
             for (const VideoSegmentPlan& seg : videoSegments) {
                 throwIfCancelled(runner, run.id);
                 const std::string suffix = segmentSuffix(seg.index);
                 const bool isFirst = seg.index == 0;
                 const bool isLast = seg.index + 1 == static_cast<int>(videoSegments.size());
                 const std::filesystem::path segStripPath = std::filesystem::path(run.outputDir) /
-                    (isFirst ? std::string("ln_map.png") : ("ln_map_" + suffix + ".png"));
+                    (isFirst ? std::string("ln_map.png") : ("_segments_tmp/ln_map_" + suffix + ".png"));
                 const std::filesystem::path segFinalPath = isLast
                     ? finalPath
-                    : (std::filesystem::path(run.outputDir) / ("final_frame_" + suffix + ".png"));
+                    : (segmentTmpDir / ("final_frame_" + suffix + ".png"));
 
                 compute::MapParams chunkMp = mp;
                 const double chunkKTopEnd = kTop_start - seg.finalFrameDepthOctaves * LN_TWO;
@@ -2308,11 +2383,13 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                             0.0, 1.0);
                         const double currentDepth = std::min(depth, seg.startDepthOctaves + seg.depthOctaves * local);
                         setVideoProgress(runner, run.id, lnMapRenderStage, currentRows, stripPlan.totalSegmentRows, currentDepth, depth,
-                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", currentRows}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
+                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", currentRows}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
                     });
                 throwIfCancelled(runner, run.id);
                 compute::write_png(segStripPath.string(), segStrip);
-                runner.addArtifact(run.id, Artifact{isFirst ? "ln-map" : "ln-map-segment", segStripPath.string(), "image"});
+                if (isFirst) {
+                    runner.addArtifact(run.id, Artifact{"ln-map", segStripPath.string(), "image"});
+                }
 
                 if (chunkFinalDeferred) {
                     const compute::LnMapEqualization& chunkEq =
@@ -2354,7 +2431,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 }
                 renderedSegments.push_back(RenderedSegment{seg, segStripPath, segFinalPath, segStats, chunkFinalStats});
                 setVideoProgress(runner, run.id, lnMapRenderStage, rowsDoneTotal, stripPlan.totalSegmentRows, seg.endDepthOctaves, depth,
-                                 "", "", Json{{"engine", segStats.engine_used}, {"scalar", segStats.scalar_used}, {"lnMapEngine", segStats.engine_used}, {"lnMapScalar", segStats.scalar_used}, {"lnMapMode", segStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", segStats.layer_summary}, {"lnMapValidationSummary", segStats.validation_summary}, {"currentLnMapRow", rowsDoneTotal}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
+                                 "", "", Json{{"engine", segStats.engine_used}, {"scalar", segStats.scalar_used}, {"lnMapEngine", segStats.engine_used}, {"lnMapScalar", segStats.scalar_used}, {"lnMapMode", segStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", segStats.layer_summary}, {"lnMapValidationSummary", segStats.validation_summary}, {"currentLnMapRow", rowsDoneTotal}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
             }
             if (segmentedEq.valid) lnStats.equalization = segmentedEq;
             if (segmentedCdf.valid()) lnStats.global_cdf = segmentedCdf;
@@ -2382,6 +2459,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     {"firstFrameDepthOctaves", seg.plan.firstFrameDepthOctaves},
                     {"lastFrameDepthOctaves", seg.plan.lastFrameDepthOctaves},
                     {"frameCount", seg.plan.frameCount},
+                    {"temporaryFiles", seg.stripPath.parent_path() == segmentTmpDir || seg.finalPath.parent_path() == segmentTmpDir},
                 });
             }
             Json sc = {
@@ -2400,10 +2478,12 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"qualityScale", stripPlan.qualityScale},
                 {"estimatedPeakMemory", stripPlan.estimatedPeakMemory},
                 {"estimatedSingleStripMemory", stripPlan.estimatedSingleStripMemory},
+                {"keepIntermediateVideoFiles", keepSegmentFiles},
                 {"lnRadiusTop", LN_FOUR}, {"variant", variantStr},
                 {"colorMap", colormapStr}, {"iterations", iters},
                 {"lnMapColorMode", lnMapColorMode},
                 {"lnMapStatsSource", lnMapStatsSource},
+                {"lnMapStatsReused", lnMapStatsReused},
                 {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
                 {"bailout", bailout},
                 {"bailoutSq", bailoutSq},
@@ -2445,70 +2525,41 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             runner.addArtifact(run.id, Artifact{"end-frame",   endPreviewPath.string(),   "image"});
 
             setVideoProgress(runner, run.id, "video_warp_encode", 0, frameCount, depth, depth,
-                             "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
-            std::vector<std::filesystem::path> partPaths;
-            partPaths.reserve(renderedSegments.size());
+                             "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+            std::vector<ZoomSegmentVideoInput> videoInputs;
+            videoInputs.reserve(renderedSegments.size());
+            for (const auto& seg : renderedSegments) {
+                videoInputs.push_back(ZoomSegmentVideoInput{seg.plan, seg.stripPath, seg.finalPath});
+            }
             VideoWarpStats warpStats;
-            warpStats.frameCount = frameCount;
-            warpStats.stripWidth = s;
-            warpStats.stripHeight = stripPlan.maxSegmentHeightT;
-            warpStats.opencvRemapSafe = true;
             std::string ffmpegStderr;
             std::string encoderUsed;
-            std::string warpMethod = "segmented";
-            int framesDoneBase = 0;
-            for (const auto& seg : renderedSegments) {
-                throwIfCancelled(runner, run.id);
-                cv::Mat segStrip = compute::read_png(seg.stripPath.string());
-                cv::Mat segFinal = seg.plan.index + 1 == static_cast<int>(renderedSegments.size())
-                    ? finalImg
-                    : compute::read_png(seg.finalPath.string());
-                std::string partStderr;
-                std::string partEncoder;
-                std::string partWarp;
-                VideoWarpStats partStats;
-                const std::string partBase = "zoom_part_" + segmentSuffix(seg.plan.index);
-                const std::string partPath = generateZoomVideo(
-                    segStrip, segFinal, W, H, fps, seg.plan.frameCount,
-                    kTop_start - seg.plan.firstFrameDepthOctaves * LN_TWO,
-                    kTop_start - seg.plan.finalFrameDepthOctaves * LN_TWO,
-                    seg.plan.depthOctaves,
-                    seg.plan.rowOffset,
-                    rotationDeg,
-                    std::filesystem::path(run.outputDir), partBase,
-                    [&](int frameDone) {
-                        const int current = framesDoneBase + frameDone;
-                        setVideoProgress(runner, run.id, "video_warp_encode", current, frameCount, depth, depth,
-                                         "", "", Json{{"currentFrame", current}, {"totalFrames", frameCount}, {"currentLnMapSegment", seg.plan.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
-                    },
-                    &partStderr,
-                    &partEncoder,
-                    preferCudaWarp,
-                    &partWarp,
-                    &partStats,
-                    [&]() { return runner.isCancelRequested(run.id); });
-                framesDoneBase += seg.plan.frameCount;
-                partPaths.push_back(partPath);
-                if (!partStderr.empty()) ffmpegStderr += partStderr;
-                if (!partEncoder.empty()) encoderUsed = partEncoder;
-                if (!partWarp.empty()) warpMethod = "segmented(" + partWarp + ")";
-                warpStats.warpTotalMs += partStats.warpTotalMs;
-                warpStats.copyTotalMs += partStats.copyTotalMs;
-                warpStats.writeTotalMs += partStats.writeTotalMs;
-                warpStats.encodeCloseMs += partStats.encodeCloseMs;
-                warpStats.rawVideoBytes += partStats.rawVideoBytes;
-                warpStats.opencvRemapSafe = warpStats.opencvRemapSafe && partStats.opencvRemapSafe;
-            }
-            std::string concatStderr;
-            const std::string videoPath = concatenateVideoParts(
-                partPaths, std::filesystem::path(run.outputDir), "zoom", &concatStderr);
-            if (!concatStderr.empty()) ffmpegStderr += concatStderr;
-            warpStats.warpMethod = warpMethod;
-            warpStats.encoder = "concat(" + (encoderUsed.empty() ? std::string("unknown") : encoderUsed) + ")";
-            encoderUsed = warpStats.encoder;
+            std::string warpMethod;
+            const std::string videoPath = generateZoomVideoSequence(
+                videoInputs, W, H, fps, frameCount,
+                kTop_start, rotationDeg,
+                std::filesystem::path(run.outputDir), "zoom",
+                [&](int current) {
+                    const int clamped = std::clamp(current, 0, frameCount);
+                    int currentSegment = stripPlan.segmentCount;
+                    for (const auto& seg : renderedSegments) {
+                        if (clamped < seg.plan.globalFrameEnd) {
+                            currentSegment = seg.plan.index + 1;
+                            break;
+                        }
+                    }
+                    setVideoProgress(runner, run.id, "video_warp_encode", clamped, frameCount, depth, depth,
+                                     "", "", Json{{"currentFrame", clamped}, {"totalFrames", frameCount}, {"currentLnMapSegment", currentSegment}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+                },
+                &ffmpegStderr,
+                &encoderUsed,
+                preferCudaWarp,
+                &warpMethod,
+                &warpStats,
+                [&]() { return runner.isCancelRequested(run.id); });
             throwIfCancelled(runner, run.id);
 
-            Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
+            Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
             mergeVideoWarpStats(doneDetails, warpStats);
             setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, depth, depth,
                              "", "", doneDetails);
@@ -2523,6 +2574,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"lnMapMode", lnStats.precision_mode},
                 {"lnMapColorMode", lnMapColorMode},
                 {"lnMapStatsSource", lnMapStatsSource},
+                {"lnMapStatsReused", lnMapStatsReused},
                 {"lnMapLayerSummary", lnStats.layer_summary},
                 {"lnMapValidationSummary", lnStats.validation_summary},
                 {"warpMethod", warpMethod},
@@ -2610,6 +2662,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"lnMapMode",          lnStats.precision_mode},
                 {"lnMapColorMode",     lnMapColorMode},
                 {"lnMapStatsSource",   lnMapStatsSource},
+                {"lnMapStatsReused",   lnMapStatsReused},
                 {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
                 {"lnMapLayerSummary",  lnStats.layer_summary},
                 {"lnMapValidationSummary", lnStats.validation_summary},
@@ -2717,7 +2770,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             lp.fast_validation_max_p99_iter_delta = lnMapFastValidationMaxP99IterDelta;
             lp.fast_validation_max_mean_color_delta = lnMapFastValidationMaxMeanColorDelta;
             setVideoProgress(runner, run.id, "ln_map", 0, t, 0.0, depth,
-                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", 0}, {"totalLnMapRows", t}});
+                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", 0}, {"totalLnMapRows", t}});
             throwIfCancelled(runner, run.id);
             lnStats = compute::render_ln_map(
                 lp, strip,
@@ -2725,11 +2778,11 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     throwIfCancelled(runner, run.id);
                     const double octave = depth * static_cast<double>(rowsDone) / std::max(1, t);
                     setVideoProgress(runner, run.id, "ln_map", rowsDone, t, octave, depth,
-                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", t}});
+                                     "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", t}});
                 });
             throwIfCancelled(runner, run.id);
             setVideoProgress(runner, run.id, "ln_map", t, t, depth, depth,
-                             "", "", Json{{"engine", lnStats.engine_used}, {"scalar", lnStats.scalar_used}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"currentLnMapRow", t}, {"totalLnMapRows", t}});
+                             "", "", Json{{"engine", lnStats.engine_used}, {"scalar", lnStats.scalar_used}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"currentLnMapRow", t}, {"totalLnMapRows", t}});
 
             compute::write_png(stripPath.string(), strip);
             runner.addArtifact(run.id, Artifact{"ln-map", stripPath.string(), "image"});
@@ -2770,6 +2823,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"colorMap", colormapStr}, {"iterations", iters},
                 {"lnMapColorMode", lnMapColorMode},
                 {"lnMapStatsSource", lnMapStatsSource},
+                {"lnMapStatsReused", lnMapStatsReused},
                 {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
                 {"bailout", bailout},
                 {"bailoutSq", bailoutSq},
@@ -2803,7 +2857,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
 
         // ── 4. Generate video ──────────────────────────────────────────────────
         setVideoProgress(runner, run.id, "video_warp_encode", 0, frameCount, depth, depth,
-                         "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+                         "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
         std::string ffmpegStderr;
         std::string encoderUsed;
         std::string warpMethod;
@@ -2814,7 +2868,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             std::filesystem::path(run.outputDir), "zoom",
             [&](int frameDone) {
                 setVideoProgress(runner, run.id, "video_warp_encode", frameDone, frameCount, depth, depth,
-                                 "", "", Json{{"currentFrame", frameDone}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
+                                 "", "", Json{{"currentFrame", frameDone}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
             },
             &ffmpegStderr,
             &encoderUsed,
@@ -2824,7 +2878,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             [&]() { return runner.isCancelRequested(run.id); }
         );
         throwIfCancelled(runner, run.id);
-        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
+        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
         mergeVideoWarpStats(doneDetails, warpStats);
         setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, depth, depth,
                          "", "", doneDetails);
@@ -2839,6 +2893,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnMapMode", lnStats.precision_mode},
             {"lnMapColorMode", lnMapColorMode},
             {"lnMapStatsSource", lnMapStatsSource},
+            {"lnMapStatsReused", lnMapStatsReused},
             {"lnMapLayerSummary", lnStats.layer_summary},
             {"lnMapValidationSummary", lnStats.validation_summary},
             {"warpMethod", warpMethod},
@@ -2927,6 +2982,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnMapMode",          lnStats.precision_mode},
             {"lnMapColorMode",     lnMapColorMode},
             {"lnMapStatsSource",   lnMapStatsSource},
+            {"lnMapStatsReused",   lnMapStatsReused},
             {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
             {"lnMapLayerSummary",  lnStats.layer_summary},
             {"lnMapValidationSummary", lnStats.validation_summary},
@@ -2969,7 +3025,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         }
 #endif
         if (stripPlan.segmentCount > 1) {
-            queuedWarpMethod = "segmented(" + queuedWarpMethod + ")";
+            queuedWarpMethod = "segmented_stream(" + queuedWarpMethod + ")";
         }
 
         Json resp = {
@@ -3001,6 +3057,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"lnMapMode", lnMapMode},
             {"lnMapColorMode", lnMapColorMode},
             {"lnMapStatsSource", lnMapStatsSource},
+            {"lnMapStatsReused", lnMapStatsReused},
             {"lnMapCyclesPerOctave", lnMapCyclesPerOctave},
             {"lnMapLayerSummary", ""},
             {"lnMapValidationSummary", ""},

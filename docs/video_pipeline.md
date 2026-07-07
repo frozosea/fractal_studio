@@ -7,7 +7,7 @@
 | Endpoint | Purpose |
 |---|---|
 | `POST /api/map/ln` | 单独渲染 ln-map strip PNG 和 sidecar JSON。 |
-| `POST /api/video/preview` | 只渲染起止预览帧，不生成 ln-map 和 MP4。 |
+| `POST /api/video/preview` | 渲染小尺寸 ln-map、起止预览帧和预览统计，不生成 MP4。 |
 | `POST /api/video/export` | 统一导出：final frame + ln-map + preview frames + MP4 + report。 |
 | `POST /api/video/zoom` | 旧路径：从已有 ln-map artifact 生成 MP4。 |
 
@@ -44,17 +44,15 @@ t = ceil((2 + depthOctaves) * ln(2) / (2*pi) * widthS)
 
 `2` 个额外 octave 是为了覆盖视频首帧边缘和采样安全区。
 
-Video export no longer has to allocate this whole strip as one image. If the
-logical `heightT` is larger than `lnMapMaxSegmentHeight` (default `8192` rows),
-`/api/video/export` splits the zoom into multiple ln-map segments. Each segment
-has:
+Video export normally allocates one strip and creates the movie from
+`ln_map.png + final_frame.png`. If the logical `heightT` is larger than
+`lnMapMaxSegmentHeight` (default `8192` rows), `/api/video/export` uses segmented
+strips as a memory fallback. Segment strips and local fallback frames are written
+to a temporary directory, then streamed sequentially into one ffmpeg pipe; the
+normal output directory does not keep `zoom_part_*.mp4` files or concat lists
+unless `keepIntermediateVideoFiles=true`.
 
-- a bounded-height strip (`ln_map.png`, `ln_map_001.png`, ...)
-- its own local final frame for the center fallback (`final_frame_000.png`, ...)
-- a row offset recorded in `ln_map.json`
-
-The chunk videos are encoded independently and concatenated into the usual
-`zoom.mp4`. Responses and reports include `lnMapSegmented`,
+Responses and reports include `lnMapSegmented`,
 `lnMapSegmentCount`, `lnMapMaxSegmentHeight`, `lnMapTotalSegmentRows`,
 `estimatedPeakMemory` (bounded segment peak), and
 `estimatedSingleStripMemory` (what the old one-piece strip would have needed).
@@ -62,9 +60,10 @@ For `lnMapColorMode="hist_eq"`, segmented export first streams the logical
 one-piece strip in bounded chunks to build one global equalization/periodic
 coloring table, then renders every segment with that shared table. If the
 request supplies a compatible `lnMapStatsRunId` from a small preview run,
-`hist_eq` can reuse that preview equalization instead, which makes the final
-video match the tuned preview more closely. This avoids per-segment direct-color
-discontinuities without allocating the full strip.
+`hist_eq` reuses that preview equalization instead (`lnMapStatsReused=true`),
+which skips the export statistics pass and makes the final video match the tuned
+preview more closely. This avoids per-segment direct-color discontinuities
+without allocating the full strip.
 The legacy `/api/video/zoom` route intentionally rejects segmented ln-map
 artifacts because it only knows how to warp a single strip.
 
@@ -94,8 +93,9 @@ scale = 2 * exp(kTop)
 ```
 
 这条路径用于 UI 快速确认 zoom 终点、构图和上色。对 `hist_eq`/`bands`/`frontier`
-这类整体染色模式，统计来自 preview strip，是低成本近似；完整导出默认仍可重新
-统计全尺寸 strip。
+这类整体染色模式，统计来自 preview strip，是低成本近似。`hist_eq` 完整导出
+会优先复用兼容的 preview equalization；复用时不会再跑 `ln_map_equalization`
+统计阶段，只会渲染高清导出 strip。
 
 ## Unified Export Flow / 统一导出流程
 
@@ -105,10 +105,10 @@ scale = 2 * exp(kTop)
 createRun("video-export")
   -> acquire video_export/cuda_heavy/cpu_heavy locks
   -> render final_frame.png at kTop_end
-  -> optionally build global ln-map color statistics (segmented hist_eq/bands/frontier)
+  -> optionally build global ln-map color statistics (only when preview stats cannot be reused)
   -> render ln_map.png + ln_map.json
   -> render start_frame.png and end_frame.png
-  -> generate zoom.mp4 by warping strip + final frame
+  -> generate zoom.mp4 by warping strip + final frame into one encoder stream
   -> write video_export.json report
   -> register artifacts
 ```
@@ -135,7 +135,8 @@ run writes normal artifacts under `runtime/runs/videos/<runId>/`.
 
 ## Warp And Encode / warp 与编码
 
-每一帧由 `generateZoomVideo()` 生成。采样规则：
+每一帧由 `generateZoomVideo()` / `generateZoomVideoSequence()` 生成。单片和分片
+都直接把 raw BGR frame 写进同一个编码器流。采样规则：
 
 ```text
 if strip_row is inside strip:
@@ -208,8 +209,8 @@ fullWidthS = ceil(sqrt(W^2 + H^2) * pi)
 - `queued`
 - `final_frame`
 - `ln_map`
-- `ln_map_equalization`（segmented `hist_eq`/`bands`/`frontier` 的全局统计 pass）
-- `ln_map_render`（这些全局染色模式的实际条带渲染 pass）
+- `ln_map_equalization`（segmented `hist_eq`/`bands`/`frontier` 且无法复用 preview stats 时的全局统计 pass）
+- `ln_map_render`（真正存在单独统计 pass 时的实际条带渲染 pass）
 - `video_warp_encode`
 - `completed`
 - `cancelled`

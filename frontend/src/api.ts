@@ -628,6 +628,7 @@ export interface VideoExportResponse {
   lnMapMode?: string
   lnMapColorMode?: LnMapColorMode
   lnMapStatsSource?: string
+  lnMapStatsReused?: boolean
   lnMapCyclesPerOctave?: number
   lnMapLayerSummary?: string
   lnMapValidationSummary?: string
@@ -667,6 +668,7 @@ export interface RunProgress {
   lnMapColorMode?: LnMapColorMode
   lnMapPass?: 'equalization' | 'render' | string
   lnMapStatsSource?: string
+  lnMapStatsReused?: boolean
   lnMapCyclesPerOctave?: number
   lnMapLayerSummary?: string
   lnMapValidationSummary?: string
