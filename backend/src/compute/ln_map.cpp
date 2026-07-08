@@ -2519,29 +2519,71 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
 
 #if USE_CUDA
     if (!rendered && batch_ok && wants_cuda && fsd_cuda::cuda_available()) {
-        fsd_cuda::CudaPerturbParams cp;
-        cp.width = S; cp.height = T; cp.iterations = max_iter;
-        cp.bailout_sq = bail2;
-        cp.offset_mode = 1;
-        cp.ln_r0 = LN_FOUR - p.row_offset * TAU / static_cast<double>(S);
-        cp.k_step = TAU / static_cast<double>(S);
-        cp.theta_step = TAU / static_cast<double>(S);
-        cp.julia = is_julia;
-        cp.dz_shift_re = dz_shift_re; cp.dz_shift_im = dz_shift_im;
-        cp.tab_re = tab_re; cp.tab_im = tab_im; cp.tab_len = tab_len;
-        cp.start_off = start_off; cp.start_len = start_len;
-        cp.k_off = k_off; cp.k_len = Klen;
-        std::vector<uint32_t> iters(static_cast<size_t>(S) * T);
-        std::vector<float> norms(static_cast<size_t>(S) * T);
-        if (fsd_cuda::cuda_render_perturb_field(cp, iters.data(), norms.data(), nullptr)) {
+        // Row-chunked (rather than one whole-field launch) so a solid-white
+        // chunk can short-circuit every deeper chunk in the same strip — same
+        // rationale as the CPU path's first_interior_row check below. Chunk
+        // size trades early-exit granularity against reference-table
+        // (tab_re/tab_im) re-upload overhead paid on every launch.
+        constexpr int kCudaPerturbChunkRows = 512;
+        const double base_ln_r0 = LN_FOUR - p.row_offset * TAU / static_cast<double>(S);
+        const double k_step = TAU / static_cast<double>(S);
+        const int chunk_cap = std::min(T, kCudaPerturbChunkRows);
+        std::vector<uint32_t> iters(static_cast<size_t>(S) * static_cast<size_t>(chunk_cap));
+        std::vector<float> norms(static_cast<size_t>(S) * static_cast<size_t>(chunk_cap));
+        bool cuda_ok = true;
+        int rows_filled = 0;
+        for (int row0 = 0; row0 < T; row0 += kCudaPerturbChunkRows) {
+            const int rows = std::min(kCudaPerturbChunkRows, T - row0);
+            fsd_cuda::CudaPerturbParams cp;
+            cp.width = S; cp.height = rows; cp.iterations = max_iter;
+            cp.bailout_sq = bail2;
+            cp.offset_mode = 1;
+            cp.ln_r0 = base_ln_r0 - static_cast<double>(row0) * k_step;
+            cp.k_step = k_step;
+            cp.theta_step = TAU / static_cast<double>(S);
+            cp.julia = is_julia;
+            cp.dz_shift_re = dz_shift_re; cp.dz_shift_im = dz_shift_im;
+            cp.tab_re = tab_re; cp.tab_im = tab_im; cp.tab_len = tab_len;
+            cp.start_off = start_off; cp.start_len = start_len;
+            cp.k_off = k_off; cp.k_len = Klen;
+            if (!fsd_cuda::cuda_render_perturb_field(cp, iters.data(), norms.data(), nullptr)) {
+                cuda_ok = false;
+                break;
+            }
             #pragma omp parallel for num_threads(thread_count) schedule(static)
-            for (int row = 0; row < T; ++row) {
+            for (int local_row = 0; local_row < rows; ++local_row) {
+                const size_t row_base = static_cast<size_t>(row0 + local_row) * S;
+                const size_t src_base = static_cast<size_t>(local_row) * S;
                 for (int x = 0; x < S; ++x) {
-                    const size_t idx = static_cast<size_t>(row) * S + x;
-                    sink(idx, static_cast<int>(iters[idx]));
+                    sink(row_base + x, static_cast<int>(iters[src_base + static_cast<size_t>(x)]));
                 }
             }
-            if (on_row_done) on_row_done(T);
+            rows_filled = row0 + rows;
+            if (on_row_done) on_row_done(rows_filled);
+
+            bool last_row_all_interior = true;
+            const size_t last_row_base = static_cast<size_t>(rows - 1) * S;
+            for (int x = 0; x < S; ++x) {
+                if (iters[last_row_base + static_cast<size_t>(x)] < static_cast<uint32_t>(max_iter)) {
+                    last_row_all_interior = false;
+                    break;
+                }
+            }
+            if (last_row_all_interior && rows_filled < T) {
+                // Deepest row of this chunk proved solid-white: every remaining,
+                // deeper row is guaranteed solid-white too (see the CPU path's
+                // identical argument) — fill it directly, no further launches.
+                #pragma omp parallel for num_threads(thread_count) schedule(static)
+                for (int row = rows_filled; row < T; ++row) {
+                    const size_t row_base = static_cast<size_t>(row) * S;
+                    for (int x = 0; x < S; ++x) sink(row_base + x, max_iter);
+                }
+                if (on_row_done) on_row_done(T);
+                rows_filled = T;
+                break;
+            }
+        }
+        if (cuda_ok) {
             engine_used = "cuda";
             rendered = true;
         }
@@ -2551,6 +2593,14 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
     if (!rendered) {
         const TrigColumns cols = make_trig_columns(S);
         std::atomic<int> rows_done{0};
+        // Set once a whole row (every column — a full ring at constant radius
+        // around the same center) comes back non-escaping: an interior point
+        // has an open neighbourhood inside the set, so every smaller radius —
+        // every row with a larger index — is guaranteed interior too. Rows
+        // already claimed by a thread when this fires just finish normally
+        // (bounded overshoot under dynamic scheduling); every row grabbed
+        // after it is filled directly, with no reference-orbit iteration.
+        std::atomic<int> first_interior_row{T};
 
         #pragma omp parallel num_threads(thread_count)
         {
@@ -2568,48 +2618,65 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
 
             #pragma omp for schedule(dynamic, 8)
             for (int row = 0; row < T; ++row) {
-                const double global_row = p.row_offset + static_cast<double>(row);
-                const double k = LN_FOUR - global_row * TAU / static_cast<double>(S);
-                const double r_mag = std::exp(k);
                 const size_t row_base = static_cast<size_t>(row) * S;
 
-                if (batch) {
-                    for (int x = 0; x < S; ++x) {
-                        const double off_re = r_mag * cols.cos_col[static_cast<size_t>(x)];
-                        const double off_im = r_mag * cols.sin_col[static_cast<size_t>(x)];
-                        if (is_julia) {
-                            bdz_re[static_cast<size_t>(x)] = off_re + dz_shift_re;
-                            bdz_im[static_cast<size_t>(x)] = off_im + dz_shift_im;
-                            bdc_re[static_cast<size_t>(x)] = 0.0;
-                            bdc_im[static_cast<size_t>(x)] = 0.0;
-                        } else {
-                            bdz_re[static_cast<size_t>(x)] = dz_shift_re;
-                            bdz_im[static_cast<size_t>(x)] = dz_shift_im;
-                            bdc_re[static_cast<size_t>(x)] = off_re;
-                            bdc_im[static_cast<size_t>(x)] = off_im;
+                if (row >= first_interior_row.load(std::memory_order_relaxed)) {
+                    for (int x = 0; x < S; ++x) sink(row_base + x, max_iter);
+                } else {
+                    const double global_row = p.row_offset + static_cast<double>(row);
+                    const double k = LN_FOUR - global_row * TAU / static_cast<double>(S);
+                    const double r_mag = std::exp(k);
+                    bool row_all_interior = true;
+
+                    if (batch) {
+                        for (int x = 0; x < S; ++x) {
+                            const double off_re = r_mag * cols.cos_col[static_cast<size_t>(x)];
+                            const double off_im = r_mag * cols.sin_col[static_cast<size_t>(x)];
+                            if (is_julia) {
+                                bdz_re[static_cast<size_t>(x)] = off_re + dz_shift_re;
+                                bdz_im[static_cast<size_t>(x)] = off_im + dz_shift_im;
+                                bdc_re[static_cast<size_t>(x)] = 0.0;
+                                bdc_im[static_cast<size_t>(x)] = 0.0;
+                            } else {
+                                bdz_re[static_cast<size_t>(x)] = dz_shift_re;
+                                bdz_im[static_cast<size_t>(x)] = dz_shift_im;
+                                bdc_re[static_cast<size_t>(x)] = off_re;
+                                bdc_im[static_cast<size_t>(x)] = off_im;
+                            }
+                        }
+                        batch(tab_re, tab_im, start_off, start_len, k_off, Klen,
+                              bdz_re.data(), bdz_im.data(), bdc_re.data(), bdc_im.data(),
+                              S, max_iter, bail2, b_iter.data(), b_mag2.data());
+                        for (int x = 0; x < S; ++x) {
+                            const int32_t it = b_iter[static_cast<size_t>(x)];
+                            if (it < max_iter) row_all_interior = false;
+                            sink(row_base + x, it);
+                        }
+                    } else {
+                        for (int x = 0; x < S; ++x) {
+                            const double off_re = r_mag * cols.cos_col[static_cast<size_t>(x)];
+                            const double off_im = r_mag * cols.sin_col[static_cast<size_t>(x)];
+
+                            const double dz0_re = is_julia ? off_re : 0.0;
+                            const double dz0_im = is_julia ? off_im : 0.0;
+                            const double dc_re  = is_julia ? 0.0 : off_re;
+                            const double dc_im  = is_julia ? 0.0 : off_im;
+
+                            const PerturbPixel res = perturb_iterate(
+                                Rr, Ri, Rlen, Kr, Ki, Klen,
+                                dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2);
+
+                            if (res.iter < max_iter) row_all_interior = false;
+                            sink(row_base + x, res.iter);
                         }
                     }
-                    batch(tab_re, tab_im, start_off, start_len, k_off, Klen,
-                          bdz_re.data(), bdz_im.data(), bdc_re.data(), bdc_im.data(),
-                          S, max_iter, bail2, b_iter.data(), b_mag2.data());
-                    for (int x = 0; x < S; ++x) {
-                        sink(row_base + x, b_iter[static_cast<size_t>(x)]);
-                    }
-                } else {
-                    for (int x = 0; x < S; ++x) {
-                        const double off_re = r_mag * cols.cos_col[static_cast<size_t>(x)];
-                        const double off_im = r_mag * cols.sin_col[static_cast<size_t>(x)];
 
-                        const double dz0_re = is_julia ? off_re : 0.0;
-                        const double dz0_im = is_julia ? off_im : 0.0;
-                        const double dc_re  = is_julia ? 0.0 : off_re;
-                        const double dc_im  = is_julia ? 0.0 : off_im;
-
-                        const PerturbPixel res = perturb_iterate(
-                            Rr, Ri, Rlen, Kr, Ki, Klen,
-                            dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2);
-
-                        sink(row_base + x, res.iter);
+                    if (row_all_interior) {
+                        int expected = first_interior_row.load(std::memory_order_relaxed);
+                        while (row < expected &&
+                               !first_interior_row.compare_exchange_weak(
+                                   expected, row, std::memory_order_relaxed)) {
+                        }
                     }
                 }
                 if (on_row_done) {

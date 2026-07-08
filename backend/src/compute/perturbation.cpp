@@ -43,17 +43,63 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace fsd::compute {
 
+namespace {
+
+// Reference-orbit caches. Within one video export, the same (center,
+// iterations, bailout[, julia_c]) reference orbit is independently
+// recomputed by the final-frame render, the ln-map hist_eq/bands/frontier
+// stats pass, and every video segment's own ln-map render — all sharing the
+// same underlying center point. Cache the most-precise orbit computed so far
+// (smallest `scale` tier requested) and reuse it whenever a later call needs
+// the same or less precision; recompute only when a strictly deeper scale is
+// requested. Single-entry each, mirroring ln_map.cpp's g_ln_field_cache.
+struct PlainOrbitCacheEntry {
+    bool valid = false;
+    double re = 0.0, im = 0.0;
+    int max_iter = 0;
+    double bailout_sq = 0.0;
+    RefOrbit orbit;
+};
+std::mutex g_plain_orbit_cache_mu;
+PlainOrbitCacheEntry g_plain_orbit_cache;
+
+struct AutoOrbitCacheEntry {
+    bool valid = false;
+    std::string re_str, im_str;
+    int max_iter = 0;
+    double bailout_sq = 0.0;
+    double scale = 0.0;
+    RefOrbit orbit;
+};
+std::mutex g_mandel_auto_orbit_cache_mu;
+AutoOrbitCacheEntry g_mandel_auto_orbit_cache;
+
+struct JuliaAutoOrbitCacheEntry {
+    bool valid = false;
+    std::string re_str, im_str;
+    double julia_re = 0.0, julia_im = 0.0;
+    int max_iter = 0;
+    double bailout_sq = 0.0;
+    double scale = 0.0;
+    RefOrbit orbit;
+};
+std::mutex g_julia_auto_orbit_cache_mu;
+JuliaAutoOrbitCacheEntry g_julia_auto_orbit_cache;
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Reference orbit computation at __float128 precision
 // ---------------------------------------------------------------------------
 
-RefOrbit compute_reference_orbit(
+static RefOrbit compute_reference_orbit_impl(
     double center_re, double center_im,
     int max_iter, double bailout_sq)
 {
@@ -116,6 +162,26 @@ RefOrbit compute_reference_orbit(
     ref.escaped = false;
 #endif
 
+    return ref;
+}
+
+RefOrbit compute_reference_orbit(
+    double center_re, double center_im,
+    int max_iter, double bailout_sq)
+{
+    {
+        std::lock_guard<std::mutex> lk(g_plain_orbit_cache_mu);
+        const auto& c = g_plain_orbit_cache;
+        if (c.valid && c.re == center_re && c.im == center_im &&
+            c.max_iter == max_iter && c.bailout_sq == bailout_sq) {
+            return c.orbit;
+        }
+    }
+    RefOrbit ref = compute_reference_orbit_impl(center_re, center_im, max_iter, bailout_sq);
+    {
+        std::lock_guard<std::mutex> lk(g_plain_orbit_cache_mu);
+        g_plain_orbit_cache = PlainOrbitCacheEntry{true, center_re, center_im, max_iter, bailout_sq, ref};
+    }
     return ref;
 }
 
@@ -190,7 +256,7 @@ static RefOrbit compute_reference_orbit_mpfr(
 // Precision-tiered dispatch: double → __float128 → MPFR
 // ---------------------------------------------------------------------------
 
-RefOrbit compute_reference_orbit_auto(
+static RefOrbit compute_reference_orbit_auto_impl(
     const std::string& cre_str, const std::string& cim_str,
     int max_iter, double bailout_sq, double scale)
 {
@@ -265,6 +331,28 @@ RefOrbit compute_reference_orbit_auto(
     double cre = std::stod(cre_str);
     double cim = std::stod(cim_str);
     return compute_reference_orbit(cre, cim, max_iter, bailout_sq);
+}
+
+RefOrbit compute_reference_orbit_auto(
+    const std::string& cre_str, const std::string& cim_str,
+    int max_iter, double bailout_sq, double scale)
+{
+    const bool cacheable = !cre_str.empty() && !cim_str.empty();
+    if (cacheable) {
+        std::lock_guard<std::mutex> lk(g_mandel_auto_orbit_cache_mu);
+        const auto& c = g_mandel_auto_orbit_cache;
+        if (c.valid && c.re_str == cre_str && c.im_str == cim_str &&
+            c.max_iter == max_iter && c.bailout_sq == bailout_sq &&
+            c.scale <= scale) {
+            return c.orbit;
+        }
+    }
+    RefOrbit ref = compute_reference_orbit_auto_impl(cre_str, cim_str, max_iter, bailout_sq, scale);
+    if (cacheable) {
+        std::lock_guard<std::mutex> lk(g_mandel_auto_orbit_cache_mu);
+        g_mandel_auto_orbit_cache = AutoOrbitCacheEntry{true, cre_str, cim_str, max_iter, bailout_sq, scale, ref};
+    }
+    return ref;
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +449,7 @@ static RefOrbit compute_reference_orbit_julia_mpfr(
 }
 #endif
 
-RefOrbit compute_reference_orbit_julia_auto(
+static RefOrbit compute_reference_orbit_julia_auto_impl(
     const std::string& z0_re_str, const std::string& z0_im_str,
     double julia_re, double julia_im,
     int max_iter, double bailout_sq, double scale)
@@ -422,6 +510,32 @@ RefOrbit compute_reference_orbit_julia_auto(
     const double z0im = std::stod(z0_im_str);
     return compute_reference_orbit_julia(z0re, z0im, julia_re, julia_im,
                                          max_iter, bailout_sq);
+}
+
+RefOrbit compute_reference_orbit_julia_auto(
+    const std::string& z0_re_str, const std::string& z0_im_str,
+    double julia_re, double julia_im,
+    int max_iter, double bailout_sq, double scale)
+{
+    const bool cacheable = !z0_re_str.empty() && !z0_im_str.empty();
+    if (cacheable) {
+        std::lock_guard<std::mutex> lk(g_julia_auto_orbit_cache_mu);
+        const auto& c = g_julia_auto_orbit_cache;
+        if (c.valid && c.re_str == z0_re_str && c.im_str == z0_im_str &&
+            c.julia_re == julia_re && c.julia_im == julia_im &&
+            c.max_iter == max_iter && c.bailout_sq == bailout_sq &&
+            c.scale <= scale) {
+            return c.orbit;
+        }
+    }
+    RefOrbit ref = compute_reference_orbit_julia_auto_impl(
+        z0_re_str, z0_im_str, julia_re, julia_im, max_iter, bailout_sq, scale);
+    if (cacheable) {
+        std::lock_guard<std::mutex> lk(g_julia_auto_orbit_cache_mu);
+        g_julia_auto_orbit_cache = JuliaAutoOrbitCacheEntry{
+            true, z0_re_str, z0_im_str, julia_re, julia_im, max_iter, bailout_sq, scale, ref};
+    }
+    return ref;
 }
 
 // ---------------------------------------------------------------------------

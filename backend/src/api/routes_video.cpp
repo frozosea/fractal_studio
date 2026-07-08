@@ -611,6 +611,24 @@ uint8_t clampByte(double v) {
     return static_cast<uint8_t>(v + 0.5);
 }
 
+// Every ln-map color mode paints a pixel that never escapes (it >= iterations)
+// solid white (colormap.hpp's colorize_escape_bgr and this file's
+// colorizeFinalFrameWithLnMapMode both do this before any palette switch). A
+// row that comes back fully white is therefore a full ring, at constant
+// radius around the zoom center, entirely inside the (filled) fractal set.
+// Interior points have an open neighbourhood contained in the set, so every
+// smaller radius around the same center — i.e. every deeper row/segment — is
+// guaranteed to be fully white too. Used to skip strip/final-frame work for
+// segments past the point a video has provably "landed" inside the set.
+bool isRowSolidWhite(const cv::Mat& img, int row) {
+    if (img.empty() || img.type() != CV_8UC3 || row < 0 || row >= img.rows) return false;
+    const uint8_t* p = img.ptr<uint8_t>(row);
+    for (int x = 0; x < img.cols; ++x) {
+        if (p[3 * x + 0] != 255 || p[3 * x + 1] != 255 || p[3 * x + 2] != 255) return false;
+    }
+    return true;
+}
+
 void sampleBgrBilinearBorder(const cv::Mat& img, double x, double y, uint8_t* dst) {
     double b = 0.0;
     double g = 0.0;
@@ -2225,9 +2243,11 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         throwIfCancelled(runner, run.id);
 
         const std::filesystem::path finalPath = std::filesystem::path(run.outputDir) / "final_frame.png";
+        bool finalFrameArtifactRegistered = false;
         if (!finalFrameDeferred) {
             compute::write_png(finalPath.string(), finalImg);
             runner.addArtifact(run.id, Artifact{"final-frame", finalPath.string(), "image"});
+            finalFrameArtifactRegistered = true;
         }
         setVideoProgress(runner, run.id, "final_frame", 1, 1, depth, depth,
                          "", "", Json{{"engine", finalStats.engine_used}, {"scalar", finalStats.scalar_used}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
@@ -2238,6 +2258,14 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             const std::string lnMapRenderStage =
                 separateLnMapStatsProgress ? "ln_map_render" : "ln_map";
             const bool keepSegmentFiles = j.value("keepIntermediateVideoFiles", false);
+            // Once a whole ln-map row comes back solid white (see isRowSolidWhite),
+            // every deeper segment is provably solid white too. Default: stop the
+            // export there and ship a shorter video ending right where it lands
+            // inside the set. false: keep the originally requested duration, padding
+            // the remaining segments with solid white instead of recomputing them.
+            const bool truncateOnInterior = j.value("truncateOnInterior", true);
+            bool confirmedInterior = false;
+            bool truncatedForInterior = false;
             const std::filesystem::path segmentTmpDir = std::filesystem::path(run.outputDir) / "_segments_tmp";
             std::filesystem::create_directories(segmentTmpDir);
             struct SegmentTempCleaner {
@@ -2349,7 +2377,14 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 compute::MapStats chunkFinalStats;
                 compute::FieldOutput chunkField;
                 bool chunkFinalDeferred = false;
-                if (lnMapColorMode == "escape") {
+                // Once an earlier segment proved solid-white (see isRowSolidWhite
+                // below), every later segment is guaranteed solid-white too — skip its
+                // final-frame render entirely instead of re-deriving the same color.
+                const bool skipHeavyCompute = confirmedInterior;
+                if (!isLast && skipHeavyCompute) {
+                    chunkFinal.setTo(cv::Scalar(255, 255, 255));
+                    chunkFinalStats.engine_used = "interior_skip";
+                } else if (lnMapColorMode == "escape") {
                     if (isLast) {
                         chunkFinal = finalImg;
                         chunkFinalStats = finalStats;
@@ -2369,28 +2404,46 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 throwIfCancelled(runner, run.id);
 
                 cv::Mat segStrip(seg.heightT, s, CV_8UC3);
-                compute::LnMapParams lp = makeLnParams(seg.heightT, seg.rowOffset);
-                if (segmentedEq.valid) lp.equalization_override = &segmentedEq;
-                if (segmentedCdf.valid()) lp.global_cdf_override = &segmentedCdf;
-                const int rowBase = rowsDoneTotal;
-                compute::LnMapStats segStats = compute::render_ln_map(
-                    lp, segStrip,
-                    [&](int rowsDone) {
-                        throwIfCancelled(runner, run.id);
-                        const int currentRows = std::min(stripPlan.totalSegmentRows, rowBase + rowsDone);
-                        const double local = std::clamp(
-                            static_cast<double>(rowsDone) / static_cast<double>(std::max(1, seg.heightT)),
-                            0.0, 1.0);
-                        const double currentDepth = std::min(depth, seg.startDepthOctaves + seg.depthOctaves * local);
-                        setVideoProgress(runner, run.id, lnMapRenderStage, currentRows, stripPlan.totalSegmentRows, currentDepth, depth,
-                                         "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", currentRows}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
-                    });
+                compute::LnMapStats segStats;
+                if (skipHeavyCompute) {
+                    segStrip.setTo(cv::Scalar(255, 255, 255));
+                    segStats.engine_used = "interior_skip";
+                    segStats.scalar_used = "interior_skip";
+                    segStats.pixel_count = s * seg.heightT;
+                } else {
+                    compute::LnMapParams lp = makeLnParams(seg.heightT, seg.rowOffset);
+                    if (segmentedEq.valid) lp.equalization_override = &segmentedEq;
+                    if (segmentedCdf.valid()) lp.global_cdf_override = &segmentedCdf;
+                    const int rowBase = rowsDoneTotal;
+                    segStats = compute::render_ln_map(
+                        lp, segStrip,
+                        [&](int rowsDone) {
+                            throwIfCancelled(runner, run.id);
+                            const int currentRows = std::min(stripPlan.totalSegmentRows, rowBase + rowsDone);
+                            const double local = std::clamp(
+                                static_cast<double>(rowsDone) / static_cast<double>(std::max(1, seg.heightT)),
+                                0.0, 1.0);
+                            const double currentDepth = std::min(depth, seg.startDepthOctaves + seg.depthOctaves * local);
+                            setVideoProgress(runner, run.id, lnMapRenderStage, currentRows, stripPlan.totalSegmentRows, currentDepth, depth,
+                                             "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", currentRows}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
+                        });
+                    // A fully-white deepest row proves every later segment lands solid
+                    // white too (see isRowSolidWhite's rationale) — the last segment
+                    // already ends the video, so it needs no truncation/skip decision.
+                    if (!isLast && isRowSolidWhite(segStrip, seg.heightT - 1)) {
+                        confirmedInterior = true;
+                        if (truncateOnInterior) truncatedForInterior = true;
+                    }
+                }
                 throwIfCancelled(runner, run.id);
                 compute::write_png(segStripPath.string(), segStrip);
                 if (isFirst) {
                     runner.addArtifact(run.id, Artifact{"ln-map", segStripPath.string(), "image"});
                 }
 
+                // Truncating: this segment's own (just-computed) landing frame becomes
+                // the video's actual final frame, same as reaching the true last segment.
+                const bool isFinalOutputSegment = isLast || truncatedForInterior;
                 if (chunkFinalDeferred) {
                     const compute::LnMapEqualization& chunkEq =
                         segmentedEq.valid ? segmentedEq : segStats.equalization;
@@ -2399,16 +2452,27 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                         (segStats.global_cdf.valid() ? &segStats.global_cdf : nullptr);
                     colorizeFinalFrameWithLnMapMode(chunkMp, chunkField, lnMapColorMode, chunkEq, chunkCdf, chunkFinal);
                     chunkField = compute::FieldOutput{};
-                    if (isLast) finalImg = chunkFinal;
                 }
-                if (isLast) {
-                    if (finalFrameDeferred) {
+                if (isFinalOutputSegment) finalImg = chunkFinal;
+                if (isFinalOutputSegment) {
+                    // finalFrameDeferred: mapped-mode overall final frame not written yet.
+                    // truncatedForInterior: the canonical final frame moved from the
+                    // originally requested depth to this (shallower) landing point.
+                    if (finalFrameDeferred || truncatedForInterior) {
                         compute::write_png(finalPath.string(), finalImg);
-                        runner.addArtifact(run.id, Artifact{"final-frame", finalPath.string(), "image"});
+                        if (!finalFrameArtifactRegistered) {
+                            runner.addArtifact(run.id, Artifact{"final-frame", finalPath.string(), "image"});
+                            finalFrameArtifactRegistered = true;
+                        }
                     }
                 } else {
                     compute::write_png(segFinalPath.string(), chunkFinal);
                 }
+                // Truncation can make isFinalOutputSegment true on a segment whose
+                // segFinalPath (computed above from isLast alone) is the temp path —
+                // record wherever the file actually landed, not that stale path.
+                const std::filesystem::path& recordedFinalPath =
+                    isFinalOutputSegment ? finalPath : segFinalPath;
 
                 rowsDoneTotal += seg.heightT;
                 lnStats.elapsed_ms += segStats.elapsed_ms;
@@ -2429,9 +2493,12 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     if (segStats.equalization.valid) lnStats.equalization = segStats.equalization;
                     if (segStats.global_cdf.valid()) lnStats.global_cdf = segStats.global_cdf;
                 }
-                renderedSegments.push_back(RenderedSegment{seg, segStripPath, segFinalPath, segStats, chunkFinalStats});
+                renderedSegments.push_back(RenderedSegment{seg, segStripPath, recordedFinalPath, segStats, chunkFinalStats});
                 setVideoProgress(runner, run.id, lnMapRenderStage, rowsDoneTotal, stripPlan.totalSegmentRows, seg.endDepthOctaves, depth,
                                  "", "", Json{{"engine", segStats.engine_used}, {"scalar", segStats.scalar_used}, {"lnMapEngine", segStats.engine_used}, {"lnMapScalar", segStats.scalar_used}, {"lnMapMode", segStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapPass", "render"}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", segStats.layer_summary}, {"lnMapValidationSummary", segStats.validation_summary}, {"currentLnMapRow", rowsDoneTotal}, {"totalLnMapRows", stripPlan.totalSegmentRows}, {"currentLnMapSegment", seg.index + 1}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapSegmentHeight", seg.heightT}});
+                // Landed solid-white and truncating: every remaining segment would be
+                // identical filler, so stop the export here instead of rendering it.
+                if (truncatedForInterior) break;
             }
             if (segmentedEq.valid) lnStats.equalization = segmentedEq;
             if (segmentedCdf.valid()) lnStats.global_cdf = segmentedCdf;
@@ -2440,6 +2507,17 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 lnStats.scalar_used = "segmented(" + lnStats.scalar_used + ")";
             }
             throwIfCancelled(runner, run.id);
+            if (truncatedForInterior && !renderedSegments.empty()) {
+                const VideoSegmentPlan& lastRendered = renderedSegments.back().plan;
+                frameCount = lastRendered.globalFrameEnd;
+                durSec = static_cast<double>(frameCount) / static_cast<double>(fps);
+            }
+            const double reportedDepth = truncatedForInterior && !renderedSegments.empty()
+                ? renderedSegments.back().plan.finalFrameDepthOctaves
+                : depth;
+            const double reportedKTopEnd = truncatedForInterior
+                ? (kTop_start - reportedDepth * LN_TWO)
+                : kTop_end;
 
             Json segJson = Json::array();
             for (const auto& seg : renderedSegments) {
@@ -2468,7 +2546,9 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"julia", julia}, {"juliaRe", jre}, {"juliaIm", jim},
                 {"rotationDeg", rotationDeg},
                 {"widthS", s}, {"actualWidthS", s}, {"fullWidthS", stripPlan.fullWidthS},
-                {"heightT", stripPlan.heightT}, {"depthOctaves", depth},
+                {"heightT", stripPlan.heightT}, {"depthOctaves", reportedDepth},
+                {"requestedDepthOctaves", depth},
+                {"interiorTruncated", truncatedForInterior},
                 {"segmented", true},
                 {"segmentCount", stripPlan.segmentCount},
                 {"maxSegmentHeightT", stripPlan.maxSegmentHeightT},
@@ -2514,7 +2594,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 rotationDeg, preferCudaWarp);
             const cv::Mat lastStrip = compute::read_png(renderedSegments.back().stripPath.string());
             const cv::Mat endPreview = renderZoomPreviewFrameSmart(
-                lastStrip, finalImg, W, H, kTop_end, kTop_end,
+                lastStrip, finalImg, W, H, reportedKTopEnd, reportedKTopEnd,
                 renderedSegments.back().plan.rowOffset,
                 rotationDeg, preferCudaWarp);
             const std::filesystem::path startPreviewPath = std::filesystem::path(run.outputDir) / "start_frame.png";
@@ -2524,7 +2604,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             runner.addArtifact(run.id, Artifact{"start-frame", startPreviewPath.string(), "image"});
             runner.addArtifact(run.id, Artifact{"end-frame",   endPreviewPath.string(),   "image"});
 
-            setVideoProgress(runner, run.id, "video_warp_encode", 0, frameCount, depth, depth,
+            setVideoProgress(runner, run.id, "video_warp_encode", 0, frameCount, reportedDepth, reportedDepth,
                              "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
             std::vector<ZoomSegmentVideoInput> videoInputs;
             videoInputs.reserve(renderedSegments.size());
@@ -2548,7 +2628,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                             break;
                         }
                     }
-                    setVideoProgress(runner, run.id, "video_warp_encode", clamped, frameCount, depth, depth,
+                    setVideoProgress(runner, run.id, "video_warp_encode", clamped, frameCount, reportedDepth, reportedDepth,
                                      "", "", Json{{"currentFrame", clamped}, {"totalFrames", frameCount}, {"currentLnMapSegment", currentSegment}, {"lnMapSegmentCount", stripPlan.segmentCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}});
                 },
                 &ffmpegStderr,
@@ -2561,7 +2641,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
 
             Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
             mergeVideoWarpStats(doneDetails, warpStats);
-            setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, depth, depth,
+            setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, reportedDepth, reportedDepth,
                              "", "", doneDetails);
             const std::string videoFile = std::filesystem::path(videoPath).filename().string();
             runner.addArtifact(run.id, Artifact{"zoom-video", videoPath, "video"});
@@ -2591,6 +2671,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"lnMapMaxSegmentHeight", stripPlan.maxSegmentHeightT},
                 {"lnMapTotalSegmentRows", stripPlan.totalSegmentRows},
                 {"rotationDeg", rotationDeg},
+                {"interiorTruncated", truncatedForInterior},
+                {"requestedDepthOctaves", depth},
             };
             mergeVideoWarpStats(renderLog, warpStats);
             const std::filesystem::path reportPath = std::filesystem::path(run.outputDir) / "video_export.json";
@@ -2637,8 +2719,10 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"fps",                fps},
                 {"durationSec",        durSec},
                 {"secondsPerOctave",   secondsPerOctave},
-                {"depthOctaves",       depth},
-                {"targetScale",        2.0 * std::exp(kTop_end)},
+                {"depthOctaves",       reportedDepth},
+                {"requestedDepthOctaves", depth},
+                {"interiorTruncated",  truncatedForInterior},
+                {"targetScale",        2.0 * std::exp(reportedKTopEnd)},
                 {"rotationDeg",        rotationDeg},
                 {"fullWidthS",         stripPlan.fullWidthS},
                 {"actualWidthS",       s},
