@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <regex>
+#include <stdexcept>
 #include <string>
 
 namespace fsd {
@@ -21,6 +22,24 @@ namespace fsd {
 constexpr int MAX_MAP_DIM = 8192;
 
 using Json = nlohmann::json;
+
+// A request that supplies a high-precision center-coordinate string (deep zooms need it
+// for perturbation reference orbits) must have that string win over the plain double —
+// otherwise a request that only sends the string, or sends a stale/mismatched double
+// alongside it, has the standard (non-perturbation) renderer silently fall back to the
+// double field's default instead of the intended point.
+inline double resolveCenterCoord(const std::string& preciseStr, double fallback) {
+    if (!preciseStr.empty()) {
+        try {
+            return std::stod(preciseStr);
+        } catch (const std::exception&) {
+            // Malformed string: fall back to the plain double rather than throw here —
+            // callers that need strict validation already parse the string themselves
+            // downstream (e.g. the perturbation reference-orbit path).
+        }
+    }
+    return fallback;
+}
 
 // Resolve a run's output directory from its id. Runs are stored grouped by product type
 // (runs/<category>/<runId>/); older runs are flat (runs/<runId>/). Checks the flat path first,

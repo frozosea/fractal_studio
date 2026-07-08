@@ -1627,10 +1627,10 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     cv::Mat strip  = compute::read_png(lk.pngPath.string());
 
     const double sidecarDepth = lk.sidecar.value("depthOctaves", 40.0);
-    const double cr           = lk.sidecar.value("centerRe",    0.0);
-    const double ci           = lk.sidecar.value("centerIm",    0.0);
     const std::string crStr   = lk.sidecar.value("centerReStr", std::string());
     const std::string ciStr   = lk.sidecar.value("centerImStr", std::string());
+    const double cr           = resolveCenterCoord(crStr, lk.sidecar.value("centerRe", 0.0));
+    const double ci           = resolveCenterCoord(ciStr, lk.sidecar.value("centerIm", 0.0));
     const int    iters        = lk.sidecar.value("iterations",  4096);
     const std::string variantStr  = lk.sidecar.value("variant",  std::string("mandelbrot"));
     const std::string colormapStr = lk.sidecar.value("colorMap", std::string("classic_cos"));
@@ -1798,12 +1798,12 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
     (void)repoRoot;
     const Json j = parseJsonBody(body);
 
-    const double cr         = j.value("centerRe", 0.0);
-    const double ci         = j.value("centerIm", 0.0);
     const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                               ? j["centerReStr"].get<std::string>() : std::string();
     const std::string ciStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
                               ? j["centerImStr"].get<std::string>() : std::string();
+    const double cr         = resolveCenterCoord(crStr, j.value("centerRe", 0.0));
+    const double ci         = resolveCenterCoord(ciStr, j.value("centerIm", 0.0));
     const bool   julia      = j.value("julia",    false);
     const double jre        = j.value("juliaRe",  0.0);
     const double jim        = j.value("juliaIm",  0.0);
@@ -2075,12 +2075,12 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const Json j = parseJsonBody(body);
     const std::string lnMapRunId = j.value("lnMapRunId", std::string(""));
 
-    const double cr         = j.value("centerRe", 0.0);
-    const double ci         = j.value("centerIm", 0.0);
     const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                               ? j["centerReStr"].get<std::string>() : std::string();
     const std::string ciStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
                               ? j["centerImStr"].get<std::string>() : std::string();
+    const double cr         = resolveCenterCoord(crStr, j.value("centerRe", 0.0));
+    const double ci         = resolveCenterCoord(ciStr, j.value("centerIm", 0.0));
     const bool   julia      = j.value("julia",    false);
     const double jre        = j.value("juliaRe",  0.0);
     const double jim        = j.value("juliaIm",  0.0);
@@ -3162,12 +3162,12 @@ std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, J
     (void)repoRoot;
     const Json j = parseJsonBody(body);
 
-    const double cr         = j.value("centerRe", 0.0);
-    const double ci         = j.value("centerIm", 0.0);
     const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                               ? j["centerReStr"].get<std::string>() : std::string();
     const std::string ciStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
                               ? j["centerImStr"].get<std::string>() : std::string();
+    const double cr         = resolveCenterCoord(crStr, j.value("centerRe", 0.0));
+    const double ci         = resolveCenterCoord(ciStr, j.value("centerIm", 0.0));
     const bool   julia      = j.value("julia",    false);
     const double jre        = j.value("juliaRe",  0.0);
     const double jim        = j.value("juliaIm",  0.0);
@@ -3327,12 +3327,12 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
     (void)repoRoot;
     const Json j = parseJsonBody(body);
 
-    const double cr         = j.value("centerRe", 0.0);
-    const double ci         = j.value("centerIm", 0.0);
     const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                               ? j["centerReStr"].get<std::string>() : std::string();
     const std::string ciStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
                               ? j["centerImStr"].get<std::string>() : std::string();
+    const double cr         = resolveCenterCoord(crStr, j.value("centerRe", 0.0));
+    const double ci         = resolveCenterCoord(ciStr, j.value("centerIm", 0.0));
     const bool   julia      = j.value("julia",    false);
     const double jre        = j.value("juliaRe",  0.0);
     const double jim        = j.value("juliaIm",  0.0);

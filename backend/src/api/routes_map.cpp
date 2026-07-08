@@ -260,8 +260,12 @@ MapRenderInput parseMapRenderInput(const std::string& body) {
     in.j = parseJsonBody(body);
     const Json& j = in.j;
 
-    in.cRe = j.value("centerRe", -0.75);
-    in.cIm = j.value("centerIm", 0.0);
+    in.cRe = resolveCenterCoord(
+        (j.contains("centerReStr") && j["centerReStr"].is_string()) ? j["centerReStr"].get<std::string>() : std::string(),
+        j.value("centerRe", -0.75));
+    in.cIm = resolveCenterCoord(
+        (j.contains("centerImStr") && j["centerImStr"].is_string()) ? j["centerImStr"].get<std::string>() : std::string(),
+        j.value("centerIm", 0.0));
     in.scale = j.value("scale", 3.0);
     in.width = j.value("width", 1024);
     in.height = j.value("height", 768);
@@ -722,8 +726,12 @@ std::string mapPreemptRoute(const std::string& body) {
 std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::string& body) {
     const Json j = parseJsonBody(body);
 
-    const double cRe     = j.value("centerRe",  -0.75);
-    const double cIm     = j.value("centerIm",   0.0);
+    const std::string cReStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
+                               ? j["centerReStr"].get<std::string>() : std::string();
+    const std::string cImStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
+                               ? j["centerImStr"].get<std::string>() : std::string();
+    const double cRe     = resolveCenterCoord(cReStr, j.value("centerRe",  -0.75));
+    const double cIm     = resolveCenterCoord(cImStr, j.value("centerIm",   0.0));
     const double scale   = j.value("scale",      3.0);
     const int width      = j.value("width",      256);
     const int height     = j.value("height",     256);
@@ -757,10 +765,8 @@ std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::stri
     p.center_re  = cRe;
     p.center_im  = cIm;
     p.scale      = scale;
-    if (j.contains("centerReStr") && j["centerReStr"].is_string())
-        p.center_re_str = j["centerReStr"].get<std::string>();
-    if (j.contains("centerImStr") && j["centerImStr"].is_string())
-        p.center_im_str = j["centerImStr"].get<std::string>();
+    p.center_re_str = cReStr;
+    p.center_im_str = cImStr;
     p.width      = width;
     p.height     = height;
     p.iterations = iters;

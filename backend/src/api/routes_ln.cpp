@@ -75,8 +75,12 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     (void)repoRoot;
     const Json j = parseJsonBody(body);
 
-    const double cr            = j.value("centerRe", 0.0);
-    const double ci            = j.value("centerIm", 0.0);
+    const std::string crStr    = (j.contains("centerReStr") && j["centerReStr"].is_string())
+                                  ? j["centerReStr"].get<std::string>() : std::string();
+    const std::string ciStr    = (j.contains("centerImStr") && j["centerImStr"].is_string())
+                                  ? j["centerImStr"].get<std::string>() : std::string();
+    const double cr            = resolveCenterCoord(crStr, j.value("centerRe", 0.0));
+    const double ci            = resolveCenterCoord(ciStr, j.value("centerIm", 0.0));
     const bool   julia         = j.value("julia", false);
     const double jre           = j.value("juliaRe", 0.0);
     const double jim           = j.value("juliaIm", 0.0);
@@ -194,10 +198,8 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         lp.julia = julia;
         lp.center_re = cr;
         lp.center_im = ci;
-        if (j.contains("centerReStr") && j["centerReStr"].is_string())
-            lp.center_re_str = j["centerReStr"].get<std::string>();
-        if (j.contains("centerImStr") && j["centerImStr"].is_string())
-            lp.center_im_str = j["centerImStr"].get<std::string>();
+        lp.center_re_str = crStr;
+        lp.center_im_str = ciStr;
         lp.julia_re = jre;
         lp.julia_im = jim;
         lp.width_s = s;
