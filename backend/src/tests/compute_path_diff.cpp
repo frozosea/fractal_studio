@@ -105,6 +105,15 @@ bool scalar_matches(const std::string& requested, const std::string& actual) {
     return expected_scalar_name(requested) == actual;
 }
 
+// Perturbation reports "perturb-<ref>-<delta>", where <ref> depends on the
+// depth tier ("fp128", "mpfr192", ...). These scenes expect fp64 deltas.
+bool perturb_fp64_scalar(const std::string& actual) {
+    const std::string suffix = "-fp64";
+    return actual.rfind("perturb-", 0) == 0 &&
+           actual.size() > suffix.size() &&
+           actual.compare(actual.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 std::string variant_slug(Variant variant) {
     return fsd::compute::variant_name(variant);
 }
@@ -1119,7 +1128,7 @@ void compare_perturbation_scene_to_fp128(
     remember_stats(runner, perturb.stats);
     remember_stats(runner, reference.stats);
 
-    if (perturb.stats.scalar_used != "perturbation_fp64" ||
+    if (!perturb_fp64_scalar(perturb.stats.scalar_used) ||
         reference.stats.engine_used != "openmp" ||
         !scalar_matches("fp128", reference.stats.scalar_used)) {
         ++runner.failed;
@@ -1202,7 +1211,7 @@ void compare_perturbation_scene_to_fp128(
             continue;
         }
         remember_stats(runner, alt.stats);
-        if (alt.stats.scalar_used != "perturbation_fp64" ||
+        if (!perturb_fp64_scalar(alt.stats.scalar_used) ||
             alt.field.iter_u32.size() != b.size()) {
             ++runner.failed;
             std::cerr << "[FAIL] " << scene.name << " engine " << eng
@@ -1222,7 +1231,7 @@ void compare_perturbation_scene_to_fp128(
 
 #if defined(FSD_HAS_MPFR)
 // Direct per-pixel MPFR iteration — the ground truth beyond fp128's ~34
-// significant digits (deep centers below ~1e-33 carry far more). Same
+// significant digits (deep centers carry far more). Same
 // step-then-check escape convention as the render kernels.
 void mpfr_direct_field(const MapParams& p, std::vector<uint32_t>& out) {
     const int W = p.width, H = p.height;
@@ -1323,7 +1332,7 @@ void compare_perturbation_1e301_to_mpfr(Runner& runner) {
     remember_stats(runner, perturb.stats);
 
     const auto& a = perturb.field.iter_u32;
-    if (perturb.stats.scalar_used != "perturbation_fp64" ||
+    if (!perturb_fp64_scalar(perturb.stats.scalar_used) ||
         a.size() != b.size() || a.size() != c.size() || a.empty()) {
         ++runner.failed;
         std::cerr << "[FAIL] " << scene.name << " scalar="
@@ -1405,7 +1414,7 @@ void compare_perturbation_envelope_to_fp128(Runner& runner) {
     const auto& a = perturb.field.field_f64;
     const auto& b = reference.field.field_f64;
     const auto& c = shifted.field.field_f64;
-    if (perturb.stats.scalar_used != "perturbation_fp64" ||
+    if (!perturb_fp64_scalar(perturb.stats.scalar_used) ||
         a.size() != b.size() || a.size() != c.size() || a.empty()) {
         ++runner.failed;
         std::cerr << "[FAIL] " << scene.name << " scalar="
@@ -1441,10 +1450,10 @@ void compare_perturbation_envelope_to_fp128(Runner& runner) {
 #endif
 }
 
-// Deep ln-map strip crossing the 1e-33 reference-precision tier (the video
-// route derives depthOctaves from targetScale with no 80-octave cap, so
-// 112-octave viewpoints produce strips whose innermost radius needs the MPFR
-// reference). Renders escape and hist_eq strips at ~119 total octaves and
+// Deep ln-map strip crossing the fp128→MPFR reference-precision tier at
+// kRefFp128MinScale = 1e-26 (the video route derives depthOctaves from
+// targetScale with no 80-octave cap, so 112-octave viewpoints produce strips
+// whose innermost radius needs the MPFR reference). Renders escape and hist_eq strips at ~119 total octaves and
 // checks the deep rows carry structure (not a flat/black band).
 void verify_deep_lnmap_strip(Runner& runner, const std::string& engine) {
 #if defined(FSD_HAS_FLOAT128) && defined(FSD_HAS_MPFR)
@@ -1483,7 +1492,7 @@ void verify_deep_lnmap_strip(Runner& runner, const std::string& engine) {
                       << " threw: " << ex.what() << "\n";
             continue;
         }
-        // Deep fifth of the strip (below the 1e-33 crossing at ~112 octaves).
+        // Deep fifth of the strip (well below the 1e-26 crossing at ~88 octaves).
         const int y0 = lp.height_t * 4 / 5;
         cv::Mat deep = strip.rowRange(y0, lp.height_t);
         double lum_sum = 0.0;

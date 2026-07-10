@@ -2444,7 +2444,11 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
         ref = compute_reference_orbit_julia_auto(
             p.center_re_str, p.center_im_str,
             p.julia_re, p.julia_im, max_iter, bail2, r_min);
-        crit = compute_reference_orbit(p.julia_re, p.julia_im, max_iter, bail2);
+        // The critical orbit is the long-term rebase target at the same
+        // depth, so it needs the same iteration-precision tier as the
+        // primary (c_julia itself is exact in every tier).
+        crit = compute_reference_orbit_scaled(p.julia_re, p.julia_im,
+                                              max_iter, bail2, r_min);
     } else {
         ref = compute_reference_orbit_auto(
             p.center_re_str, p.center_im_str, max_iter, bail2, r_min);

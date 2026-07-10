@@ -376,7 +376,7 @@ async function renderFrame() {
       emit('rendered', {
         generatedMs: resp.generatedMs,
         artifactId:  '',
-        engineUsed:  undefined,
+        engineUsed:  resp.engineUsed,
         scalarUsed:  resp.scalarUsed,
       })
     } catch (e: any) {

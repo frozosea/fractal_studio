@@ -1,7 +1,7 @@
 // compute/cuda/perturb_kernel.cuh
 //
 // Host-side interface to the CUDA perturbation renderer (deep-zoom
-// Mandelbrot/Julia, fp64 deltas with Zhuoran rebasing — mirrors
+// Mandelbrot/Julia, fp64 or fp32 deltas with Zhuoran rebasing — mirrors
 // fsd::compute::perturb_iterate).
 //
 // The reference data is one combined table: the primary orbit R selected by
@@ -33,6 +33,14 @@ struct CudaPerturbParams {
 
     // Julia: pixel offset enters as delta_z0 (dc = 0); else as delta_c.
     bool julia = false;
+
+    // Iterate deltas in fp32 instead of fp64. Consumer GPUs (RTX 40 series:
+    // 1:64 fp64:fp32 throughput) run this path dramatically faster. The
+    // reference table is downconverted to float on the host; pixel offsets
+    // are still generated in fp64 (once per pixel) before narrowing. Only
+    // sensible while |dz| stays clear of the fp32 denormal floor — callers
+    // gate by scale (good to ~1e-30).
+    bool fp32_delta = false;
 
     // Added to every pixel's initial delta_z. Non-zero only when the primary
     // orbit is degenerate (seed escaped instantly): pixels then start on K

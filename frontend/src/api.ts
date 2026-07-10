@@ -370,6 +370,7 @@ export interface MapFieldResponse {
   fieldMax?: number
   generatedMs: number
   scalarUsed?: string
+  engineUsed?: string
 }
 
 export interface LnMapRequest {

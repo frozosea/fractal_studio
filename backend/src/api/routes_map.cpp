@@ -795,6 +795,7 @@ std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::stri
         {"metric",      metricStr},
         {"generatedMs", stats.elapsed_ms},
         {"scalarUsed",  stats.scalar_used},
+        {"engineUsed",  stats.engine_used},
         {"maxIter",     iters},
     };
 

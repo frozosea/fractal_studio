@@ -706,7 +706,13 @@ const activeCenterImStr = () =>
 
 // ── Engine / scalar ───────────────────────────────────────────────────────────
 const engineMode = ref<'auto' | 'openmp' | 'avx2' | 'avx512' | 'cuda' | 'hybrid'>('auto')
-const scalarMode = ref<'auto' | 'fp32' | 'fp64' | 'fp80' | 'fp128' | 'fx64'>('auto')
+// Plain scalars, plus perturbation combos "perturb-<ref orbit>-<pixel delta>"
+// (deep-zoom Mandelbrot/Julia only; other variants fall back to the auto ladder).
+const scalarMode = ref<
+  'auto' | 'fp32' | 'fp64' | 'fp80' | 'fp128' | 'fx64'
+  | 'perturb-fp64-fp32' | 'perturb-fp128-fp32' | 'perturb-mpfr-fp32'
+  | 'perturb-fp128-fp64' | 'perturb-mpfr-fp64' | 'perturb-mpfr-fp128'
+>('auto')
 
 // ── Status rail sync ─────────────────────────────────────────────────────────
 const lastMs         = ref<number | null>(null)
@@ -1740,6 +1746,9 @@ async function pollVideoExport(initial: VideoExportResponse) {
           <option value="hybrid">CPU + GPU</option>
           <option value="openmp">{{ lang === 'en' ? 'CPU (basic)' : 'CPU（基础）' }}</option>
         </select>
+        <div v-if="engineMode === 'auto' && lastEngine" class="mono auto-resolved"
+             :title="lang === 'en' ? 'engine picked by auto for the last render' : '上次渲染 auto 实际选用的引擎'">
+          ↳ {{ lastEngine }}</div>
       </div>
 
       <div class="group">
@@ -1751,7 +1760,36 @@ async function pollVideoExport(initial: VideoExportResponse) {
           <option value="fp80">{{ lang === 'en' ? '80-bit (extended)' : '80 位（扩展）' }}</option>
           <option value="fp128">{{ lang === 'en' ? '128-bit (deep zoom)' : '128 位（深层缩放）' }}</option>
           <option value="fx64">{{ lang === 'en' ? 'Fixed 64-bit' : '定点 64 位' }}</option>
+          <optgroup :label="lang === 'en' ? 'Perturbation: ref orbit / pixel Δ' : '扰动：参考轨道 / 像素增量'">
+            <option value="perturb-fp64-fp32"
+              :title="lang === 'en' ? 'fp64 reference orbit, fp32 deltas — fastest on GPU; Mandelbrot/Julia, zoom to ~1e-12'
+                                    : 'fp64 参考轨道 + fp32 增量 — GPU 上最快；限 Mandelbrot/Julia，缩放约至 1e-12'">
+              {{ lang === 'en' ? '64 / 32 (GPU fast)' : '64 / 32（GPU 快速）' }}</option>
+            <option value="perturb-fp128-fp32"
+              :title="lang === 'en' ? '__float128 reference orbit, fp32 deltas — deep and fast; zoom to ~1e-26'
+                                    : '__float128 参考轨道 + fp32 增量 — 深且快；缩放约至 1e-26'">
+              {{ lang === 'en' ? '128 / 32 (to ~1e-26)' : '128 / 32（约至 1e-26）' }}</option>
+            <option value="perturb-mpfr-fp32"
+              :title="lang === 'en' ? 'MPFR reference orbit, fp32 deltas — fp32 range limits depth to ~1e-30'
+                                    : 'MPFR 参考轨道 + fp32 增量 — fp32 范围限制深度约至 1e-30'">
+              {{ lang === 'en' ? 'MPFR / 32 (to ~1e-30)' : 'MPFR / 32（约至 1e-30）' }}</option>
+            <option value="perturb-fp128-fp64"
+              :title="lang === 'en' ? '__float128 reference orbit, fp64 deltas — exact to ~1e-26'
+                                    : '__float128 参考轨道 + fp64 增量 — 精确至约 1e-26'">
+              {{ lang === 'en' ? '128 / 64 (to ~1e-26)' : '128 / 64（约至 1e-26）' }}</option>
+            <option value="perturb-mpfr-fp64"
+              :title="lang === 'en' ? 'MPFR reference orbit, fp64 deltas — the deepest practical mode (~1e-305)'
+                                    : 'MPFR 参考轨道 + fp64 增量 — 实际可用的最深模式（约 1e-305）'">
+              {{ lang === 'en' ? 'MPFR / 64 (deepest)' : 'MPFR / 64（最深）' }}</option>
+            <option value="perturb-mpfr-fp128"
+              :title="lang === 'en' ? 'MPFR reference orbit, __float128 deltas — slow oracle/validation mode'
+                                    : 'MPFR 参考轨道 + __float128 增量 — 慢速校验模式'">
+              {{ lang === 'en' ? 'MPFR / 128 (oracle)' : 'MPFR / 128（校验）' }}</option>
+          </optgroup>
         </select>
+        <div v-if="scalarMode === 'auto' && lastScalar" class="mono auto-resolved"
+             :title="lang === 'en' ? 'scalar picked by auto for the last render' : '上次渲染 auto 实际选用的标量'">
+          ↳ {{ lastScalar }}</div>
       </div>
 
       <div class="spacer"></div>
@@ -2230,6 +2268,14 @@ async function pollVideoExport(initial: VideoExportResponse) {
   display: flex;
   flex-direction: column;
   min-width: 100px;
+}
+
+/* Resolved engine/scalar shown under an "auto" select after each render. */
+.auto-resolved {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  white-space: nowrap;
 }
 
 .group.transition-group { min-width: 340px; }

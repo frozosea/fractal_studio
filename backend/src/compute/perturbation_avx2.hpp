@@ -34,4 +34,15 @@ void perturb_iterate_batch_avx2(
     int count, int max_iter, double bail2,
     int32_t* out_iter, double* out_mag2) noexcept;
 
+// fp32-delta variant: eight lanes per vector against a float reference
+// table (the driver downconverts the double orbit once per render).
+void perturb_iterate_batch_avx2_fp32(
+    const float* tab_re, const float* tab_im,
+    int start_off, int start_len,
+    int k_off, int k_len,
+    const float* dz0_re, const float* dz0_im,
+    const float* dc_re, const float* dc_im,
+    int count, int max_iter, float bail2,
+    int32_t* out_iter, float* out_mag2) noexcept;
+
 } // namespace fsd::compute

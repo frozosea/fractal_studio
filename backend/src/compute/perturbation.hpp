@@ -2,10 +2,12 @@
 //
 // Perturbation-theory renderer for deep-zoom Mandelbrot and Julia.
 //
-// Computes reference orbits at high precision (double / __float128 / MPFR
-// tiered by scale), then uses fp64 perturbation deltas (delta_z) for all
-// pixels. This enables rendering at zoom depths far beyond fp64's ~1e-15
-// limit while keeping per-pixel work in fast fp64 arithmetic.
+// Computes reference orbits at high precision (double / __float128 / MPFR,
+// tiered by scale or pinned by the scalar_type combo), then iterates
+// per-pixel deltas (delta_z) in a selectable precision — fp32, fp64 or
+// __float128. fp64 deltas are the default; fp32 deltas trade the deepest
+// range for large SIMD/GPU speedups (consumer GPUs run fp32 32–64x faster
+// than fp64); __float128 deltas are an oracle/validation mode.
 //
 // Pixels use Zhuoran-style rebasing: whenever the full orbit |Z_m + dz|
 // drops below |dz|, or the reference orbit data runs out, the pixel is
@@ -24,13 +26,18 @@
 // variants break analyticity with abs-value folds, making the perturbation
 // formula piecewise and significantly more complex.
 //
-// Depth range: exact down to scale ~1e-305 (verified against an MPFR oracle
-// at 1.8e-301). fp64 deltas stay normal that deep because |dz| >= |dc| ~
-// scale and the flushed dz^2 underflow terms are genuinely negligible. The
-// remaining wall is representation, not arithmetic: pixel offsets denormalize
-// below ~1e-305, and MapParams::scale itself is a double (min normal
-// 2.2e-308) — going deeper needs an extended scale representation through
-// the API plus floatexp deltas.
+// Depth ranges by delta precision (reference orbit precision must also
+// cover the depth — see kRefFp128MinScale below):
+//   fp32   exact-looking down to scale ~1e-30: |dz| quanta stay above the
+//          fp32 denormal floor (2^-149) with the ~2^-24 relative delta
+//          precision; degrades gracefully below, unusable past ~1e-38.
+//   fp64   exact down to scale ~1e-305 (verified against an MPFR oracle at
+//          1.8e-301). The remaining wall is representation, not arithmetic:
+//          pixel offsets denormalize below ~1e-305, and MapParams::scale
+//          itself is a double (min normal 2.2e-308).
+//   fp128  validation mode; extends the arithmetic headroom to the scale
+//          representation wall (~2.2e-308). Pixel offsets are computed in
+//          __float128 for this mode, so dc carries full 113-bit precision.
 
 #pragma once
 
@@ -41,9 +48,20 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace fsd::compute {
+
+// Auto reference-orbit tier: keep __float128 only while it retains a healthy
+// guard margin. The reference orbit is iterated at 113-bit precision and its
+// error compounds with the orbit's Lyapunov growth (~1/scale near escape), so
+// the usable depth is mantissa bits minus a guard band. Rebase-seam tearing
+// was observed in the field at ~110 octaves (scale ~3e-33, i.e. ~108 zoom
+// bits — only ~5 guard bits) under the old 1e-33 cutoff. 1e-26 (~86 zoom
+// bits) keeps >= ~26 guard bits; below it the auto tier switches to MPFR,
+// whose precision tracks the scale (zoom bits + 64).
+inline constexpr double kRefFp128MinScale = 1e-26;
 
 struct RefOrbit {
     std::vector<double> z_re;
@@ -51,17 +69,30 @@ struct RefOrbit {
     int    length   = 0;
     bool   escaped  = false;
     double bail2    = 4.0;
+    // Precision actually used to iterate the orbit: "fp64", "fp128", or
+    // "mpfr<bits>" (e.g. "mpfr192"). Reported through MapStats::scalar_used.
+    std::string prec_used = "fp64";
 };
 
 RefOrbit compute_reference_orbit(
     double center_re, double center_im,
     int max_iter, double bailout_sq);
 
-// Precision-tiered overload: selects double / __float128 / MPFR based on scale.
-// String coordinates parsed at full precision for the reference orbit.
+// Scale-aware variant for double-defined centers (Julia critical orbits, API
+// calls without decimal strings): tiers fp128 / MPFR like the string path —
+// the double center is exact in every tier, but the *iteration* still needs
+// enough precision for the requested depth. `ref_prec` pins the tier.
+RefOrbit compute_reference_orbit_scaled(
+    double center_re, double center_im,
+    int max_iter, double bailout_sq, double scale,
+    PerturbRefPrec ref_prec = PerturbRefPrec::Auto);
+
+// Precision-tiered overload: selects fp128 / MPFR based on scale (or the
+// explicit `ref_prec`). String coordinates parsed at full precision.
 RefOrbit compute_reference_orbit_auto(
     const std::string& center_re_str, const std::string& center_im_str,
-    int max_iter, double bailout_sq, double scale);
+    int max_iter, double bailout_sq, double scale,
+    PerturbRefPrec ref_prec = PerturbRefPrec::Auto);
 
 RefOrbit compute_reference_orbit_julia(
     double z0_re, double z0_im,
@@ -71,11 +102,14 @@ RefOrbit compute_reference_orbit_julia(
 RefOrbit compute_reference_orbit_julia_auto(
     const std::string& z0_re_str, const std::string& z0_im_str,
     double julia_re, double julia_im,
-    int max_iter, double bailout_sq, double scale);
+    int max_iter, double bailout_sq, double scale,
+    PerturbRefPrec ref_prec = PerturbRefPrec::Auto);
 
 // ---------------------------------------------------------------------------
-// Per-pixel fp64 delta iteration with rebasing, shared by the cartesian and
-// ln-map renderers (and mirrored by the AVX2/CUDA kernels).
+// Per-pixel delta iteration with rebasing, shared by the cartesian and
+// ln-map renderers (and mirrored by the AVX2/AVX-512/CUDA kernels). The
+// delta scalar D is fp32 / fp64 / __float128; reference tables are stored in
+// D as well (the driver converts once per render).
 // ---------------------------------------------------------------------------
 
 struct PerturbPixel {
@@ -104,23 +138,28 @@ struct PerturbPixel {
 //
 // Glitch-free by construction: rebases onto K's start whenever significance
 // would be lost or the current orbit's data ends.
-template <bool TrackMinMax = false>
+template <bool TrackMinMax = false, typename D = double>
 inline PerturbPixel perturb_iterate(
-    const double* Rr, const double* Ri, int r_len,
-    const double* Kr, const double* Ki, int k_len,
-    double dz0_re, double dz0_im,
-    double dc_re, double dc_im,
-    int max_iter, double bail2) noexcept
+    const D* Rr, const D* Ri, int r_len,
+    const D* Kr, const D* Ki, int k_len,
+    D dz0_re, D dz0_im,
+    D dc_re, D dc_im,
+    int max_iter, D bail2) noexcept
 {
     PerturbPixel out;
     out.iter = max_iter;
 
-    const double* Or = Rr;
-    const double* Oi = Ri;
+    const D* Or = Rr;
+    const D* Oi = Ri;
     int olen = r_len;
     int m = 0;  // reference orbit index, decoupled from pixel iteration n
 
-    double dz_re = dz0_re, dz_im = dz0_im;
+    D dz_re = dz0_re, dz_im = dz0_im;
+
+    // double inf converts to D's inf for every supported D (fp32/fp64/fp128),
+    // avoiding a numeric_limits<__float128> dependency in strict-ANSI builds.
+    D min_mag2 = D(std::numeric_limits<double>::infinity());
+    D max_mag2 = D(0);
 
     if (olen < 2) {
         // Degenerate primary orbit (its seed already escaped): rebase to K
@@ -131,36 +170,41 @@ inline PerturbPixel perturb_iterate(
         if (olen < 2) return out;
     }
 
+    const D two = D(2);
     for (int n = 0; n < max_iter; ++n) {
-        const double two_Zr = 2.0 * Or[m];
-        const double two_Zi = 2.0 * Oi[m];
+        const D two_Zr = two * Or[m];
+        const D two_Zi = two * Oi[m];
 
         // dz' = 2*Z_m*dz + dz^2 + dc
-        const double new_dz_re = two_Zr * dz_re - two_Zi * dz_im
-                               + dz_re * dz_re - dz_im * dz_im + dc_re;
-        const double new_dz_im = two_Zr * dz_im + two_Zi * dz_re
-                               + 2.0 * dz_re * dz_im + dc_im;
+        const D new_dz_re = two_Zr * dz_re - two_Zi * dz_im
+                          + dz_re * dz_re - dz_im * dz_im + dc_re;
+        const D new_dz_im = two_Zr * dz_im + two_Zi * dz_re
+                          + two * dz_re * dz_im + dc_im;
         dz_re = new_dz_re;
         dz_im = new_dz_im;
 
-        const double z_re = Or[m + 1] + dz_re;
-        const double z_im = Oi[m + 1] + dz_im;
-        const double mag2 = z_re * z_re + z_im * z_im;
+        const D z_re = Or[m + 1] + dz_re;
+        const D z_im = Oi[m + 1] + dz_im;
+        const D mag2 = z_re * z_re + z_im * z_im;
 
         if constexpr (TrackMinMax) {
-            if (mag2 < out.min_mag2) out.min_mag2 = mag2;
-            if (mag2 > out.max_mag2) out.max_mag2 = mag2;
+            if (mag2 < min_mag2) min_mag2 = mag2;
+            if (mag2 > max_mag2) max_mag2 = mag2;
         }
 
         if (mag2 > bail2) {
             out.iter = n;
             out.escaped = true;
-            out.escape_mag2 = mag2;
+            out.escape_mag2 = static_cast<double>(mag2);
+            if constexpr (TrackMinMax) {
+                out.min_mag2 = static_cast<double>(min_mag2);
+                out.max_mag2 = static_cast<double>(max_mag2);
+            }
             return out;
         }
 
         ++m;
-        const double dz_mag2 = dz_re * dz_re + dz_im * dz_im;
+        const D dz_mag2 = dz_re * dz_re + dz_im * dz_im;
         if (mag2 < dz_mag2 || m + 1 >= olen) {
             // Rebase: the full orbit is closer to K_0 = 0 than to Z_m, or the
             // orbit data ends. dz <- z is exact because K_0 = 0.
@@ -169,6 +213,10 @@ inline PerturbPixel perturb_iterate(
             Or = Kr; Oi = Ki; olen = k_len;
             m = 0;
         }
+    }
+    if constexpr (TrackMinMax) {
+        out.min_mag2 = static_cast<double>(min_mag2);
+        out.max_mag2 = static_cast<double>(max_mag2);
     }
     return out;
 }

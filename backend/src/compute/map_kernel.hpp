@@ -107,6 +107,53 @@ inline bool map_scalar_type_is_auto(const std::string& scalar) noexcept {
     return scalar.empty() || scalar == "auto";
 }
 
+// ---------------------------------------------------------------------------
+// Perturbation precision combos.
+//
+// scalar_type can pin both halves of the perturbation renderer:
+//   "perturbation"            auto reference tier, fp64 deltas (legacy alias)
+//   "perturb-<ref>-<delta>"   ref   ∈ { fp64, fp128, mpfr, auto }
+//                             delta ∈ { fp32, fp64, fp128 }
+// e.g. "perturb-fp128-fp32" = __float128 reference orbit, fp32 pixel deltas.
+// Underscores are accepted in place of dashes.
+// ---------------------------------------------------------------------------
+
+enum class PerturbRefPrec   { Auto, Fp64, Fp128, Mpfr };
+enum class PerturbDeltaPrec { Fp32, Fp64, Fp128 };
+
+struct PerturbMode {
+    bool             requested = false;   // scalar_type names perturbation explicitly
+    PerturbRefPrec   ref       = PerturbRefPrec::Auto;
+    PerturbDeltaPrec delta     = PerturbDeltaPrec::Fp64;
+};
+
+inline PerturbMode map_scalar_perturb_mode(const std::string& scalar) noexcept {
+    PerturbMode mode;
+    if (scalar == "perturbation" || scalar == "perturb") {
+        mode.requested = true;
+        return mode;
+    }
+    std::string s = scalar;
+    std::replace(s.begin(), s.end(), '_', '-');
+    if (s.rfind("perturb-", 0) != 0) return mode;
+    const std::string body = s.substr(8);
+    const auto dash = body.find('-');
+    if (dash == std::string::npos) return mode;
+    const std::string ref = body.substr(0, dash);
+    const std::string dlt = body.substr(dash + 1);
+    if      (ref == "auto")  mode.ref = PerturbRefPrec::Auto;
+    else if (ref == "fp64")  mode.ref = PerturbRefPrec::Fp64;
+    else if (ref == "fp128") mode.ref = PerturbRefPrec::Fp128;
+    else if (ref == "mpfr")  mode.ref = PerturbRefPrec::Mpfr;
+    else return mode;
+    if      (dlt == "fp32")  mode.delta = PerturbDeltaPrec::Fp32;
+    else if (dlt == "fp64")  mode.delta = PerturbDeltaPrec::Fp64;
+    else if (dlt == "fp128") mode.delta = PerturbDeltaPrec::Fp128;
+    else return mode;
+    mode.requested = true;
+    return mode;
+}
+
 inline double map_pixel_step(const MapParams& p) noexcept {
     if (!(p.scale > 0.0) || p.height <= 0 || !std::isfinite(p.scale)) return 0.0;
     return p.scale / static_cast<double>(p.height);
@@ -134,7 +181,11 @@ inline std::string map_effective_scalar_type(const MapParams& p) {
     if (map_scalar_type_is_fp64(p.scalar_type)) return "fp64";
     if (map_scalar_type_is_fp80(p.scalar_type)) return "fp80";
     if (map_scalar_type_is_fp128(p.scalar_type)) return "fp128";
-    if (!map_scalar_type_is_auto(p.scalar_type)) return p.scalar_type;
+    // Perturbation combos are handled by the perturbation renderer; when a
+    // request carrying one lands on a non-perturbation path (other variant or
+    // metric), fall through to the auto ladder instead of leaking the token.
+    if (!map_scalar_type_is_auto(p.scalar_type) &&
+        !map_scalar_perturb_mode(p.scalar_type).requested) return p.scalar_type;
 
     // Auto precision ladder by zoom depth.
     // Perturbation (handled separately in render_map) covers Mandelbrot+Escape
