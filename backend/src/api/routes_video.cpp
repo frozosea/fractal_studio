@@ -194,6 +194,18 @@ bool opencv_remap_size_safe(const cv::Mat& src, int dstW, int dstH) {
         && dstH < OPENCV_REMAP_DIM_LIMIT;
 }
 
+// A zoom frame's pixels reach out to the frame corner — rMax = sqrt(aspect²+1)
+// times the half-height. A segment's fallback frame must therefore be rendered
+// log2(rMax) octaves shallower than the strip bottom (plus a feather/bilinear
+// margin), or the strip-exhausted disk pokes past the frame's covered rect and
+// samples the black border: the "black circle around a rectangle" artifact at
+// the center of the deepest frames of every non-last segment.
+double finalFrameSlackOctaves(int W, int H) {
+    const double aspect = static_cast<double>(W) / static_cast<double>(std::max(1, H));
+    const double rMax = std::sqrt(aspect * aspect + 1.0);
+    return std::log2(rMax) + 0.15;
+}
+
 StripPlan resolveStripPlan(const Json& j, int W, int H, double depthOctaves, const std::string& colorMode) {
     StripPlan plan;
     plan.fullWidthS = derivedMinStripWidth(W, H);
@@ -217,6 +229,14 @@ StripPlan resolveStripPlan(const Json& j, int W, int H, double depthOctaves, con
     if (!(plan.extraOctaves >= 2.0) || plan.extraOctaves > 16.0 || !std::isfinite(plan.extraOctaves)) {
         throw std::runtime_error("invalid lnMapExtraOctaves (2..16)");
     }
+
+    // Segmented exports render each non-last segment's fallback frame
+    // finalFrameSlackOctaves() shallower than the strip bottom so it covers
+    // the whole strip-exhausted disk (see buildVideoSegmentPlans). The extra
+    // padding must leave room for that slack, or the deepest frames of a
+    // segment would out-zoom their own fallback frame.
+    const double minExtraForSlack = finalFrameSlackOctaves(W, H) + 0.5;
+    if (plan.extraOctaves < minExtraForSlack) plan.extraOctaves = minExtraForSlack;
 
     const double rowsPerOctave = LN_TWO / TAU * static_cast<double>(plan.actualWidthS);
     plan.extraRows = std::max(1, static_cast<int>(std::ceil(plan.extraOctaves * rowsPerOctave)));
@@ -377,7 +397,8 @@ std::vector<VideoSegmentPlan> buildVideoSegmentPlans(
     double depthOctaves,
     double secondsPerOctave,
     int fps,
-    int globalFrameCount
+    int globalFrameCount,
+    double finalFrameSlack
 ) {
     std::vector<VideoSegmentPlan> segments;
     const double octavesPerRow = lnMapOctavesPerRow(plan.actualWidthS);
@@ -404,9 +425,16 @@ std::vector<VideoSegmentPlan> buildVideoSegmentPlans(
         if (!(seg.endDepthOctaves > seg.startDepthOctaves)) {
             seg.endDepthOctaves = std::min(depthOctaves, seg.startDepthOctaves + static_cast<double>(depthRows) * octavesPerRow);
         }
+        // Non-last segments: keep the fallback frame finalFrameSlack octaves
+        // shallower than the strip bottom (endDepth + extraOctaves) so its
+        // half-height covers the whole strip-exhausted disk, corners included
+        // (see finalFrameSlackOctaves). resolveStripPlan guarantees
+        // extraOctaves > finalFrameSlack.
         seg.finalFrameDepthOctaves = isLastRowSegment
             ? depthOctaves
-            : std::min(depthOctaves, seg.endDepthOctaves + plan.extraOctaves);
+            : std::min(depthOctaves,
+                       seg.endDepthOctaves +
+                           std::max(0.25, plan.extraOctaves - finalFrameSlack));
         seg.heightT = depthRows + plan.extraRows;
 
         const int frameStart = nextFrame;
@@ -1212,14 +1240,20 @@ static std::string encodeZoomVideoFrames(
     const std::string inputArgs =
         "ffmpeg -y -f rawvideo -pix_fmt bgr24 -s " + std::to_string(W) + "x" + std::to_string(H) +
         " -r " + std::to_string(fps) + " -i - -an ";
+    // NVENC's -cq is a *target*, not a ceiling: on dense deep-zoom frames the
+    // per-frame quantizer was observed drifting to QP 39 (visible blocking).
+    // Pin VBR constant-quality mode, cap QP, and enable adaptive quantization
+    // so noisy fractal detail gets bits where it matters.
     if (commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_nvenc\"")) {
         ffmpegCmds.push_back({"h264_nvenc",
-            inputArgs + "-c:v h264_nvenc -pix_fmt yuv420p -preset p5 -cq 18 \"" + tmpMp4.string() +
+            inputArgs + "-c:v h264_nvenc -pix_fmt yuv420p -preset p5 -rc vbr -cq 18 -b:v 0"
+            " -qmax 28 -spatial-aq 1 -temporal-aq 1 \"" + tmpMp4.string() +
             "\" 2>\"" + ffmpegErrTmp.string() + "\""});
     }
     if (commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q hevc_nvenc\"")) {
         ffmpegCmds.push_back({"hevc_nvenc",
-            inputArgs + "-c:v hevc_nvenc -pix_fmt yuv420p -preset p5 -cq 20 \"" + tmpMp4.string() +
+            inputArgs + "-c:v hevc_nvenc -pix_fmt yuv420p -preset p5 -rc vbr -cq 20 -b:v 0"
+            " -qmax 30 -spatial_aq 1 -temporal_aq 1 \"" + tmpMp4.string() +
             "\" 2>\"" + ffmpegErrTmp.string() + "\""});
     }
     ffmpegCmds.push_back({"libx264",
@@ -2110,7 +2144,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const StripPlan stripPlan = resolveStripPlan(j, W, H, depth, lnMapColorMode);
     const int s = stripPlan.actualWidthS;
     const std::vector<VideoSegmentPlan> videoSegments =
-        buildVideoSegmentPlans(stripPlan, depth, secondsPerOctave, fps, frameCount);
+        buildVideoSegmentPlans(stripPlan, depth, secondsPerOctave, fps, frameCount,
+                               finalFrameSlackOctaves(W, H));
     if (stripPlan.segmentCount > 1 && totalFramesForSegments(videoSegments) != frameCount) {
         frameCount = totalFramesForSegments(videoSegments);
         durSec = static_cast<double>(frameCount) / static_cast<double>(fps);
@@ -2373,6 +2408,14 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 compute::MapParams chunkMp = mp;
                 const double chunkKTopEnd = kTop_start - seg.finalFrameDepthOctaves * LN_TWO;
                 chunkMp.scale = 2.0 * std::exp(chunkKTopEnd);
+                // Fast mode: fallback frames in the perturbation range render
+                // with fp32 deltas while safely above the fp32 depth floor
+                // (~1e-30; see perturbation.hpp). Falls back to the auto
+                // ladder automatically for non-Mandelbrot variants.
+                if (lnMapMode == "fast" &&
+                    chunkMp.scale < 1e-13 && chunkMp.scale >= 1e-30) {
+                    chunkMp.scalar_type = "perturb-auto-fp32";
+                }
                 cv::Mat chunkFinal(H, W, CV_8UC3);
                 compute::MapStats chunkFinalStats;
                 compute::FieldOutput chunkField;

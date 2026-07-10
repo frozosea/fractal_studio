@@ -946,7 +946,6 @@ const exportFps       = ref(30)
 const exportSecondsPerOctave = ref(0.4)
 const exportQualityPreset = ref<'draft' | 'balanced' | 'high' | 'full'>('balanced')
 const exportLnMapMode = ref<'standard' | 'fast'>('fast')
-const exportLnMapScalar = ref<'auto' | 'fp64' | 'fx64'>('auto')
 const exportLnMapColorMode = ref<LnMapColorMode>('escape')
 const exportCyclesPerOctave = ref(0.5)
 const exportW         = ref(1920)
@@ -1323,7 +1322,6 @@ function videoRequestBase() {
     rotationDeg:  rotationDeg.value || undefined,
     qualityPreset: exportQualityPreset.value,
     lnMapMode:    exportLnMapMode.value,
-    lnMapScalar:  exportLnMapScalar.value,
     lnMapStatsRunId: exportLnMapColorMode.value === 'hist_eq' && lnMapPreviewRunId.value ? lnMapPreviewRunId.value : undefined,
     background: true,
     localExport:  localExportMode.value,
@@ -1404,7 +1402,6 @@ async function runLnMapPreview() {
       iterations: base.iterations,
       depthOctaves: base.depthOctaves,
       precisionMode: base.lnMapMode,
-      scalarType: base.lnMapScalar,
       widthS: LN_PREVIEW_WIDTH_S,
     })
     lnMapPreviewUrl.value = api.baseUrl + resp.imagePath + '&t=' + Date.now()  // bust img cache
@@ -2124,14 +2121,6 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 <input type="range" v-model.number="exportCyclesPerOctave" min="0.1" max="16" step="0.05" class="cpo-slider" />
                 <input type="number" v-model.number="exportCyclesPerOctave" min="0.1" max="64" step="0.05" class="cpo-num" />
               </div>
-            </div>
-            <div v-if="!transitionOn" class="mrow">
-              <label>{{ lang === 'en' ? 'ln-map scalar' : 'ln-map 标量' }}</label>
-              <select v-model="exportLnMapScalar">
-                <option value="auto">auto</option>
-                <option value="fp64">fp64</option>
-                <option value="fx64">fx64</option>
-              </select>
             </div>
             <div class="mrow">
               <label>{{ lang === 'en' ? 'Preset' : '预设' }}</label>

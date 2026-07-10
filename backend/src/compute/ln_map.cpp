@@ -1480,7 +1480,9 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     stats.pixel_count = p.width_s * p.height_t;
     stats.engine_used = field_engine + "_" + mode;   // e.g. "cuda_fp64_hist_eq" / "perturbation_avx512_hist_eq"
     if (field_engine.find("perturbation") != std::string::npos) {
-        stats.scalar_used = "perturbation_fp64";
+        stats.scalar_used = field_engine.find("+fp32") != std::string::npos
+            ? "perturbation_fp32+fp64"
+            : "perturbation_fp64";
     } else {
         stats.scalar_used = field_engine.find("fx64") != std::string::npos &&
                             field_engine.find("->fp64") == std::string::npos ? "fx64" : "fp64";
@@ -2489,6 +2491,23 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
     }
     const bool batch_ok = start_len >= 2 && Klen >= 2;
 
+    // Fast mode: rows whose radius stays above the fp32 depth floor iterate
+    // fp32 deltas (the consumer-GPU fast path — RTX 40 runs fp32 at 32-64x
+    // fp64 throughput; fp32's ~2^-24 relative delta precision keeps ~14 bits
+    // of sub-pixel margin at any depth). Deeper rows keep fp64 deltas, so a
+    // deep strip transitions fp32 → fp64 exactly once, at a fixed global row.
+    constexpr double kLnPerturbFp32MinRadius = 1e-30;
+    const bool fast_mode = p.precision_mode == "fast";
+    // radius(global_row) = exp(LN_FOUR - global_row * TAU / S); safe while
+    // global_row <= (LN_FOUR - ln(rmin)) * S / TAU.
+    const double fp32_global_row_limit =
+        (LN_FOUR - std::log(kLnPerturbFp32MinRadius)) * static_cast<double>(S) / TAU;
+    const int fp32_rows = fast_mode
+        ? static_cast<int>(std::clamp(
+              std::floor(fp32_global_row_limit - p.row_offset) + 1.0,
+              0.0, static_cast<double>(T)))
+        : 0;
+
     // Explicit engine request, or auto → AVX-512, CUDA, AVX2, scalar
     // (matching select_map_engine's no-benchmark preference order).
     std::string want = p.engine;
@@ -2505,16 +2524,24 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
         const double*, const double*, int, int, int, int,
         const double*, const double*, const double*, const double*,
         int, int, double, int32_t*, double*) noexcept;
+    using PerturbBatchFn32 = void (*)(
+        const float*, const float*, int, int, int, int,
+        const float*, const float*, const float*, const float*,
+        int, int, float, int32_t*, float*) noexcept;
     // Best CPU batch kernel — the primary path for the AVX engines and the
-    // fallback when a CUDA render fails.
+    // fallback when a CUDA render fails. batch32 handles the fp32-delta rows
+    // of fast mode with the same SIMD tier.
     PerturbBatchFn batch = nullptr;
+    PerturbBatchFn32 batch32 = nullptr;
     const char* batch_engine = "openmp";
     if (batch_ok && want != "openmp") {
         if (want != "avx2" && perturb_avx512_available()) {
             batch = perturb_iterate_batch_avx512;
+            batch32 = perturb_iterate_batch_avx512_fp32;
             batch_engine = "avx512";
         } else if (perturb_avx2_available()) {
             batch = perturb_iterate_batch_avx2;
+            batch32 = perturb_iterate_batch_avx2_fp32;
             batch_engine = "avx2";
         }
     }
@@ -2535,6 +2562,7 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
         std::vector<uint32_t> iters(static_cast<size_t>(S) * static_cast<size_t>(chunk_cap));
         std::vector<float> norms(static_cast<size_t>(S) * static_cast<size_t>(chunk_cap));
         bool cuda_ok = true;
+        bool cuda_used_fp32 = false;
         int rows_filled = 0;
         for (int row0 = 0; row0 < T; row0 += kCudaPerturbChunkRows) {
             const int rows = std::min(kCudaPerturbChunkRows, T - row0);
@@ -2546,6 +2574,11 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
             cp.k_step = k_step;
             cp.theta_step = TAU / static_cast<double>(S);
             cp.julia = is_julia;
+            // fp32 deltas only when the whole chunk stays above the fp32
+            // depth floor (a straddling chunk falls back to fp64 wholesale —
+            // at most one 512-row chunk of extra fp64 work per strip).
+            cp.fp32_delta = row0 + rows <= fp32_rows;
+            cuda_used_fp32 = cuda_used_fp32 || cp.fp32_delta;
             cp.dz_shift_re = dz_shift_re; cp.dz_shift_im = dz_shift_im;
             cp.tab_re = tab_re; cp.tab_im = tab_im; cp.tab_len = tab_len;
             cp.start_off = start_off; cp.start_len = start_len;
@@ -2588,7 +2621,7 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
             }
         }
         if (cuda_ok) {
-            engine_used = "cuda";
+            engine_used = cuda_used_fp32 ? "cuda+fp32" : "cuda";
             rendered = true;
         }
     }
@@ -2597,6 +2630,17 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
     if (!rendered) {
         const TrigColumns cols = make_trig_columns(S);
         std::atomic<int> rows_done{0};
+
+        // fp32-delta rows read a float copy of the reference table.
+        std::vector<float> tab32_re_store, tab32_im_store;
+        const float* tab32_re = nullptr;
+        const float* tab32_im = nullptr;
+        if (fp32_rows > 0) {
+            tab32_re_store.assign(tab_re, tab_re + tab_len);
+            tab32_im_store.assign(tab_im, tab_im + tab_len);
+            tab32_re = tab32_re_store.data();
+            tab32_im = tab32_im_store.data();
+        }
         // Set once a whole row (every column — a full ring at constant radius
         // around the same center) comes back non-escaping: an interior point
         // has an open neighbourhood inside the set, so every smaller radius —
@@ -2619,6 +2663,15 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
                 b_iter.resize(static_cast<size_t>(S));
                 b_mag2.resize(static_cast<size_t>(S));
             }
+            std::vector<float> bdz_re32, bdz_im32, bdc_re32, bdc_im32, b_mag232;
+            if (batch32 && fp32_rows > 0) {
+                bdz_re32.resize(static_cast<size_t>(S));
+                bdz_im32.resize(static_cast<size_t>(S));
+                bdc_re32.resize(static_cast<size_t>(S));
+                bdc_im32.resize(static_cast<size_t>(S));
+                b_mag232.resize(static_cast<size_t>(S));
+                if (b_iter.empty()) b_iter.resize(static_cast<size_t>(S));
+            }
 
             #pragma omp for schedule(dynamic, 8)
             for (int row = 0; row < T; ++row) {
@@ -2630,9 +2683,35 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
                     const double global_row = p.row_offset + static_cast<double>(row);
                     const double k = LN_FOUR - global_row * TAU / static_cast<double>(S);
                     const double r_mag = std::exp(k);
+                    const bool row_fp32 = row < fp32_rows;
                     bool row_all_interior = true;
 
-                    if (batch) {
+                    if (batch32 && row_fp32) {
+                        for (int x = 0; x < S; ++x) {
+                            const double off_re = r_mag * cols.cos_col[static_cast<size_t>(x)];
+                            const double off_im = r_mag * cols.sin_col[static_cast<size_t>(x)];
+                            if (is_julia) {
+                                bdz_re32[static_cast<size_t>(x)] = static_cast<float>(off_re + dz_shift_re);
+                                bdz_im32[static_cast<size_t>(x)] = static_cast<float>(off_im + dz_shift_im);
+                                bdc_re32[static_cast<size_t>(x)] = 0.0f;
+                                bdc_im32[static_cast<size_t>(x)] = 0.0f;
+                            } else {
+                                bdz_re32[static_cast<size_t>(x)] = static_cast<float>(dz_shift_re);
+                                bdz_im32[static_cast<size_t>(x)] = static_cast<float>(dz_shift_im);
+                                bdc_re32[static_cast<size_t>(x)] = static_cast<float>(off_re);
+                                bdc_im32[static_cast<size_t>(x)] = static_cast<float>(off_im);
+                            }
+                        }
+                        batch32(tab32_re, tab32_im, start_off, start_len, k_off, Klen,
+                                bdz_re32.data(), bdz_im32.data(), bdc_re32.data(), bdc_im32.data(),
+                                S, max_iter, static_cast<float>(bail2),
+                                b_iter.data(), b_mag232.data());
+                        for (int x = 0; x < S; ++x) {
+                            const int32_t it = b_iter[static_cast<size_t>(x)];
+                            if (it < max_iter) row_all_interior = false;
+                            sink(row_base + x, it);
+                        }
+                    } else if (batch) {
                         for (int x = 0; x < S; ++x) {
                             const double off_re = r_mag * cols.cos_col[static_cast<size_t>(x)];
                             const double off_im = r_mag * cols.sin_col[static_cast<size_t>(x)];
@@ -2666,9 +2745,16 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
                             const double dc_re  = is_julia ? 0.0 : off_re;
                             const double dc_im  = is_julia ? 0.0 : off_im;
 
-                            const PerturbPixel res = perturb_iterate(
-                                Rr, Ri, Rlen, Kr, Ki, Klen,
-                                dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2);
+                            const PerturbPixel res = row_fp32
+                                ? perturb_iterate<false, float>(
+                                      tab32_re, tab32_im, Rlen,
+                                      tab32_re + k_off, tab32_im + k_off, Klen,
+                                      static_cast<float>(dz0_re), static_cast<float>(dz0_im),
+                                      static_cast<float>(dc_re), static_cast<float>(dc_im),
+                                      max_iter, static_cast<float>(bail2))
+                                : perturb_iterate(
+                                      Rr, Ri, Rlen, Kr, Ki, Klen,
+                                      dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2);
 
                             if (res.iter < max_iter) row_all_interior = false;
                             sink(row_base + x, res.iter);
@@ -2689,7 +2775,8 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
                 }
             }
         }
-        engine_used = batch_engine;
+        engine_used = fp32_rows > 0 ? std::string(batch_engine) + "+fp32"
+                                    : std::string(batch_engine);
     }
 
     return engine_used;
@@ -2718,8 +2805,10 @@ static LnMapStats render_ln_map_perturbation(const LnMapParams& p, cv::Mat& out,
     stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     stats.pixel_count = p.width_s * p.height_t;
     stats.engine_used = engine_used;
-    stats.scalar_used = "perturbation";
-    stats.precision_mode = "standard";
+    stats.scalar_used = engine_used.find("+fp32") != std::string::npos
+        ? "perturbation_fp32+fp64"
+        : "perturbation";
+    stats.precision_mode = p.precision_mode;
     return stats;
 }
 

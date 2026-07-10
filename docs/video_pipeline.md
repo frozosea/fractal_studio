@@ -145,6 +145,13 @@ else:
     sample final cartesian frame
 ```
 
+分段导出时，非末段的 fallback frame 渲染在 `endDepth + extraOctaves −
+log2(sqrt(aspect²+1)) − 0.15` oct 处（而不是 strip 底部深度）：帧像素能延伸到
+屏幕对角（corner 半径 = rMax × 半高），fallback frame 的**半高**必须盖住
+strip 数据耗尽的圆盘，否则每段最深的几帧会在画面中心出现「黑圈套矩形」
+（圈 = strip 底部圆盘，矩形 = fallback frame 的覆盖范围）。`resolveStripPlan`
+会保证 `extraOctaves` 至少留出这个余量。
+
 warp 方法优先级：
 
 1. CUDA video warp，如果编译和运行时可用且 `cudaWarp=true`
@@ -153,11 +160,15 @@ warp 方法优先级：
 
 编码优先级：
 
-1. `ffmpeg` + `h264_nvenc`
-2. `ffmpeg` + `hevc_nvenc`
+1. `ffmpeg` + `h264_nvenc`（`-rc vbr -cq 18 -qmax 28 -spatial-aq 1 -temporal-aq 1`）
+2. `ffmpeg` + `hevc_nvenc`（`-rc vbr -cq 20 -qmax 30`，同样开 AQ）
 3. `ffmpeg` + `libx264`
 4. OpenCV `VideoWriter` mp4v
 5. OpenCV `VideoWriter` MJPG AVI fallback
+
+NVENC 的 `-cq` 只是目标质量：在信息量大的深层 4K 帧上实测 QP 会漂到 39
+（明显块状破碎）。`-qmax` 提供硬上限，AQ 把码率倾斜到高纹理区域，长视频
+末段的「编码烂帧」由此消除（代价是这些段码率升高）。
 
 响应和 report 会记录 `warpMethod`、`encoder`、`ffmpegStderr`、平均 warp/write 时间等统计。
 
@@ -184,12 +195,18 @@ fullWidthS = ceil(sqrt(W^2 + H^2) * pi)
 
 `lnMapMode`:
 
-- `standard`: 单一路径渲染。
-- `fast`: 按深度分层使用更快 scalar，并可做 validation。
+- `standard`: 单一路径渲染（perturbation 全程 fp64 delta）。
+- `fast`: 按深度分层使用更快 scalar，并可做 validation。进入 perturbation
+  深度后（内圈半径 < 1e-13），半径 ≥ 1e-30 的行使用 **fp32 perturbation
+  delta**（CUDA/AVX-512/AVX2/scalar 各层都有 fp32 内核；RTX 40 上 strip
+  迭代实测 ~15x），更深的行自动回落 fp64 delta——整条 strip 只在一个固定
+  全局行发生一次 fp32→fp64 切换。分段导出的非末段 fallback frame 也在
+  1e-30 ≤ scale < 1e-13 时用 `perturb-auto-fp32` 渲染。engine/scalar 字段
+  会带上 `+fp32` / `perturbation_fp32+fp64` 标记。
 
 相关参数：
 
-- `lnMapScalar`
+- `lnMapScalar`（已废弃：UI 不再提供，后端仍接受但 fast 模式自动分层）
 - `lnMapFastFp32DepthOctaves`
 - `lnMapFastFp64DepthOctaves`
 - `lnMapFastValidate`
