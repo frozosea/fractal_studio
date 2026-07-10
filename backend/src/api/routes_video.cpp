@@ -1227,7 +1227,8 @@ static std::string encodeZoomVideoFrames(
     const VideoWarpStats& baseStats,
     std::string* ffmpeg_stderr_out,
     std::string* encoder_out,
-    VideoWarpStats* stats_out
+    VideoWarpStats* stats_out,
+    int videoQp = -1
 ) {
     if (encoder_out) *encoder_out = "";
     const std::filesystem::path ffmpegErr = outDir / (baseName + "_ffmpeg.stderr.txt");
@@ -1240,20 +1241,31 @@ static std::string encodeZoomVideoFrames(
     const std::string inputArgs =
         "ffmpeg -y -f rawvideo -pix_fmt bgr24 -s " + std::to_string(W) + "x" + std::to_string(H) +
         " -r " + std::to_string(fps) + " -i - -an ";
-    // NVENC's -cq is a *target*, not a ceiling: on dense deep-zoom frames the
-    // per-frame quantizer was observed drifting to QP 39 (visible blocking).
-    // Pin VBR constant-quality mode, cap QP, and enable adaptive quantization
-    // so noisy fractal detail gets bits where it matters.
+    // NVENC only truly bounds per-frame quality in constqp mode: its
+    // target-quality VBR (-cq) ignores -qmax on this driver/ffmpeg (verified
+    // empirically — 4K120 noise drove the quantizer to QP 50 despite
+    // -qmax 28, which showed as badly-encoded stretches in dense deep-zoom
+    // sections). Auto-select the QP from the export parameters and let the
+    // bitrate float with content; adaptive quantization steers bits toward
+    // the noisy fractal detail. `videoQp` overrides the auto choice.
+    int qp = videoQp;
+    if (qp < 0) {
+        qp = 18;                                             // transparent base
+        if (fps > 60) qp += 1;                               // shorter frame display
+        if (static_cast<int64_t>(W) * H >= 3840LL * 2160LL) qp += 1;  // 4K+ pixel density
+    }
+    qp = std::clamp(qp, 1, 51);
+    const int hevcQp = std::min(51, qp + 2);
     if (commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_nvenc\"")) {
         ffmpegCmds.push_back({"h264_nvenc",
-            inputArgs + "-c:v h264_nvenc -pix_fmt yuv420p -preset p5 -rc vbr -cq 18 -b:v 0"
-            " -qmax 28 -spatial-aq 1 -temporal-aq 1 \"" + tmpMp4.string() +
+            inputArgs + "-c:v h264_nvenc -pix_fmt yuv420p -preset p5 -rc constqp -qp " +
+            std::to_string(qp) + " -b:v 0 -spatial-aq 1 -temporal-aq 1 \"" + tmpMp4.string() +
             "\" 2>\"" + ffmpegErrTmp.string() + "\""});
     }
     if (commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q hevc_nvenc\"")) {
         ffmpegCmds.push_back({"hevc_nvenc",
-            inputArgs + "-c:v hevc_nvenc -pix_fmt yuv420p -preset p5 -rc vbr -cq 20 -b:v 0"
-            " -qmax 30 -spatial_aq 1 -temporal_aq 1 \"" + tmpMp4.string() +
+            inputArgs + "-c:v hevc_nvenc -pix_fmt yuv420p -preset p5 -rc constqp -qp " +
+            std::to_string(hevcQp) + " -b:v 0 -spatial_aq 1 -temporal_aq 1 \"" + tmpMp4.string() +
             "\" 2>\"" + ffmpegErrTmp.string() + "\""});
     }
     ffmpegCmds.push_back({"libx264",
@@ -1400,7 +1412,8 @@ static std::string generateZoomVideo(
     bool prefer_cuda_warp = true,
     std::string* warp_method_out = nullptr,
     VideoWarpStats* stats_out = nullptr,
-    const std::function<bool()>& should_cancel = nullptr
+    const std::function<bool()>& should_cancel = nullptr,
+    int videoQp = -1
 ) {
     ZoomRenderSource source;
     source.strip = &strip;
@@ -1426,7 +1439,7 @@ static std::string generateZoomVideo(
 
     return encodeZoomVideoFrames(
         W, H, fps, outDir, baseName, renderFrames, baseStats,
-        ffmpeg_stderr_out, encoder_out, stats_out);
+        ffmpeg_stderr_out, encoder_out, stats_out, videoQp);
 }
 
 static std::string generateZoomVideoSequence(
@@ -1445,7 +1458,8 @@ static std::string generateZoomVideoSequence(
     bool prefer_cuda_warp = true,
     std::string* warp_method_out = nullptr,
     VideoWarpStats* stats_out = nullptr,
-    const std::function<bool()>& should_cancel = nullptr
+    const std::function<bool()>& should_cancel = nullptr,
+    int videoQp = -1
 ) {
     if (segments.empty()) throw std::runtime_error("no segmented video frames were produced");
 
@@ -1486,7 +1500,7 @@ static std::string generateZoomVideoSequence(
 
     return encodeZoomVideoFrames(
         W, H, fps, outDir, baseName, renderFrames, baseStats,
-        ffmpeg_stderr_out, encoder_out, stats_out);
+        ffmpeg_stderr_out, encoder_out, stats_out, videoQp);
 }
 
 struct LnMapLookup {
@@ -1772,7 +1786,8 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
             j.value("cudaWarp", true),
             &warpMethod,
             &warpStats,
-            [&]() { return runner.isCancelRequested(run.id); }
+            [&]() { return runner.isCancelRequested(run.id); },
+            std::clamp(j.value("videoQp", -1), -1, 51)
         );
         const auto t1 = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -2262,6 +2277,13 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         mp.scalar_type = "auto";
         mp.rotation_deg = rotationDeg;
 
+        // Fast mode: render the final frame with fp32 perturbation deltas while
+        // safely above the fp32 depth floor (~1e-30; see perturbation.hpp).
+        // Falls back to the auto ladder for non-Mandelbrot variants.
+        if (lnMapMode == "fast" && mp.scale < 1e-13 && mp.scale >= 1e-30) {
+            mp.scalar_type = "perturb-auto-fp32";
+        }
+
         cv::Mat finalImg(H, W, CV_8UC3);
         compute::MapStats finalStats;
         compute::FieldOutput finalField;   // held for deferred coloring (non-escape modes)
@@ -2299,6 +2321,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             // inside the set. false: keep the originally requested duration, padding
             // the remaining segments with solid white instead of recomputing them.
             const bool truncateOnInterior = j.value("truncateOnInterior", true);
+            const bool preferCudaWarp = j.value("cudaWarp", true);
             bool confirmedInterior = false;
             bool truncatedForInterior = false;
             const std::filesystem::path segmentTmpDir = std::filesystem::path(run.outputDir) / "_segments_tmp";
@@ -2405,46 +2428,16 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     ? finalPath
                     : (segmentTmpDir / ("final_frame_" + suffix + ".png"));
 
-                compute::MapParams chunkMp = mp;
-                const double chunkKTopEnd = kTop_start - seg.finalFrameDepthOctaves * LN_TWO;
-                chunkMp.scale = 2.0 * std::exp(chunkKTopEnd);
-                // Fast mode: fallback frames in the perturbation range render
-                // with fp32 deltas while safely above the fp32 depth floor
-                // (~1e-30; see perturbation.hpp). Falls back to the auto
-                // ladder automatically for non-Mandelbrot variants.
-                if (lnMapMode == "fast" &&
-                    chunkMp.scale < 1e-13 && chunkMp.scale >= 1e-30) {
-                    chunkMp.scalar_type = "perturb-auto-fp32";
-                }
-                cv::Mat chunkFinal(H, W, CV_8UC3);
-                compute::MapStats chunkFinalStats;
-                compute::FieldOutput chunkField;
-                bool chunkFinalDeferred = false;
+                // Non-last segments carry no rendered cartesian fallback frame
+                // anymore: their fallbacks are synthesized after this loop by
+                // warping the NEXT segment's strip back-to-front, so every
+                // fractal point is computed exactly once — in the strips and
+                // the single true final frame.
+                //
                 // Once an earlier segment proved solid-white (see isRowSolidWhite
-                // below), every later segment is guaranteed solid-white too — skip its
-                // final-frame render entirely instead of re-deriving the same color.
+                // below), every later segment is guaranteed solid-white too — skip
+                // its strip iteration entirely instead of re-deriving the same color.
                 const bool skipHeavyCompute = confirmedInterior;
-                if (!isLast && skipHeavyCompute) {
-                    chunkFinal.setTo(cv::Scalar(255, 255, 255));
-                    chunkFinalStats.engine_used = "interior_skip";
-                } else if (lnMapColorMode == "escape") {
-                    if (isLast) {
-                        chunkFinal = finalImg;
-                        chunkFinalStats = finalStats;
-                    } else {
-                        chunkFinalStats = compute::render_map(chunkMp, chunkFinal);
-                    }
-                } else {
-                    if (isLast) {
-                        chunkField = std::move(finalField);
-                        chunkFinalStats = finalStats;
-                    } else {
-                        chunkFinalStats = compute::render_map_field(chunkMp, chunkField);
-                        chunkFinalStats.engine_used += "_ln_" + lnMapColorMode;
-                    }
-                    chunkFinalDeferred = true;
-                }
-                throwIfCancelled(runner, run.id);
 
                 cv::Mat segStrip(seg.heightT, s, CV_8UC3);
                 compute::LnMapStats segStats;
@@ -2484,20 +2477,42 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     runner.addArtifact(run.id, Artifact{"ln-map", segStripPath.string(), "image"});
                 }
 
-                // Truncating: this segment's own (just-computed) landing frame becomes
-                // the video's actual final frame, same as reaching the true last segment.
+                // Truncating: a landing frame synthesized from this segment's own
+                // strip becomes the video's actual final frame, same as reaching
+                // the true last segment.
                 const bool isFinalOutputSegment = isLast || truncatedForInterior;
-                if (chunkFinalDeferred) {
-                    const compute::LnMapEqualization& chunkEq =
-                        segmentedEq.valid ? segmentedEq : segStats.equalization;
-                    const compute::LnMapGlobalCdf* chunkCdf =
-                        segmentedCdf.valid() ? &segmentedCdf :
-                        (segStats.global_cdf.valid() ? &segStats.global_cdf : nullptr);
-                    colorizeFinalFrameWithLnMapMode(chunkMp, chunkField, lnMapColorMode, chunkEq, chunkCdf, chunkFinal);
-                    chunkField = compute::FieldOutput{};
-                }
-                if (isFinalOutputSegment) finalImg = chunkFinal;
+                compute::MapStats chunkFinalStats;
+                chunkFinalStats.engine_used = "warp_synth";
+                chunkFinalStats.scalar_used = "warp_synth";
                 if (isFinalOutputSegment) {
+                    if (truncatedForInterior) {
+                        // Landed solid-white: everything beyond this strip is
+                        // provably interior, so warp the strip over a solid-white
+                        // fallback at the landing depth — no fractal render needed.
+                        cv::Mat whiteFallback(H, W, CV_8UC3, cv::Scalar(255, 255, 255));
+                        const double kTopLanding =
+                            kTop_start - seg.finalFrameDepthOctaves * LN_TWO;
+                        finalImg = renderZoomPreviewFrameSmart(
+                            segStrip, whiteFallback, W, H,
+                            kTopLanding, kTopLanding, seg.rowOffset,
+                            rotationDeg, preferCudaWarp);
+                        chunkFinalStats.engine_used = "interior_warp_synth";
+                        chunkFinalStats.scalar_used = "interior_warp_synth";
+                    } else if (finalFrameDeferred) {
+                        // Mapped modes: colorize the deferred true final frame with
+                        // the strip-wide stats for a seamless warp blend.
+                        const compute::LnMapEqualization& chunkEq =
+                            segmentedEq.valid ? segmentedEq : segStats.equalization;
+                        const compute::LnMapGlobalCdf* chunkCdf =
+                            segmentedCdf.valid() ? &segmentedCdf :
+                            (segStats.global_cdf.valid() ? &segStats.global_cdf : nullptr);
+                        colorizeFinalFrameWithLnMapMode(mp, finalField, lnMapColorMode,
+                                                        chunkEq, chunkCdf, finalImg);
+                        finalField = compute::FieldOutput{};
+                        chunkFinalStats = finalStats;
+                    } else {
+                        chunkFinalStats = finalStats;
+                    }
                     // finalFrameDeferred: mapped-mode overall final frame not written yet.
                     // truncatedForInterior: the canonical final frame moved from the
                     // originally requested depth to this (shallower) landing point.
@@ -2508,8 +2523,6 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                             finalFrameArtifactRegistered = true;
                         }
                     }
-                } else {
-                    compute::write_png(segFinalPath.string(), chunkFinal);
                 }
                 // Truncation can make isFinalOutputSegment true on a segment whose
                 // segFinalPath (computed above from isLast alone) is the temp path —
@@ -2543,6 +2556,36 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 // identical filler, so stop the export here instead of rendering it.
                 if (truncatedForInterior) break;
             }
+
+            // ── Synthesize non-last fallback frames, back-to-front ─────────────
+            // fallback_i is one warped frame at seg_i's fallback depth, sampled
+            // from segment i+1's strip and *its* fallback — pure resampling of
+            // already-computed pixels, no fractal iteration. The chain bottoms
+            // out at the single true final frame (renderedSegments.back()).
+            // Geometry holds because each fallback sits finalFrameSlackOctaves
+            // above its strip bottom (see buildVideoSegmentPlans), which also
+            // keeps every synthesis sample inside the next strip + fallback.
+            if (renderedSegments.size() > 1) {
+                setVideoProgress(runner, run.id, lnMapRenderStage,
+                                 stripPlan.totalSegmentRows, stripPlan.totalSegmentRows, depth, depth,
+                                 "", "", Json{{"lnMapPass", "fallback_synthesis"},
+                                              {"lnMapSegmentCount", stripPlan.segmentCount}});
+                cv::Mat nextFallback = finalImg;
+                for (int i = static_cast<int>(renderedSegments.size()) - 2; i >= 0; --i) {
+                    throwIfCancelled(runner, run.id);
+                    const RenderedSegment& next = renderedSegments[static_cast<size_t>(i) + 1];
+                    RenderedSegment& cur = renderedSegments[static_cast<size_t>(i)];
+                    const cv::Mat nextStrip = compute::read_png(next.stripPath.string());
+                    cv::Mat fallback = renderZoomPreviewFrameSmart(
+                        nextStrip, nextFallback, W, H,
+                        kTop_start - cur.plan.finalFrameDepthOctaves * LN_TWO,
+                        kTop_start - next.plan.finalFrameDepthOctaves * LN_TWO,
+                        next.plan.rowOffset, rotationDeg, preferCudaWarp);
+                    compute::write_png(cur.finalPath.string(), fallback);
+                    nextFallback = std::move(fallback);
+                }
+            }
+
             if (segmentedEq.valid) lnStats.equalization = segmentedEq;
             if (segmentedCdf.valid()) lnStats.global_cdf = segmentedCdf;
             lnStats.engine_used = "segmented(" + std::to_string(stripPlan.segmentCount) + " parts,last=" + lnStats.engine_used + ")";
@@ -2626,7 +2669,6 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             const std::filesystem::path scPath = std::filesystem::path(run.outputDir) / "ln_map.json";
             atomicWriteText(scPath, sc.dump(2));
 
-            const bool preferCudaWarp = j.value("cudaWarp", true);
             const cv::Mat firstStrip = compute::read_png(renderedSegments.front().stripPath.string());
             const cv::Mat firstFinal = compute::read_png(renderedSegments.front().finalPath.string());
             const cv::Mat startPreview = renderZoomPreviewFrameSmart(
@@ -2679,7 +2721,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 preferCudaWarp,
                 &warpMethod,
                 &warpStats,
-                [&]() { return runner.isCancelRequested(run.id); });
+                [&]() { return runner.isCancelRequested(run.id); },
+                std::clamp(j.value("videoQp", -1), -1, 51));
             throwIfCancelled(runner, run.id);
 
             Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
@@ -3002,7 +3045,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             preferCudaWarp,
             &warpMethod,
             &warpStats,
-            [&]() { return runner.isCancelRequested(run.id); }
+            [&]() { return runner.isCancelRequested(run.id); },
+            std::clamp(j.value("videoQp", -1), -1, 51)
         );
         throwIfCancelled(runner, run.id);
         Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};

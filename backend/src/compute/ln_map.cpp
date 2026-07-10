@@ -2416,7 +2416,13 @@ static double lnmap_innermost_radius(const LnMapParams& p) {
 static bool lnmap_perturbation_applicable(const LnMapParams& p) {
     if (p.variant != Variant::Mandelbrot) return false;
     if (p.center_re_str.empty())          return false;
-    return lnmap_innermost_radius(p) < 1e-13;
+    // Standard mode keeps perturbation for depths where direct fp64 iteration
+    // stops being exact. Fast mode hands everything below its direct-fp32 band
+    // (~18 octaves, radius ~1e-5) to perturbation instead: fp32 deltas with
+    // rebasing on CUDA beat the direct fp64 tiers long before precision
+    // requires perturbation, and stay exact-to-fp32 at any of these depths.
+    const double gate = p.precision_mode == "fast" ? 1e-5 : 1e-13;
+    return lnmap_innermost_radius(p) < gate;
 }
 
 // Perturbation iteration for the whole strip. Calls sink(idx, iter) once per
