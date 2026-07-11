@@ -167,13 +167,19 @@ warp 方法优先级：
 2. OpenCV remap，前提是 strip/frame 尺寸低于 OpenCV remap 的 short 坐标限制
 3. manual CPU bilinear fallback
 
-编码优先级：
+编码优先级（每个硬件编码器先用 1 帧黑帧**实测探测**——ffmpeg 即使在无
+对应 GPU 的机器上也带着 nvenc/vaapi 编码器，光查列表会误判；探测结果按
+进程缓存）：
 
 1. `ffmpeg` + `h264_nvenc`（`-rc constqp -qp <auto> -spatial-aq 1 -temporal-aq 1`）
 2. `ffmpeg` + `hevc_nvenc`（`-rc constqp -qp <auto+2>`，同样开 AQ）
-3. `ffmpeg` + `libx264`（`-crf 16`）
-4. OpenCV `VideoWriter` mp4v
-5. OpenCV `VideoWriter` MJPG AVI fallback
+3. `ffmpeg` + `h264_vaapi`（AMD/Intel 硬编，遍历 `/dev/dri/renderD*` 探测；仅 420）
+4. `ffmpeg` + `libx264`（`-crf 16`；≥1440p 用 `veryfast`，否则 `medium`）
+5. OpenCV `VideoWriter` mp4v
+6. OpenCV `VideoWriter` MJPG AVI fallback
+
+`videoEncoder`：`auto`（默认）| `vaapi`（跳过 NVENC）| `software`（跳过全部
+硬件编码器）。非 NVIDIA 设备无需任何配置：探测失败的编码器直接跳过。
 
 编码质量自动选择：QP 基准 18（4:4:4 时 15），`fps > 60` 时 +1，4K 及以上
 +1（4K120 → 420 qp 20 / 444 qp 17）。请求可用 `videoQp`（0..51）覆盖。
