@@ -75,6 +75,11 @@ export function bdAdd(a: BigDec, b: BigDec): BigDec {
   return bdNormalize({ mantissa: am + bm, exp })
 }
 
+export function bdSub(a: BigDec, b: BigDec): BigDec {
+  const [am, bm, exp] = alignExp(a, b)
+  return bdNormalize({ mantissa: am - bm, exp })
+}
+
 export function bdAddNumber(a: BigDec, n: number): BigDec {
   if (n === 0) return a
   return bdAdd(a, bdFromNumber(n))

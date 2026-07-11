@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
@@ -78,7 +79,7 @@ Json variantCompatibilityToJson(const std::vector<compute::VariantExistence>& va
 }
 
 Json pointToJson(const compute::SpecialPointResult& p) {
-    return Json{
+    Json out{
         {"id", p.id},
         {"kind", compute::special_point_kind_name(p.kind)},
         {"preperiod", p.preperiod},
@@ -102,6 +103,12 @@ Json pointToJson(const compute::SpecialPointResult& p) {
         {"variantCompatibility", variantCompatibilityToJson(p.variants)},
         {"reason", p.reason},
     };
+    if (!p.re_str.empty() && !p.im_str.empty()) {
+        out["reStr"] = p.re_str;
+        out["imStr"] = p.im_str;
+        out["precBits"] = p.prec_bits;
+    }
+    return out;
 }
 
 Json enumResponseToJson(const compute::SpecialPointEnumResponse& r) {
@@ -160,8 +167,19 @@ compute::SpecialPointViewport parseViewport(const Json& j) {
         viewport.scale = v.value("scale", 3.0);
         viewport.width = v.value("width", 1200);
         viewport.height = v.value("height", 800);
+        if (v.contains("centerReStr") && v["centerReStr"].is_string())
+            viewport.center_re_str = v["centerReStr"].get<std::string>();
+        if (v.contains("centerImStr") && v["centerImStr"].is_string())
+            viewport.center_im_str = v["centerImStr"].get<std::string>();
     }
     return viewport;
+}
+
+bool parsesAsDecimal(const std::string& s) {
+    if (s.empty()) return false;
+    char* end = nullptr;
+    const double parsed = std::strtod(s.c_str(), &end);
+    return end != s.c_str() && *end == '\0' && std::isfinite(parsed);
 }
 
 compute::SpecialPointEnumRequest parseEnumRequest(const Json& j) {
@@ -304,6 +322,10 @@ void validateSearchRequest(const compute::SpecialPointSearchRequest& req) {
         !std::isfinite(req.viewport.center_re) || !std::isfinite(req.viewport.center_im) ||
         !std::isfinite(req.viewport.scale) || req.viewport.scale <= 0.0) {
         throw HttpError(400, Json{{"error", "valid viewport required"}}.dump());
+    }
+    if ((!req.viewport.center_re_str.empty() && !parsesAsDecimal(req.viewport.center_re_str)) ||
+        (!req.viewport.center_im_str.empty() && !parsesAsDecimal(req.viewport.center_im_str))) {
+        throw HttpError(400, Json{{"error", "invalid viewport center strings"}}.dump());
     }
 }
 

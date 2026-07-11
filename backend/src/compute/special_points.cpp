@@ -1019,6 +1019,12 @@ SpecialPointSearchResponse search_special_points(
         throw std::runtime_error("viewport is required for special point search");
     }
 
+    // Deep zoom: double precision cannot separate roots below the threshold,
+    // hand off to the MPFR ball-period + Newton solver.
+    if (special_points_search_wants_hp(req)) {
+        return search_special_points_hp(req, progress);
+    }
+
     SpecialPointSearchResponse resp;
     resp.status = "searching";
     resp.sampled = false;

@@ -215,6 +215,10 @@ export type SpecialPointKind = 'center' | 'misiurewicz'
 export interface SpecialPointViewport {
   centerRe: number
   centerIm: number
+  // Full-precision decimal strings for deep zoom; override centerRe/centerIm
+  // in the backend's high-precision solver when present.
+  centerReStr?: string
+  centerImStr?: string
   scale: number
   width: number
   height: number
@@ -283,6 +287,14 @@ export interface SpecialPointEnumResult {
   period: number
   re: number
   im: number
+  // Full-precision coordinates from the high-precision (deep zoom) solver.
+  reStr?: string
+  imStr?: string
+  precBits?: number
+  // Client-side only: offset from the current precise view center, computed
+  // in MapView (BigDec) so deep-zoom markers project correctly.
+  offsetRe?: number
+  offsetIm?: number
   real?: number
   imag?: number
   converged: boolean

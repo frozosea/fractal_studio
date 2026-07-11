@@ -1,4 +1,4 @@
-.PHONY: backend-configure backend-build verify-system verify-immutable
+.PHONY: backend-configure backend-build verify-system verify-immutable start
 
 backend-configure:
 	cmake -S backend -B runtime/build
@@ -11,3 +11,6 @@ verify-system:
 
 verify-immutable:
 	bash scripts/check_legacy_immutable.sh
+
+start:
+	bash scripts/start.sh

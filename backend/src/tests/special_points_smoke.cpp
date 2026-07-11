@@ -6,6 +6,10 @@
 #include <stdexcept>
 #include <string>
 
+#if defined(FSD_HAS_MPFR)
+#  include <mpfr.h>
+#endif
+
 namespace {
 
 using fsd::compute::SpecialPointEnumRequest;
@@ -106,6 +110,9 @@ void expect_high_period_local_center() {
     require(found_period_207, "high-period local center search did not mark the expected period");
 }
 
+// Below the HP threshold this routes to the MPFR ball-period solver; the
+// assertions are engine-agnostic so a non-MPFR build still passes via the
+// double path.
 void expect_deep_zoom_local_center_search() {
     SpecialPointSearchRequest search;
     search.kind = SpecialPointKind::HyperbolicCenter;
@@ -128,13 +135,26 @@ void expect_deep_zoom_local_center_search() {
     const auto resp = fsd::compute::search_special_points(search);
     require(resp.status == "completed", "deep-zoom local center search did not complete");
     require(resp.accepted_count >= 1, "deep-zoom local center search did not find any center");
-    require(resp.seed_count >= 2862, "deep-zoom local center search skipped lower-period equations");
-    bool found_period_2862 = false;
+    // The viewport contains the primitive period-954 nucleus and its period-
+    // tripled satellite (2862). Double precision cannot verify the primitive
+    // nucleus (its Newton noise floor sits above the acceptance threshold) and
+    // lands on the satellite; the MPFR path finds the primitive one, matching
+    // the period-ascending search contract.
+    const int expected_period = fsd::compute::special_points_hp_available() ? 954 : 2862;
+    bool found_expected = false;
     for (const auto& point : resp.points) {
         require(point.visible, "deep-zoom local center search returned a non-visible point");
-        if (point.actual.is_center && point.actual.period == 2862) found_period_2862 = true;
+        if (point.actual.is_center && point.actual.period == expected_period) found_expected = true;
     }
-    require(found_period_2862, "deep-zoom local center search did not mark the expected period");
+    require(found_expected, "deep-zoom local center search did not mark the expected period");
+    if (fsd::compute::special_points_hp_available()) {
+        require(resp.points.front().prec_bits > 0,
+                "deep-zoom search did not use the high-precision solver");
+        require(!resp.points.front().re_str.empty() && !resp.points.front().im_str.empty(),
+                "high-precision result missing string coordinates");
+        require(resp.points.front().residual < 1e-30,
+                "high-precision nucleus residual unexpectedly large");
+    }
 }
 
 void expect_overview_period_ordered_center_search() {
@@ -192,15 +212,146 @@ void expect_viewport_sampled_center_search() {
 
     const auto resp = fsd::compute::search_special_points(search);
     require(resp.status == "completed", "viewport-sampled center search did not complete");
-    require(resp.sampled, "viewport-sampled center search did not sample the viewport");
+    if (!fsd::compute::special_points_hp_available()) {
+        require(resp.sampled, "viewport-sampled center search did not sample the viewport");
+    }
     require(resp.accepted_count >= 1, "viewport-sampled center search did not find any center");
-    bool found_period_2762 = false;
+    // Primitive period-1381 nucleus vs. its period-doubled satellite (2762);
+    // same double-precision blindness as in the 954/2862 viewport above.
+    const int expected_period = fsd::compute::special_points_hp_available() ? 1381 : 2762;
+    bool found_expected = false;
     for (const auto& point : resp.points) {
         require(point.visible, "viewport-sampled center search returned a non-visible point");
-        if (point.actual.is_center && point.actual.period == 2762) found_period_2762 = true;
+        if (point.actual.is_center && point.actual.period == expected_period) found_expected = true;
     }
-    require(found_period_2762, "viewport-sampled center search did not mark the expected period");
+    require(found_expected, "viewport-sampled center search did not mark the expected period");
 }
+
+#if defined(FSD_HAS_MPFR)
+
+// |a - b| for two decimal strings, evaluated in MPFR.
+double decimal_string_diff(const std::string& a, const std::string& b) {
+    mpfr_t va, vb;
+    mpfr_inits2(320, va, vb, static_cast<mpfr_ptr>(nullptr));
+    mpfr_set_str(va, a.c_str(), 10, MPFR_RNDN);
+    mpfr_set_str(vb, b.c_str(), 10, MPFR_RNDN);
+    mpfr_sub(va, va, vb, MPFR_RNDN);
+    mpfr_abs(va, va, MPFR_RNDN);
+    const double out = mpfr_get_d(va, MPFR_RNDN);
+    mpfr_clears(va, vb, static_cast<mpfr_ptr>(nullptr));
+    return out;
+}
+
+SpecialPointSearchRequest hp_center_request() {
+    SpecialPointSearchRequest search;
+    search.kind = SpecialPointKind::HyperbolicCenter;
+    search.period_min = 1;
+    search.period_max = 8192;
+    search.visible_only = true;
+    search.include_variant_compatibility = true;
+    search.viewport.enabled = true;
+    search.viewport.width = 1200;
+    search.viewport.height = 800;
+    return search;
+}
+
+// The HP solver must agree with the double path where both work: the
+// period-207 nucleus near (-0.7601060136, 0.0803662122).
+fsd::compute::SpecialPointResult expect_hp_matches_double_at_moderate_zoom() {
+    SpecialPointEnumRequest req = base_request();
+    const auto reference = fsd::compute::newton_solve_center(
+        {-0.7601060136, 0.0803662122}, 207, req);
+    require(reference.accepted, "double-path period-207 reference did not converge");
+
+    SpecialPointSearchRequest search = hp_center_request();
+    search.viewport.center_re = -0.7601060136;
+    search.viewport.center_im = 0.0803662122;
+    search.viewport.scale = 2.171e-8;
+
+    const auto resp = fsd::compute::search_special_points_hp(search);
+    require(resp.status == "completed", "hp moderate-zoom center search did not complete");
+    require(resp.accepted_count >= 1, "hp moderate-zoom center search found no center");
+    const auto& p = resp.points.front();
+    require(p.accepted && p.actual.is_center && p.actual.period == 207,
+            "hp moderate-zoom center search returned wrong classification");
+    require(std::abs(p.re - reference.re) < 1e-10 && std::abs(p.im - reference.im) < 1e-10,
+            "hp nucleus disagrees with the double-path nucleus");
+    require(!p.re_str.empty() && !p.im_str.empty() && p.prec_bits >= 128,
+            "hp result missing high-precision coordinates");
+    return p;
+}
+
+// Re-searching a 1e-24 viewport centered on the found nucleus strings must
+// find the same period-207 nucleus again — double precision cannot even
+// represent this viewport, so this exercises the string path end to end.
+void expect_hp_deep_zoom_self_consistency(const fsd::compute::SpecialPointResult& moderate) {
+    SpecialPointSearchRequest search = hp_center_request();
+    search.viewport.center_re = moderate.re;
+    search.viewport.center_im = moderate.im;
+    search.viewport.center_re_str = moderate.re_str;
+    search.viewport.center_im_str = moderate.im_str;
+    search.viewport.scale = 1e-24;
+
+    const auto resp = fsd::compute::search_special_points(search);
+    require(resp.status == "completed", "hp deep self-consistency search did not complete");
+    require(resp.accepted_count >= 1, "hp deep self-consistency search found no center");
+    const auto& p = resp.points.front();
+    require(p.accepted && p.visible, "hp deep self-consistency point not accepted/visible");
+    require(p.actual.is_center && p.actual.period == 207,
+            "hp deep self-consistency returned wrong period");
+    require(p.prec_bits > moderate.prec_bits,
+            "hp deep re-solve did not raise precision with depth");
+    require(decimal_string_diff(p.re_str, moderate.re_str) < 1e-30,
+            "hp deep re-solve moved the nucleus (re)");
+    require(decimal_string_diff(p.im_str, moderate.im_str) < 1e-30,
+            "hp deep re-solve moved the nucleus (im)");
+}
+
+// String round-trip for a Misiurewicz solve: a 1e-14 viewport just off c=-2
+// must snap onto the exact m=2, p=1 point at -2.
+void expect_hp_misiurewicz_string_roundtrip() {
+    SpecialPointSearchRequest search;
+    search.kind = SpecialPointKind::Misiurewicz;
+    search.preperiod_min = 2;
+    search.preperiod_max = 2;
+    search.period_min = 1;
+    search.period_max = 1;
+    search.visible_only = true;
+    search.include_variant_compatibility = true;
+    search.viewport.enabled = true;
+    search.viewport.center_re = -2.0;
+    search.viewport.center_im = 0.0;
+    search.viewport.center_re_str = "-2.0000000000000000000000001";
+    search.viewport.center_im_str = "0";
+    search.viewport.scale = 1e-14;
+    search.viewport.width = 1200;
+    search.viewport.height = 800;
+
+    const auto resp = fsd::compute::search_special_points(search);
+    require(resp.status == "completed", "hp Misiurewicz string search did not complete");
+    require(resp.accepted_count == 1, "hp Misiurewicz string search did not accept exactly one point");
+    const auto& p = resp.points.front();
+    require(p.actual.is_misiurewicz && p.actual.preperiod == 2 && p.actual.period == 1,
+            "hp Misiurewicz string search classified wrong (m, p)");
+    require(!p.re_str.empty() && decimal_string_diff(p.re_str, "-2") < 1e-20,
+            "hp Misiurewicz root re_str is not -2");
+    require(decimal_string_diff(p.im_str, "0") < 1e-20,
+            "hp Misiurewicz root im_str is not 0");
+}
+
+void run_hp_tests() {
+    const auto moderate = expect_hp_matches_double_at_moderate_zoom();
+    expect_hp_deep_zoom_self_consistency(moderate);
+    expect_hp_misiurewicz_string_roundtrip();
+}
+
+#else
+
+void run_hp_tests() {
+    std::cout << "special_points_smoke: MPFR unavailable, skipping high-precision tests\n";
+}
+
+#endif // FSD_HAS_MPFR
 
 SpecialPointSearchRequest base_search_request() {
     SpecialPointSearchRequest req;
@@ -321,6 +472,7 @@ int main() {
         expect_high_period_local_center();
         expect_deep_zoom_local_center_search();
         expect_viewport_sampled_center_search();
+        run_hp_tests();
     } catch (const std::exception& e) {
         std::cerr << "special_points_smoke failed: " << e.what() << '\n';
         return 1;

@@ -20,6 +20,11 @@ struct SpecialPointViewport {
     double scale = 3.0;
     int width = 1200;
     int height = 800;
+    // Optional decimal strings for deep zoom; when non-empty they carry the
+    // full-precision center and override center_re/center_im in the
+    // high-precision solver (same convention as the perturbation renderer).
+    std::string center_re_str;
+    std::string center_im_str;
 };
 
 struct SpecialPointEnumRequest {
@@ -74,6 +79,11 @@ struct SpecialPointResult {
     int period = 1;
     double re = 0.0;
     double im = 0.0;
+    // Full-precision decimal coordinates, set by the high-precision solver
+    // (empty on the double path). re/im hold the rounded values.
+    std::string re_str;
+    std::string im_str;
+    int prec_bits = 0;  // MPFR precision used; 0 = double path
     bool converged = false;
     bool accepted = false;
     bool fallback = false;
@@ -188,6 +198,16 @@ SpecialPointEnumResponse enumerate_special_points(
     const SpecialPointProgressCallback& progress = {});
 
 SpecialPointSearchResponse search_special_points(
+    const SpecialPointSearchRequest& req,
+    const SpecialPointSearchProgressCallback& progress = {});
+
+// High-precision (MPFR) deep-zoom path, implemented in special_points_hp.cpp.
+// search_special_points() delegates to it when the viewport scale drops below
+// special_points_hp_scale_threshold(); it can also be called directly.
+bool special_points_hp_available();
+double special_points_hp_scale_threshold();
+bool special_points_search_wants_hp(const SpecialPointSearchRequest& req);
+SpecialPointSearchResponse search_special_points_hp(
     const SpecialPointSearchRequest& req,
     const SpecialPointSearchProgressCallback& progress = {});
 

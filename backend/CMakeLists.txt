@@ -79,6 +79,7 @@ add_executable(fractal_studio_backend
     src/compute/mesh_io.cpp
     src/compute/marching_cubes.cpp
     src/compute/special_points.cpp
+    src/compute/special_points_hp.cpp
     src/compute/transition_volume.cpp
     src/compute/transition_volume_avx2.cpp
     src/compute/hs/heightfield_mesh.cpp
@@ -145,6 +146,7 @@ target_compile_options(fractal_studio_backend PRIVATE
 add_executable(special_points_smoke
     src/tests/special_points_smoke.cpp
     src/compute/special_points.cpp
+    src/compute/special_points_hp.cpp
 )
 target_include_directories(special_points_smoke PRIVATE
     src
@@ -222,10 +224,13 @@ find_path(MPFR_INCLUDE_DIR mpfr.h)
 if(MPFR_LIB AND MPFR_INCLUDE_DIR)
     target_compile_definitions(fractal_studio_backend PRIVATE FSD_HAS_MPFR=1)
     target_compile_definitions(compute_path_diff PRIVATE FSD_HAS_MPFR=1)
+    target_compile_definitions(special_points_smoke PRIVATE FSD_HAS_MPFR=1)
     target_include_directories(fractal_studio_backend PRIVATE ${MPFR_INCLUDE_DIR})
     target_include_directories(compute_path_diff PRIVATE ${MPFR_INCLUDE_DIR})
+    target_include_directories(special_points_smoke PRIVATE ${MPFR_INCLUDE_DIR})
     target_link_libraries(fractal_studio_backend PRIVATE ${MPFR_LIB})
     target_link_libraries(compute_path_diff PRIVATE ${MPFR_LIB})
+    target_link_libraries(special_points_smoke PRIVATE ${MPFR_LIB})
     message(STATUS "MPFR enabled (${MPFR_LIB})")
 else()
     message(STATUS "MPFR not found — arbitrary-precision perturbation disabled")

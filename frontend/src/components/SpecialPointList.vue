@@ -397,15 +397,26 @@ function runActive() {
   else enumerate()
 }
 
+function pointReText(p: SpecialPointEnumResult): string {
+  return p.reStr ?? p.re.toFixed(10)
+}
+
+function pointImText(p: SpecialPointEnumResult): string {
+  return p.imStr ?? p.im.toFixed(10)
+}
+
 function copyPoint(p: SpecialPointEnumResult) {
-  navigator.clipboard?.writeText(`${p.re}, ${p.im}`)
+  navigator.clipboard?.writeText(`${p.reStr ?? p.re}, ${p.imStr ?? p.im}`)
 }
 
 function addBookmark(p: SpecialPointEnumResult) {
   const raw = localStorage.getItem('fs_special_point_bookmarks')
   let items: any[] = []
   try { items = raw ? JSON.parse(raw) : [] } catch { items = [] }
-  items.push({ id: p.id, re: p.re, im: p.im, kind: p.kind, period: p.period, preperiod: p.preperiod, createdAt: new Date().toISOString() })
+  items.push({
+    id: p.id, re: p.re, im: p.im, reStr: p.reStr, imStr: p.imStr,
+    kind: p.kind, period: p.period, preperiod: p.preperiod, createdAt: new Date().toISOString(),
+  })
   localStorage.setItem('fs_special_point_bookmarks', JSON.stringify(items.slice(-500)))
 }
 
@@ -427,7 +438,7 @@ watch(
   () => ({
     mode: panelMode.value,
     auto: autoSearch.value,
-    viewport: props.viewport ? `${props.viewport.centerRe}:${props.viewport.centerIm}:${props.viewport.scale}:${props.viewport.width}:${props.viewport.height}` : '',
+    viewport: props.viewport ? `${props.viewport.centerReStr ?? props.viewport.centerRe}:${props.viewport.centerImStr ?? props.viewport.centerIm}:${props.viewport.scale}:${props.viewport.width}:${props.viewport.height}` : '',
     periodMin: periodMin.value,
     periodMax: periodMax.value,
     preperiodMin: preperiodMin.value,
@@ -525,12 +536,12 @@ defineExpose({ enumerate, refresh: runActive, points })
           @mouseleave="$emit('hover-point', '')"
           @click="selectPoint(p)">
           <div class="coord mono">
-            <span>{{ p.re.toFixed(10) }}</span>
-            <span>{{ p.im.toFixed(10) }}</span>
+            <span>{{ pointReText(p) }}</span>
+            <span>{{ pointImText(p) }}</span>
           </div>
           <div class="meta mono">
             <span v-if="isFallbackPoint(p)" class="fallback-label">{{ lang === 'en' ? 'fallback' : '回退' }} · {{ actualPointLabel(p) }} · </span>
-            {{ lang === 'en' ? 'res' : '残差' }} {{ p.residual.toExponential(1) }} · {{ p.newtonIterations }} {{ lang === 'en' ? 'it' : '次迭代' }}
+            {{ lang === 'en' ? 'res' : '残差' }} {{ p.residual.toExponential(1) }} · {{ p.newtonIterations }} {{ lang === 'en' ? 'it' : '次迭代' }}<span v-if="p.precBits"> · mpfr{{ p.precBits }}</span>
           </div>
           <div v-if="(p.compatibleVariants?.length || p.variants?.length)" class="tags">
             <button
@@ -620,6 +631,7 @@ defineExpose({ enumerate, refresh: runActive, points })
   gap: 2px;
   font-size: 10px;
   color: var(--text);
+  overflow-wrap: anywhere; /* deep-zoom coordinates run to ~70 digits */
 }
 .meta { color: var(--text-faint); font-size: 9px; margin-top: 4px; }
 .fallback-label { color: #d5ad45; }

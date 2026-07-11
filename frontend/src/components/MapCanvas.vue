@@ -706,11 +706,10 @@ function updatePinch() {
   })
 }
 
-function worldToScreen(re: number, im: number): { x: number; y: number; visible: boolean } {
+function offsetToScreen(dre: number, dim: number): { x: number; y: number; visible: boolean } {
   const w = Math.max(1, domW.value)
   const h = Math.max(1, domH.value)
   const aspect = w / h
-  const dre = re - props.centerRe, dim = im - props.centerIm
   const rad = (props.rotationDeg ?? 0) * Math.PI / 180
   const cosR = Math.cos(rad), sinR = Math.sin(rad)
   const dx = dre * cosR + dim * sinR
@@ -720,8 +719,16 @@ function worldToScreen(re: number, im: number): { x: number; y: number; visible:
   return { x, y, visible: x >= -8 && x <= w + 8 && y >= -8 && y <= h + 8 }
 }
 
+function worldToScreen(re: number, im: number): { x: number; y: number; visible: boolean } {
+  return offsetToScreen(re - props.centerRe, im - props.centerIm)
+}
+
 function markerStyle(p: SpecialPointEnumResult) {
-  const pos = worldToScreen(p.re, p.im)
+  // Deep-zoom points carry a BigDec-computed offset; the double coordinates
+  // collapse onto the center below ~1e-13 scales.
+  const pos = p.offsetRe !== undefined && p.offsetIm !== undefined
+    ? offsetToScreen(p.offsetRe, p.offsetIm)
+    : worldToScreen(p.re, p.im)
   return {
     transform: `translate(${pos.x}px, ${pos.y}px)`,
     display: pos.visible ? 'block' : 'none',

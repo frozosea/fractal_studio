@@ -35,6 +35,7 @@ z_{n+1} = z_n^2 + c
 - `backend/src/api/routes_points.cpp`
 - `backend/src/compute/special_points.hpp`
 - `backend/src/compute/special_points.cpp`
+- `backend/src/compute/special_points_hp.cpp`（MPFR 深 zoom 路径）
 - `backend/src/compute/newton/mandelbrot_sp.hpp`
 - `backend/src/compute/newton/mandelbrot_sp.cpp`
 - `backend/src/compute/cuda/special_points.cu`
@@ -61,6 +62,39 @@ routes_points.cpp
 `enumerate` 目标是找完整范围内的根。它先用 anchors，再用 deterministic low-discrepancy disk seeds，按 batch 并行尝试。
 
 `search` 目标是在当前 viewport 里快速找可见点。它按 period/preperiod 递进，中心点搜索会结合 viewport-local seed 和 fallback candidate。大 period 的本地中心搜索是这个路径的核心使用场景。
+
+## Deep Zoom / 高精度深 zoom 路径
+
+viewport `scale` 低于阈值（默认 `1e-8`）时，`search` 自动切换到
+`special_points_hp.cpp` 的 MPFR 求解器（`search_special_points_hp`）：
+
+1. **Ball-arithmetic period detection**：在全精度下迭代 viewport 中心的
+   critical orbit，同时维护一个覆盖整个 viewport 圆盘的误差半径；ball 包含 0
+   的迭代数即候选 period。
+2. **Newton 精化**：对候选 period 在全精度下解 `z_p(c) = 0`
+  （Misiurewicz 为 `z_{m+p} = z_m`），收敛到精度下限。
+3. **分类**：actual period 取 `p` 的最小因子 `q` 满足 `|z_q|` 低于随深度
+   缩放的阈值；Misiurewicz 另做最小前周期与 center 退化检查。
+
+精度策略：`bits = max(128, 1.5·zoom_bits + 96)`，`zoom_bits = -log2(scale)`。
+分类阈值 `2^-(zoom_bits/2 + 40)` 把"真零点"（~残差量级）与 near-return
+（~sqrt(minibrot 尺寸)）分开。
+
+坐标以十进制字符串跨越 API（与 perturbation renderer 相同约定）：
+
+- 请求：`viewport.centerReStr` / `viewport.centerImStr`（存在时覆盖 double 值）
+- 结果：`reStr` / `imStr`（全精度）与 `precBits`；`re`/`im` 为舍入 double
+
+环境变量：
+
+- `FSD_SPECIAL_POINT_HP=0` 关闭 HP 路径（回退旧 double 引擎）
+- `FSD_SPECIAL_POINT_HP_SCALE=<scale>` 修改切换阈值
+
+注意：HP 路径返回 viewport 内**最低 period 的 primitive nucleus**（与
+period 升序契约一致）。double 引擎在这些深度会因 Newton 噪声下限错过
+primitive nucleus 而落到它的 satellite（如 954 的 3× satellite 2862）——
+smoke test 对两种引擎分别断言。HP 结果的 `variants` 只含 Mandelbrot 条目
+（double 精度的 variant 轨道在该深度无意义）。
 
 ## Legacy Polynomial Solver / legacy 多项式 solver
 
@@ -99,6 +133,7 @@ Local search 的内部上限更高，用于深 zoom 高周期中心：
 
 - `kind`, `preperiod`, `period`
 - `re`, `im`
+- `reStr`, `imStr`, `precBits`（仅 HP 路径；全精度十进制坐标）
 - `converged`, `accepted`, `fallback`, `visible`
 - `residual`, `newtonIterations`
 - `actual`: orbit classifier 输出

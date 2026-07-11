@@ -314,7 +314,7 @@ const EXPORT_PRESETS: ExportPreset[] = [
 ]
 
 // ── Left / Mandelbrot viewport ────────────────────────────────────────────────
-import { type BigDec, bdFromString, bdFromNumber, bdAddNumber, bdToString, bdToNumber } from '../bigdec'
+import { type BigDec, bdFromString, bdFromNumber, bdAddNumber, bdSub, bdToString, bdToNumber } from '../bigdec'
 
 const centerRePrecise = ref<BigDec>(bdFromString('-0.75'))
 const centerImPrecise = ref<BigDec>(bdFromString('0'))
@@ -805,34 +805,54 @@ function resetView() {
 }
 
 function onImportPoint(p: SpecialPoint | SpecialPointEnumResult) {
+  const reStr = 'reStr' in p ? p.reStr : undefined
+  const imStr = 'imStr' in p ? p.imStr : undefined
   centerRe.value = 're' in p ? p.re : p.real
   centerIm.value = 'im' in p ? p.im : p.imag
-  centerRePrecise.value = bdFromNumber(centerRe.value)
-  centerImPrecise.value = bdFromNumber(centerIm.value)
+  centerRePrecise.value = reStr ? bdFromString(reStr) : bdFromNumber(centerRe.value)
+  centerImPrecise.value = imStr ? bdFromString(imStr) : bdFromNumber(centerIm.value)
   mapViewEpoch.value++
 }
 
 const specialPointViewport = computed(() => ({
   centerRe: centerRe.value,
   centerIm: centerIm.value,
+  centerReStr: bdToString(centerRePrecise.value),
+  centerImStr: bdToString(centerImPrecise.value),
   scale: scale.value,
   width: mapViewportW.value,
   height: mapViewportH.value,
 }))
 
+// Offset from the current precise center. Deep-zoom points carry full
+// coordinates only in reStr/imStr; their doubles all collapse onto the
+// center, so the subtraction must happen in BigDec.
+function specialPointOffset(p: SpecialPointEnumResult): { dRe: number; dIm: number } {
+  if (p.reStr && p.imStr) {
+    return {
+      dRe: bdToNumber(bdSub(bdFromString(p.reStr), centerRePrecise.value)),
+      dIm: bdToNumber(bdSub(bdFromString(p.imStr), centerImPrecise.value)),
+    }
+  }
+  return { dRe: p.re - centerRe.value, dIm: p.im - centerIm.value }
+}
+
 function pointInCurrentView(p: SpecialPointEnumResult) {
   const aspect = specialPointViewport.value.width / specialPointViewport.value.height
   const halfH = scale.value * 0.5
   const halfW = halfH * aspect
-  return p.re >= centerRe.value - halfW && p.re <= centerRe.value + halfW
-    && p.im >= centerIm.value - halfH && p.im <= centerIm.value + halfH
+  const { dRe, dIm } = specialPointOffset(p)
+  return dRe >= -halfW && dRe <= halfW && dIm >= -halfH && dIm <= halfH
 }
 
 const visibleSpecialPoints = computed(() =>
   specialPointResults.value.filter(p => pointInCurrentView(p) && specialPointMatchesCurrentVariant(p))
 )
 const renderedSpecialPoints = computed(() =>
-  pointsCollapsed.value ? [] : visibleSpecialPoints.value
+  pointsCollapsed.value ? [] : visibleSpecialPoints.value.map(p => {
+    const { dRe, dIm } = specialPointOffset(p)
+    return { ...p, offsetRe: dRe, offsetIm: dIm }
+  })
 )
 
 function onSpecialPointResults(points: SpecialPointEnumResult[]) {
