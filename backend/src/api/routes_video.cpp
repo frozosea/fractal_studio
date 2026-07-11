@@ -1217,6 +1217,41 @@ void renderZoomFramesToWriter(
 
 using ZoomRenderDriver = std::function<void(const std::function<void(const cv::Mat&)>&, VideoWarpStats&)>;
 
+// Mean absolute horizontal neighbor difference (all channels, sampled rows).
+// Smooth gradient renders score < ~4; per-pixel banding "static" (dense
+// hist_eq deep zooms) scores 30+. Used to auto-select 4:4:4 encoding: 4:2:0
+// chroma subsampling erases single-pixel color detail at ANY QP (measured
+// ~19 dB vs 39+ dB on real deep-zoom frames).
+double frameDetailScore(const cv::Mat& img) {
+    if (img.empty() || img.type() != CV_8UC3 || img.cols < 2) return 0.0;
+    const int step = std::max(1, img.rows / 256);
+    double sum = 0.0;
+    long long count = 0;
+    for (int y = 0; y < img.rows; y += step) {
+        const uint8_t* row = img.ptr<uint8_t>(y);
+        for (int x = 1; x < img.cols; ++x) {
+            sum += std::abs(int(row[3*x+0]) - int(row[3*(x-1)+0]))
+                 + std::abs(int(row[3*x+1]) - int(row[3*(x-1)+1]))
+                 + std::abs(int(row[3*x+2]) - int(row[3*(x-1)+2]));
+            count += 3;
+        }
+    }
+    return count > 0 ? sum / static_cast<double>(count) : 0.0;
+}
+
+// videoChroma: "420" (default), "444", or "auto". 4:2:0 hardware-decodes
+// everywhere and halves the bitrate, at the cost of erasing single-pixel
+// color detail; it stays the default so 4K120 exports remain smooth to play.
+// "444" keeps pixel-level color faithful (archival masters); "auto" picks
+// 4:4:4 only when the final frame carries pixel-level detail that 4:2:0
+// would erase.
+bool resolveVideoChroma444(const Json& j, const cv::Mat& finalImg) {
+    const std::string mode = j.value("videoChroma", std::string("420"));
+    if (mode == "444") return true;
+    if (mode == "auto") return frameDetailScore(finalImg) > 10.0;
+    return false;
+}
+
 static std::string encodeZoomVideoFrames(
     int W,
     int H,
@@ -1228,7 +1263,8 @@ static std::string encodeZoomVideoFrames(
     std::string* ffmpeg_stderr_out,
     std::string* encoder_out,
     VideoWarpStats* stats_out,
-    int videoQp = -1
+    int videoQp = -1,
+    bool chroma444 = false
 ) {
     if (encoder_out) *encoder_out = "";
     const std::filesystem::path ffmpegErr = outDir / (baseName + "_ffmpeg.stderr.txt");
@@ -1250,26 +1286,42 @@ static std::string encodeZoomVideoFrames(
     // the noisy fractal detail. `videoQp` overrides the auto choice.
     int qp = videoQp;
     if (qp < 0) {
-        qp = 18;                                             // transparent base
+        qp = chroma444 ? 15 : 18;                            // transparent base
         if (fps > 60) qp += 1;                               // shorter frame display
         if (static_cast<int64_t>(W) * H >= 3840LL * 2160LL) qp += 1;  // 4K+ pixel density
     }
     qp = std::clamp(qp, 1, 51);
     const int hevcQp = std::min(51, qp + 2);
-    if (commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_nvenc\"")) {
-        ffmpegCmds.push_back({"h264_nvenc",
-            inputArgs + "-c:v h264_nvenc -pix_fmt yuv420p -preset p5 -rc constqp -qp " +
+    const std::string h264Fmt = chroma444 ? "-pix_fmt yuv444p -profile:v high444p"
+                                          : "-pix_fmt yuv420p";
+    const std::string hevcFmt = chroma444 ? "-pix_fmt yuv444p" : "-pix_fmt yuv420p";
+    const std::string x264Fmt = chroma444 ? "-pix_fmt yuv444p" : "-pix_fmt yuv420p";
+    const std::string encTag = std::string(chroma444 ? "(yuv444p,qp" : "(yuv420p,qp");
+    const bool haveH264Nvenc =
+        commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_nvenc\"");
+    const bool haveHevcNvenc =
+        commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q hevc_nvenc\"");
+    auto pushH264 = [&]() {
+        if (!haveH264Nvenc) return;
+        ffmpegCmds.push_back({"h264_nvenc" + encTag + std::to_string(qp) + ")",
+            inputArgs + "-c:v h264_nvenc " + h264Fmt + " -preset p5 -rc constqp -qp " +
             std::to_string(qp) + " -b:v 0 -spatial-aq 1 -temporal-aq 1 \"" + tmpMp4.string() +
             "\" 2>\"" + ffmpegErrTmp.string() + "\""});
-    }
-    if (commandSucceeds("bash -lc \"ffmpeg -hide_banner -encoders 2>/dev/null | grep -q hevc_nvenc\"")) {
-        ffmpegCmds.push_back({"hevc_nvenc",
-            inputArgs + "-c:v hevc_nvenc -pix_fmt yuv420p -preset p5 -rc constqp -qp " +
+    };
+    auto pushHevc = [&]() {
+        if (!haveHevcNvenc) return;
+        ffmpegCmds.push_back({"hevc_nvenc" + encTag + std::to_string(hevcQp) + ")",
+            inputArgs + "-c:v hevc_nvenc " + hevcFmt + " -preset p5 -rc constqp -qp " +
             std::to_string(hevcQp) + " -b:v 0 -spatial_aq 1 -temporal_aq 1 \"" + tmpMp4.string() +
             "\" 2>\"" + ffmpegErrTmp.string() + "\""});
-    }
+    };
+    // 4:2:0 prefers h264 (universal hardware decode). 4:4:4 prefers HEVC:
+    // NVDEC hardware-decodes HEVC 4:4:4, while h264 4:4:4 always falls back
+    // to software decoding.
+    if (chroma444) { pushHevc(); pushH264(); }
+    else           { pushH264(); pushHevc(); }
     ffmpegCmds.push_back({"libx264",
-        inputArgs + "-c:v libx264 -pix_fmt yuv420p -preset medium -crf 16 \"" + tmpMp4.string() +
+        inputArgs + "-c:v libx264 " + x264Fmt + " -preset medium -crf 16 \"" + tmpMp4.string() +
         "\" 2>\"" + ffmpegErrTmp.string() + "\""});
 
     for (const auto& [encoderName, ffmpegCmd] : ffmpegCmds) {
@@ -1413,7 +1465,8 @@ static std::string generateZoomVideo(
     std::string* warp_method_out = nullptr,
     VideoWarpStats* stats_out = nullptr,
     const std::function<bool()>& should_cancel = nullptr,
-    int videoQp = -1
+    int videoQp = -1,
+    bool chroma444 = false
 ) {
     ZoomRenderSource source;
     source.strip = &strip;
@@ -1439,7 +1492,7 @@ static std::string generateZoomVideo(
 
     return encodeZoomVideoFrames(
         W, H, fps, outDir, baseName, renderFrames, baseStats,
-        ffmpeg_stderr_out, encoder_out, stats_out, videoQp);
+        ffmpeg_stderr_out, encoder_out, stats_out, videoQp, chroma444);
 }
 
 static std::string generateZoomVideoSequence(
@@ -1459,7 +1512,8 @@ static std::string generateZoomVideoSequence(
     std::string* warp_method_out = nullptr,
     VideoWarpStats* stats_out = nullptr,
     const std::function<bool()>& should_cancel = nullptr,
-    int videoQp = -1
+    int videoQp = -1,
+    bool chroma444 = false
 ) {
     if (segments.empty()) throw std::runtime_error("no segmented video frames were produced");
 
@@ -1500,7 +1554,7 @@ static std::string generateZoomVideoSequence(
 
     return encodeZoomVideoFrames(
         W, H, fps, outDir, baseName, renderFrames, baseStats,
-        ffmpeg_stderr_out, encoder_out, stats_out, videoQp);
+        ffmpeg_stderr_out, encoder_out, stats_out, videoQp, chroma444);
 }
 
 struct LnMapLookup {
@@ -1787,7 +1841,8 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
             &warpMethod,
             &warpStats,
             [&]() { return runner.isCancelRequested(run.id); },
-            std::clamp(j.value("videoQp", -1), -1, 51)
+            std::clamp(j.value("videoQp", -1), -1, 51),
+            resolveVideoChroma444(j, finalImg)
         );
         const auto t1 = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -2722,7 +2777,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 &warpMethod,
                 &warpStats,
                 [&]() { return runner.isCancelRequested(run.id); },
-                std::clamp(j.value("videoQp", -1), -1, 51));
+                std::clamp(j.value("videoQp", -1), -1, 51),
+                resolveVideoChroma444(j, finalImg));
             throwIfCancelled(runner, run.id);
 
             Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
@@ -3046,7 +3102,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             &warpMethod,
             &warpStats,
             [&]() { return runner.isCancelRequested(run.id); },
-            std::clamp(j.value("videoQp", -1), -1, 51)
+            std::clamp(j.value("videoQp", -1), -1, 51),
+            resolveVideoChroma444(j, finalImg)
         );
         throwIfCancelled(runner, run.id);
         Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};

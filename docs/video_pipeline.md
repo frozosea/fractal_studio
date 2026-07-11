@@ -175,13 +175,26 @@ warp 方法优先级：
 4. OpenCV `VideoWriter` mp4v
 5. OpenCV `VideoWriter` MJPG AVI fallback
 
-编码质量自动选择：QP 基准 18，`fps > 60` 时 +1，4K 及以上 +1（4K120 → h264
-qp 20）。请求可用 `videoQp`（0..51）覆盖自动值。
+编码质量自动选择：QP 基准 18（4:4:4 时 15），`fps > 60` 时 +1，4K 及以上
++1（4K120 → 420 qp 20 / 444 qp 17）。请求可用 `videoQp`（0..51）覆盖。
+
+`videoChroma`：`420`（默认）| `444` | `auto`。
+- `420`：所有设备硬解、码率减半，但 4:2:0 色度二次采样会抹掉**单像素级
+  彩色细节**（深层 hist_eq 的彩色「雪花」区在任何 QP 下都会发灰发糊——
+  实测 420 任意 QP ≈ 19 dB，444 ≈ 39–46 dB）。日常导出/流畅播放选它。
+- `444`：逐像素色彩保真（母带存档）。此时优先 `hevc_nvenc`（NVDEC 支持
+  HEVC 4:4:4 硬解；h264 4:4:4 只能软解），文件明显更大。
+- `auto`：final frame 的像素级细节评分 > 10 时自动选 444。
 
 为什么用 constqp：NVENC 的 target-quality VBR（`-cq`）在本机 driver/ffmpeg
 组合下**忽略 `-qmax`**（实测 4K120 噪声源 QP 漂到 50），信息量大的深层段落
 会被压成块状碎块（长视频「编码烂帧」的根源）。constqp 是 NVENC 唯一真正
 限定每帧质量的模式；码率随内容浮动，AQ 把码率倾斜到高纹理区域。
+
+播放注意：4K120 constqp 输出平均码率可达 ~180 Mbps，解码本身很快（实测
+NVDEC/软解都 >700 fps），但**导出运行中同一块 GPU 上播放会卡顿**（CUDA
+渲染与合成器/解码争抢），且 KDE 默认播放器对 4K120 的呈现管线较弱——建议
+用 `mpv --hwdec=auto`，并避免在导出进行时预览成片。
 
 响应和 report 会记录 `warpMethod`、`encoder`、`ffmpegStderr`、平均 warp/write 时间等统计。
 
