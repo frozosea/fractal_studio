@@ -85,6 +85,10 @@ cd frontend
 npm run dev
 ```
 
+开发服务默认使用轮询监听，避免桌面应用或编辑器耗尽 Linux 的 inotify 实例后出现
+`EMFILE: too many open files`。如机器的 inotify 配额充足，可用
+`VITE_USE_POLLING=0 npm run dev` 切回原生文件监听。
+
 生产构建和预览：
 
 ```bash

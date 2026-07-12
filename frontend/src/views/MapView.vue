@@ -895,6 +895,9 @@ watch(variant, () => {
 const pngPresetKey = ref('fhd')
 const videoPresetKey = ref('fhd')
 const showExportFrame = ref(false)
+const CLI_BINARY_PATH = './runtime/build/fractal_studio_backend'
+const copiedCliTarget = ref<'png' | 'video' | 'error-png' | 'error-video' | null>(null)
+let copyResetTimer: number | undefined
 
 const pngPreset = computed(() =>
   EXPORT_PRESETS.find(p => p.key === pngPresetKey.value) ?? EXPORT_PRESETS[0]
@@ -1058,8 +1061,42 @@ function pngRequestBase(background = false) {
 }
 
 const pngCliCommand = computed(() =>
-  `./backend/build/fractal_studio_backend export-map --json ${shellQuote(JSON.stringify(pngRequestBase(false)))}`
+  `${CLI_BINARY_PATH} export-map --json ${shellQuote(JSON.stringify(pngRequestBase(false)))}`
 )
+
+function copyTextFallback(text: string): boolean {
+  const el = document.createElement('textarea')
+  el.value = text
+  el.setAttribute('readonly', '')
+  el.style.position = 'fixed'
+  el.style.opacity = '0'
+  document.body.appendChild(el)
+  el.select()
+  const copied = document.execCommand('copy')
+  document.body.removeChild(el)
+  return copied
+}
+
+async function copyCliCommand(command: string, target: 'png' | 'video') {
+  if (copyResetTimer !== undefined) window.clearTimeout(copyResetTimer)
+  try {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(command)
+      } catch {
+        if (!copyTextFallback(command)) throw new Error('clipboard unavailable')
+      }
+    } else if (!copyTextFallback(command)) {
+      throw new Error('clipboard unavailable')
+    }
+    copiedCliTarget.value = target
+  } catch {
+    copiedCliTarget.value = `error-${target}`
+  }
+  copyResetTimer = window.setTimeout(() => {
+    copiedCliTarget.value = null
+  }, 2200)
+}
 
 function fmtDurationMs(ms?: number | null): string {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return ''
@@ -1351,7 +1388,7 @@ function videoRequestBase() {
 }
 
 const videoCliCommand = computed(() =>
-  `./backend/build/fractal_studio_backend export-video --json ${shellQuote(JSON.stringify({
+  `${CLI_BINARY_PATH} export-video --json ${shellQuote(JSON.stringify({
     ...videoRequestBase(),
     localExport: true,
     background: true,
@@ -1838,7 +1875,12 @@ async function pollVideoExport(initial: VideoExportResponse) {
       <span v-if="pngExportStatus" class="export-local-status mono">{{ pngExportStatus }}</span>
       <details v-if="localExportMode" class="cli-details">
         <summary>CLI</summary>
-        <textarea class="cli-command mono" readonly :value="pngCliCommand"></textarea>
+        <div class="cli-command-shell">
+          <textarea class="cli-command mono" readonly :value="pngCliCommand"></textarea>
+          <button class="cli-copy" type="button" @click="copyCliCommand(pngCliCommand, 'png')">
+            {{ copiedCliTarget === 'png' ? t('cli_copied') : copiedCliTarget === 'error-png' ? t('cli_copy_failed') : t('cli_copy') }}
+          </button>
+        </div>
       </details>
     </div>
 
@@ -2085,7 +2127,12 @@ async function pollVideoExport(initial: VideoExportResponse) {
             </div>
             <div v-if="localExportMode && !transitionOn" class="mrow cli-row">
               <label>CLI</label>
-              <textarea class="cli-command mono" readonly :value="videoCliCommand"></textarea>
+              <div class="cli-command-shell">
+                <textarea class="cli-command mono" readonly :value="videoCliCommand"></textarea>
+                <button class="cli-copy" type="button" @click="copyCliCommand(videoCliCommand, 'video')">
+                  {{ copiedCliTarget === 'video' ? t('cli_copied') : copiedCliTarget === 'error-video' ? t('cli_copy_failed') : t('cli_copy') }}
+                </button>
+              </div>
             </div>
             <div v-if="!transitionOn" class="mrow">
               <label>{{ lang === 'en' ? 'Quality' : '质量' }}</label>
@@ -2349,11 +2396,31 @@ async function pollVideoExport(initial: VideoExportResponse) {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.cli-command-shell {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+.cli-command-shell .cli-command {
+  flex: 1;
+  min-width: 0;
+}
+.cli-copy {
+  flex: 0 0 auto;
+  align-self: stretch;
+  white-space: nowrap;
+  padding: 5px 8px;
+  font-size: 9px;
+}
 .cli-row {
   align-items: stretch;
 }
-.cli-row .cli-command {
+.cli-row .cli-command-shell {
   flex: 1;
+  min-width: 0;
+}
+.cli-row .cli-command {
   min-height: 74px;
 }
 

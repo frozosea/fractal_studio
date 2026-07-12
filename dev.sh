@@ -13,6 +13,27 @@ BACKEND_BIN="$BACKEND_BUILD_DIR/fractal_studio_backend"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 BACKEND_PORT="${BACKEND_PORT:-18080}"
 FRONTEND_PORT="${FRONTEND_PORT:-5174}"
+BACKEND_PID=""
+FRONTEND_PID=""
+TAIL_PID=""
+
+stop_process() {
+    local pid="$1"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+}
+
+cleanup() {
+    stop_process "$TAIL_PID"
+    stop_process "$FRONTEND_PID"
+    stop_process "$BACKEND_PID"
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -68,17 +89,6 @@ echo "[dev.sh] Starting frontend on :$FRONTEND_PORT ..."
 FRONTEND_PID=$!
 echo "         PID=$FRONTEND_PID  log=$LOG_DIR/frontend.log"
 
-# Kill both on Ctrl-C / SIGTERM
-cleanup() {
-    echo ""
-    echo "[dev.sh] Shutting down..."
-    kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
-    wait "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
-    echo "[dev.sh] Done."
-    exit 0
-}
-trap cleanup INT TERM
-
 echo ""
 echo "  Backend  → http://localhost:$BACKEND_PORT"
 echo "  Frontend → http://localhost:$FRONTEND_PORT"
@@ -91,6 +101,4 @@ TAIL_PID=$!
 
 # Exit when the backend dies (frontend is secondary)
 wait "$BACKEND_PID" || true
-kill "$FRONTEND_PID" "$TAIL_PID" 2>/dev/null || true
-wait "$FRONTEND_PID" 2>/dev/null || true
 echo "[dev.sh] Backend exited."

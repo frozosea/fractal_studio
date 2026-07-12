@@ -73,6 +73,9 @@ const dict: Dict = {
   video_render:         { en: 'Render',               zh: '渲染' },
   video_cancel:         { en: 'Cancel',               zh: '取消' },
   video_download:       { en: 'Download video',       zh: '下载视频' },
+  cli_copy:             { en: 'Copy',                  zh: '复制' },
+  cli_copied:           { en: 'Copied',                zh: '已复制' },
+  cli_copy_failed:      { en: 'Copy failed',            zh: '复制失败' },
 
   // ── 3D view ─────────────────────────────────────────────────────────────
   three_mode_hs:    { en: 'Hidden structure', zh: '隐结构' },

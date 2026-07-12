@@ -122,10 +122,11 @@ createRun("video-export")
 ```
 
 The backend binary also exposes local CLI entry points for long-running exports:
+Run these commands from the project root (`fractal_studio/`):
 
 ```bash
-./backend/build/fractal_studio_backend export-map --json '{"taskType":"still_export", ...}'
-./backend/build/fractal_studio_backend export-video --json '{"centerRe":-0.75, ...}'
+./runtime/build/fractal_studio_backend export-map --json '{"taskType":"still_export", ...}'
+./runtime/build/fractal_studio_backend export-video --json '{"centerRe":-0.75, ...}'
 ```
 
 `export-video` starts the same background job and prints stage progress while the
