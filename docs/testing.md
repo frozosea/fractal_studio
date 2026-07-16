@@ -26,11 +26,17 @@ ctest --test-dir runtime/build --output-on-failure
 当前 CMake 注册的测试：
 
 - `special_points_smoke`
+- `artifact_routes_smoke`
+- `ln_map_reuse_smoke`
+- `http_range_smoke`
 - `compute_path_diff`
 
 测试源文件：
 
 - `backend/src/tests/special_points_smoke.cpp`
+- `backend/src/tests/artifact_routes_smoke.cpp`
+- `backend/src/tests/ln_map_reuse_smoke.cpp`
+- `backend/src/tests/http_range_smoke.cpp`
 - `backend/src/tests/compute_path_diff.cpp`
 
 覆盖重点：
@@ -40,6 +46,9 @@ ctest --test-dir runtime/build --output-on-failure
 - 高周期 local center Newton 收敛
 - 深 zoom local center search
 - viewport sampled search
+- 嵌套 artifact 的 run-relative ID、URL 编码和目录穿越拒绝
+- ln-map preview/full-strip 复用的精确 center 与生成参数身份校验
+- artifact 单 Range、开放尾端、suffix、multi-range 忽略与 If-Range 全量回退
 
 ## Compute Path Differential Tester / 计算路径对拍器
 
@@ -58,7 +67,9 @@ ctest --test-dir runtime/build --output-on-failure
 - Escape raw field 对拍：AVX2 覆盖 `fp32` / `fp64`，AVX512 当前覆盖 `fp64`
 - Transition renderer direct slice: `theta=0/90°` 对拍普通 map；`theta=-90°/180°` 额外覆盖非零 viewport rotation、精确 center 字符串和 Julia imaginary 的镜像变换
 - Transition renderer 非 cardinal slice: milli-degree 输入和 radians 输入对拍，覆盖 escape、HS envelope、pairwise、smooth field
-- Rotated transition engine parity: pair/multi × escape/metric 使用 OpenMP 基准对拍 AVX2/CUDA，并覆盖 CUDA `fp32` escape
+- Rotated transition engine parity: pair/multi × escape/metric 使用 OpenMP 基准对拍 AVX2/CUDA，覆盖 Bird/Celtic Ship fold 和 CUDA `fp32` escape
+- 非 cardinal transition 深 zoom：非零 `v`、37° theta、150° viewport rotation 的 Mandelbrot→Bird Julia 边界场景，验证 fp80/可选 fp128 保持高精度 viewport、三角函数与完整 3D orbit，不会退化为 fp64 坐标
+- Bird transition volume raw voxel 对拍：OpenMP 语义护栏区分旧 Mask-like fold；AVX2/CUDA 可用时必须实际命中并与 OpenMP fp32 对拍
 - OpenMP-only HS/scalar fallback smoke: `min_pairwise_dist`、smooth field coloring、transcendental variant
 - `fp64`、`fp32`、`fx64`，以及 OpenMP-only 的 `fp80` / 可选 `fp128`
 - AVX2 / AVX512 / CUDA 可用时自动对拍；不可用时记录 `SKIP`
@@ -78,6 +89,9 @@ Transition 对拍策略：
 - `theta=-90°/180°` 的翻转 direct slice 也必须等于经过严格镜像变换的普通 map；这些 direct slice 会分别跑 `fp64`、`fp32`、`fx64`，要求逐像素完全一致。
 - 非 cardinal transition 使用 milli-degree 参数和 radians 参数互相对拍，防止角度归一化和 HS 着色路径漂移。
 - 非零 `rotationDeg` 另以 OpenMP fp64 为基准，对拍 AVX2/CUDA 的 pair/multi、escape/metric；escape 还对拍 CUDA fp32。不可用的硬件路径记录 `SKIP`。
+- Bird/Celtic Ship 的虚部 fold 严格使用 `2*abs(x*axis)`；旋转 pair/multi 场景防止 SIMD/CUDA 只对 `axis` 取绝对值。
+- 非 cardinal `fp80`/`fp128` 另有深 zoom Julia 场景，使用非零 `v`、非同构 variant 和非零 viewport rotation，要求 orbit 的像素在 fp64 已坍缩时仍可区分。
+- Bird volume 使用单迭代、远离 bailout 的构造场景；旧的 `2*x*abs(axis)` fold 会触发语义护栏，AVX2/CUDA 可用时禁止 fallback。
 
 跨 scalar 只跑专门构造的 fp32-equivalent 场景：
 

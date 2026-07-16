@@ -128,6 +128,8 @@ c = juliaRe + juliaIm * i
 
 `scalarType: "auto"` 会根据 viewport 深度选择 `fp32`、`fp64` 或 fixed-point。`scale < 1e-13` 时优先进入 fixed-point 路径；不支持的变体、metric 或 engine 会回退。也可以显式请求 OpenMP-only 的 `fp80`，以及编译器支持 libquadmath 时的 `fp128`。
 
+非 cardinal 双变体 transition 显式请求 `fp80`/`fp128` 时，viewport 坐标和完整 3D orbit 都使用对应标量计算；不会在嵌入 slice 后转回 `double`。multi 与 `min_pairwise_dist` 目前仍使用 fp64 OpenMP fallback，并通过响应中的实际 `scalarUsed` 暴露该回退。
+
 `min_pairwise_dist` 是 O(N^2) orbit-buffer metric，固定点、SIMD、CUDA 都会受限，详见 [recurrence_metric.md](recurrence_metric.md)。
 
 ## Transition Slice / 过渡切片
@@ -145,6 +147,7 @@ z0 = v * sin(theta)
 `theta = 0` 对应 `transitionFrom` 平面，`theta = 90deg` 对应 `transitionTo` 平面。`transition_kernel.cpp` 会对精确 cardinal angle 做直接 2D map 快捷路径，避免浮点三角函数漂移。`theta = -90deg` 和 `theta = ±180deg` 的快捷路径还会一致镜像 center imaginary、Julia imaginary 和 viewport rotation，再翻转输出行。
 
 `transitionFrom` 和 `transitionTo` 只支持前 10 个二次/folded variants，不支持 transcendental 和 custom variants。
+Bird（API 名 `celtic_ship`）在所有 pair/volume 的 OpenMP、AVX2 和 CUDA 路径中统一使用 `2*abs(x*axis)` 虚部投影。
 
 ## Custom Formula / 自定义公式
 

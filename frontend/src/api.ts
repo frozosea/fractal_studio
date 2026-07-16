@@ -2,13 +2,29 @@
 //
 // All endpoints are POST JSON / GET query-string. Returns parsed JSON.
 
+const viteEnv = (import.meta as any).env
+const backendPort = viteEnv?.VITE_BACKEND_PORT ?? '18080'
 const BASE =
-  (import.meta as any).env?.VITE_BACKEND_URL ??
-  `http://${location.hostname}:18080`
+  viteEnv?.VITE_BACKEND_URL ??
+  `http://${location.hostname}:${backendPort}`
+
+function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (host === 'localhost' || host === '::1') return true
+  const octets = host.split('.')
+  return octets.length === 4 && octets[0] === '127' &&
+    octets.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+}
 
 export function isLocalBrowserAccess(): boolean {
-  const host = location.hostname.toLowerCase()
-  return host === 'localhost' || host.startsWith('127.') || host === '::1'
+  if (!isLoopbackHostname(location.hostname)) return false
+  try {
+    // Local export writes to the backend machine. A local Vite page pointed at
+    // a remote VITE_BACKEND_URL must therefore keep download-based export.
+    return isLoopbackHostname(new URL(BASE, location.href).hostname)
+  } catch {
+    return false
+  }
 }
 
 async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {

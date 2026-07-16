@@ -4,6 +4,7 @@
 #include "compute/colorize.hpp"
 #include "compute/perturbation.hpp"
 #include "compute/transition_kernel.hpp"
+#include "compute/transition_volume.hpp"
 
 #if defined(FSD_HAS_MPFR)
 #  include <mpfr.h>
@@ -31,7 +32,9 @@ using fsd::compute::FieldOutput;
 using fsd::compute::MapParams;
 using fsd::compute::MapStats;
 using fsd::compute::Metric;
+using fsd::compute::McField;
 using fsd::compute::TransitionParams;
+using fsd::compute::TransitionVolumeParams;
 using fsd::compute::Variant;
 
 struct DiffLimits {
@@ -673,6 +676,19 @@ std::vector<TransitionScene> transition_engine_rotation_scenes() {
 
     {
         TransitionParams p = base_transition_params();
+        p.base.center_re = -0.58;
+        p.base.center_im = 0.23;
+        p.base.scale = 2.3;
+        p.base.rotation_deg = 29.0;
+        p.theta_milli_deg = 31 * 1000;
+        p.from_variant = Variant::Bird;
+        p.to_variant = Variant::Boat;
+        p.base.metric = Metric::Escape;
+        scenes.push_back({"transition_rotated_pair_celtic_ship_escape", p});
+    }
+
+    {
+        TransitionParams p = base_transition_params();
         p.base.center_im = 0.19;
         p.base.scale = 2.35;
         p.base.rotation_deg = 41.0;
@@ -700,6 +716,22 @@ std::vector<TransitionScene> transition_engine_rotation_scenes() {
         scenes.push_back({"transition_rotated_multi_metric", p});
     }
 
+    {
+        TransitionParams p = base_transition_params();
+        p.base.center_re = -0.51;
+        p.base.center_im = -0.18;
+        p.base.scale = 2.25;
+        p.base.rotation_deg = -33.0;
+        p.base.iterations = 32;
+        p.base.metric = Metric::Escape;
+        p.multi_legs = {
+            {Variant::Bird, 1.0},
+            {Variant::Mandelbrot, 0.67},
+            {Variant::Mask, 0.36},
+        };
+        scenes.push_back({"transition_rotated_multi_celtic_ship_escape", p});
+    }
+
     return scenes;
 }
 
@@ -719,6 +751,19 @@ Rendered render_transition_scene(const TransitionScene& scene, const std::string
     cv::Mat image;
     MapStats stats = fsd::compute::render_transition(p, image);
     return {image, stats};
+}
+
+FieldRendered render_transition_field_scene(
+    const TransitionScene& scene,
+    const std::string& engine,
+    const std::string& scalar
+) {
+    TransitionParams p = scene.params;
+    p.base.engine = engine;
+    p.base.scalar_type = scalar;
+    FieldOutput field;
+    MapStats stats = fsd::compute::render_transition_field(p, field);
+    return {std::move(field), stats};
 }
 
 FieldRendered render_field_scene(const RenderScene& scene, const std::string& scalar,
@@ -1989,6 +2034,265 @@ void compare_transition_theta_encoding(
     if (!ok) ++runner.failed;
 }
 
+void verify_transition_high_precision_orbit(Runner& runner) {
+    TransitionScene scene;
+    scene.name = "transition_non_cardinal_rotated_deep_julia";
+
+    // This point lies on the c=0 Julia boundary for the 37-degree
+    // Mandelbrot/Bird transition. The decimal centers retain enough precision
+    // for the four 1e-18-wide samples to straddle that boundary. A 150-degree
+    // viewport rotation deliberately makes the first half move outward and the
+    // second half inward; with rotation=0 the ordering is reversed. Keeping v
+    // non-zero also makes both embedded y/z coordinates participate.
+    scene.params.base.center_re = 0.9070502151769073;
+    scene.params.base.center_im = 0.6802876613826805;
+    scene.params.base.center_re_str =
+        "0.9070502151769073214854827809821880851126721000908163590385510763";
+    scene.params.base.center_im_str =
+        "0.6802876613826804911141120857366410638345040750681122692789133072";
+    scene.params.base.scale = 1.0e-18;
+    scene.params.base.width = 4;
+    scene.params.base.height = 1;
+    scene.params.base.iterations = 100;
+    scene.params.base.bailout = 2.0;
+    scene.params.base.bailout_sq = 4.0;
+    scene.params.base.metric = Metric::Escape;
+    scene.params.base.julia = true;
+    scene.params.base.julia_re = 0.0;
+    scene.params.base.julia_im = 0.0;
+    scene.params.base.render_threads = 1;
+    scene.params.base.rotation_deg = 150.0;
+    scene.params.theta_milli_deg_set = true;
+    scene.params.theta_milli_deg = 37 * 1000;
+    scene.params.from_variant = Variant::Mandelbrot;
+    scene.params.to_variant = Variant::Bird;
+
+    FieldRendered fp64;
+    FieldRendered fp80;
+#if defined(FSD_HAS_FLOAT128)
+    FieldRendered fp128;
+#endif
+    try {
+        fp64 = render_transition_field_scene(scene, "openmp", "fp64");
+        fp80 = render_transition_field_scene(scene, "openmp", "fp80");
+#if defined(FSD_HAS_FLOAT128)
+        fp128 = render_transition_field_scene(scene, "openmp", "fp128");
+#endif
+    } catch (const std::exception& ex) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << scene.name << " threw: " << ex.what() << "\n";
+        return;
+    }
+
+    auto metadata_matches = [](const FieldRendered& rendered, const std::string& scalar) {
+        return rendered.stats.engine_used == "openmp" &&
+               scalar_matches(scalar, rendered.stats.scalar_used) &&
+               rendered.field.engine_used == "openmp" &&
+               scalar_matches(scalar, rendered.field.scalar_used);
+    };
+    auto fp64_collapsed = [&](const FieldRendered& rendered) {
+        const auto& iters = rendered.field.iter_u32;
+        return iters.size() == 4 &&
+               iters.front() < static_cast<uint32_t>(scene.params.base.iterations) &&
+               std::all_of(iters.begin() + 1, iters.end(), [&](uint32_t iter) {
+                   return iter == iters.front();
+               });
+    };
+    auto hp_separates_halves = [&](const FieldRendered& rendered) {
+        const auto& iters = rendered.field.iter_u32;
+        const uint32_t bounded = static_cast<uint32_t>(scene.params.base.iterations);
+        return iters.size() == 4 &&
+               iters[0] < bounded && iters[1] < bounded &&
+               iters[2] == bounded && iters[3] == bounded;
+    };
+    auto iter_signature = [](const FieldRendered& rendered) {
+        std::string out;
+        for (uint32_t iter : rendered.field.iter_u32) {
+            if (!out.empty()) out += ',';
+            out += std::to_string(iter);
+        }
+        return out;
+    };
+    auto report = [&](const std::string& scalar, const FieldRendered& rendered, bool orbit_ok) {
+        remember_stats(runner, rendered.stats);
+        ++runner.compared;
+        const bool ok = metadata_matches(rendered, scalar) && orbit_ok;
+        std::cout << (ok ? "[PASS] " : "[FAIL] ") << scene.name
+                  << " openmp/" << scalar
+                  << " actual=" << rendered.stats.engine_used << "/" << rendered.stats.scalar_used
+                  << " iters=[" << iter_signature(rendered) << "]\n";
+        if (!ok) ++runner.failed;
+    };
+
+    report("fp64", fp64, fp64_collapsed(fp64));
+    report("fp80", fp80, hp_separates_halves(fp80));
+#if defined(FSD_HAS_FLOAT128)
+    report("fp128", fp128, hp_separates_halves(fp128));
+#endif
+}
+
+void verify_bird_transition_volume_parity(Runner& runner) {
+    TransitionVolumeParams params;
+    // Every voxel has x < 0 and y/z > 0, so one iteration cleanly
+    // distinguishes Bird's 2*abs(x*axis) fold from the old Mask-like
+    // 2*x*abs(axis) implementation without chaotic boundary amplification.
+    params.centerX = -0.75;
+    params.centerY = 0.5;
+    params.centerZ = 0.25;
+    params.extent = 0.1;
+    params.resolution = 4;
+    params.iterations = 1;
+    params.bailout = 2.0;
+    params.bailout_sq = 4.0;
+    params.from_variant = Variant::Bird;
+    params.to_variant = Variant::Bird;
+    params.scalar_type = "fp32";
+
+    struct VolumeDiff {
+        double max_abs = 0.0;
+        double mean_abs = 0.0;
+        double bad_ratio = 0.0;
+        size_t samples = 0;
+    };
+
+    auto diff_volume = [](const McField& a, const McField& b, double bad_threshold) {
+        VolumeDiff stats;
+        if (a.Nx != b.Nx || a.Ny != b.Ny || a.Nz != b.Nz ||
+            a.data.size() != b.data.size() || a.data.empty()) {
+            stats.max_abs = std::numeric_limits<double>::infinity();
+            stats.mean_abs = std::numeric_limits<double>::infinity();
+            stats.bad_ratio = 1.0;
+            return stats;
+        }
+
+        size_t bad = 0;
+        double sum = 0.0;
+        for (size_t i = 0; i < a.data.size(); ++i) {
+            double delta = std::fabs(static_cast<double>(a.data[i]) -
+                                     static_cast<double>(b.data[i]));
+            if (!std::isfinite(delta)) delta = std::numeric_limits<double>::infinity();
+            stats.max_abs = std::max(stats.max_abs, delta);
+            sum += delta;
+            if (delta > bad_threshold) ++bad;
+        }
+        stats.samples = a.data.size();
+        stats.mean_abs = sum / static_cast<double>(stats.samples);
+        stats.bad_ratio = static_cast<double>(bad) / static_cast<double>(stats.samples);
+        return stats;
+    };
+
+    McField baseline;
+    try {
+        params.engine = "openmp";
+        baseline = fsd::compute::buildTransitionVolume(params);
+    } catch (const std::exception& ex) {
+        ++runner.failed;
+        std::cerr << "[FAIL] transition_volume_bird openmp threw: " << ex.what() << "\n";
+        return;
+    }
+
+    ++runner.compared;
+    const bool baseline_finite = std::all_of(
+        baseline.data.begin(), baseline.data.end(), [](float value) {
+            return std::isfinite(value);
+        });
+    const bool baseline_ok = baseline.engine_used == "openmp_fp32" &&
+                             baseline.scalar_used == "fp32" &&
+                             baseline.Nx == 4 && baseline.Ny == 4 && baseline.Nz == 4 &&
+                             baseline.data.size() == 4u * 4u * 4u && baseline_finite;
+    std::cout << (baseline_ok ? "[PASS] " : "[FAIL] ")
+              << "transition_volume_bird baseline actual="
+              << baseline.engine_used << "/" << baseline.scalar_used
+              << " voxels=" << baseline.data.size() << "\n";
+    if (!baseline_ok) {
+        ++runner.failed;
+        return;
+    }
+
+    // Mask has the exact real fold that Bird uses, but its imaginary fold is
+    // the historical buggy Bird implementation. Requiring a material delta
+    // proves this scene would fail against that regression.
+    TransitionVolumeParams wrong_params = params;
+    wrong_params.from_variant = Variant::Mask;
+    wrong_params.to_variant = Variant::Mask;
+    McField wrong_fold;
+    try {
+        wrong_fold = fsd::compute::buildTransitionVolume(wrong_params);
+    } catch (const std::exception& ex) {
+        ++runner.failed;
+        std::cerr << "[FAIL] transition_volume_bird wrong-fold guard threw: "
+                  << ex.what() << "\n";
+        return;
+    }
+    const VolumeDiff guard = diff_volume(baseline, wrong_fold, 0.01);
+    const bool wrong_finite = std::all_of(
+        wrong_fold.data.begin(), wrong_fold.data.end(), [](float value) {
+            return std::isfinite(value);
+        });
+    const double first_voxel_delta = baseline.data.empty() || wrong_fold.data.empty()
+        ? 0.0
+        : std::fabs(static_cast<double>(baseline.data.front()) -
+                    static_cast<double>(wrong_fold.data.front()));
+    const bool guard_ok = wrong_fold.engine_used == "openmp_fp32" &&
+                          wrong_fold.scalar_used == "fp32" &&
+                          wrong_finite &&
+                          first_voxel_delta > 0.15 && guard.max_abs > 0.20;
+    ++runner.compared;
+    std::cout << (guard_ok ? "[PASS] " : "[FAIL] ")
+              << "transition_volume_bird wrong-fold sensitivity"
+              << " first=" << first_voxel_delta
+              << " max=" << guard.max_abs
+              << " mean=" << guard.mean_abs
+              << " bad=" << guard.bad_ratio << "\n";
+    if (!guard_ok) ++runner.failed;
+
+    auto compare_engine = [&](const char* requested, const char* expected) {
+        TransitionVolumeParams candidate_params = params;
+        candidate_params.engine = requested;
+        McField candidate;
+        try {
+            candidate = fsd::compute::buildTransitionVolume(candidate_params);
+        } catch (const std::exception& ex) {
+            ++runner.failed;
+            std::cerr << "[FAIL] transition_volume_bird " << requested
+                      << " threw: " << ex.what() << "\n";
+            return;
+        }
+
+        const VolumeDiff diff = diff_volume(baseline, candidate, 2.0e-6);
+        const bool engine_ok = candidate.engine_used == expected &&
+                               candidate.scalar_used == "fp32";
+        // This is a single fp32 iteration far from the bailout boundary. The
+        // historical fold error is >0.19 at the first voxel, leaving five
+        // orders of magnitude of room for backend rounding differences.
+        const bool values_ok = diff.max_abs <= 2.0e-6;
+        const bool ok = engine_ok && values_ok;
+        ++runner.compared;
+        std::cout << (ok ? "[PASS] " : "[FAIL] ")
+                  << "transition_volume_bird " << requested
+                  << " actual=" << candidate.engine_used << "/" << candidate.scalar_used
+                  << " max=" << diff.max_abs
+                  << " mean=" << diff.mean_abs
+                  << " bad=" << diff.bad_ratio << "\n";
+        if (!ok) ++runner.failed;
+    };
+
+    const auto caps = fsd::compute::runtime_capabilities();
+    if (caps.avx2_compiled && caps.avx2_runtime && caps.fma_runtime) {
+        compare_engine("avx2", "avx2_fp32");
+    } else {
+        ++runner.skipped;
+        std::cout << "[SKIP] transition_volume_bird avx2 unavailable\n";
+    }
+
+    if (caps.cuda_compiled && caps.cuda_runtime) {
+        compare_engine("cuda", "cuda_fp32");
+    } else {
+        ++runner.skipped;
+        std::cout << "[SKIP] transition_volume_bird cuda unavailable\n";
+    }
+}
+
 void require_seen(Runner& runner, const std::set<std::string>& seen, const std::string& value, const char* env_name) {
     if (!env_enabled(env_name)) return;
     if (seen.count(value)) return;
@@ -2093,6 +2397,9 @@ int main() {
             compare_transition_engine(runner, scene, "cuda", "fp32", same_scalar_limits);
         }
     }
+
+    verify_transition_high_precision_orbit(runner);
+    verify_bird_transition_volume_parity(runner);
 
     compare_deep_perturbation_scenes(runner);
     compare_perturbation_envelope_to_fp128(runner);

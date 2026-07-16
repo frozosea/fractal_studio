@@ -42,7 +42,8 @@ FoldRules fold_rules(Variant v) {
     r.post_abs_real =
         v == Variant::Fish || v == Variant::Vase || v == Variant::Bird ||
         v == Variant::Mask || v == Variant::Ship;
-    r.abs_x = v == Variant::Boat || v == Variant::Bell || v == Variant::Ship;
+    r.abs_x = v == Variant::Boat || v == Variant::Bell ||
+              v == Variant::Bird || v == Variant::Ship;
     r.abs_axis = v == Variant::Boat || v == Variant::Duck ||
                  v == Variant::Mask || v == Variant::Bird;
     r.neg_imag = v == Variant::Tri || v == Variant::Bell ||

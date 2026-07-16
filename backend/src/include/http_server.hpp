@@ -18,6 +18,7 @@ private:
 
     static std::string makeHttpResponse(int status, const std::string& body, const std::string& contentType = "application/json", const std::string& extraHeaders = "");
     std::string handleRequest(const std::string& request) const;
+    bool streamArtifactResponse(int clientFd, const std::string& request) const;
 };
 
 } // namespace fsd

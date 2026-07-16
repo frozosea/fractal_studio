@@ -2,7 +2,7 @@
 //
 // Scan categorized runtime/runs/<category>/<runId>/ directories (plus the old
 // flat runtime/runs/<runId>/ layout) and expose every file as an artifact.
-// artifactId is "runId:fileName". This keeps artifact listing independent of
+// artifactId is "runId:relative/path". This keeps artifact listing independent of
 // the sqlite table (useful for debugging and tooling).
 
 #include "routes.hpp"
@@ -10,7 +10,7 @@
 
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -58,12 +58,18 @@ std::string contentTypeFromPath(const fs::path& path) {
     return "application/octet-stream";
 }
 
-std::string readFileBinary(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) throw std::runtime_error("failed to open file: " + path.string());
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    return ss.str();
+std::string urlEncodeQueryValue(const std::string& value) {
+    std::ostringstream out;
+    out << std::uppercase << std::hex;
+    for (const unsigned char c : value) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+            out << static_cast<char>(c);
+        } else {
+            out << '%' << std::setw(2) << std::setfill('0') << static_cast<int>(c);
+        }
+    }
+    return out.str();
 }
 
 struct ArtifactEntry {
@@ -80,15 +86,20 @@ void collectRunDir(const fs::path& runDir, const std::string& runId, std::vector
     std::error_code ec;
     for (fs::recursive_directory_iterator it(runDir, ec), end; it != end; it.increment(ec)) {
         if (ec) break;
-        if (!it->is_regular_file(ec)) continue;
+        std::error_code sec;
+        if (it->is_symlink(sec) || sec || !it->is_regular_file(sec)) continue;
         ArtifactEntry row;
         row.runId      = runId;
         row.path       = it->path().string();
-        row.fileName   = it->path().filename().string();
+        std::error_code rec;
+        const fs::path relative = fs::relative(it->path(), runDir, rec);
+        if (rec || relative.empty()) continue;
+        row.fileName   = relative.generic_string();
         row.artifactId = runId + ":" + row.fileName;
         row.kind       = kindFromPath(it->path());
-        std::error_code sec;
-        row.sizeBytes  = static_cast<long long>(fs::file_size(it->path(), sec));
+        std::error_code fec;
+        row.sizeBytes  = static_cast<long long>(fs::file_size(it->path(), fec));
+        if (fec) continue;
         rows.push_back(row);
     }
 }
@@ -98,54 +109,60 @@ bool hasDirectFiles(const fs::path& dir) {
     std::error_code ec;
     for (fs::directory_iterator it(dir, ec), end; it != end; it.increment(ec)) {
         if (ec) break;
-        if (it->is_regular_file(ec)) return true;
+        std::error_code sec;
+        if (it->is_symlink(sec) || sec) continue;
+        if (it->is_regular_file(sec) && !sec) return true;
     }
     return false;
 }
 
 std::vector<ArtifactEntry> collectArtifacts(const fs::path& repoRoot) {
-    const fs::path runsRoot = repoRoot / "fractal_studio" / "runtime" / "runs";
     std::vector<ArtifactEntry> rows;
-    if (!fs::exists(runsRoot)) return rows;
+    std::error_code ec;
+    const fs::path runsRoot = fs::canonical(
+        repoRoot / "fractal_studio" / "runtime" / "runs", ec);
+    if (ec || !fs::is_directory(runsRoot, ec)) return rows;
 
     // Runs are grouped by product type: runs/<category>/<runId>/. A top-level dir that holds
     // loose files is itself an (old, flat) run dir; one that holds only subdirs is a category
     // container whose children are run dirs.
-    std::error_code ec;
     for (fs::directory_iterator it(runsRoot, ec), end; it != end; it.increment(ec)) {
         if (ec) break;
-        if (!it->is_directory(ec)) continue;
-        const fs::path top = it->path();
+        std::error_code sec;
+        if (it->is_symlink(sec) || sec || !it->is_directory(sec)) continue;
+        const fs::path top = fs::canonical(it->path(), sec);
+        if (sec || !canonicalPathIsWithin(runsRoot, top)) continue;
         if (hasDirectFiles(top)) {
             collectRunDir(top, top.filename().string(), rows);          // old flat layout
         } else {
             std::error_code cec;
             for (fs::directory_iterator rit(top, cec), rend; rit != rend; rit.increment(cec)) {
                 if (cec) break;
-                if (rit->is_directory(cec)) collectRunDir(rit->path(), rit->path().filename().string(), rows);
+                std::error_code rec;
+                if (rit->is_symlink(rec) || rec || !rit->is_directory(rec)) continue;
+                const fs::path runDir = fs::canonical(rit->path(), rec);
+                if (rec || !canonicalPathIsWithin(runsRoot, runDir)) continue;
+                collectRunDir(runDir, rit->path().filename().string(), rows);
             }
         }
     }
     return rows;
 }
 
-fs::path artifactPathFromId(const fs::path& repoRoot, const std::string& artifactId, std::string& fileNameOut) {
+fs::path artifactPathFromId(
+    const fs::path& repoRoot,
+    const std::string& artifactId,
+    std::string& fileNameOut,
+    fs::path& runDirOut
+) {
     const auto split = artifactId.find(':');
     if (artifactId.empty() || split == std::string::npos) {
         throw std::runtime_error("invalid artifactId");
     }
-    const std::string runId    = artifactId.substr(0, split);
-    const std::string fileName = artifactId.substr(split + 1);
-    if (runId.find("..") != std::string::npos || fileName.find("..") != std::string::npos ||
-        runId.find('/')  != std::string::npos || runId.find('\\') != std::string::npos ||
-        fileName.find('/') != std::string::npos || fileName.find('\\') != std::string::npos) {
-        throw std::runtime_error("invalid artifactId path");
-    }
-    fileNameOut = fileName;
-    const fs::path path = resolveRunDir(repoRoot, runId) / fileName;
-    if (!fs::exists(path) || !fs::is_regular_file(path)) {
-        throw std::runtime_error("artifact not found");
-    }
+    const std::string runId = artifactId.substr(0, split);
+    const std::string relativeName = artifactId.substr(split + 1);
+    const fs::path path = resolveRunFileSecure(repoRoot, runId, relativeName, &runDirOut);
+    fileNameOut = path.filename().string();
     return path;
 }
 
@@ -161,14 +178,15 @@ std::string artifactsListRoute(const std::filesystem::path& repoRoot, const std:
     for (const auto& row : rows) {
         if (!kindFilter.empty()  && row.kind  != kindFilter)  continue;
         if (!runIdFilter.empty() && row.runId != runIdFilter) continue;
+        const std::string encodedId = urlEncodeQueryValue(row.artifactId);
         items.push_back({
             {"artifactId",  row.artifactId},
             {"runId",       row.runId},
             {"name",        row.fileName},
             {"kind",        row.kind},
             {"sizeBytes",   row.sizeBytes},
-            {"downloadPath","/api/artifacts/download?artifactId=" + row.artifactId},
-            {"contentPath", "/api/artifacts/content?artifactId="  + row.artifactId},
+            {"downloadPath","/api/artifacts/download?artifactId=" + encodedId},
+            {"contentPath", "/api/artifacts/content?artifactId="  + encodedId},
             {"localPath",   row.path},
         });
     }
@@ -176,21 +194,15 @@ std::string artifactsListRoute(const std::filesystem::path& repoRoot, const std:
     return resp.dump();
 }
 
-std::string artifactDownloadBody(const std::filesystem::path& repoRoot, const std::string& query, std::string& contentType, std::string& downloadName) {
+ArtifactFile artifactFileRoute(const std::filesystem::path& repoRoot, const std::string& query) {
     const std::string artifactId = urlDecode(getQueryParam(query, "artifactId"));
     std::string fileName;
-    const fs::path path = artifactPathFromId(repoRoot, artifactId, fileName);
-    contentType = contentTypeFromPath(path);
-    downloadName = fileName;
-    return readFileBinary(path);
-}
-
-std::string artifactContentBody(const std::filesystem::path& repoRoot, const std::string& query, std::string& contentType) {
-    const std::string artifactId = urlDecode(getQueryParam(query, "artifactId"));
-    std::string fileName;
-    const fs::path path = artifactPathFromId(repoRoot, artifactId, fileName);
-    contentType = contentTypeFromPath(path);
-    return readFileBinary(path);
+    fs::path runDir;
+    const fs::path path = artifactPathFromId(repoRoot, artifactId, fileName, runDir);
+    std::error_code ec;
+    const std::uintmax_t size = fs::file_size(path, ec);
+    if (ec) throw std::runtime_error("failed to stat artifact");
+    return ArtifactFile{path, runDir, contentTypeFromPath(path), fileName, size};
 }
 
 } // namespace fsd

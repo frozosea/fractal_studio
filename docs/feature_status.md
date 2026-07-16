@@ -2,7 +2,7 @@
 
 本文记录已经确认的功能状态和暂缓决策，避免把已完成能力重复列为待办，也避免在语义与生命周期约定尚未确定时提前固化接口。
 
-决策日期：2026-07-16。
+决策日期：2026-07-17。
 
 ## Decision Summary / 决策摘要
 
@@ -10,6 +10,10 @@
 |---|---|---|
 | AVX2 `fp32` raw field | Implemented / 已实现 | 当前实现已覆盖 AVX2 `fp32` raw-field 路径，不再作为待办。 |
 | Transition map rotation | Fixed / 已修复 | 前端预览和 OpenMP/AVX2/CUDA pair/multi viewport rotation 已统一，并有差分回归覆盖。 |
+| Bird/Celtic Ship transition fold | Fixed / 已修复 | pair/volume 的 OpenMP、AVX2、CUDA 统一为 `2*abs(x*axis)`；旋转 pair/multi 与 raw-volume 硬件路径均有回归。 |
+| Non-cardinal transition fp80/fp128 | Implemented / 已实现 | 双变体 viewport 与完整 3D orbit 使用所请求高精度标量；multi/pairwise fallback 继续报告实际 fp64。 |
+| Single-strip ln-map reuse guard | Implemented / 已实现 | preview stats 和非分段 full-strip 复用校验完整生成身份；缺少持久全局 CDF 的 `bands`/`frontier` 暂不复用。 |
+| Artifact nested paths and streaming | Implemented / 已实现 | artifact ID 保存 run-relative path；download/content 支持流式发送和单 Range，不再整文件读入内存。 |
 | Multi-variant transition video | Deferred / 暂缓 | multi-kernel `theta` 尚无明确语义；先定义权重与路径动画、schema 和 tests。 |
 | Segmented ln-map reuse | Deferred / 暂缓 | 临时段默认清理，且尚无持久 manifest、兼容性约定与保留策略；现有 preview stats reuse 继续。 |
 

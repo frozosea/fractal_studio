@@ -40,7 +40,8 @@ inline float transition_real_projection_f32(Variant v, float x2, float axis2) {
 
 inline float transition_imag_projection_f32(Variant v, float x, float axis) {
     const bool abs_x =
-        v == Variant::Boat || v == Variant::Bell || v == Variant::Ship;
+        v == Variant::Boat || v == Variant::Bell ||
+        v == Variant::Bird || v == Variant::Ship;
     const bool abs_axis =
         v == Variant::Boat || v == Variant::Duck || v == Variant::Mask || v == Variant::Bird;
     const bool neg =

@@ -942,22 +942,37 @@ MapStats render_transition_scalar(const TransitionParams& p, FieldOutput& fo) {
     const S s_center_re = scalar_from_string<S>(b.center_re_str, b.center_re);
     const S s_center_im = scalar_from_string<S>(b.center_im_str, b.center_im);
     const S s_scale     = scalar_from_double<S>(b.scale);
-    const S s_aspect    = scalar_from_double<S>(static_cast<double>(W) / H);
+    const S s_aspect    = scalar_from_double<S>(static_cast<double>(W)) /
+                          scalar_from_double<S>(static_cast<double>(H));
     const S s_span_im   = s_scale;
     const S s_span_re   = s_scale * s_aspect;
     const S s_half      = scalar_from_double<S>(0.5);
     const S s_re_min    = s_center_re - s_span_re * s_half;
     const S s_im_max    = s_center_im + s_span_im * s_half;
-    const S s_inv_W     = scalar_from_double<S>(1.0 / W);
-    const S s_inv_H     = scalar_from_double<S>(1.0 / H);
+    const S s_inv_W     = scalar_from_double<S>(1.0) /
+                          scalar_from_double<S>(static_cast<double>(W));
+    const S s_inv_H     = scalar_from_double<S>(1.0) /
+                          scalar_from_double<S>(static_cast<double>(H));
     const bool has_view_rot = b.rotation_deg != 0.0;
-    const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
-    const S s_view_cos = scalar_from_double<S>(has_view_rot ? std::cos(view_rad) : 1.0);
-    const S s_view_sin = scalar_from_double<S>(has_view_rot ? std::sin(view_rad) : 0.0);
+    const S s_pi = scalar_from_string<S>(
+        "3.1415926535897932384626433832795028841971693993751", PI);
+    const S s_view_rad = has_view_rot
+        ? scalar_from_double<S>(b.rotation_deg) * s_pi / scalar_from_double<S>(180.0)
+        : scalar_from_double<S>(0.0);
+    const S s_view_cos = has_view_rot ? scalar_cos(s_view_rad) : scalar_from_double<S>(1.0);
+    const S s_view_sin = has_view_rot ? scalar_sin(s_view_rad) : scalar_from_double<S>(0.0);
     const S s_pixel_step = s_scale / scalar_from_double<S>(static_cast<double>(H));
     const S s_half_w = scalar_from_double<S>(static_cast<double>(W) * 0.5);
     const S s_half_h = scalar_from_double<S>(static_cast<double>(H) * 0.5);
-    const double bail2  = b.bailout_sq;
+    const S s_bail2 = scalar_from_double<S>(b.bailout_sq);
+    const S s_theta = p.theta_milli_deg_set
+        ? scalar_from_double<S>(static_cast<double>(p.theta_milli_deg)) * s_pi /
+              scalar_from_double<S>(180.0 * THETA_SCALE)
+        : scalar_from_double<S>(p.theta);
+    const S s_cos_theta = scalar_cos(s_theta);
+    const S s_sin_theta = scalar_sin(s_theta);
+    const S s_julia_re = scalar_from_double<S>(b.julia_re);
+    const S s_julia_im = scalar_from_double<S>(b.julia_im);
 
     const int thread_count = resolve_render_threads(b.render_threads);
     std::atomic<bool> cancelled{false};
@@ -989,37 +1004,40 @@ MapStats render_transition_scalar(const TransitionParams& p, FieldOutput& fo) {
                 s_v = s_v_norot;
             }
 
-            const double u  = static_cast<double>(s_u);
-            const double v  = static_cast<double>(s_v);
-            const double x0 = u;
-            const double y0 = v * std::cos(p.theta);
-            const double z0 = v * std::sin(p.theta);
-            const double cx = b.julia ? b.julia_re                         : x0;
-            const double cy = b.julia ? b.julia_im * std::cos(p.theta)     : y0;
-            const double cz = b.julia ? b.julia_im * std::sin(p.theta)     : z0;
+            // Keep both the viewport coordinates and the complete 3D orbit in
+            // S. Converting s_u/s_v to double here used to make fp80/fp128 a
+            // metadata-only choice and collapsed deep-zoom neighbouring pixels.
+            const S x0 = s_u;
+            const S y0 = s_v * s_cos_theta;
+            const S z0 = s_v * s_sin_theta;
+            const S cx = b.julia ? s_julia_re                 : x0;
+            const S cy = b.julia ? s_julia_im * s_cos_theta   : y0;
+            const S cz = b.julia ? s_julia_im * s_sin_theta   : z0;
 
-            double xv = x0, yv = y0, zv = z0;
-            double xv2 = xv*xv, yv2 = yv*yv, zv2 = zv*zv;
-            double min_sq = xv2 + yv2 + zv2, max_sq = min_sq;
+            S xv = x0, yv = y0, zv = z0;
+            S xv2 = xv*xv, yv2 = yv*yv, zv2 = zv*zv;
+            S min_sq = xv2 + yv2 + zv2, max_sq = min_sq;
             int iter = 0;
             bool escaped = false;
-            double norm = 0.0;
+            S norm = scalar_from_double<S>(0.0);
 
             for (; iter < b.iterations; iter++) {
-                const double nx = variant_transition_real_projection(p.from_variant, xv2, yv2)
-                                + variant_transition_real_projection(p.to_variant,   xv2, zv2)
-                                - xv2 + cx;
-                const double ny = variant_transition_imag_projection(p.from_variant, xv, yv) + cy;
-                const double nz = variant_transition_imag_projection(p.to_variant,   xv, zv) + cz;
-                const bool fin = std::isfinite(nx) && std::isfinite(ny) && std::isfinite(nz);
-                const double n2 = fin ? (nx*nx + ny*ny + nz*nz) : std::numeric_limits<double>::infinity();
+                const S nx = transition_real_projection_s(p.from_variant, xv2, yv2)
+                           + transition_real_projection_s(p.to_variant,   xv2, zv2)
+                           - xv2 + cx;
+                const S ny = transition_imag_projection_s(p.from_variant, xv, yv) + cy;
+                const S nz = transition_imag_projection_s(p.to_variant,   xv, zv) + cz;
+                const bool fin = std::isfinite(scalar_to_double(nx)) &&
+                                 std::isfinite(scalar_to_double(ny)) &&
+                                 std::isfinite(scalar_to_double(nz));
+                const S n2 = nx*nx + ny*ny + nz*nz;
                 if constexpr (iter_result_wants(NeedMask, IterResultField::MinAbs)) {
                     if (n2 < min_sq) min_sq = n2;
                 }
                 if constexpr (iter_result_wants(NeedMask, IterResultField::MaxAbs)) {
                     if (n2 > max_sq) max_sq = n2;
                 }
-                if (!fin || n2 > bail2) { norm = n2; escaped = true; break; }
+                if (!fin || n2 > s_bail2) { norm = n2; escaped = true; break; }
                 xv = nx; yv = ny; zv = nz;
                 xv2 = nx*nx; yv2 = ny*ny; zv2 = nz*nz;
             }
@@ -1027,12 +1045,15 @@ MapStats render_transition_scalar(const TransitionParams& p, FieldOutput& fo) {
             const size_t idx = row_off + static_cast<size_t>(x);
             if constexpr (M == Metric::Escape) {
                 fo.iter_u32[idx] = static_cast<uint32_t>(escaped ? iter : b.iterations);
-                fo.norm_f32[idx] = escaped ? static_cast<float>(norm) : 0.0f;
+                fo.norm_f32[idx] = escaped ? static_cast<float>(scalar_to_double(norm)) : 0.0f;
             } else {
                 double fv = 0.0;
-                if constexpr (M == Metric::MinAbs)  fv = std::sqrt(min_sq);
-                if constexpr (M == Metric::MaxAbs)   fv = std::sqrt(max_sq);
-                if constexpr (M == Metric::Envelope) fv = 0.5 * (std::sqrt(min_sq) + std::sqrt(max_sq));
+                if constexpr (M == Metric::MinAbs)  fv = scalar_to_double(scalar_sqrt(min_sq));
+                if constexpr (M == Metric::MaxAbs)  fv = scalar_to_double(scalar_sqrt(max_sq));
+                if constexpr (M == Metric::Envelope) {
+                    fv = 0.5 * (scalar_to_double(scalar_sqrt(min_sq)) +
+                                scalar_to_double(scalar_sqrt(max_sq)));
+                }
                 fo.field_f64[idx] = fv;
                 if (fv < local_min) local_min = fv;
                 if (fv > local_max) local_max = fv;
@@ -1150,6 +1171,8 @@ MapStats render_transition_field(const TransitionParams& p, FieldOutput& fo) {
 
     TransitionParams q = p;
     q.theta = theta.radians;
+    q.theta_milli_deg_set = true;
+    q.theta_milli_deg = theta.milli_deg;
 
     // ── Engine dispatch ─────────────────────────────────────────────────────
     const std::string eff = map_effective_scalar_type(q.base);

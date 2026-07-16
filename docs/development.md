@@ -36,9 +36,10 @@ Frontend:
 - 用 Release 配置构建 backend 到 `runtime/build/`
 - 如果端口被旧进程占用，用 `fuser` 释放 backend/frontend 端口
 - 从仓库根目录启动 backend
-- 从 `frontend/` 启动 Vite，并开启 `--host`
+- 等待新 backend 的 health check 通过后再启动 frontend
+- 从 `frontend/` 启动 Vite，开启 `--host --strictPort`
 - 写日志到 `runtime/logs/backend.log` 和 `runtime/logs/frontend.log`
-- Ctrl-C 时同时关闭两个进程
+- backend/frontend 任一退出时返回失败并关闭另一进程；Ctrl-C 会清理两个进程组
 
 自定义端口：
 
@@ -46,11 +47,15 @@ Frontend:
 ./dev.sh --backend-port 18081 --frontend-port 5175
 ```
 
-如果前端访问的后端不是当前 host 的 `18080`，需要设置：
+`dev.sh` 会把自定义 backend 端口通过 `VITE_BACKEND_PORT` 注入前端；API 地址仍使用浏览器当前 hostname，因此 localhost 与 LAN 设备访问都指向同一台开发机。`VITE_BACKEND_URL` 优先级更高，可用于连接另一台主机上的 backend：
 
 ```bash
-VITE_BACKEND_URL=http://<backend-host>:18080 npm run dev
+VITE_BACKEND_URL=http://<backend-host>:18080 ./dev.sh
 ```
+
+显式连接远程 backend 时，前端会关闭“本地导出”判定，避免把远程主机上的输出路径误报为浏览器所在机器的本地文件。
+
+`make start` 使用固定 backend 地址 `http://127.0.0.1:18080`，并显式覆盖遗留的 Vite backend 环境变量；若端口已被占用会直接失败，不会把新 frontend 误接到陈旧或远程 backend。需要连接远程 backend 时使用上面的 `dev.sh` 显式覆盖方式。
 
 ## Manual Backend Build / 手动构建后端
 
@@ -166,6 +171,7 @@ Runs: http://localhost:18080/api/runs
 
 - 确认 backend 还在运行：`http://localhost:18080/api/system/check`
 - 如果手机或平板访问电脑上的 Vite 地址，前端默认会请求 `http://<phone-visible-host>:18080`。电脑防火墙、局域网 IP、后端端口都要可达。
+- `./dev.sh --backend-port <port>` 会保留上述当前-host 行为并替换端口。
 - 需要手动指定后端时，用 `VITE_BACKEND_URL=http://<server-ip>:18080 npm run dev -- --host 0.0.0.0`。
 
 ### Backend build fails on CUDA

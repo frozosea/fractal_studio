@@ -2,6 +2,7 @@
 
 #include "job_runner.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -94,9 +95,16 @@ std::string activeTasksRoute(JobRunner& runner);
 std::string cancelRunRoute(JobRunner& runner, const std::string& body);
 std::string cancelRunRoute(JobRunner& runner, const std::string& runId, const std::string& body);
 
-// Artifacts (filesystem scan of runs dir; artifactId = "runId:fileName")
+// Artifacts (filesystem scan of runs dir; artifactId = "runId:relative/path")
+struct ArtifactFile {
+    std::filesystem::path path;
+    std::filesystem::path runDir;
+    std::string contentType;
+    std::string downloadName;
+    std::uintmax_t sizeBytes = 0;
+};
+
 std::string artifactsListRoute(const std::filesystem::path& repoRoot, const std::string& query);
-std::string artifactDownloadBody(const std::filesystem::path& repoRoot, const std::string& query, std::string& contentType, std::string& downloadName);
-std::string artifactContentBody(const std::filesystem::path& repoRoot, const std::string& query, std::string& contentType);
+ArtifactFile artifactFileRoute(const std::filesystem::path& repoRoot, const std::string& query);
 
 } // namespace fsd

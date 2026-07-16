@@ -17,7 +17,7 @@ namespace fsd {
 
 namespace {
 // Category subfolder a run is stored under (runs/<category>/<runId>/), grouped by what the run
-// produces. Keep this in sync with resolveRunDir() in routes_common.hpp, which finds a run in
+// produces. Keep this in sync with resolveRunDirSecure() in routes_common.hpp, which finds a run in
 // either this nested layout or the old flat one.
 std::string categoryForModule(const std::string& m) {
     if (m == "video-export" || m == "zoom-video" || m == "video-preview" ||
@@ -53,7 +53,7 @@ JobRunner::JobRunner(fs::path runtimeRoot, Db* db)
 RunRecord JobRunner::createRun(const std::string& module, const std::string& paramsJson) {
     RunRecord run;
     run.status = "queued";
-    // Group runs on disk by product type: runs/<category>/<runId>/. resolveRunDir() finds a run
+    // Group runs on disk by product type: runs/<category>/<runId>/. resolveRunDirSecure() finds a run
     // in this layout or the old flat runs/<runId>/.
     const fs::path categoryDir = runtimeRoot_ / "runs" / categoryForModule(module);
     {

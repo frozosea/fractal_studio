@@ -16,7 +16,7 @@ Browser
   -> runtime/runs/<category>/<runId>/ + runtime/db/fractal_studio.sqlite3
 ```
 
-后端是一个本地原生 C++ HTTP 服务，不依赖 Web 框架。`frontend/src/api.ts` 默认请求 `http://<current-host>:18080`，也可以用 `VITE_BACKEND_URL` 覆盖。
+后端是一个本地原生 C++ HTTP 服务，不依赖 Web 框架。`frontend/src/api.ts` 默认请求 `http://<current-host>:18080`；`dev.sh` 可用 `VITE_BACKEND_PORT` 替换端口，也可以用优先级更高的 `VITE_BACKEND_URL` 覆盖完整地址。
 
 ## Backend Layers / 后端分层
 
@@ -50,6 +50,11 @@ Browser
 4. route 在计算过程中更新 `progress.json`，结束后调用 `addArtifact()` 写入 artifact 记录。
 5. run 元数据持久化到 `runtime/db/fractal_studio.sqlite3`。
 6. 前端通过 `/api/runs`, `/api/runs/status`, `/api/artifacts/*` 展示历史、进度和文件。
+
+Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件也能唯一定位；
+解析时会做 canonical containment 检查，拒绝目录穿越和逃逸 symlink。`content`
+与 `download` 响应从磁盘分块发送并支持单个 HTTP byte Range，视频预览或数 GiB
+下载不会先把整个文件读入后端内存。
 
 高频交互接口并不总是写 artifact。例如 `/api/map/render-inline` 返回二进制图像帧，`/api/map/field` 返回原始场数据，适合实时预览。
 

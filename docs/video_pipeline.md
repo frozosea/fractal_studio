@@ -76,6 +76,16 @@ request supplies a compatible `lnMapStatsRunId` from a small preview run,
 which skips the export statistics pass and makes the final video match the tuned
 preview more closely. This avoids per-segment direct-color discontinuities
 without allocating the full strip.
+
+“compatible” 会校验完整生成身份：精确 center 字符串采用双向严格匹配、
+Julia 模式与参数、variant、iterations、bailout radius/square、color map/mode、
+cycles、precision/engine/scalar、fast precision ladder 与验证参数，以及额外 octave；
+preview depth 也必须相容。任一项变化时 preview stats 不复用，导出会重新计算统计。
+非分段 `lnMapRunId` 复用执行同一身份校验，并继续严格校验 strip width/depth/height；
+不匹配会明确失败，不会把旧位置的 strip 接到当前视频。`bands`/`frontier` 的
+single-strip 缓存尚未持久化全局 CDF，因此当前明确拒绝这两种模式的 `lnMapRunId`
+复用，避免 cached strip 与新 final frame 使用不同 CDF 产生接缝。
+
 The legacy `/api/video/zoom` route intentionally rejects segmented ln-map
 artifacts because it only knows how to warp a single strip.
 

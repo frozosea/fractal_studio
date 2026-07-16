@@ -1,17 +1,24 @@
 #include "http_server.hpp"
 
 #include "hardware_probe.hpp"
+#include "http_range.hpp"
 #include "routes.hpp"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <array>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -64,7 +71,7 @@ std::string HttpServer::makeHttpResponse(int status, const std::string& body, co
        << "Content-Type: " << contentType << "\r\n"
        << "Access-Control-Allow-Origin: *\r\n"
        << "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-       << "Access-Control-Allow-Headers: Content-Type\r\n"
+       << "Access-Control-Allow-Headers: Content-Type, Range, If-Range\r\n"
        << "Access-Control-Expose-Headers: "
        << "X-FSD-Status, X-FSD-Request-Id, X-FSD-Generated-Ms, X-FSD-Engine, "
        << "X-FSD-Scalar, X-FSD-Width, X-FSD-Height, X-FSD-Pixel-Format\r\n"
@@ -151,25 +158,8 @@ std::string HttpServer::handleRequest(const std::string& request) const {
 
     // Artifacts
     if (method == "GET"  && path == "/api/artifacts") return makeHttpResponse(200, artifactsListRoute(repoRoot_, query));
-    if (method == "GET"  && path == "/api/artifacts/download") {
-        try {
-            std::string contentType, downloadName;
-            const std::string bodyText = artifactDownloadBody(repoRoot_, query, contentType, downloadName);
-            const std::string headers = "Content-Disposition: attachment; filename=\"" + downloadName + "\"\r\n";
-            return makeHttpResponse(200, bodyText, contentType, headers);
-        } catch (const std::exception& ex) {
-            return makeHttpResponse(404, jsonErrorBody(ex.what()));
-        }
-    }
-    if (method == "GET"  && path == "/api/artifacts/content") {
-        try {
-            std::string contentType;
-            const std::string bodyText = artifactContentBody(repoRoot_, query, contentType);
-            return makeHttpResponse(200, bodyText, contentType);
-        } catch (const std::exception& ex) {
-            return makeHttpResponse(404, jsonErrorBody(ex.what()));
-        }
-    }
+    // Artifact bodies are streamed directly by streamArtifactResponse() in the
+    // connection worker, so multi-gigabyte files never enter a std::string.
 
     if (method != "GET" && method != "POST") return makeHttpResponse(405, "{\"error\":\"method not allowed\"}");
     return makeHttpResponse(404, "{\"error\":\"not found\"}");
@@ -243,20 +233,190 @@ std::string readRequest(int fd) {
 
 // Send all bytes, looping on partial writes (response can be many MB for
 // artifact content downloads).
-void sendAll(int fd, const std::string& data) {
-    const char* p = data.data();
-    std::size_t remaining = data.size();
+bool sendBytes(int fd, const char* p, std::size_t remaining) {
     while (remaining > 0) {
         // MSG_NOSIGNAL: don't deliver SIGPIPE if the peer has closed the socket.
         // (main.cpp also calls signal(SIGPIPE, SIG_IGN) for defence-in-depth.)
         const ssize_t n = ::send(fd, p, remaining, MSG_NOSIGNAL);
-        if (n <= 0) return;  // client gone — stop, don't crash
+        if (n <= 0) return false;  // client gone — stop, don't crash
         p += n;
         remaining -= static_cast<size_t>(n);
     }
+    return true;
+}
+
+void sendAll(int fd, const std::string& data) {
+    (void)sendBytes(fd, data.data(), data.size());
+}
+
+std::string requestHeaderValue(const std::string& request, const std::string& wantedName) {
+    const std::size_t headEnd = request.find("\r\n\r\n");
+    const std::size_t limit = headEnd == std::string::npos ? request.size() : headEnd;
+    std::size_t lineStart = request.find("\r\n");
+    if (lineStart == std::string::npos) return {};
+    lineStart += 2;
+    while (lineStart < limit) {
+        std::size_t lineEnd = request.find("\r\n", lineStart);
+        if (lineEnd == std::string::npos || lineEnd > limit) lineEnd = limit;
+        const std::size_t colon = request.find(':', lineStart);
+        if (colon != std::string::npos && colon < lineEnd) {
+            const std::size_t nameLength = colon - lineStart;
+            bool matches = nameLength == wantedName.size();
+            for (std::size_t i = 0; matches && i < nameLength; ++i) {
+                matches = std::tolower(static_cast<unsigned char>(request[lineStart + i])) ==
+                          std::tolower(static_cast<unsigned char>(wantedName[i]));
+            }
+            if (matches) {
+                std::size_t first = colon + 1;
+                while (first < lineEnd && (request[first] == ' ' || request[first] == '\t')) ++first;
+                std::size_t last = lineEnd;
+                while (last > first && (request[last - 1] == ' ' || request[last - 1] == '\t')) --last;
+                return request.substr(first, last - first);
+            }
+        }
+        lineStart = lineEnd + 2;
+    }
+    return {};
+}
+
+std::string safeDownloadName(const std::string& name) {
+    std::string safe;
+    safe.reserve(name.size());
+    for (const unsigned char c : name) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_' || c == ' ') {
+            safe.push_back(static_cast<char>(c));
+        } else {
+            safe.push_back('_');
+        }
+    }
+    return safe.empty() ? "artifact" : safe;
+}
+
+class ScopedFileDescriptor {
+public:
+    explicit ScopedFileDescriptor(int fd) : fd_(fd) {}
+    ~ScopedFileDescriptor() {
+        if (fd_ >= 0) ::close(fd_);
+    }
+    ScopedFileDescriptor(const ScopedFileDescriptor&) = delete;
+    ScopedFileDescriptor& operator=(const ScopedFileDescriptor&) = delete;
+    int get() const { return fd_; }
+
+private:
+    int fd_ = -1;
+};
+
+bool pathIsWithin(
+    const std::filesystem::path& root,
+    const std::filesystem::path& candidate
+) {
+    auto rootIt = root.begin();
+    auto candidateIt = candidate.begin();
+    for (; rootIt != root.end(); ++rootIt, ++candidateIt) {
+        if (candidateIt == candidate.end() || *rootIt != *candidateIt) return false;
+    }
+    return true;
 }
 
 } // namespace
+
+bool HttpServer::streamArtifactResponse(int clientFd, const std::string& request) const {
+    const std::size_t firstLineEnd = request.find("\r\n");
+    const std::string firstLine = request.substr(0, firstLineEnd);
+    std::istringstream firstLineStream(firstLine);
+    std::string method, rawPath, version;
+    firstLineStream >> method >> rawPath >> version;
+    const std::size_t q = rawPath.find('?');
+    const std::string path = rawPath.substr(0, q);
+    const std::string query = q == std::string::npos ? std::string() : rawPath.substr(q + 1);
+    const bool isDownload = path == "/api/artifacts/download";
+    const bool isContent = path == "/api/artifacts/content";
+    if (method != "GET" || (!isDownload && !isContent)) return false;
+
+    try {
+        const ArtifactFile file = artifactFileRoute(repoRoot_, query);
+        ScopedFileDescriptor input(::open(
+            file.path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+        if (input.get() < 0) throw std::runtime_error("failed to open artifact");
+
+        struct stat fileStat {};
+        if (::fstat(input.get(), &fileStat) != 0 || !S_ISREG(fileStat.st_mode) || fileStat.st_size < 0) {
+            throw std::runtime_error("failed to stat artifact");
+        }
+        const std::uintmax_t fileSize = static_cast<std::uintmax_t>(fileStat.st_size);
+
+        // Resolve the already-open descriptor and re-check containment. This
+        // closes the canonicalize/open race if a local process swaps a parent
+        // directory or symlink between route validation and open().
+        std::error_code openedPathError;
+        const std::filesystem::path openedPath = std::filesystem::canonical(
+            "/proc/self/fd/" + std::to_string(input.get()), openedPathError);
+        if (openedPathError || !pathIsWithin(file.runDir, openedPath)) {
+            throw std::runtime_error("artifact path changed during open");
+        }
+
+        const std::string rangeHeader = requestHeaderValue(request, "Range");
+        // This endpoint does not publish an ETag or Last-Modified validator.
+        // It therefore cannot prove an If-Range match and must send the full
+        // representation rather than risk combining bytes from two versions.
+        const detail::FileRange range = detail::parseFileRange(
+            rangeHeader, fileSize,
+            !requestHeaderValue(request, "If-Range").empty());
+        if (!range.valid) {
+            const std::string response =
+                "HTTP/1.1 416 Range Not Satisfiable\r\n"
+                "Content-Range: bytes */" + std::to_string(fileSize) + "\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "Content-Length: 0\r\nConnection: close\r\n\r\n";
+            sendAll(clientFd, response);
+            return true;
+        }
+
+        const std::uintmax_t contentLength = fileSize == 0 ? 0 : range.end - range.start + 1;
+        if (contentLength > 0) {
+            if (range.start > static_cast<std::uintmax_t>(std::numeric_limits<off_t>::max())) {
+                throw std::runtime_error("artifact offset is too large");
+            }
+            if (::lseek(input.get(), static_cast<off_t>(range.start), SEEK_SET) < 0) {
+                throw std::runtime_error("failed to seek artifact");
+            }
+        }
+
+        std::ostringstream head;
+        head << "HTTP/1.1 " << (range.requested ? "206 Partial Content" : "200 OK") << "\r\n"
+             << "Content-Type: " << file.contentType << "\r\n"
+             << "Access-Control-Allow-Origin: *\r\n"
+             << "Access-Control-Expose-Headers: Content-Disposition, Content-Length, Content-Range, Accept-Ranges\r\n"
+             << "Accept-Ranges: bytes\r\n";
+        if (range.requested) {
+            head << "Content-Range: bytes " << range.start << '-' << range.end << '/' << fileSize << "\r\n";
+        }
+        if (isDownload) {
+            head << "Content-Disposition: attachment; filename=\"" << safeDownloadName(file.downloadName) << "\"\r\n";
+        }
+        head << "Content-Length: " << contentLength << "\r\nConnection: close\r\n\r\n";
+        const std::string headerText = head.str();
+        if (!sendBytes(clientFd, headerText.data(), headerText.size()) || contentLength == 0) return true;
+
+        std::array<char, 1024 * 1024> chunk{};
+        std::uintmax_t remaining = contentLength;
+        while (remaining > 0) {
+            const std::size_t wanted = static_cast<std::size_t>(
+                std::min<std::uintmax_t>(remaining, chunk.size()));
+            ssize_t got = -1;
+            do {
+                got = ::read(input.get(), chunk.data(), wanted);
+            } while (got < 0 && errno == EINTR);
+            if (got <= 0) break;
+            if (!sendBytes(clientFd, chunk.data(), static_cast<std::size_t>(got))) break;
+            remaining -= static_cast<std::uintmax_t>(got);
+        }
+    } catch (const std::exception& ex) {
+        sendAll(clientFd, makeHttpResponse(404, jsonErrorBody(ex.what())));
+    }
+    return true;
+}
 
 void HttpServer::serveForever() {
     const int serverFd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -293,8 +453,10 @@ void HttpServer::serveForever() {
             try {
                 const std::string req = readRequest(clientFd);
                 if (!req.empty()) {
-                    const std::string resp = handleRequest(req);
-                    sendAll(clientFd, resp);
+                    if (!streamArtifactResponse(clientFd, req)) {
+                        const std::string resp = handleRequest(req);
+                        sendAll(clientFd, resp);
+                    }
                 }
             } catch (...) {
                 // Last-resort catch: log and continue serving.

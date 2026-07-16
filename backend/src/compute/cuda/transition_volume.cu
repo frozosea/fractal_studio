@@ -23,7 +23,7 @@ __device__ inline float real_projection(int v, float x2, float axis2) {
 }
 
 __device__ inline float imag_projection(int v, float x, float axis) {
-    const bool abs_x = v == 2 || v == 4 || v == 9;
+    const bool abs_x = v == 2 || v == 4 || v == 7 || v == 9;
     const bool abs_axis = v == 2 || v == 3 || v == 7 || v == 8;
     const bool neg = v == 1 || v == 4 || v == 6 || v == 9;
     const float a = abs_x ? fabsf(x) : x;

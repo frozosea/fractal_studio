@@ -160,6 +160,43 @@ if(OpenMP_CXX_FOUND)
 endif()
 add_test(NAME special_points_smoke COMMAND special_points_smoke)
 
+add_executable(artifact_routes_smoke
+    src/tests/artifact_routes_smoke.cpp
+    src/api/routes_artifacts.cpp
+)
+target_include_directories(artifact_routes_smoke PRIVATE
+    src
+    src/include
+)
+target_compile_options(artifact_routes_smoke PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -O3
+)
+add_test(NAME artifact_routes_smoke COMMAND artifact_routes_smoke)
+
+add_executable(ln_map_reuse_smoke
+    src/tests/ln_map_reuse_smoke.cpp
+)
+target_include_directories(ln_map_reuse_smoke PRIVATE
+    src
+    src/include
+)
+target_compile_options(ln_map_reuse_smoke PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -O3
+)
+add_test(NAME ln_map_reuse_smoke COMMAND ln_map_reuse_smoke)
+
+add_executable(http_range_smoke
+    src/tests/http_range_smoke.cpp
+)
+target_include_directories(http_range_smoke PRIVATE
+    src
+    src/include
+)
+target_compile_options(http_range_smoke PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -O3
+)
+add_test(NAME http_range_smoke COMMAND http_range_smoke)
+
 add_executable(compute_path_diff
     src/tests/compute_path_diff.cpp
     src/compute/colorize.cpp
@@ -173,6 +210,8 @@ add_executable(compute_path_diff
     src/compute/map_kernel_avx512.cpp
     src/compute/transition_kernel.cpp
     src/compute/transition_kernel_avx2.cpp
+    src/compute/transition_volume.cpp
+    src/compute/transition_volume_avx2.cpp
     src/compute/tile_scheduler.cpp
     src/compute/perturbation.cpp
     src/compute/perturbation_avx2.cpp

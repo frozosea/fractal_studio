@@ -9,6 +9,7 @@
 
 #include "../third_party/nlohmann/json.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -41,22 +42,113 @@ inline double resolveCenterCoord(const std::string& preciseStr, double fallback)
     return fallback;
 }
 
-// Resolve a run's output directory from its id. Runs are stored grouped by product type
-// (runs/<category>/<runId>/); older runs are flat (runs/<runId>/). Checks the flat path first,
-// then one category level deep. Returns the flat path if not found (callers test existence).
-inline std::filesystem::path resolveRunDir(const std::filesystem::path& repoRoot, const std::string& runId) {
+inline bool pathHasControlCharacters(const std::string& value) {
+    return std::any_of(value.begin(), value.end(), [](unsigned char c) {
+        return c < 0x20 || c == 0x7f;
+    });
+}
+
+inline bool canonicalPathIsWithin(
+    const std::filesystem::path& root,
+    const std::filesystem::path& candidate
+) {
+    auto rootIt = root.begin();
+    auto candidateIt = candidate.begin();
+    for (; rootIt != root.end(); ++rootIt, ++candidateIt) {
+        if (candidateIt == candidate.end() || *rootIt != *candidateIt) return false;
+    }
+    return true;
+}
+
+inline void validateRunIdForPath(const std::string& runId) {
+    const std::filesystem::path parsed(runId);
+    if (runId.empty() || runId.find("..") != std::string::npos ||
+        runId.find('/') != std::string::npos || runId.find('\\') != std::string::npos ||
+        pathHasControlCharacters(runId) || parsed.is_absolute() || parsed.has_root_path()) {
+        throw std::runtime_error("invalid runId path");
+    }
+}
+
+// Resolve an existing run without following category/run directory symlinks.
+// The returned canonical directory is guaranteed to remain beneath the
+// canonical runtime/runs root at resolution time.
+inline std::filesystem::path resolveRunDirSecure(
+    const std::filesystem::path& repoRoot,
+    const std::string& runId
+) {
     namespace fs = std::filesystem;
-    const fs::path runsRoot = repoRoot / "fractal_studio" / "runtime" / "runs";
+    validateRunIdForPath(runId);
+
     std::error_code ec;
-    const fs::path flat = runsRoot / runId;
-    if (fs::is_directory(flat, ec)) return flat;
+    const fs::path runsRoot = fs::canonical(
+        repoRoot / "fractal_studio" / "runtime" / "runs", ec);
+    if (ec || !fs::is_directory(runsRoot, ec)) {
+        throw std::runtime_error("run not found");
+    }
+
+    auto resolveCandidate = [&](const fs::path& candidate) -> fs::path {
+        std::error_code sec;
+        const fs::file_status status = fs::symlink_status(candidate, sec);
+        if (!sec && fs::is_symlink(status)) {
+            throw std::runtime_error("invalid run directory symlink");
+        }
+        if (sec || !fs::is_directory(status)) return {};
+
+        const fs::path canonical = fs::canonical(candidate, sec);
+        if (sec || !fs::is_directory(canonical, sec) ||
+            !canonicalPathIsWithin(runsRoot, canonical)) {
+            throw std::runtime_error("invalid run directory path");
+        }
+        return canonical;
+    };
+
+    if (const fs::path flat = resolveCandidate(runsRoot / runId); !flat.empty()) {
+        return flat;
+    }
+
     for (fs::directory_iterator it(runsRoot, ec), end; it != end; it.increment(ec)) {
         if (ec) break;
-        if (!it->is_directory(ec)) continue;
-        const fs::path cand = it->path() / runId;
-        if (fs::is_directory(cand, ec)) return cand;
+        std::error_code dec;
+        if (it->is_symlink(dec) || dec || !it->is_directory(dec)) continue;
+        if (const fs::path nested = resolveCandidate(it->path() / runId); !nested.empty()) {
+            return nested;
+        }
     }
-    return flat;
+    throw std::runtime_error("run not found");
+}
+
+inline std::filesystem::path resolveRunFileSecure(
+    const std::filesystem::path& repoRoot,
+    const std::string& runId,
+    const std::string& relativeName,
+    std::filesystem::path* resolvedRunDir = nullptr
+) {
+    namespace fs = std::filesystem;
+    if (relativeName.empty() || relativeName.find('\\') != std::string::npos ||
+        pathHasControlCharacters(relativeName)) {
+        throw std::runtime_error("invalid run-relative path");
+    }
+    const fs::path relativePath(relativeName);
+    if (relativePath.is_absolute() || relativePath.has_root_path()) {
+        throw std::runtime_error("invalid run-relative path");
+    }
+    for (const auto& component : relativePath) {
+        if (component == "." || component == ".." || component.empty()) {
+            throw std::runtime_error("invalid run-relative path");
+        }
+    }
+
+    const fs::path runDir = resolveRunDirSecure(repoRoot, runId);
+    std::error_code ec;
+    const fs::path path = fs::weakly_canonical(runDir / relativePath, ec);
+    if (ec || !fs::is_regular_file(path, ec)) {
+        throw std::runtime_error("run file not found");
+    }
+    if (!canonicalPathIsWithin(runDir, path)) {
+        throw std::runtime_error("invalid run-relative path");
+    }
+    if (resolvedRunDir != nullptr) *resolvedRunDir = runDir;
+    return path;
 }
 
 inline Json parseJsonBody(const std::string& body) {

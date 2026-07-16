@@ -26,6 +26,7 @@
 
 #include "routes.hpp"
 #include "routes_common.hpp"
+#include "ln_map_reuse.hpp"
 #include "resource_manager.hpp"
 
 #include "../compute/image_io.hpp"
@@ -1669,12 +1670,8 @@ LnMapLookup resolveLnMap(const std::filesystem::path& repoRoot, const std::strin
     const std::string runId   = artifactId.substr(0, split);
     const std::string fileName = artifactId.substr(split + 1);
 
-    const fs::path runDir = resolveRunDir(repoRoot, runId);
-    const fs::path png    = runDir / fileName;
-    if (!fs::exists(png)) throw std::runtime_error("ln-map png not found: " + png.string());
-
-    fs::path sidecar = runDir / "ln_map.json";
-    if (!fs::exists(sidecar)) throw std::runtime_error("ln-map sidecar not found");
+    const fs::path png = resolveRunFileSecure(repoRoot, runId, fileName);
+    const fs::path sidecar = resolveRunFileSecure(repoRoot, runId, "ln_map.json");
 
     std::ifstream in(sidecar);
     std::ostringstream ss; ss << in.rdbuf();
@@ -1684,28 +1681,41 @@ LnMapLookup resolveLnMap(const std::filesystem::path& repoRoot, const std::strin
 std::optional<compute::LnMapEqualization> loadPreviewEqualizationOverride(
     const std::filesystem::path& repoRoot,
     const std::string& runId,
+    const std::string& centerReStr,
+    const std::string& centerImStr,
+    double centerRe,
+    double centerIm,
+    bool julia,
+    double juliaRe,
+    double juliaIm,
     const std::string& variantStr,
     const std::string& colormapStr,
     int iterations,
+    double bailoutSq,
     double depthOctaves,
     double cyclesPerOctave,
+    const std::string& precisionMode,
+    const detail::LnMapGenerationIdentity& generationIdentity,
     compute::Colormap colormap
 ) {
     if (runId.empty()) return std::nullopt;
+    const std::filesystem::path sidecar =
+        resolveRunFileSecure(repoRoot, runId, "ln_map.json");
     try {
-        const std::filesystem::path sidecar = resolveRunDir(repoRoot, runId) / "ln_map.json";
-        if (!std::filesystem::exists(sidecar)) return std::nullopt;
         std::ifstream in(sidecar);
         std::ostringstream ss;
         ss << in.rdbuf();
         const Json saved = Json::parse(ss.str());
         if (saved.value("lnMapColorMode", std::string("")) != "hist_eq") return std::nullopt;
         if (!saved.contains("eqCountMin") || !saved.contains("eqPeriod")) return std::nullopt;
-        if (saved.value("variant", std::string("")) != variantStr) return std::nullopt;
-        if (saved.value("colorMap", std::string("")) != colormapStr) return std::nullopt;
-        if (saved.value("iterations", iterations) != iterations) return std::nullopt;
-        if (std::abs(saved.value("depthOctaves", depthOctaves) - depthOctaves) > 0.25) return std::nullopt;
-        if (std::abs(saved.value("lnMapCyclesPerOctave", cyclesPerOctave) - cyclesPerOctave) > 1e-9) return std::nullopt;
+        if (!detail::lnMapIdentityMismatch(
+                saved, centerReStr, centerImStr, centerRe, centerIm,
+                julia, juliaRe, juliaIm, variantStr, iterations, bailoutSq,
+                colormapStr, "hist_eq", cyclesPerOctave, depthOctaves,
+                precisionMode).empty()) return std::nullopt;
+        if (!detail::lnMapGenerationIdentityMismatch(saved, generationIdentity).empty()) {
+            return std::nullopt;
+        }
         return compute::reconstructEqualization(
             saved.value("eqCountMin", 0.0),
             saved.value("eqPeriod", 1.0),
@@ -2054,6 +2064,7 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
     compute::Colormap cm;
     if (!compute::colormap_from_name(colormapStr.c_str(), cm)) cm = compute::Colormap::ClassicCos;
     const std::string lnMapMode = j.value("lnMapMode", std::string("standard"));
+    const std::string lnMapEngine = j.value("lnMapEngine", std::string("auto"));
     const std::string lnMapScalar = j.value("lnMapScalar", std::string("auto"));
     const double lnMapCyclesPerOctave = j.value("lnMapCyclesPerOctave", 0.5);
     const double lnMapFastFp32Depth = j.value("lnMapFastFp32DepthOctaves", 18.0);
@@ -2085,6 +2096,20 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
         const StripPlan previewStripPlan = resolveStripPlan(previewPlanJson, previewW, previewH, depth, lnMapColorMode);
         const int s = previewStripPlan.actualWidthS;
         const int t = previewStripPlan.heightT;
+        detail::LnMapGenerationIdentity generationIdentity;
+        generationIdentity.bailout = bailout;
+        generationIdentity.extraOctaves = previewStripPlan.extraOctaves;
+        generationIdentity.engineRequest = lnMapEngine;
+        generationIdentity.scalarRequest = lnMapScalar;
+        generationIdentity.fastFp32DepthOctaves = lnMapFastFp32Depth;
+        generationIdentity.fastFp64DepthOctaves = lnMapFastFp64Depth;
+        generationIdentity.fastValidate = lnMapFastValidate;
+        generationIdentity.fastValidationBandOctaves = lnMapFastValidationBandOctaves;
+        generationIdentity.fastValidationSampleRows = lnMapFastValidationSampleRows;
+        generationIdentity.fastValidationSampleCols = lnMapFastValidationSampleCols;
+        generationIdentity.fastValidationMaxMismatchRatio = lnMapFastValidationMaxMismatchRatio;
+        generationIdentity.fastValidationMaxP99IterDelta = lnMapFastValidationMaxP99IterDelta;
+        generationIdentity.fastValidationMaxMeanColorDelta = lnMapFastValidationMaxMeanColorDelta;
 
         compute::MapParams mp;
         mp.center_re  = cr;
@@ -2136,7 +2161,7 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
         lp.colormap = cm;
         lp.color_mode = lnMapColorMode;
         lp.color_cycles_per_octave = lnMapCyclesPerOctave;
-        lp.engine = j.value("lnMapEngine", std::string("auto"));
+        lp.engine = lnMapEngine;
         lp.precision_mode = lnMapMode;
         lp.scalar_type = lnMapScalar;
         lp.fast_fp32_depth_octaves = lnMapFastFp32Depth;
@@ -2198,6 +2223,7 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
             {"layerSummary", lnStats.layer_summary},
             {"validationSummary", lnStats.validation_summary},
         };
+        detail::writeLnMapGenerationIdentity(sidecar, generationIdentity);
         if (lnStats.equalization.valid) {
             sidecar["eqCountMin"]      = lnStats.equalization.count_min;
             sidecar["eqPeriod"]        = lnStats.equalization.period;
@@ -2320,6 +2346,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         durSec = static_cast<double>(frameCount) / static_cast<double>(fps);
     }
     const std::string lnMapMode = j.value("lnMapMode", std::string("standard"));
+    const std::string lnMapEngine = j.value("lnMapEngine", std::string("auto"));
     const std::string lnMapScalar = j.value("lnMapScalar", std::string("auto"));
     const double lnMapFastFp32Depth = j.value("lnMapFastFp32DepthOctaves", 18.0);
     const double lnMapFastFp64Depth = j.value("lnMapFastFp64DepthOctaves", 34.0);
@@ -2348,6 +2375,12 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"feature", "segmented-ln-map-reuse"},
         }.dump());
     }
+    if (!lnMapRunId.empty() && (lnMapColorMode == "bands" || lnMapColorMode == "frontier")) {
+        throw HttpError(400, Json{
+            {"error", "lnMapRunId reuse is not supported for color modes that require a cached global CDF"},
+            {"feature", "global-cdf-ln-map-reuse"},
+        }.dump());
+    }
     if (!(lnMapFastFp32Depth >= 0.0) || !(lnMapFastFp64Depth >= 0.0) ||
         !std::isfinite(lnMapFastFp32Depth) || !std::isfinite(lnMapFastFp64Depth)) {
         throw std::runtime_error("invalid ln-map fast depth thresholds");
@@ -2372,13 +2405,29 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     }
     if (!(bailout > 0.0) || !std::isfinite(bailout)) throw std::runtime_error("invalid bailout");
     if (!(bailoutSq > 0.0) || !std::isfinite(bailoutSq)) throw std::runtime_error("invalid bailoutSq");
+    detail::LnMapGenerationIdentity generationIdentity;
+    generationIdentity.bailout = bailout;
+    generationIdentity.extraOctaves = stripPlan.extraOctaves;
+    generationIdentity.engineRequest = lnMapEngine;
+    generationIdentity.scalarRequest = lnMapScalar;
+    generationIdentity.fastFp32DepthOctaves = lnMapFastFp32Depth;
+    generationIdentity.fastFp64DepthOctaves = lnMapFastFp64Depth;
+    generationIdentity.fastValidate = lnMapFastValidate;
+    generationIdentity.fastValidationBandOctaves = lnMapFastValidationBandOctaves;
+    generationIdentity.fastValidationSampleRows = lnMapFastValidationSampleRows;
+    generationIdentity.fastValidationSampleCols = lnMapFastValidationSampleCols;
+    generationIdentity.fastValidationMaxMismatchRatio = lnMapFastValidationMaxMismatchRatio;
+    generationIdentity.fastValidationMaxP99IterDelta = lnMapFastValidationMaxP99IterDelta;
+    generationIdentity.fastValidationMaxMeanColorDelta = lnMapFastValidationMaxMeanColorDelta;
     compute::Colormap cm;
     if (!compute::colormap_from_name(colormapStr.c_str(), cm)) cm = compute::Colormap::ClassicCos;
     const std::optional<compute::LnMapEqualization> previewEqualizationOverride =
         lnMapColorMode == "hist_eq"
             ? loadPreviewEqualizationOverride(
-                  repoRoot, lnMapStatsRunId, variantStr, colormapStr,
-                  iters, depth, lnMapCyclesPerOctave, cm)
+                  repoRoot, lnMapStatsRunId, crStr, ciStr, cr, ci,
+                  julia, jre, jim, variantStr, colormapStr,
+                  iters, bailoutSq, depth, lnMapCyclesPerOctave, lnMapMode,
+                  generationIdentity, cm)
             : std::nullopt;
     const std::string lnMapStatsSource = previewEqualizationOverride.has_value()
         ? ("preview:" + lnMapStatsRunId)
@@ -2526,7 +2575,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 lp.colormap = cm;
                 lp.color_mode = lnMapColorMode;
                 lp.color_cycles_per_octave = lnMapCyclesPerOctave;
-                lp.engine = j.value("lnMapEngine", std::string("auto"));
+                lp.engine = lnMapEngine;
                 lp.precision_mode = lnMapMode;
                 lp.scalar_type = lnMapScalar;
                 lp.fast_fp32_depth_octaves = lnMapFastFp32Depth;
@@ -2816,6 +2865,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"validationSummary", lnStats.validation_summary},
                 {"segments", segJson},
             };
+            detail::writeLnMapGenerationIdentity(sc, generationIdentity);
             if (lnStats.equalization.valid) {
                 sc["eqCountMin"]      = lnStats.equalization.count_min;
                 sc["eqPeriod"]        = lnStats.equalization.period;
@@ -3009,14 +3059,8 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         if (!lnMapRunId.empty()) {
             // Load pre-rendered strip from the specified run, skip field computation.
             namespace fs = std::filesystem;
-            const fs::path srcDir = resolveRunDir(repoRoot, lnMapRunId);
-            const fs::path srcPng = srcDir / "ln_map.png";
-            const fs::path srcSc  = srcDir / "ln_map.json";
-            if (!fs::exists(srcPng)) throw std::runtime_error("ln-map PNG not found in run " + lnMapRunId);
-            if (!fs::exists(srcSc))  throw std::runtime_error("ln-map sidecar not found in run " + lnMapRunId);
-
-            strip = compute::read_png(srcPng.string());
-            t = strip.rows;
+            const fs::path srcPng = resolveRunFileSecure(repoRoot, lnMapRunId, "ln_map.png");
+            const fs::path srcSc  = resolveRunFileSecure(repoRoot, lnMapRunId, "ln_map.json");
 
             std::ifstream scIn(srcSc);
             std::ostringstream scBuf; scBuf << scIn.rdbuf();
@@ -3025,19 +3069,37 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 throw std::runtime_error("reusing segmented ln-map runs is not supported yet");
             }
 
-            const double srcDepth = savedSc.value("depthOctaves", 0.0);
-            const int srcWidthS = savedSc.value("widthS", 0);
-            if (srcWidthS > 0 && std::abs(srcWidthS - s) > std::max(s / 10, 8))
+            const std::string identityMismatch = detail::lnMapIdentityMismatch(
+                savedSc, crStr, ciStr, cr, ci, julia, jre, jim,
+                variantStr, iters, bailoutSq, colormapStr, lnMapColorMode,
+                lnMapCyclesPerOctave, depth, lnMapMode);
+            if (!identityMismatch.empty()) {
+                throw std::runtime_error(
+                    "ln-map reuse mismatch for " + identityMismatch +
+                    " (re-render the ln-map for the current export settings)");
+            }
+            const std::string generationMismatch =
+                detail::lnMapGenerationIdentityMismatch(savedSc, generationIdentity);
+            if (!generationMismatch.empty()) {
+                throw std::runtime_error(
+                    "ln-map reuse mismatch for " + generationMismatch +
+                    " (re-render the ln-map for the current export settings)");
+            }
+
+            if (!savedSc.contains("widthS") || !savedSc["widthS"].is_number_integer()) {
+                throw std::runtime_error("ln-map reuse sidecar is missing widthS");
+            }
+            const int srcWidthS = savedSc["widthS"].get<int>();
+            if (srcWidthS != s)
                 throw std::runtime_error("strip width mismatch: saved " + std::to_string(srcWidthS)
                     + " vs export " + std::to_string(s));
-            if (srcDepth > 0.0 && std::abs(srcDepth - depth) > 0.5)
-                throw std::runtime_error("depth mismatch: saved " + std::to_string(srcDepth)
-                    + " vs export " + std::to_string(depth));
+            strip = compute::read_png(srcPng.string());
+            t = strip.rows;
             // Height (extra-octave) compatibility: the strip's row count sets how deep crisp
             // strip data reaches before the warp falls back to the cartesian final frame. A
             // strip rendered with fewer lead-in octaves than this export expects would shrink
             // that crisp region, so reject a strip whose height diverges from the plan.
-            if (std::abs(strip.rows - stripPlan.heightT) > std::max(stripPlan.heightT / 10, 16))
+            if (std::abs(strip.rows - stripPlan.heightT) > 1)
                 throw std::runtime_error("strip height mismatch: saved " + std::to_string(strip.rows)
                     + " vs export plan " + std::to_string(stripPlan.heightT)
                     + " (re-render the full ln-map after changing depth/extra-octaves/quality)");
@@ -3083,7 +3145,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             lp.color_mode = lnMapColorMode;
             lp.color_cycles_per_octave = lnMapCyclesPerOctave;
             if (previewEqualizationOverride) lp.equalization_override = &*previewEqualizationOverride;
-            lp.engine = j.value("lnMapEngine", std::string("auto"));
+            lp.engine = lnMapEngine;
             lp.precision_mode = lnMapMode;
             lp.scalar_type = lnMapScalar;
             lp.fast_fp32_depth_octaves = lnMapFastFp32Depth;
@@ -3159,6 +3221,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"layerSummary", lnStats.layer_summary},
                 {"validationSummary", lnStats.validation_summary},
             };
+            detail::writeLnMapGenerationIdentity(sc, generationIdentity);
             if (lnStats.equalization.valid) {
                 sc["eqCountMin"]      = lnStats.equalization.count_min;
                 sc["eqPeriod"]        = lnStats.equalization.period;
