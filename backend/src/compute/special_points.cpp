@@ -76,6 +76,10 @@ bool finite(Z z) {
     return std::isfinite(z.real()) && std::isfinite(z.imag());
 }
 
+bool cancel_requested(const SpecialPointCancelCallback& should_cancel) {
+    return should_cancel && should_cancel();
+}
+
 int env_int(const char* name, int min_value, int max_value) {
     const char* raw = std::getenv(name);
     if (!raw || *raw == '\0') return 0;
@@ -206,7 +210,10 @@ int viewport_search_seed_limit(const SpecialPointSearchRequest& req) {
     return std::max(1, std::min(budget, LOCAL_VIEWPORT_SEED_LIMIT));
 }
 
-std::vector<Z> viewport_search_seeds(const SpecialPointSearchRequest& req) {
+std::vector<Z> viewport_search_seeds(
+    const SpecialPointSearchRequest& req,
+    const SpecialPointCancelCallback& should_cancel
+) {
     std::vector<Z> seeds;
     const int limit = viewport_search_seed_limit(req);
     seeds.reserve(static_cast<size_t>(limit));
@@ -227,7 +234,15 @@ std::vector<Z> viewport_search_seeds(const SpecialPointSearchRequest& req) {
         push_unique_seed(seeds, viewport_seed_at(req, uv[0], uv[1]), duplicate_eps);
     }
 
-    for (unsigned long long i = 0; static_cast<int>(seeds.size()) < limit; ++i) {
+    // At depths below double's ULP every offset may round back to the center.
+    // Bound the de-duplication loop so a non-MPFR build cannot spin forever
+    // trying to reach an impossible unique-seed budget.
+    const unsigned long long max_attempts =
+        static_cast<unsigned long long>(std::max(1024, limit * 64));
+    for (unsigned long long i = 0;
+         i < max_attempts && static_cast<int>(seeds.size()) < limit;
+         ++i) {
+        if ((i & 63ULL) == 0 && cancel_requested(should_cancel)) break;
         const double u = halton(i + 1, 2);
         const double v = halton(i + 1, 3);
         push_unique_seed(seeds, viewport_seed_at(req, u, v), duplicate_eps);
@@ -287,7 +302,8 @@ OrbitClassification classify_orbit_with_step(
     Z c,
     int max_iter,
     double eps,
-    const std::function<Z(Z, Z)>& step
+    const std::function<Z(Z, Z)>& step,
+    const SpecialPointCancelCallback& should_cancel = {}
 ) {
     OrbitClassification out;
     out.orbit.reserve(static_cast<size_t>(max_iter) + 1);
@@ -324,6 +340,7 @@ OrbitClassification classify_orbit_with_step(
     out.orbit.push_back(z);
     insert_orbit_point(0, z);
     for (int n = 1; n <= max_iter; ++n) {
+        if ((n == 1 || (n & 63) == 0) && cancel_requested(should_cancel)) return out;
         z = step(z, c);
         if (!finite(z)) break;
         check_repeats(n, z);
@@ -457,14 +474,19 @@ SpecialPointResult make_base_result(SpecialPointKind kind, int preperiod, int pe
     return out;
 }
 
-SpecialPointResult polish_result(const SpecialPointResult& input, const SpecialPointEnumRequest& req) {
+SpecialPointResult polish_result(
+    const SpecialPointResult& input,
+    const SpecialPointEnumRequest& req,
+    const SpecialPointCancelCallback& should_cancel
+) {
     SpecialPointResult out = input;
     if (!input.accepted) return out;
     const Z c0(input.re, input.im);
     if (input.kind == SpecialPointKind::HyperbolicCenter) {
-        out = newton_solve_center(c0, input.period, req);
+        out = newton_solve_center(c0, input.period, req, should_cancel);
     } else {
-        out = newton_solve_misiurewicz(c0, input.preperiod, input.period, req);
+        out = newton_solve_misiurewicz(
+            c0, input.preperiod, input.period, req, should_cancel);
     }
     return out;
 }
@@ -481,7 +503,8 @@ void add_or_replace_root(std::vector<SpecialPointResult>& roots, const SpecialPo
 bool make_local_fallback_candidate(
     SpecialPointResult root,
     const SpecialPointSearchRequest& req,
-    SpecialPointResult& fallback
+    SpecialPointResult& fallback,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     if (!root.converged || !root.actual.found_repeat || root.actual.period < 1) return false;
     if (root.actual.is_center) {
@@ -503,8 +526,10 @@ bool make_local_fallback_candidate(
     root.id = format_id(root.kind, root.preperiod, root.period, Z(root.re, root.im));
     if (req.include_variant_compatibility) {
         root.variants = classify_variant_existence(
-            Z(root.re, root.im), root.kind, root.preperiod, root.period, req.classify_eps);
+            Z(root.re, root.im), root.kind, root.preperiod, root.period, req.classify_eps,
+            should_cancel);
     }
+    if (cancel_requested(should_cancel)) return false;
     fallback = std::move(root);
     return true;
 }
@@ -521,14 +546,22 @@ bool better_local_fallback_candidate(
     return candidate.residual < current.residual;
 }
 
-SeedSolveOutcome solve_enum_seed(Z seed, const Task& task, const SpecialPointEnumRequest& req) {
+SeedSolveOutcome solve_enum_seed(
+    Z seed,
+    const Task& task,
+    const SpecialPointEnumRequest& req,
+    const SpecialPointCancelCallback& should_cancel
+) {
     SeedSolveOutcome out;
+    if (cancel_requested(should_cancel)) return out;
     if (std::norm(seed) > 4.0) return out;
     out.seed_count = 1;
 
     SpecialPointResult root = task.kind == SpecialPointKind::HyperbolicCenter
-        ? newton_solve_center(seed, task.period, req)
-        : newton_solve_misiurewicz(seed, task.preperiod, task.period, req);
+        ? newton_solve_center(seed, task.period, req, should_cancel)
+        : newton_solve_misiurewicz(
+            seed, task.preperiod, task.period, req, should_cancel);
+    if (cancel_requested(should_cancel) || root.reason == "cancelled") return out;
 
     if (root.converged) ++out.newton_success_count;
     if (!root.accepted) {
@@ -537,7 +570,8 @@ SeedSolveOutcome solve_enum_seed(Z seed, const Task& task, const SpecialPointEnu
         return out;
     }
 
-    root = polish_result(root, req);
+    root = polish_result(root, req, should_cancel);
+    if (cancel_requested(should_cancel) || root.reason == "cancelled") return out;
     if (!root.accepted) {
         ++out.rejected_count;
         if (req.include_rejected_debug) out.rejected_debug.push_back(root);
@@ -550,10 +584,11 @@ SeedSolveOutcome solve_enum_seed(Z seed, const Task& task, const SpecialPointEnu
     if (std::abs(root.im) > req.root_merge_eps) {
         const Z conj_seed(root.re, -root.im);
         SpecialPointResult conj_root = task.kind == SpecialPointKind::HyperbolicCenter
-            ? newton_solve_center(conj_seed, task.period, req)
-            : newton_solve_misiurewicz(conj_seed, task.preperiod, task.period, req);
+            ? newton_solve_center(conj_seed, task.period, req, should_cancel)
+            : newton_solve_misiurewicz(
+                conj_seed, task.preperiod, task.period, req, should_cancel);
         if (conj_root.accepted) {
-            conj_root = polish_result(conj_root, req);
+            conj_root = polish_result(conj_root, req, should_cancel);
             conj_root.visible = point_in_viewport(req.viewport, Z(conj_root.re, conj_root.im));
             if (!req.visible_only || conj_root.visible) out.accepted.push_back(conj_root);
         }
@@ -580,9 +615,11 @@ SeedSolveOutcome solve_search_seed(
     Z seed,
     const Task& task,
     const SpecialPointEnumRequest& opt,
-    const SpecialPointSearchRequest& req
+    const SpecialPointSearchRequest& req,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     SeedSolveOutcome out;
+    if (cancel_requested(should_cancel)) return out;
     if (std::norm(seed) > 4.0) return out;
     out.seed_count = 1;
 
@@ -592,8 +629,9 @@ SeedSolveOutcome solve_search_seed(
         SpecialPointEnumRequest attempt_opt = opt;
         attempt_opt.max_newton_iter = iter_limit;
         root = task.kind == SpecialPointKind::HyperbolicCenter
-            ? newton_solve_center(seed, task.period, attempt_opt)
-            : newton_solve_misiurewicz(seed, task.preperiod, task.period, attempt_opt);
+            ? newton_solve_center(seed, task.period, attempt_opt, should_cancel)
+            : newton_solve_misiurewicz(seed, task.preperiod, task.period, attempt_opt, should_cancel);
+        if (cancel_requested(should_cancel) || root.reason == "cancelled") return out;
         if (root.converged || root.reason != "not_converged" || iter_limit >= LOCAL_ADAPTIVE_NEWTON_MAX_ITER) break;
         iter_limit = std::min(LOCAL_ADAPTIVE_NEWTON_MAX_ITER, std::max(iter_limit + 1, iter_limit * 2));
     }
@@ -601,7 +639,8 @@ SeedSolveOutcome solve_search_seed(
     if (!root.accepted) {
         ++out.rejected_count;
         SpecialPointResult fallback;
-        if (make_local_fallback_candidate(root, req, fallback) && (!req.visible_only || fallback.visible)) {
+        if (make_local_fallback_candidate(root, req, fallback, should_cancel) &&
+            (!req.visible_only || fallback.visible)) {
             out.has_fallback_candidate = true;
             out.fallback_candidate = std::move(fallback);
         }
@@ -640,7 +679,8 @@ std::vector<Task> build_tasks(const SpecialPointEnumRequest& req) {
 
 std::vector<int> estimated_center_period_candidates(
     Z initial,
-    const SpecialPointSearchRequest& req
+    const SpecialPointSearchRequest& req,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     std::vector<int> candidates;
     if (req.kind != SpecialPointKind::HyperbolicCenter ||
@@ -654,7 +694,10 @@ std::vector<int> estimated_center_period_candidates(
         std::min(200000, std::max(req.seed_budget, req.period_max * 8 + 32)));
     const std::vector<double> probe_epsilons = center_period_probe_epsilons(req);
     for (double eps : probe_epsilons) {
-        const OrbitClassification orbit = classify_critical_orbit_mandelbrot(initial, max_iter, eps);
+        if (cancel_requested(should_cancel)) break;
+        const OrbitClassification orbit = classify_critical_orbit_mandelbrot(
+            initial, max_iter, eps, should_cancel);
+        if (cancel_requested(should_cancel)) break;
         if (!orbit.found_repeat || orbit.period < req.period_min) continue;
 
         const bool relaxed_probe = eps > req.classify_eps * 1.5;
@@ -693,23 +736,42 @@ std::string special_point_kind_name(SpecialPointKind kind) {
     return kind == SpecialPointKind::HyperbolicCenter ? "center" : "misiurewicz";
 }
 
-std::pair<Z, Z> eval_center_f_df(Z c, int period) {
+namespace {
+
+bool eval_center_f_df_cancelable(
+    Z c,
+    int period,
+    const SpecialPointCancelCallback& should_cancel,
+    Z& f,
+    Z& df
+) {
     Z z{0.0, 0.0};
     Z dz{0.0, 0.0};
     for (int i = 0; i < period; ++i) {
+        if ((i & 63) == 0 && cancel_requested(should_cancel)) return false;
         dz = 2.0 * z * dz + Z{1.0, 0.0};
         z = z * z + c;
     }
-    return {z, dz};
+    f = z;
+    df = dz;
+    return !cancel_requested(should_cancel);
 }
 
-std::pair<Z, Z> eval_misiurewicz_f_df(Z c, int preperiod, int period) {
+bool eval_misiurewicz_f_df_cancelable(
+    Z c,
+    int preperiod,
+    int period,
+    const SpecialPointCancelCallback& should_cancel,
+    Z& f,
+    Z& df
+) {
     Z z{0.0, 0.0};
     Z dz{0.0, 0.0};
     Z z_m{0.0, 0.0};
     Z dz_m{0.0, 0.0};
     const int total = preperiod + period;
     for (int i = 0; i < total; ++i) {
+        if ((i & 63) == 0 && cancel_requested(should_cancel)) return false;
         dz = 2.0 * z * dz + Z{1.0, 0.0};
         z = z * z + c;
         if (i + 1 == preperiod) {
@@ -717,17 +779,43 @@ std::pair<Z, Z> eval_misiurewicz_f_df(Z c, int preperiod, int period) {
             dz_m = dz;
         }
     }
-    return {z - z_m, dz - dz_m};
+    f = z - z_m;
+    df = dz - dz_m;
+    return !cancel_requested(should_cancel);
 }
 
-OrbitClassification classify_critical_orbit_mandelbrot(Z c, int max_iter, double eps) {
+} // namespace
+
+std::pair<Z, Z> eval_center_f_df(Z c, int period) {
+    Z f, df;
+    (void)eval_center_f_df_cancelable(c, period, {}, f, df);
+    return {f, df};
+}
+
+std::pair<Z, Z> eval_misiurewicz_f_df(Z c, int preperiod, int period) {
+    Z f, df;
+    (void)eval_misiurewicz_f_df_cancelable(c, preperiod, period, {}, f, df);
+    return {f, df};
+}
+
+OrbitClassification classify_critical_orbit_mandelbrot(
+    Z c,
+    int max_iter,
+    double eps,
+    const SpecialPointCancelCallback& should_cancel
+) {
     return classify_orbit_with_step(c, max_iter, eps, [](Z z, Z cc) {
         return z * z + cc;
-    });
+    }, should_cancel);
 }
 
-OrbitClassification classify_critical_orbit(Z c, int max_iter, double eps) {
-    return classify_critical_orbit_mandelbrot(c, max_iter, eps);
+OrbitClassification classify_critical_orbit(
+    Z c,
+    int max_iter,
+    double eps,
+    const SpecialPointCancelCallback& should_cancel
+) {
+    return classify_critical_orbit_mandelbrot(c, max_iter, eps, should_cancel);
 }
 
 std::vector<VariantExistence> classify_variant_existence(
@@ -735,7 +823,8 @@ std::vector<VariantExistence> classify_variant_existence(
     SpecialPointKind requested_kind,
     int requested_preperiod,
     int requested_period,
-    double eps
+    double eps,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     static constexpr Variant variants[] = {
         Variant::Mandelbrot, Variant::Tri,  Variant::Boat, Variant::Duck, Variant::Bell,
@@ -743,11 +832,14 @@ std::vector<VariantExistence> classify_variant_existence(
     };
 
     const OrbitClassification mandel = classify_critical_orbit_mandelbrot(
-        c, std::max(8, requested_preperiod + requested_period + 8), eps);
+        c, std::max(8, requested_preperiod + requested_period + 8), eps,
+        should_cancel);
+    if (cancel_requested(should_cancel)) return {};
 
     std::vector<VariantExistence> out;
     out.reserve(std::size(variants));
     for (Variant v : variants) {
+        if (cancel_requested(should_cancel)) break;
         VariantExistence item;
         item.variant_name = display_variant_name(v);
 
@@ -764,7 +856,9 @@ std::vector<VariantExistence> classify_variant_existence(
 
         const OrbitClassification actual = classify_orbit_with_step(
             c, std::max(8, requested_preperiod + requested_period + 8), eps,
-            [v](Z z, Z cc) { return variant_step_switch(v, z, cc); });
+            [v](Z z, Z cc) { return variant_step_switch(v, z, cc); },
+            should_cancel);
+        if (cancel_requested(should_cancel)) break;
 
         item.exists = matches_request(actual, requested_kind, requested_preperiod, requested_period);
         item.actual_preperiod = actual.preperiod;
@@ -780,11 +874,20 @@ std::vector<VariantExistence> classify_variant_existence(
     return out;
 }
 
-SpecialPointResult newton_solve_center(Z initial, int period, const SpecialPointEnumRequest& req) {
+SpecialPointResult newton_solve_center(
+    Z initial,
+    int period,
+    const SpecialPointEnumRequest& req,
+    const SpecialPointCancelCallback& should_cancel
+) {
     SpecialPointResult out = make_base_result(SpecialPointKind::HyperbolicCenter, 0, period, initial);
     Z c = initial;
     const double accept_eps = newton_accept_eps(req);
     for (int iter = 0; iter < req.max_newton_iter; ++iter) {
+        if (cancel_requested(should_cancel)) {
+            out.reason = "cancelled";
+            return out;
+        }
         if (!finite(c)) {
             out.reason = "non_finite";
             return out;
@@ -793,7 +896,11 @@ SpecialPointResult newton_solve_center(Z initial, int period, const SpecialPoint
             out.reason = "escaped_parameter_region";
             return out;
         }
-        const auto [f, df] = eval_center_f_df(c, period);
+        Z f, df;
+        if (!eval_center_f_df_cancelable(c, period, should_cancel, f, df)) {
+            out.reason = "cancelled";
+            return out;
+        }
         out.residual = std::abs(f);
         out.newton_iterations = iter;
         if (out.residual < accept_eps) {
@@ -816,8 +923,11 @@ SpecialPointResult newton_solve_center(Z initial, int period, const SpecialPoint
         }
     }
 
-    const auto [f, df] = eval_center_f_df(c, period);
-    (void)df;
+    Z f, df;
+    if (!eval_center_f_df_cancelable(c, period, should_cancel, f, df)) {
+        out.reason = "cancelled";
+        return out;
+    }
     const int iterations_used = out.newton_iterations;
     out = make_base_result(SpecialPointKind::HyperbolicCenter, 0, period, c);
     out.newton_iterations = iterations_used;
@@ -827,11 +937,22 @@ SpecialPointResult newton_solve_center(Z initial, int period, const SpecialPoint
         out.reason = "not_converged";
         return out;
     }
-    out.actual = classify_critical_orbit_mandelbrot(c, std::max(16, period * 3 + 8), req.classify_eps);
+    out.actual = classify_critical_orbit_mandelbrot(
+        c, std::max(16, period * 3 + 8), req.classify_eps, should_cancel);
+    if (cancel_requested(should_cancel)) {
+        out.accepted = false;
+        out.reason = "cancelled";
+        return out;
+    }
     out.accepted = out.converged && matches_request(out.actual, out.kind, 0, period);
     out.reason = out.accepted ? "ok" : rejection_reason(out.actual, out.kind, 0, period);
     if (req.include_variant_existence && out.accepted) {
-        out.variants = classify_variant_existence(c, out.kind, 0, period, req.classify_eps);
+        out.variants = classify_variant_existence(
+            c, out.kind, 0, period, req.classify_eps, should_cancel);
+        if (cancel_requested(should_cancel)) {
+            out.accepted = false;
+            out.reason = "cancelled";
+        }
     }
     return out;
 }
@@ -841,11 +962,21 @@ SpecialPointResult find_hyperbolic_center_near(Z initial, int period, const Spec
     return newton_solve_center(initial, period, opt);
 }
 
-SpecialPointResult newton_solve_misiurewicz(Z initial, int preperiod, int period, const SpecialPointEnumRequest& req) {
+SpecialPointResult newton_solve_misiurewicz(
+    Z initial,
+    int preperiod,
+    int period,
+    const SpecialPointEnumRequest& req,
+    const SpecialPointCancelCallback& should_cancel
+) {
     SpecialPointResult out = make_base_result(SpecialPointKind::Misiurewicz, preperiod, period, initial);
     Z c = initial;
     const double accept_eps = newton_accept_eps(req);
     for (int iter = 0; iter < req.max_newton_iter; ++iter) {
+        if (cancel_requested(should_cancel)) {
+            out.reason = "cancelled";
+            return out;
+        }
         if (!finite(c)) {
             out.reason = "non_finite";
             return out;
@@ -854,7 +985,12 @@ SpecialPointResult newton_solve_misiurewicz(Z initial, int preperiod, int period
             out.reason = "escaped_parameter_region";
             return out;
         }
-        const auto [f, df] = eval_misiurewicz_f_df(c, preperiod, period);
+        Z f, df;
+        if (!eval_misiurewicz_f_df_cancelable(
+                c, preperiod, period, should_cancel, f, df)) {
+            out.reason = "cancelled";
+            return out;
+        }
         out.residual = std::abs(f);
         out.newton_iterations = iter;
         if (out.residual < accept_eps) {
@@ -877,8 +1013,12 @@ SpecialPointResult newton_solve_misiurewicz(Z initial, int preperiod, int period
         }
     }
 
-    const auto [f, df] = eval_misiurewicz_f_df(c, preperiod, period);
-    (void)df;
+    Z f, df;
+    if (!eval_misiurewicz_f_df_cancelable(
+            c, preperiod, period, should_cancel, f, df)) {
+        out.reason = "cancelled";
+        return out;
+    }
     const int iterations_used = out.newton_iterations;
     out = make_base_result(SpecialPointKind::Misiurewicz, preperiod, period, c);
     out.newton_iterations = iterations_used;
@@ -889,11 +1029,22 @@ SpecialPointResult newton_solve_misiurewicz(Z initial, int preperiod, int period
         return out;
     }
     out.actual = classify_critical_orbit_mandelbrot(
-        c, std::max(16, (preperiod + period) * 3 + 8), req.classify_eps);
+        c, std::max(16, (preperiod + period) * 3 + 8), req.classify_eps,
+        should_cancel);
+    if (cancel_requested(should_cancel)) {
+        out.accepted = false;
+        out.reason = "cancelled";
+        return out;
+    }
     out.accepted = out.converged && matches_request(out.actual, out.kind, preperiod, period);
     out.reason = out.accepted ? "ok" : rejection_reason(out.actual, out.kind, preperiod, period);
     if (req.include_variant_existence && out.accepted) {
-        out.variants = classify_variant_existence(c, out.kind, preperiod, period, req.classify_eps);
+        out.variants = classify_variant_existence(
+            c, out.kind, preperiod, period, req.classify_eps, should_cancel);
+        if (cancel_requested(should_cancel)) {
+            out.accepted = false;
+            out.reason = "cancelled";
+        }
     }
     return out;
 }
@@ -934,11 +1085,16 @@ bool point_in_viewport(const SpecialPointViewport& viewport, Z c) {
 
 SpecialPointEnumResponse enumerate_special_points(
     const SpecialPointEnumRequest& req,
-    const SpecialPointProgressCallback& progress
+    const SpecialPointProgressCallback& progress,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     const std::vector<Task> tasks = build_tasks(req);
     SpecialPointEnumResponse resp;
     resp.status = "running";
+    if (cancel_requested(should_cancel)) {
+        resp.status = "cancelled";
+        return resp;
+    }
     for (const Task& t : tasks) {
         if (t.expected < 0) {
             throw std::runtime_error("expected count unavailable for requested Misiurewicz parameter");
@@ -948,6 +1104,11 @@ SpecialPointEnumResponse enumerate_special_points(
 
     int task_index = 0;
     for (const Task& task : tasks) {
+        if (cancel_requested(should_cancel)) {
+            resp.status = "cancelled";
+            resp.complete = false;
+            return resp;
+        }
         ++task_index;
         const int accepted_before_task = static_cast<int>(resp.points.size());
         const unsigned long long task_seed_offset =
@@ -959,8 +1120,14 @@ SpecialPointEnumResponse enumerate_special_points(
             {0.0, 1.0}, {0.0, -1.0}, {-0.75, 0.75}, {-0.75, -0.75},
         };
         for (Z seed : anchors) {
+            if (cancel_requested(should_cancel)) {
+                resp.status = "cancelled";
+                resp.complete = false;
+                return resp;
+            }
             if (static_cast<int>(resp.points.size()) - accepted_before_task >= task.expected) break;
-            merge_enum_outcome(resp, solve_enum_seed(seed, task, req), req);
+            merge_enum_outcome(
+                resp, solve_enum_seed(seed, task, req, should_cancel), req);
         }
 
         for (int batch = 0; batch < req.max_seed_batches; ++batch) {
@@ -976,6 +1143,11 @@ SpecialPointEnumResponse enumerate_special_points(
             std::vector<Z> seeds;
             seeds.reserve(static_cast<size_t>(req.seeds_per_batch));
             for (int i = 0; i < req.seeds_per_batch; ++i) {
+                if ((i & 63) == 0 && cancel_requested(should_cancel)) {
+                    resp.status = "cancelled";
+                    resp.complete = false;
+                    return resp;
+                }
                 const unsigned long long seed_index = task_seed_offset
                     + static_cast<unsigned long long>(batch) * static_cast<unsigned long long>(req.seeds_per_batch)
                     + static_cast<unsigned long long>(i);
@@ -985,7 +1157,15 @@ SpecialPointEnumResponse enumerate_special_points(
             std::vector<SeedSolveOutcome> outcomes(seeds.size());
             #pragma omp parallel for schedule(dynamic, 16)
             for (int i = 0; i < static_cast<int>(seeds.size()); ++i) {
-                outcomes[static_cast<size_t>(i)] = solve_enum_seed(seeds[static_cast<size_t>(i)], task, req);
+                if (cancel_requested(should_cancel)) continue;
+                outcomes[static_cast<size_t>(i)] = solve_enum_seed(
+                    seeds[static_cast<size_t>(i)], task, req, should_cancel);
+            }
+
+            if (cancel_requested(should_cancel)) {
+                resp.status = "cancelled";
+                resp.complete = false;
+                return resp;
             }
 
             for (const auto& outcome : outcomes) {
@@ -1013,16 +1193,23 @@ SpecialPointEnumResponse enumerate_special_points(
 
 SpecialPointSearchResponse search_special_points(
     const SpecialPointSearchRequest& req,
-    const SpecialPointSearchProgressCallback& progress
+    const SpecialPointSearchProgressCallback& progress,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     if (!req.viewport.enabled) {
         throw std::runtime_error("viewport is required for special point search");
     }
 
+    if (cancel_requested(should_cancel)) {
+        SpecialPointSearchResponse cancelled;
+        cancelled.status = "cancelled";
+        return cancelled;
+    }
+
     // Deep zoom: double precision cannot separate roots below the threshold,
     // hand off to the MPFR ball-period + Newton solver.
     if (special_points_search_wants_hp(req)) {
-        return search_special_points_hp(req, progress);
+        return search_special_points_hp(req, progress, should_cancel);
     }
 
     SpecialPointSearchResponse resp;
@@ -1053,6 +1240,10 @@ SpecialPointSearchResponse search_special_points(
     int progress_index = 0;
 
     auto report_progress = [&](const Task& task) -> bool {
+        if (cancel_requested(should_cancel)) {
+            resp.status = "cancelled";
+            return false;
+        }
         if (progress) {
             const int period_index = ++progress_index;
             const bool proceed = progress(
@@ -1078,7 +1269,7 @@ SpecialPointSearchResponse search_special_points(
 
     auto run_task = [&](Z seed, const Task& task) -> SearchStepResult {
         if (!report_progress(task)) return {false, true};
-        return {merge_outcome(solve_search_seed(seed, task, opt, req)), false};
+        return {merge_outcome(solve_search_seed(seed, task, opt, req, should_cancel)), false};
     };
 
     auto run_tasks_for_seed = [&](Z seed, const std::vector<Task>& selected) -> SearchStepResult {
@@ -1095,6 +1286,11 @@ SpecialPointSearchResponse search_special_points(
 
         std::vector<SeedSolveOutcome> outcomes(seed_indices.size());
         bool used_cuda_batch = false;
+
+        if (cancel_requested(should_cancel)) {
+            resp.status = "cancelled";
+            return {false, true};
+        }
 
 #if USE_CUDA_SPECIAL_POINTS
         if (task.kind == SpecialPointKind::HyperbolicCenter &&
@@ -1126,7 +1322,8 @@ SpecialPointSearchResponse search_special_points(
                         SpecialPointResult root = newton_solve_center(
                             {cuda_root.re, cuda_root.im},
                             task.period,
-                            polish_opt);
+                            polish_opt,
+                            should_cancel);
                         if (!root.accepted && !root.converged) {
                             root = make_base_result(
                                 SpecialPointKind::HyperbolicCenter,
@@ -1139,7 +1336,8 @@ SpecialPointSearchResponse search_special_points(
                             root.actual = classify_critical_orbit_mandelbrot(
                                 {cuda_root.re, cuda_root.im},
                                 std::max(16, task.period * 3 + 8),
-                                req.classify_eps);
+                                req.classify_eps,
+                                should_cancel);
                             root.accepted = matches_request(root.actual, root.kind, 0, task.period);
                             root.reason = root.accepted ? "ok" : rejection_reason(root.actual, root.kind, 0, task.period);
                             if (req.include_variant_compatibility && root.accepted) {
@@ -1148,7 +1346,8 @@ SpecialPointSearchResponse search_special_points(
                                     root.kind,
                                     0,
                                     task.period,
-                                    req.classify_eps);
+                                    req.classify_eps,
+                                    should_cancel);
                             }
                         }
                         ++out.newton_success_count;
@@ -1176,17 +1375,26 @@ SpecialPointSearchResponse search_special_points(
             })) {
             #pragma omp parallel for schedule(dynamic, 1)
             for (int i = 0; i < static_cast<int>(seed_indices.size()); ++i) {
+                if (cancel_requested(should_cancel)) continue;
                 const size_t seed_index = seed_indices[static_cast<size_t>(i)];
-                outcomes[static_cast<size_t>(i)] = solve_search_seed(seeds[seed_index], task, opt, req);
+                outcomes[static_cast<size_t>(i)] = solve_search_seed(
+                    seeds[seed_index], task, opt, req, should_cancel);
             }
         }
 
         if (!used_cuda_batch) {
             #pragma omp parallel for schedule(dynamic, 1)
             for (int i = 0; i < static_cast<int>(seed_indices.size()); ++i) {
+                if (cancel_requested(should_cancel)) continue;
                 const size_t seed_index = seed_indices[static_cast<size_t>(i)];
-                outcomes[static_cast<size_t>(i)] = solve_search_seed(seeds[seed_index], task, opt, req);
+                outcomes[static_cast<size_t>(i)] = solve_search_seed(
+                    seeds[seed_index], task, opt, req, should_cancel);
             }
+        }
+
+        if (cancel_requested(should_cancel)) {
+            resp.status = "cancelled";
+            return {false, true};
         }
 
         bool accepted = false;
@@ -1198,7 +1406,11 @@ SpecialPointSearchResponse search_special_points(
 
     bool done = false;
     if (req.kind == SpecialPointKind::HyperbolicCenter) {
-        const std::vector<Z> seeds = viewport_search_seeds(req);
+        const std::vector<Z> seeds = viewport_search_seeds(req, should_cancel);
+        if (cancel_requested(should_cancel)) {
+            resp.status = "cancelled";
+            return resp;
+        }
         std::vector<std::vector<int>> seed_period_hints(seeds.size());
         bool seed_period_hints_ready = false;
 
@@ -1206,8 +1418,10 @@ SpecialPointSearchResponse search_special_points(
             if (seed_period_hints_ready) return;
             #pragma omp parallel for schedule(dynamic, 1)
             for (int i = 1; i < static_cast<int>(seeds.size()); ++i) {
+                if (cancel_requested(should_cancel)) continue;
                 seed_period_hints[static_cast<size_t>(i)] =
-                    estimated_center_period_candidates(seeds[static_cast<size_t>(i)], req);
+                    estimated_center_period_candidates(
+                        seeds[static_cast<size_t>(i)], req, should_cancel);
             }
             seed_period_hints_ready = true;
         };
@@ -1219,8 +1433,15 @@ SpecialPointSearchResponse search_special_points(
             std::vector<SeedSolveOutcome> center_outcomes(block_end - block_start);
             #pragma omp parallel for schedule(dynamic, 1)
             for (int i = 0; i < static_cast<int>(center_outcomes.size()); ++i) {
+                if (cancel_requested(should_cancel)) continue;
                 const Task& task = tasks[block_start + static_cast<size_t>(i)];
-                center_outcomes[static_cast<size_t>(i)] = solve_search_seed(initial, task, opt, req);
+                center_outcomes[static_cast<size_t>(i)] = solve_search_seed(
+                    initial, task, opt, req, should_cancel);
+            }
+
+            if (cancel_requested(should_cancel)) {
+                resp.status = "cancelled";
+                return resp;
             }
 
             bool center_wave_accepted = false;
@@ -1239,6 +1460,10 @@ SpecialPointSearchResponse search_special_points(
             for (size_t task_i = block_start; task_i < block_end; ++task_i) {
                 const Task& task = tasks[task_i];
                 ensure_seed_period_hints();
+                if (cancel_requested(should_cancel)) {
+                    resp.status = "cancelled";
+                    return resp;
+                }
                 std::vector<size_t> seed_indices;
                 seed_indices.reserve(seeds.size());
                 for (size_t seed_i = 1; seed_i < seeds.size(); ++seed_i) {

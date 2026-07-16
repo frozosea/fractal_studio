@@ -87,7 +87,8 @@ bool special_points_hp_available() { return false; }
 
 SpecialPointSearchResponse search_special_points_hp(
     const SpecialPointSearchRequest&,
-    const SpecialPointSearchProgressCallback&
+    const SpecialPointSearchProgressCallback&,
+    const SpecialPointCancelCallback&
 ) {
     SpecialPointSearchResponse resp;
     resp.status = "completed";
@@ -98,6 +99,10 @@ SpecialPointSearchResponse search_special_points_hp(
 #else
 
 namespace {
+
+bool hp_cancel_requested(const SpecialPointCancelCallback& should_cancel) {
+    return should_cancel && should_cancel();
+}
 
 // ---------------------------------------------------------------------------
 // Minimal MPFR complex helpers. Perturbation reference orbits already use raw
@@ -313,7 +318,8 @@ std::vector<int> hp_ball_periods(
     const HpContext& ctx,
     int period_min,
     int period_max,
-    int max_candidates
+    int max_candidates,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     std::vector<int> candidates;
     HpC z(ctx.prec);
@@ -322,6 +328,7 @@ std::vector<int> hp_ball_periods(
     const double r0 = std::hypot(ctx.half_w, ctx.half_h);
     double r = r0;
     for (int n = 1; n <= period_max; ++n) {
+        if ((n == 1 || (n & 63) == 0) && hp_cancel_requested(should_cancel)) break;
         hp_step(z, ctx.center, w);
         const double abs_z = hp_abs_d(z, w);
         if (!std::isfinite(abs_z) || abs_z > 4.0) break;
@@ -341,6 +348,7 @@ std::vector<int> hp_ball_periods(
 
 struct HpNewtonOutcome {
     bool converged = false;
+    bool cancelled = false;
     std::string fail_reason = "not_converged";
     int iterations = 0;
     double residual = 0.0;
@@ -348,23 +356,41 @@ struct HpNewtonOutcome {
 };
 
 // f/df of the center equation z_period(c) = 0 at c.
-void hp_center_f_df(const HpC& c, int period, HpC& f, HpC& df, HpWork& w) {
+bool hp_center_f_df(
+    const HpC& c,
+    int period,
+    HpC& f,
+    HpC& df,
+    HpWork& w,
+    const SpecialPointCancelCallback& should_cancel
+) {
     HpC z(mpfr_get_prec(c.re));
     HpC dz(mpfr_get_prec(c.re));
     for (int i = 0; i < period; ++i) {
+        if ((i & 63) == 0 && hp_cancel_requested(should_cancel)) return false;
         hp_step_derivative(dz, z, w);
         hp_step(z, c, w);
     }
     hp_set(f, z);
     hp_set(df, dz);
+    return !hp_cancel_requested(should_cancel);
 }
 
 // f/df of the Misiurewicz equation z_{m+p}(c) - z_m(c) = 0 at c.
-void hp_misiurewicz_f_df(const HpC& c, int preperiod, int period, HpC& f, HpC& df, HpWork& w) {
+bool hp_misiurewicz_f_df(
+    const HpC& c,
+    int preperiod,
+    int period,
+    HpC& f,
+    HpC& df,
+    HpWork& w,
+    const SpecialPointCancelCallback& should_cancel
+) {
     const mpfr_prec_t prec = mpfr_get_prec(c.re);
     HpC z(prec), dz(prec), zm(prec), dzm(prec);
     const int total = preperiod + period;
     for (int i = 0; i < total; ++i) {
+        if ((i & 63) == 0 && hp_cancel_requested(should_cancel)) return false;
         hp_step_derivative(dz, z, w);
         hp_step(z, c, w);
         if (i + 1 == preperiod) {
@@ -374,6 +400,7 @@ void hp_misiurewicz_f_df(const HpC& c, int preperiod, int period, HpC& f, HpC& d
     }
     hp_sub(f, z, zm);
     hp_sub(df, dz, dzm);
+    return !hp_cancel_requested(should_cancel);
 }
 
 template <typename EvalFn>
@@ -382,7 +409,8 @@ HpNewtonOutcome hp_newton(
     HpC& c,               // in: seed, out: refined root
     int orbit_len,        // steps per f/df evaluation (budget accounting)
     int max_iter,
-    const EvalFn& eval    // eval(c, f, df, w)
+    const EvalFn& eval,   // eval(c, f, df, w) -> false when cancelled
+    const SpecialPointCancelCallback& should_cancel
 ) {
     HpNewtonOutcome out;
     const mpfr_prec_t prec = ctx.prec;
@@ -391,7 +419,11 @@ HpNewtonOutcome hp_newton(
     HpReal norm(prec), n2(prec);
 
     for (int iter = 0; iter < max_iter; ++iter) {
-        eval(c, f, df, w);
+        if (hp_cancel_requested(should_cancel) || !eval(c, f, df, w)) {
+            out.cancelled = true;
+            out.fail_reason = "cancelled";
+            return out;
+        }
         out.steps += orbit_len;
         out.iterations = iter + 1;
 
@@ -431,7 +463,12 @@ HpNewtonOutcome hp_newton(
     }
 
     // Residual at the accepted root, for reporting.
-    eval(c, f, df, w);
+    if (hp_cancel_requested(should_cancel) || !eval(c, f, df, w)) {
+        out.cancelled = true;
+        out.converged = false;
+        out.fail_reason = "cancelled";
+        return out;
+    }
     out.steps += orbit_len;
     hp_norm2(n2.v, f, w);
     mpfr_sqrt(n2.v, n2.v, MPFR_RNDN);
@@ -449,13 +486,15 @@ int hp_center_actual_period(
     const HpContext& ctx,
     const HpC& c,
     int period,
-    double& repeat_error
+    double& repeat_error,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     HpC z(ctx.prec);
     HpWork w(ctx.prec);
     HpReal n2(ctx.prec);
     repeat_error = 0.0;
     for (int n = 1; n <= period; ++n) {
+        if ((n == 1 || (n & 63) == 0) && hp_cancel_requested(should_cancel)) return -1;
         hp_step(z, c, w);
         if (period % n != 0) continue;
         hp_norm2(n2.v, z, w);
@@ -483,7 +522,8 @@ HpMisiurewiczClass hp_classify_misiurewicz(
     const HpContext& ctx,
     const HpC& c,
     int preperiod,
-    int period
+    int period,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     HpMisiurewiczClass out;
     const int total = preperiod + period;
@@ -497,6 +537,7 @@ HpMisiurewiczClass hp_classify_misiurewicz(
     HpC z(ctx.prec);
     orbit.push_back(std::make_unique<HpC>(ctx.prec));  // z_0 = 0
     for (int n = 1; n <= total; ++n) {
+        if ((n == 1 || (n & 63) == 0) && hp_cancel_requested(should_cancel)) return out;
         hp_step(z, c, w);
         auto stored = std::make_unique<HpC>(ctx.prec);
         hp_set(*stored, z);
@@ -517,6 +558,7 @@ HpMisiurewiczClass hp_classify_misiurewicz(
     // Minimal period among divisors of p, measured at index m.
     int actual_period = -1;
     for (int q = 1; q <= period; ++q) {
+        if ((q == 1 || (q & 63) == 0) && hp_cancel_requested(should_cancel)) return out;
         if (period % q != 0) continue;
         hp_sub(diff, *orbit[static_cast<size_t>(preperiod + q)], *orbit[static_cast<size_t>(preperiod)]);
         hp_norm2(n2.v, diff, w);
@@ -534,6 +576,7 @@ HpMisiurewiczClass hp_classify_misiurewicz(
     // Minimal preperiod for that period.
     int actual_preperiod = preperiod;
     for (int m = 0; m < preperiod; ++m) {
+        if ((m & 63) == 0 && hp_cancel_requested(should_cancel)) return out;
         if (m + actual_period > total) break;
         hp_sub(diff, *orbit[static_cast<size_t>(m + actual_period)], *orbit[static_cast<size_t>(m)]);
         hp_norm2(n2.v, diff, w);
@@ -646,7 +689,8 @@ void hp_seed_at(const HpContext& ctx, HpC& seed, double off_re, double off_im) {
 
 SpecialPointSearchResponse hp_search_centers(
     const SpecialPointSearchRequest& req,
-    const SpecialPointSearchProgressCallback& progress
+    const SpecialPointSearchProgressCallback& progress,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     SpecialPointSearchResponse resp;
     resp.status = "searching";
@@ -654,7 +698,13 @@ SpecialPointSearchResponse hp_search_centers(
     HpWork w(ctx.prec);
 
     const std::vector<int> candidates =
-        hp_ball_periods(ctx, req.period_min, req.period_max, HP_MAX_BALL_CANDIDATES);
+        hp_ball_periods(
+            ctx, req.period_min, req.period_max, HP_MAX_BALL_CANDIDATES,
+            should_cancel);
+    if (hp_cancel_requested(should_cancel)) {
+        resp.status = "cancelled";
+        return resp;
+    }
     const auto seeds = hp_seed_offsets(ctx);
 
     SpecialPointResult best_fallback;
@@ -665,6 +715,10 @@ SpecialPointSearchResponse hp_search_centers(
 
     int candidate_index = 0;
     for (int candidate : candidates) {
+        if (hp_cancel_requested(should_cancel)) {
+            resp.status = "cancelled";
+            return resp;
+        }
         ++candidate_index;
         if (progress && !progress(candidate, candidate_index,
                                   static_cast<int>(candidates.size()),
@@ -678,16 +732,25 @@ SpecialPointSearchResponse hp_search_centers(
         }
 
         for (const auto& offset : seeds) {
+            if (hp_cancel_requested(should_cancel)) {
+                resp.status = "cancelled";
+                return resp;
+            }
             HpC c(ctx.prec);
             hp_seed_at(ctx, c, offset.first, offset.second);
             ++resp.seed_count;
 
             const HpNewtonOutcome newton = hp_newton(
                 ctx, c, candidate, HP_NEWTON_MAX_ITER,
-                [candidate](const HpC& cc, HpC& f, HpC& df, HpWork& ww) {
-                    hp_center_f_df(cc, candidate, f, df, ww);
-                });
+                [candidate, &should_cancel](const HpC& cc, HpC& f, HpC& df, HpWork& ww) {
+                    return hp_center_f_df(cc, candidate, f, df, ww, should_cancel);
+                },
+                should_cancel);
             step_budget -= newton.steps;
+            if (newton.cancelled || hp_cancel_requested(should_cancel)) {
+                resp.status = "cancelled";
+                return resp;
+            }
             if (!newton.converged) {
                 ++resp.rejected_count;
                 continue;
@@ -695,7 +758,12 @@ SpecialPointSearchResponse hp_search_centers(
             ++resp.newton_success_count;
 
             double repeat_error = 0.0;
-            const int actual = hp_center_actual_period(ctx, c, candidate, repeat_error);
+            const int actual = hp_center_actual_period(
+                ctx, c, candidate, repeat_error, should_cancel);
+            if (hp_cancel_requested(should_cancel)) {
+                resp.status = "cancelled";
+                return resp;
+            }
             if (actual < 1) {
                 ++resp.rejected_count;
                 continue;
@@ -761,7 +829,8 @@ SpecialPointSearchResponse hp_search_centers(
 
 SpecialPointSearchResponse hp_search_misiurewicz(
     const SpecialPointSearchRequest& req,
-    const SpecialPointSearchProgressCallback& progress
+    const SpecialPointSearchProgressCallback& progress,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     SpecialPointSearchResponse resp;
     resp.status = "searching";
@@ -780,6 +849,10 @@ SpecialPointSearchResponse hp_search_misiurewicz(
 
     for (int m = req.preperiod_min; m <= req.preperiod_max && !accepted_any && !budget_exhausted; ++m) {
         for (int p = req.period_min; p <= req.period_max; ++p) {
+            if (hp_cancel_requested(should_cancel)) {
+                resp.status = "cancelled";
+                return resp;
+            }
             ++task_index;
             if (progress && !progress(p, task_index, task_count,
                                       resp.accepted_count, resp.seed_count)) {
@@ -797,17 +870,27 @@ SpecialPointSearchResponse hp_search_misiurewicz(
 
             const HpNewtonOutcome newton = hp_newton(
                 ctx, c, m + p, HP_NEWTON_MAX_ITER,
-                [m, p](const HpC& cc, HpC& f, HpC& df, HpWork& ww) {
-                    hp_misiurewicz_f_df(cc, m, p, f, df, ww);
-                });
+                [m, p, &should_cancel](const HpC& cc, HpC& f, HpC& df, HpWork& ww) {
+                    return hp_misiurewicz_f_df(cc, m, p, f, df, ww, should_cancel);
+                },
+                should_cancel);
             step_budget -= newton.steps;
+            if (newton.cancelled || hp_cancel_requested(should_cancel)) {
+                resp.status = "cancelled";
+                return resp;
+            }
             if (!newton.converged) {
                 ++resp.rejected_count;
                 continue;
             }
             ++resp.newton_success_count;
 
-            const HpMisiurewiczClass cls = hp_classify_misiurewicz(ctx, c, m, p);
+            const HpMisiurewiczClass cls = hp_classify_misiurewicz(
+                ctx, c, m, p, should_cancel);
+            if (hp_cancel_requested(should_cancel)) {
+                resp.status = "cancelled";
+                return resp;
+            }
             const bool matches = cls.is_misiurewicz && cls.preperiod == m && cls.period == p;
 
             SpecialPointResult root = hp_make_result(
@@ -874,15 +957,21 @@ bool special_points_hp_available() { return true; }
 
 SpecialPointSearchResponse search_special_points_hp(
     const SpecialPointSearchRequest& req,
-    const SpecialPointSearchProgressCallback& progress
+    const SpecialPointSearchProgressCallback& progress,
+    const SpecialPointCancelCallback& should_cancel
 ) {
     if (!req.viewport.enabled) {
         throw std::runtime_error("viewport is required for special point search");
     }
-    if (req.kind == SpecialPointKind::HyperbolicCenter) {
-        return hp_search_centers(req, progress);
+    if (hp_cancel_requested(should_cancel)) {
+        SpecialPointSearchResponse resp;
+        resp.status = "cancelled";
+        return resp;
     }
-    return hp_search_misiurewicz(req, progress);
+    if (req.kind == SpecialPointKind::HyperbolicCenter) {
+        return hp_search_centers(req, progress, should_cancel);
+    }
+    return hp_search_misiurewicz(req, progress, should_cancel);
 }
 
 #endif // FSD_HAS_MPFR

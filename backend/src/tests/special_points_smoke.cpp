@@ -1,7 +1,9 @@
 #include "compute/special_points.hpp"
 
+#include <atomic>
 #include <cmath>
 #include <complex>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -435,6 +437,44 @@ void expect_local_center_search() {
             "viewport Misiurewicz point classified with wrong preperiod/period");
 }
 
+void expect_local_search_cancellation() {
+    SpecialPointSearchRequest req;
+    req.kind = SpecialPointKind::HyperbolicCenter;
+    req.period_min = 1;
+    req.period_max = 8192;
+    req.seed_budget = 160;
+    req.include_variant_compatibility = false;
+    req.viewport.enabled = true;
+    req.viewport.center_re = -0.7520160599;
+    req.viewport.center_im = 0.0361977261;
+    req.viewport.scale = 1e-20;
+    req.viewport.width = 1200;
+    req.viewport.height = 800;
+
+    std::atomic<int> cancel_checks{0};
+    const auto resp = fsd::compute::search_special_points(
+        req,
+        {},
+        [&]() { return cancel_checks.fetch_add(1, std::memory_order_relaxed) >= 4; });
+    require(resp.status == "cancelled", "local search ignored cooperative cancellation");
+    require(cancel_checks.load(std::memory_order_relaxed) >= 5,
+            "local search did not poll cancellation inside the solver");
+
+    const char* previous_hp_raw = std::getenv("FSD_SPECIAL_POINT_HP");
+    const bool had_previous_hp = previous_hp_raw != nullptr;
+    const std::string previous_hp = previous_hp_raw ? previous_hp_raw : "";
+    ::setenv("FSD_SPECIAL_POINT_HP", "0", 1);
+    cancel_checks.store(0, std::memory_order_relaxed);
+    const auto double_resp = fsd::compute::search_special_points(
+        req,
+        {},
+        [&]() { return cancel_checks.fetch_add(1, std::memory_order_relaxed) >= 4; });
+    if (had_previous_hp) ::setenv("FSD_SPECIAL_POINT_HP", previous_hp.c_str(), 1);
+    else ::unsetenv("FSD_SPECIAL_POINT_HP");
+    require(double_resp.status == "cancelled",
+            "deep double search ignored cancellation while de-duplicating seeds");
+}
+
 } // namespace
 
 int main() {
@@ -472,6 +512,7 @@ int main() {
         expect_high_period_local_center();
         expect_deep_zoom_local_center_search();
         expect_viewport_sampled_center_search();
+        expect_local_search_cancellation();
         run_hp_tests();
     } catch (const std::exception& e) {
         std::cerr << "special_points_smoke failed: " << e.what() << '\n';

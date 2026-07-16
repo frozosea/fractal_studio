@@ -2,17 +2,24 @@
 
 #include "routes.hpp"
 #include "routes_common.hpp"
+#include "resource_manager.hpp"
 
 #include "../compute/newton/mandelbrot_sp.hpp"
 #include "../compute/special_points.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
+#include <utility>
 
 namespace fsd {
 
@@ -24,6 +31,67 @@ constexpr int kLocalMisiurewiczMaxPreperiod = 4096;
 constexpr int kLocalMisiurewiczMaxPeriod = 4096;
 constexpr int kLocalMisiurewiczMaxSum = 8192;
 constexpr int kLocalMisiurewiczMaxPairs = 16384;
+
+struct SpecialPointSearchPreemptEntry {
+    long long seq = -1;
+    std::weak_ptr<std::atomic<bool>> cancelFlag;
+};
+
+std::mutex gSpecialPointSearchPreemptMu;
+std::unordered_map<std::string, SpecialPointSearchPreemptEntry> gSpecialPointSearchPreempt;
+std::weak_ptr<std::atomic<bool>> gLatestAcceptedSpecialPointSearch;
+
+class RunLaunchGuard {
+public:
+    RunLaunchGuard(JobRunner& runner, std::string runId)
+        : runner_(runner), runId_(std::move(runId)) {}
+    ~RunLaunchGuard() {
+        if (!armed_) return;
+        try { runner_.setStatus(runId_, "failed"); } catch (...) {}
+    }
+    void release() { armed_ = false; }
+
+private:
+    JobRunner& runner_;
+    std::string runId_;
+    bool armed_ = true;
+};
+
+std::shared_ptr<std::atomic<bool>> registerSpecialPointSearch(
+    const std::string& key,
+    long long seq
+) {
+    auto flag = std::make_shared<std::atomic<bool>>(false);
+    std::lock_guard<std::mutex> lock(gSpecialPointSearchPreemptMu);
+
+    if (gSpecialPointSearchPreempt.size() > 256) {
+        for (auto it = gSpecialPointSearchPreempt.begin(); it != gSpecialPointSearchPreempt.end();) {
+            if (it->second.cancelFlag.expired()) it = gSpecialPointSearchPreempt.erase(it);
+            else ++it;
+        }
+    }
+
+    auto& entry = gSpecialPointSearchPreempt[key.empty() ? "legacy" : key];
+    if (seq >= entry.seq) {
+        if (auto previous = entry.cancelFlag.lock()) {
+            previous->store(true, std::memory_order_relaxed);
+        }
+        entry.seq = seq;
+        entry.cancelFlag = flag;
+
+        // The studio has one CPU-heavy solver slot. A request that is current
+        // for its client also supersedes the globally accepted search, so
+        // remounts/tabs cannot leave an unbounded queue behind the resource
+        // lease. Stale same-client requests never reach this step.
+        if (auto previous = gLatestAcceptedSpecialPointSearch.lock()) {
+            previous->store(true, std::memory_order_relaxed);
+        }
+        gLatestAcceptedSpecialPointSearch = flag;
+    } else {
+        flag->store(true, std::memory_order_relaxed);
+    }
+    return flag;
+}
 
 Json orbitToJson(const compute::OrbitClassification& o) {
     const std::string kind = o.is_center ? "center" : (o.is_misiurewicz ? "misiurewicz" : "unknown");
@@ -378,8 +446,35 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
     validateEnumRequest(req);
 
     auto run = runner.createRun("special-points-enumerate", body);
-    runner.setStatus(run.id, "running");
+    RunLaunchGuard launchGuard(runner, run.id);
     runner.setCancelable(run.id, true);
+    auto cancelToken = runner.cancelToken(run.id);
+
+    ResourceManager::Lease lease;
+    std::string conflictLock;
+    std::string activeRunId;
+    if (!resourceManager().tryAcquire(
+            run.id,
+            "special_points_enumerate",
+            {"special_points", "cpu_heavy"},
+            lease,
+            conflictLock,
+            activeRunId)) {
+        runner.setProgress(run.id, Json{
+            {"taskType", "special_points"},
+            {"stage", "failed"},
+            {"cancelable", true},
+            {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
+            {"errorMessage", "special point solver already running"},
+        }.dump());
+        runner.setStatus(run.id, "failed");
+        throw HttpError(409, Json{
+            {"error", "special point solver already running"},
+            {"activeRunId", activeRunId},
+            {"resourceLock", conflictLock},
+        }.dump());
+    }
+    runner.setStatus(run.id, "running");
 
     auto setProgress = [&](const std::string& stage, int accepted, int expected, int seeds, int batch) {
         Json progress = {
@@ -391,12 +486,14 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
             {"batchIndex", batch},
             {"elapsedMs", runner.runElapsedMs(run.id)},
             {"cancelable", true},
+            {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
         };
         runner.setProgress(run.id, progress.dump());
     };
 
-    setProgress("enumerating", 0, totalExpectedOrThrow(req), 0, 0);
     try {
+        setProgress("enumerating", 0, totalExpectedOrThrow(req), 0, 0);
+        launchGuard.release();
         compute::SpecialPointEnumResponse resp = compute::enumerate_special_points(
             req,
             [&](int taskIndex, int taskCount, int accepted, int expected, int seeds, int batch) {
@@ -411,12 +508,14 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
                     {"batchIndex", batch},
                     {"elapsedMs", runner.runElapsedMs(run.id)},
                     {"cancelable", true},
+                    {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
                 };
                 runner.setProgress(run.id, progress.dump());
-                return !runner.isCancelRequested(run.id);
-            });
+                return !cancelToken->load(std::memory_order_relaxed);
+            },
+            [cancelToken]() { return cancelToken->load(std::memory_order_relaxed); });
 
-        if (runner.isCancelRequested(run.id) || resp.status == "cancelled") {
+        if (cancelToken->load(std::memory_order_relaxed) || resp.status == "cancelled") {
             runner.setStatus(run.id, "cancelled");
             return Json{{"runId", run.id}, {"status", "cancelled"}}.dump();
         }
@@ -443,7 +542,7 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
         responseJson["reportDownloadUrl"] = "/api/artifacts/download?artifactId=" + artId;
         return responseJson.dump();
     } catch (const std::exception& e) {
-        if (runner.isCancelRequested(run.id)) {
+        if (cancelToken->load(std::memory_order_relaxed)) {
             runner.setStatus(run.id, "cancelled");
         } else {
             runner.setStatus(run.id, "failed");
@@ -458,10 +557,18 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
     const Json j = parseJsonBody(body);
     compute::SpecialPointSearchRequest req = parseSearchRequest(j);
     validateSearchRequest(req);
+    const std::string preemptKey = j.value("preemptKey", std::string(""));
+    const long long preemptSeq = j.value("preemptSeq", 0LL);
+    if (preemptKey.size() > 128 || preemptSeq < 0) {
+        throw HttpError(400, Json{{"error", "invalid special point preemption token"}}.dump());
+    }
 
     auto run = runner.createRun("special-points-search", body);
-    runner.setStatus(run.id, "running");
+    RunLaunchGuard launchGuard(runner, run.id);
     runner.setCancelable(run.id, true);
+    auto cancelToken = runner.cancelToken(run.id);
+    auto backgroundToken = runner.backgroundTaskToken();
+    auto preemptFlag = registerSpecialPointSearch(preemptKey, preemptSeq);
 
     auto setProgress = [&](const std::string& stage, int period, int accepted, int seeds) {
         Json progress = {
@@ -472,13 +579,20 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
             {"seedCount", seeds},
             {"elapsedMs", runner.runElapsedMs(run.id)},
             {"cancelable", true},
+            {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
         };
         runner.setProgress(run.id, progress.dump());
     };
 
-    setProgress("searching", req.period_min, 0, 0);
+    setProgress("queued", req.period_min, 0, 0);
 
-    std::thread([run, req, j, &runner]() {
+    std::thread([run, req, j, preemptFlag, cancelToken, backgroundToken, &runner]() {
+        (void)backgroundToken;
+        RunLaunchGuard terminalGuard(runner, run.id);
+        auto shouldCancel = [&]() {
+            return preemptFlag->load(std::memory_order_relaxed) ||
+                cancelToken->load(std::memory_order_relaxed);
+        };
         auto setThreadProgress = [&](const std::string& stage, int period, int accepted, int seeds, const std::string& error = "") {
             Json progress = {
                 {"taskType", "special_points_search"},
@@ -488,11 +602,44 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
                 {"seedCount", seeds},
                 {"elapsedMs", runner.runElapsedMs(run.id)},
                 {"cancelable", true},
+                {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
             };
             if (!error.empty()) progress["errorMessage"] = error;
             runner.setProgress(run.id, progress.dump());
         };
+
+        ResourceManager::Lease lease;
         try {
+            for (;;) {
+                if (shouldCancel()) {
+                    setThreadProgress("cancelled", req.period_min, 0, 0);
+                    runner.setStatus(run.id, "cancelled");
+                    terminalGuard.release();
+                    return;
+                }
+                std::string conflictLock;
+                std::string activeRunId;
+                if (resourceManager().tryAcquire(
+                        run.id,
+                        "special_points_search",
+                        {"special_points", "cpu_heavy"},
+                        lease,
+                        conflictLock,
+                        activeRunId)) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            if (shouldCancel()) {
+                setThreadProgress("cancelled", req.period_min, 0, 0);
+                runner.setStatus(run.id, "cancelled");
+                terminalGuard.release();
+                return;
+            }
+            runner.setStatus(run.id, "running");
+            setThreadProgress("searching", req.period_min, 0, 0);
+
             compute::SpecialPointSearchResponse resp = compute::search_special_points(
                 req,
                 [&](int period, int periodIndex, int periodCount, int accepted, int seeds) {
@@ -506,14 +653,17 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
                         {"seedCount", seeds},
                         {"elapsedMs", runner.runElapsedMs(run.id)},
                         {"cancelable", true},
+                        {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
                     };
                     runner.setProgress(run.id, progress.dump());
-                    return !runner.isCancelRequested(run.id);
-                });
+                    return !shouldCancel();
+                },
+                shouldCancel);
 
-            if (runner.isCancelRequested(run.id) || resp.status == "cancelled") {
+            if (shouldCancel() || resp.status == "cancelled") {
                 setThreadProgress("cancelled", req.period_min, resp.accepted_count, resp.seed_count);
                 runner.setStatus(run.id, "cancelled");
+                terminalGuard.release();
                 return;
             }
 
@@ -533,20 +683,33 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
 
             setThreadProgress(resp.status, req.period_max, resp.accepted_count, resp.seed_count);
             runner.setStatus(run.id, "completed");
+            terminalGuard.release();
         } catch (const std::exception& e) {
-            if (runner.isCancelRequested(run.id)) {
-                setThreadProgress("cancelled", req.period_min, 0, 0);
-                runner.setStatus(run.id, "cancelled");
-            } else {
-                setThreadProgress("failed", req.period_min, 0, 0, e.what());
-                runner.setStatus(run.id, "failed");
-            }
+            const bool cancelled = shouldCancel();
+            try {
+                runner.setStatus(run.id, cancelled ? "cancelled" : "failed");
+                terminalGuard.release();
+            } catch (...) {}
+            try {
+                setThreadProgress(
+                    cancelled ? "cancelled" : "failed",
+                    req.period_min,
+                    0,
+                    0,
+                    cancelled ? "" : e.what());
+            } catch (...) {}
+        } catch (...) {
+            try {
+                runner.setStatus(run.id, shouldCancel() ? "cancelled" : "failed");
+                terminalGuard.release();
+            } catch (...) {}
         }
     }).detach();
+    launchGuard.release();
 
     return Json{
         {"runId", run.id},
-        {"status", "running"},
+        {"status", "queued"},
         {"sampled", false},
         {"acceptedCount", 0},
         {"fallbackCount", 0},
@@ -554,7 +717,7 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
         {"newtonSuccessCount", 0},
         {"rejectedCount", 0},
         {"points", Json::array()},
-        {"warning", "viewport local solve running"},
+        {"warning", "viewport local solve queued"},
     }.dump();
 }
 

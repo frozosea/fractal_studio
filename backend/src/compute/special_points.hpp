@@ -151,6 +151,11 @@ using SpecialPointSearchProgressCallback = std::function<bool(
     int accepted_count,
     int seed_count)>;
 
+// Kept separate from progress reporting so tight Newton/orbit loops can poll
+// cancellation without writing progress.json on every check. Search workers
+// may invoke it concurrently, so callbacks must be thread-safe.
+using SpecialPointCancelCallback = std::function<bool()>;
+
 std::pair<std::complex<double>, std::complex<double>>
 eval_center_f_df(std::complex<double> c, int period);
 
@@ -160,24 +165,28 @@ eval_misiurewicz_f_df(std::complex<double> c, int preperiod, int period);
 OrbitClassification classify_critical_orbit_mandelbrot(
     std::complex<double> c,
     int max_iter,
-    double eps);
+    double eps,
+    const SpecialPointCancelCallback& should_cancel = {});
 
 OrbitClassification classify_critical_orbit(
     std::complex<double> c,
     int max_iter,
-    double eps);
+    double eps,
+    const SpecialPointCancelCallback& should_cancel = {});
 
 std::vector<VariantExistence> classify_variant_existence(
     std::complex<double> c,
     SpecialPointKind requested_kind,
     int requested_preperiod,
     int requested_period,
-    double eps);
+    double eps,
+    const SpecialPointCancelCallback& should_cancel = {});
 
 SpecialPointResult newton_solve_center(
     std::complex<double> initial,
     int period,
-    const SpecialPointEnumRequest& req);
+    const SpecialPointEnumRequest& req,
+    const SpecialPointCancelCallback& should_cancel = {});
 
 SpecialPointResult find_hyperbolic_center_near(
     std::complex<double> initial,
@@ -188,18 +197,21 @@ SpecialPointResult newton_solve_misiurewicz(
     std::complex<double> initial,
     int preperiod,
     int period,
-    const SpecialPointEnumRequest& req);
+    const SpecialPointEnumRequest& req,
+    const SpecialPointCancelCallback& should_cancel = {});
 
 int expected_center_count(int period);
 int expected_misiurewicz_count(int preperiod, int period);
 
 SpecialPointEnumResponse enumerate_special_points(
     const SpecialPointEnumRequest& req,
-    const SpecialPointProgressCallback& progress = {});
+    const SpecialPointProgressCallback& progress = {},
+    const SpecialPointCancelCallback& should_cancel = {});
 
 SpecialPointSearchResponse search_special_points(
     const SpecialPointSearchRequest& req,
-    const SpecialPointSearchProgressCallback& progress = {});
+    const SpecialPointSearchProgressCallback& progress = {},
+    const SpecialPointCancelCallback& should_cancel = {});
 
 // High-precision (MPFR) deep-zoom path, implemented in special_points_hp.cpp.
 // search_special_points() delegates to it when the viewport scale drops below
@@ -209,7 +221,8 @@ double special_points_hp_scale_threshold();
 bool special_points_search_wants_hp(const SpecialPointSearchRequest& req);
 SpecialPointSearchResponse search_special_points_hp(
     const SpecialPointSearchRequest& req,
-    const SpecialPointSearchProgressCallback& progress = {});
+    const SpecialPointSearchProgressCallback& progress = {},
+    const SpecialPointCancelCallback& should_cancel = {});
 
 bool point_in_viewport(const SpecialPointViewport& viewport, std::complex<double> c);
 std::string special_point_kind_name(SpecialPointKind kind);

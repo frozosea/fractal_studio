@@ -207,6 +207,17 @@ void Db::upsertRun(const RunRow& row) const {
     checkSqlite(sqlite3_step(stmt.get()), h.db);
 }
 
+int Db::cancelInterruptedRuns(long long finishedAt) const {
+    DbHandle h(dbPath_);
+    Statement stmt(h.db,
+        "UPDATE runs "
+        "SET status = 'cancelled', finished_at = ? "
+        "WHERE status IN ('queued', 'running');");
+    checkSqlite(sqlite3_bind_int64(stmt.get(), 1, finishedAt), h.db);
+    checkSqlite(sqlite3_step(stmt.get()), h.db);
+    return sqlite3_changes(h.db);
+}
+
 std::vector<RunRow> Db::listRuns(int limit) const {
     return listRuns(limit, 0, "", "");
 }

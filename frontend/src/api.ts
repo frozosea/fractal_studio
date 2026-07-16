@@ -256,6 +256,8 @@ export interface SpecialPointEnumRequest {
 }
 
 export interface SpecialPointSearchRequest {
+  preemptKey?: string
+  preemptSeq?: number
   kind?: SpecialPointKind
   periodMin?: number
   periodMax?: number

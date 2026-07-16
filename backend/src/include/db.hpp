@@ -58,6 +58,9 @@ public:
 
     // Runs + artifacts
     void upsertRun(const RunRow& row) const;
+    // A newly started JobRunner cannot own workers left by an earlier process.
+    // Atomically move their persistent queued/running rows to a terminal state.
+    int cancelInterruptedRuns(long long finishedAt) const;
     std::vector<RunRow> listRuns(int limit) const;
     std::vector<RunRow> listRuns(int limit, int offset, const std::string& moduleFilter, const std::string& statusFilter) const;
     int countRuns(const std::string& moduleFilter = "", const std::string& statusFilter = "") const;

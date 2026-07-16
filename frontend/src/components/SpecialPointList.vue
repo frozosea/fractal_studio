@@ -56,7 +56,10 @@ const message = ref('')
 const result = ref<SpecialPointPanelResponse | null>(null)
 const variantFilter = ref('')
 const currentRunId = ref('')
+const searchPreemptKey = globalThis.crypto?.randomUUID?.() ??
+  `special-points-${Date.now()}-${Math.random().toString(36).slice(2)}`
 let searchSeq = 0
+let activeSearchSeq: number | null = null
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(kind, (next) => {
@@ -268,32 +271,61 @@ function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function clearSearchTimer() {
+  if (searchTimer === null) return
+  clearTimeout(searchTimer)
+  searchTimer = null
+}
+
+async function requestRunCancellation(runId: string) {
+  if (!runId) return
+  try {
+    await api.cancelRun(runId)
+  } catch {
+    // Cancellation is best-effort when the backend is unavailable. Keep the
+    // local search invalidated so a late response cannot become current again.
+  }
+}
+
 function cancelCurrentSearch() {
-  if (!currentRunId.value) return
-  api.cancelRun(currentRunId.value).catch(() => {})
+  const runId = currentRunId.value
+  if (!runId) return
   currentRunId.value = ''
+  void requestRunCancellation(runId)
+}
+
+function invalidateCurrentSearch() {
+  searchSeq += 1
+  cancelCurrentSearch()
+  if (activeSearchSeq !== null) {
+    activeSearchSeq = null
+    running.value = false
+  }
 }
 
 function cancelRunningSearch() {
-  searchSeq += 1
-  if (searchTimer) clearTimeout(searchTimer)
-  cancelCurrentSearch()
-  running.value = false
+  clearSearchTimer()
+  invalidateCurrentSearch()
   message.value = lang.value === 'en' ? 'cancelled' : '已取消'
 }
 
 async function searchViewport(manual = false) {
   if (!searchInfo.value.ok || !props.viewport) return
+  clearSearchTimer()
   const seq = ++searchSeq
   cancelCurrentSearch()
+  activeSearchSeq = seq
   running.value = true
   message.value = kind.value === 'misiurewicz'
     ? (lang.value === 'en' ? 'solving from current center...' : '正在从当前中心求解……')
     : (lang.value === 'en' ? 'sampling current viewport...' : '正在采样当前视口……')
   result.value = null
   emit('results-updated', [])
+  let startedRunId = ''
   try {
     const started = await api.specialPointsSearch({
+      preemptKey: searchPreemptKey,
+      preemptSeq: seq,
       kind: kind.value,
       periodMin: periodMin.value,
       periodMax: periodMax.value,
@@ -304,14 +336,20 @@ async function searchViewport(manual = false) {
       visibleOnly: visibleOnly.value,
       viewport: props.viewport,
     })
-    if (seq !== searchSeq) return
-    currentRunId.value = started.runId
-    message.value = lang.value === 'en' ? `${started.runId} · searching...` : `${started.runId} · 正在搜索……`
+    startedRunId = started.runId
+    if (seq !== searchSeq) {
+      // The backend creates the run before replying. A superseded POST must
+      // therefore cancel the run returned by its late response explicitly.
+      await requestRunCancellation(startedRunId)
+      return
+    }
+    currentRunId.value = startedRunId
+    message.value = lang.value === 'en' ? `${startedRunId} · searching...` : `${startedRunId} · 正在搜索……`
 
     for (;;) {
       await delay(260)
       if (seq !== searchSeq) return
-      const resp = await api.specialPointsResults(started.runId) as SpecialPointSearchResponse
+      const resp = await api.specialPointsResults(startedRunId) as SpecialPointSearchResponse
       if (seq !== searchSeq) return
       if (resp.status === 'running' || resp.status === 'queued') {
         message.value = lang.value === 'en'
@@ -351,11 +389,16 @@ async function searchViewport(manual = false) {
       return
     }
   } catch (e: any) {
+    // A polling failure must not orphan a run whose id we already received.
+    if (startedRunId) await requestRunCancellation(startedRunId)
     if (seq === searchSeq) message.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (e?.data?.error || e?.message || e)
   } finally {
-    if (seq === searchSeq) {
+    // Clear ownership by run/sequence identity: an older request completing
+    // must never erase the id or running state of a newer search.
+    if (startedRunId && currentRunId.value === startedRunId) currentRunId.value = ''
+    if (activeSearchSeq === seq) {
+      activeSearchSeq = null
       running.value = false
-      currentRunId.value = ''
     }
   }
 }
@@ -448,17 +491,20 @@ watch(
     visibleOnly: visibleOnly.value,
   }),
   () => {
+    clearSearchTimer()
+    invalidateCurrentSearch()
     if (panelMode.value !== 'search' || !autoSearch.value || !props.viewport) return
-    if (searchTimer) clearTimeout(searchTimer)
-    searchTimer = setTimeout(() => searchViewport(false), 450)
+    searchTimer = setTimeout(() => {
+      searchTimer = null
+      void searchViewport(false)
+    }, 450)
   },
   { immediate: true }
 )
 
 onBeforeUnmount(() => {
-  searchSeq += 1
-  if (searchTimer) clearTimeout(searchTimer)
-  cancelCurrentSearch()
+  clearSearchTimer()
+  invalidateCurrentSearch()
 })
 
 defineExpose({ enumerate, refresh: runActive, points })
@@ -476,37 +522,37 @@ defineExpose({ enumerate, refresh: runActive, points })
 
     <div class="controls-grid">
       <label>{{ lang === 'en' ? 'workflow' : '工作流' }}</label>
-      <select v-model="panelMode">
+      <select v-model="panelMode" :disabled="running">
         <option value="search">{{ lang === 'en' ? 'Viewport local solve' : '视口局部求解' }}</option>
         <option value="enumerate">{{ lang === 'en' ? 'Full enumerate' : '完整枚举' }}</option>
       </select>
       <label>{{ lang === 'en' ? 'mode' : '模式' }}</label>
-      <select v-model="kind">
+      <select v-model="kind" :disabled="running && panelMode === 'enumerate'">
         <option value="center">{{ lang === 'en' ? 'Hyperbolic centers' : '双曲中心' }}</option>
         <option value="misiurewicz">{{ lang === 'en' ? 'Misiurewicz points' : 'Misiurewicz 点' }}</option>
       </select>
       <label v-if="kind === 'misiurewicz'">{{ lang === 'en' ? 'preperiod' : '前周期' }}</label>
       <div v-if="kind === 'misiurewicz'" class="pair">
-        <input type="number" v-model.number="preperiodMin" min="1" :max="preperiodInputMax" />
-        <input type="number" v-model.number="preperiodMax" min="1" :max="preperiodInputMax" />
+        <input type="number" v-model.number="preperiodMin" min="1" :max="preperiodInputMax" :disabled="running && panelMode === 'enumerate'" />
+        <input type="number" v-model.number="preperiodMax" min="1" :max="preperiodInputMax" :disabled="running && panelMode === 'enumerate'" />
       </div>
       <label>{{ lang === 'en' ? 'period' : '周期' }}</label>
       <div class="pair">
-        <input type="number" v-model.number="periodMin" min="1" :max="periodInputMax" />
-        <input type="number" v-model.number="periodMax" min="1" :max="periodInputMax" />
+        <input type="number" v-model.number="periodMin" min="1" :max="periodInputMax" :disabled="running && panelMode === 'enumerate'" />
+        <input type="number" v-model.number="periodMax" min="1" :max="periodInputMax" :disabled="running && panelMode === 'enumerate'" />
       </div>
       <label v-if="panelMode === 'enumerate'">{{ lang === 'en' ? 'seeds' : '种子' }}</label>
       <div v-if="panelMode === 'enumerate'" class="pair">
-        <input type="number" v-model.number="seedsPerBatch" min="1" max="10000" />
-        <input type="number" v-model.number="maxSeedBatches" min="1" max="200" />
+        <input type="number" v-model.number="seedsPerBatch" min="1" max="10000" :disabled="running" />
+        <input type="number" v-model.number="maxSeedBatches" min="1" max="200" :disabled="running" />
       </div>
     </div>
 
     <div class="opts">
       <label v-if="panelMode === 'search'"><input type="checkbox" v-model="autoSearch" /> {{ lang === 'en' ? 'auto' : '自动' }}</label>
-      <label><input type="checkbox" v-model="includeVariantExistence" /> {{ lang === 'en' ? 'variants' : '变体' }}</label>
-      <label><input type="checkbox" v-model="visibleOnly" /> {{ lang === 'en' ? 'visible only' : '仅可见' }}</label>
-      <label v-if="panelMode === 'enumerate'"><input type="checkbox" v-model="includeRejectedDebug" /> {{ lang === 'en' ? 'rejected' : '已拒绝' }}</label>
+      <label><input type="checkbox" v-model="includeVariantExistence" :disabled="running && panelMode === 'enumerate'" /> {{ lang === 'en' ? 'variants' : '变体' }}</label>
+      <label><input type="checkbox" v-model="visibleOnly" :disabled="running && panelMode === 'enumerate'" /> {{ lang === 'en' ? 'visible only' : '仅可见' }}</label>
+      <label v-if="panelMode === 'enumerate'"><input type="checkbox" v-model="includeRejectedDebug" :disabled="running" /> {{ lang === 'en' ? 'rejected' : '已拒绝' }}</label>
     </div>
 
     <div class="status mono" :class="{ bad: !activeInfo.ok }">{{ activeInfo.text }}</div>

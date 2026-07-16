@@ -185,6 +185,21 @@ target_compile_options(ln_map_reuse_smoke PRIVATE
 )
 add_test(NAME ln_map_reuse_smoke COMMAND ln_map_reuse_smoke)
 
+add_executable(job_runner_reconcile_smoke
+    src/tests/job_runner_reconcile_smoke.cpp
+    src/core/db.cpp
+    src/core/job_runner.cpp
+)
+target_include_directories(job_runner_reconcile_smoke PRIVATE
+    src
+    src/include
+)
+target_compile_options(job_runner_reconcile_smoke PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -O3
+)
+target_link_libraries(job_runner_reconcile_smoke PRIVATE sqlite3)
+add_test(NAME job_runner_reconcile_smoke COMMAND job_runner_reconcile_smoke)
+
 add_executable(http_range_smoke
     src/tests/http_range_smoke.cpp
 )
