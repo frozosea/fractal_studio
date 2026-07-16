@@ -363,6 +363,8 @@ void avx2_fp32_row(
     bool julia, float julia_re, float julia_im,
     Metric metric, Colormap cmap,
     uint8_t* row_ptr,
+    uint32_t* iter_row = nullptr,
+    float* norm_row = nullptr,
     float center_re = 0.0f, float center_im = 0.0f,
     float cos_theta = 1.0f, float sin_theta = 0.0f
 ) {
@@ -382,6 +384,7 @@ void avx2_fp32_row(
             max_iter, max_iter, max_iter, max_iter,
             max_iter, max_iter, max_iter, max_iter
         };
+        float norm_arr[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
         int lane_mask = 0;
         for (int k = 0; k < 8; ++k) {
             const int px_x = x + k;
@@ -438,8 +441,13 @@ void avx2_fp32_row(
             const __m256 escaped_nan = _mm256_cmp_ps(n2, n2, _CMP_UNORD_Q);
             const int escaped = _mm256_movemask_ps(_mm256_or_ps(escaped_radius, escaped_nan)) & active;
             if (escaped) {
+                float n2_arr[8];
+                if (iter_row) _mm256_storeu_ps(n2_arr, n2);
                 for (int k = 0; k < 8; ++k) {
-                    if (escaped & (1 << k)) iter_arr[k] = i;
+                    if (escaped & (1 << k)) {
+                        iter_arr[k] = i;
+                        if (iter_row) norm_arr[k] = n2_arr[k];
+                    }
                 }
                 active &= ~escaped;
             }
@@ -456,8 +464,15 @@ void avx2_fp32_row(
         if (track_max) _mm256_storeu_ps(mx_arr, vmx);
 
         for (int k = 0; k < 8 && (x + k) < W; ++k) {
-            uint8_t* px = row_ptr + 3 * (x + k);
             const bool escaped_k = !((active >> k) & 1);
+            if (iter_row) {
+                iter_row[x + k] = escaped_k ? static_cast<uint32_t>(iter_arr[k])
+                                            : static_cast<uint32_t>(max_iter);
+                norm_row[x + k] = escaped_k ? norm_arr[k] : 0.0f;
+                continue;
+            }
+
+            uint8_t* px = row_ptr + 3 * (x + k);
             if (metric == Metric::Escape) {
                 const int it = escaped_k ? iter_arr[k] : max_iter;
                 colorize_escape_bgr(it, max_iter, cmap, 0.0, false, px[0], px[1], px[2]);
@@ -508,6 +523,7 @@ MapStats render_avx2_variant(const MapParams& p, cv::Mat& out) {
                 static_cast<float>(p.bailout_sq), p.iterations,
                 p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im),
                 p.metric, p.colormap, out.ptr<uint8_t>(y),
+                nullptr, nullptr,
                 static_cast<float>(p.center_re), static_cast<float>(p.center_im),
                 static_cast<float>(cos_t), static_cast<float>(sin_t));
         } else {
@@ -533,9 +549,9 @@ MapStats render_avx2_variant(const MapParams& p, cv::Mat& out) {
     return s;
 }
 
-// Escape-count FIELD (iter_u32 + |z|² norm_f32) via the same fp64 kernel as the BGR path.
-// fp64 only — the field path is fp64 by design. Escape metric only.
-template <int VariantId>
+// Escape-count FIELD (iter_u32 + |z|² norm_f32) via the same fp32/fp64 kernels
+// as the BGR path. Escape metric only.
+template <int VariantId, bool Fp32>
 MapStats render_avx2_field_variant(const MapParams& p, FieldOutput& out) {
     const int W = p.width, H = p.height;
     out.width  = W;
@@ -564,14 +580,26 @@ MapStats render_avx2_field_variant(const MapParams& p, FieldOutput& out) {
             cancelled.store(true, std::memory_order_relaxed);
             continue;
         }
-        avx2_fp64_row<VariantId>(
-            y, W, H, re_min, im_max, span_re, span_im,
-            p.bailout_sq, p.iterations,
-            p.julia, p.julia_re, p.julia_im,
-            Metric::Escape, p.colormap, nullptr,
-            out.iter_u32.data() + static_cast<size_t>(y) * static_cast<size_t>(W),
-            out.norm_f32.data() + static_cast<size_t>(y) * static_cast<size_t>(W),
-            p.center_re, p.center_im, cos_t, sin_t);
+        uint32_t* iter_row = out.iter_u32.data() + static_cast<size_t>(y) * static_cast<size_t>(W);
+        float* norm_row = out.norm_f32.data() + static_cast<size_t>(y) * static_cast<size_t>(W);
+        if constexpr (Fp32) {
+            avx2_fp32_row<VariantId>(
+                y, W, H,
+                static_cast<float>(re_min), static_cast<float>(im_max),
+                static_cast<float>(span_re), static_cast<float>(span_im),
+                static_cast<float>(p.bailout_sq), p.iterations,
+                p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im),
+                Metric::Escape, p.colormap, nullptr, iter_row, norm_row,
+                static_cast<float>(p.center_re), static_cast<float>(p.center_im),
+                static_cast<float>(cos_t), static_cast<float>(sin_t));
+        } else {
+            avx2_fp64_row<VariantId>(
+                y, W, H, re_min, im_max, span_re, span_im,
+                p.bailout_sq, p.iterations,
+                p.julia, p.julia_re, p.julia_im,
+                Metric::Escape, p.colormap, nullptr, iter_row, norm_row,
+                p.center_re, p.center_im, cos_t, sin_t);
+        }
     }
     if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
         throw std::runtime_error("cancelled");
@@ -581,7 +609,7 @@ MapStats render_avx2_field_variant(const MapParams& p, FieldOutput& out) {
     MapStats s;
     s.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     s.pixel_count = W * H;
-    s.scalar_used = "fp64";
+    s.scalar_used = Fp32 ? "fp32" : "fp64";
     s.engine_used = "avx2";
     return s;
 }
@@ -589,18 +617,23 @@ MapStats render_avx2_field_variant(const MapParams& p, FieldOutput& out) {
 } // namespace
 
 MapStats render_map_avx2_field(const MapParams& p, FieldOutput& out) {
+    const bool fp32 = map_effective_scalar_type(p) == "fp32";
+#define FSD_AVX2_FIELD(V) \
+    return fp32 ? render_avx2_field_variant<V, true>(p, out) \
+                : render_avx2_field_variant<V, false>(p, out)
     switch (static_cast<int>(p.variant)) {
-        case 1: return render_avx2_field_variant<1>(p, out);
-        case 2: return render_avx2_field_variant<2>(p, out);
-        case 3: return render_avx2_field_variant<3>(p, out);
-        case 4: return render_avx2_field_variant<4>(p, out);
-        case 5: return render_avx2_field_variant<5>(p, out);
-        case 6: return render_avx2_field_variant<6>(p, out);
-        case 7: return render_avx2_field_variant<7>(p, out);
-        case 8: return render_avx2_field_variant<8>(p, out);
-        case 9: return render_avx2_field_variant<9>(p, out);
-        default: return render_avx2_field_variant<0>(p, out);
+        case 1: FSD_AVX2_FIELD(1);
+        case 2: FSD_AVX2_FIELD(2);
+        case 3: FSD_AVX2_FIELD(3);
+        case 4: FSD_AVX2_FIELD(4);
+        case 5: FSD_AVX2_FIELD(5);
+        case 6: FSD_AVX2_FIELD(6);
+        case 7: FSD_AVX2_FIELD(7);
+        case 8: FSD_AVX2_FIELD(8);
+        case 9: FSD_AVX2_FIELD(9);
+        default: FSD_AVX2_FIELD(0);
     }
+#undef FSD_AVX2_FIELD
 }
 
 MapStats render_map_avx2_fp64(const MapParams& p, cv::Mat& out) {

@@ -370,6 +370,10 @@ compute::MapParams buildMapParams(const MapRenderInput& in, const Json& j,
     compute::MapParams p;
     p.center_re = in.cRe;
     p.center_im = in.cIm;
+    if (j.contains("centerReStr") && j["centerReStr"].is_string())
+        p.center_re_str = j["centerReStr"].get<std::string>();
+    if (j.contains("centerImStr") && j["centerImStr"].is_string())
+        p.center_im_str = j["centerImStr"].get<std::string>();
     p.scale = in.scale;
     p.width = in.width;
     p.height = in.height;
@@ -460,10 +464,6 @@ MapRenderImage renderMapImage(const std::filesystem::path& repoRoot,
     rendered.effectiveBailoutSq = bailoutSq;
 
     compute::MapParams p = buildMapParams(in, j, bailout, bailoutSq, shouldCancel);
-    if (j.contains("centerReStr") && j["centerReStr"].is_string())
-        p.center_re_str = j["centerReStr"].get<std::string>();
-    if (j.contains("centerImStr") && j["centerImStr"].is_string())
-        p.center_im_str = j["centerImStr"].get<std::string>();
     p.variant = vr.var;
     p.custom_step_fn = vr.fn;
     p.julia = in.julia;

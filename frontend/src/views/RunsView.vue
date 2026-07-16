@@ -17,7 +17,7 @@ interface Category {
 // runs/<category>/ folder. Keep the two in sync.
 const CATEGORIES: Category[] = [
   { key: 'all',       label: { en: 'All',      zh: '全部' },   modules: [], color: 'var(--text-dim)' },
-  { key: 'videos',    label: { en: 'Videos',   zh: '视频' },   modules: ['video-export', 'zoom-video', 'video-preview'], color: '#ff8a5b' },
+  { key: 'videos',    label: { en: 'Videos',   zh: '视频' },   modules: ['video-export', 'zoom-video', 'video-preview', 'transition-video-export', 'transition-video-preview'], color: '#ff8a5b' },
   { key: 'maps',      label: { en: 'Maps',     zh: '映射' },   modules: ['map', 'map-export'], color: '#5bc8ff' },
   { key: 'ln-maps',   label: { en: 'Ln-maps',  zh: 'Ln-map' }, modules: ['ln-map'], color: '#5be0c8' },
   { key: 'frames',    label: { en: 'Frames',   zh: '帧' },     modules: ['start-frame'], color: '#c8e05b' },

@@ -78,6 +78,41 @@ constexpr double TAU     = 6.283185307179586;
 constexpr double PI      = 3.141592653589793;
 constexpr double LN_TWO  = 0.6931471805599453;
 constexpr double LN_FOUR = 1.3862943611198906;
+
+compute::Variant requireBuiltinVideoVariant(const std::string& variant) {
+    compute::Variant resolved;
+    if (compute::variant_from_name(variant.c_str(), resolved)) return resolved;
+
+    const bool custom = variant.rfind("custom:", 0) == 0;
+    throw HttpError(400, Json{
+        {"error", custom
+            ? "custom variants are not supported by ln-map or video export"
+            : "invalid built-in variant"},
+        {"variant", variant},
+    }.dump());
+}
+
+compute::Variant requirePairTransitionVideoVariant(const std::string& variant) {
+    const compute::Variant resolved = requireBuiltinVideoVariant(variant);
+    if (static_cast<int>(resolved) <= static_cast<int>(compute::Variant::Ship)) return resolved;
+
+    throw HttpError(400, Json{
+        {"error", "transition video only supports quadratic Mandelbrot-family variants"},
+        {"variant", variant},
+    }.dump());
+}
+
+void rejectDeferredMultiTransitionVideo(const Json& request) {
+    const bool multiMode = request.value("transitionMode", std::string("")) == "multi";
+    const bool multiPayload = request.contains("transitionVariants") || request.contains("transitionWeights");
+    if (!multiMode && !multiPayload) return;
+
+    throw HttpError(400, Json{
+        {"error", "multi-variant transition video is deferred until animation semantics are defined"},
+        {"feature", "multi-variant-transition-video"},
+    }.dump());
+}
+
 constexpr int    MIN_VIDEO_DIM = 128;
 constexpr int    MAX_VIDEO_DIM = 8192;
 constexpr int64_t MAX_VIDEO_PIXELS = 7680LL * 4320LL;
@@ -1789,7 +1824,10 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
 
     LnMapLookup lk = resolveLnMap(repoRoot, lnArtifactId);
     if (lk.sidecar.value("segmented", false)) {
-        throw std::runtime_error("segmented ln-map artifacts cannot be consumed by the legacy zoom route");
+        throw HttpError(400, Json{
+            {"error", "segmented ln-map artifacts cannot be consumed by the legacy zoom route"},
+            {"feature", "segmented-ln-map-reuse"},
+        }.dump());
     }
     cv::Mat strip  = compute::read_png(lk.pngPath.string());
 
@@ -1817,9 +1855,7 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
 
     // ── Render final cartesian image at kTop_end ──────────────────────────────
     // This fills the centre pixels that the ln-map strip can't reach.
-    compute::Variant variantVal;
-    if (!compute::variant_from_name(variantStr.c_str(), variantVal))
-        variantVal = compute::Variant::Mandelbrot;
+    const compute::Variant variantVal = requireBuiltinVideoVariant(variantStr);
     double bailout = lk.sidecar.contains("bailout") && !lk.sidecar["bailout"].is_null()
         ? lk.sidecar.value("bailout", 2.0)
         : compute::variant_default_bailout(variantVal);
@@ -2004,8 +2040,7 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
     double durSec = 0.0;
     const int frameCount = frameCountFromSpeed(depth, secondsPerOctave, fps, durSec);
 
-    compute::Variant v;
-    if (!compute::variant_from_name(variantStr.c_str(), v)) v = compute::Variant::Mandelbrot;
+    const compute::Variant v = requireBuiltinVideoVariant(variantStr);
     double bailout = j.contains("bailout") && !j["bailout"].is_null()
         ? j.value("bailout", 2.0)
         : compute::variant_default_bailout(v);
@@ -2308,7 +2343,10 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         throw std::runtime_error("invalid lnMapMode (standard|fast)");
     }
     if (!lnMapRunId.empty() && stripPlan.segmentCount > 1) {
-        throw std::runtime_error("lnMapRunId reuse is not supported for segmented ln-map exports");
+        throw HttpError(400, Json{
+            {"error", "lnMapRunId reuse is not supported for segmented ln-map exports"},
+            {"feature", "segmented-ln-map-reuse"},
+        }.dump());
     }
     if (!(lnMapFastFp32Depth >= 0.0) || !(lnMapFastFp64Depth >= 0.0) ||
         !std::isfinite(lnMapFastFp32Depth) || !std::isfinite(lnMapFastFp64Depth)) {
@@ -2323,8 +2361,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         throw std::runtime_error("invalid ln-map fast validation settings");
     }
 
-    compute::Variant v;
-    if (!compute::variant_from_name(variantStr.c_str(), v)) v = compute::Variant::Mandelbrot;
+    const compute::Variant v = requireBuiltinVideoVariant(variantStr);
     double bailout = j.contains("bailout") && !j["bailout"].is_null()
         ? j.value("bailout", 2.0)
         : compute::variant_default_bailout(v);
@@ -3367,6 +3404,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
 std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
     (void)repoRoot;
     const Json j = parseJsonBody(body);
+    rejectDeferredMultiTransitionVideo(j);
 
     const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                               ? j["centerReStr"].get<std::string>() : std::string();
@@ -3424,9 +3462,8 @@ std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, J
         zoomFrameCount = std::max(2, static_cast<int>(std::round(std::max(0.0, zoomDurationSec) * fps)));
     }
 
-    compute::Variant fromV, toV;
-    if (!compute::variant_from_name(fromStr.c_str(), fromV)) fromV = compute::Variant::Mandelbrot;
-    if (!compute::variant_from_name(toStr.c_str(), toV))     toV   = compute::Variant::Tri;
+    const compute::Variant fromV = requirePairTransitionVideoVariant(fromStr);
+    const compute::Variant toV = requirePairTransitionVideoVariant(toStr);
     double bailout = j.contains("bailout") && !j["bailout"].is_null()
         ? j.value("bailout", 2.0)
         : std::max(compute::variant_default_bailout(fromV), compute::variant_default_bailout(toV));
@@ -3532,6 +3569,7 @@ std::string transitionVideoPreviewRoute(const std::filesystem::path& repoRoot, J
 std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
     (void)repoRoot;
     const Json j = parseJsonBody(body);
+    rejectDeferredMultiTransitionVideo(j);
 
     const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                               ? j["centerReStr"].get<std::string>() : std::string();
@@ -3592,9 +3630,8 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
         frameCount = std::max(2, static_cast<int>(std::round(durationSec * fps)));
     }
 
-    compute::Variant fromV, toV;
-    if (!compute::variant_from_name(fromStr.c_str(), fromV)) fromV = compute::Variant::Mandelbrot;
-    if (!compute::variant_from_name(toStr.c_str(), toV))     toV   = compute::Variant::Tri;
+    const compute::Variant fromV = requirePairTransitionVideoVariant(fromStr);
+    const compute::Variant toV = requirePairTransitionVideoVariant(toStr);
     double bailout = j.contains("bailout") && !j["bailout"].is_null()
         ? j.value("bailout", 2.0)
         : std::max(compute::variant_default_bailout(fromV), compute::variant_default_bailout(toV));

@@ -1022,8 +1022,10 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
             auto s = render_map_avx2_field(p, fo);
             if (accept(s, "avx2")) return s;
         }
-        // Default fast field: AVX-512 (covers avx512 / hybrid / auto selections).
-        if (avx512_available()) {
+        // Default fp64 fast field: AVX-512 (covers avx512 / hybrid / auto selections).
+        // The AVX-512 field kernel is fp64-only; fp32 continues to the AVX2 field
+        // kernel below instead of silently reporting fp64 for an fp32 request.
+        if (!field_plan.fp32 && avx512_available()) {
             auto s = render_map_field_avx512_fp64(p, fo);
             if (accept(s, "avx512")) return s;
         }

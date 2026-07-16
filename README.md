@@ -22,6 +22,7 @@ Manual backend/frontend commands, dependencies, runtime directories, and trouble
 ## Documentation / 文档
 
 - [Architecture / 架构](docs/architecture.md): backend/frontend layers, data flow, compute pipelines, and where to add features.
+- [Feature Status / 功能状态](docs/feature_status.md): dated implementation status and explicit deferral decisions.
 - [Development Guide / 开发手册](docs/development.md): local setup, build commands, runtime directories, and troubleshooting.
 - [Frontend Guide / 前端与移动端维护说明](docs/frontend.md): frontend structure, responsive strategy, tablet-landscape behavior, and mobile QA checklist.
 - [Render Pipeline / 二维渲染链路](docs/render_pipeline.md): map render, Julia, transition slices, engines, scalars, variants, and custom formulas.

@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
@@ -135,6 +136,21 @@ void flip_field_output_y(FieldOutput& fo) {
     }
 }
 
+std::string negate_decimal_string(std::string value) {
+    if (value.empty()) return value;
+
+    const size_t sign_pos = value.find_first_not_of(" \t\r\n");
+    if (sign_pos == std::string::npos) return value;
+    if (value[sign_pos] == '-') {
+        value.erase(sign_pos, 1);
+    } else if (value[sign_pos] == '+') {
+        value[sign_pos] = '-';
+    } else {
+        value.insert(sign_pos, 1, '-');
+    }
+    return value;
+}
+
 inline void transition_viewport_point(
     const MapParams& b,
     int W,
@@ -168,7 +184,17 @@ MapStats render_direct_slice_field(const TransitionParams& p, DirectSlice slice,
     MapParams mp = p.base;
     mp.variant = (slice == DirectSlice::To || slice == DirectSlice::ToFlipY)
         ? p.to_variant : p.from_variant;
-    if (flip_y) mp.center_im = -mp.center_im;
+    if (flip_y) {
+        // theta=-90/+-180 embeds the transition viewport as (u, -v).  A
+        // direct 2D render represents that reflection by rendering a mirrored
+        // viewport and flipping the rows afterwards.  Reflect every imaginary
+        // component and reverse the in-plane view rotation; keeping the
+        // original rotation is only equivalent when rotation_deg == 0.
+        mp.center_im = -mp.center_im;
+        mp.center_im_str = negate_decimal_string(mp.center_im_str);
+        mp.julia_im = -mp.julia_im;
+        mp.rotation_deg = -mp.rotation_deg;
+    }
     MapStats stats = render_map_field(mp, fo);
     if (flip_y) flip_field_output_y(fo);
     return stats;
@@ -799,6 +825,9 @@ MapStats render_transition_cuda(const TransitionParams& p, FieldOutput& fo) {
     cp.center_re  = b.center_re;
     cp.center_im  = b.center_im;
     cp.scale      = b.scale;
+    const double rotation_rad = b.rotation_deg * PI / 180.0;
+    cp.cos_rotation = std::cos(rotation_rad);
+    cp.sin_rotation = std::sin(rotation_rad);
     cp.width      = W;
     cp.height     = H;
     cp.iterations = b.iterations;

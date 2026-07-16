@@ -49,6 +49,26 @@ struct DiffStats {
     int pixel_count = 0;
 };
 
+struct EscapeFieldDiffLimits {
+    int max_iter_delta = 255;
+    double mean_iter_delta = 0.75;
+    double iter_mismatch_ratio = 0.05;
+    double max_norm_delta = 128.0;
+    double mean_norm_delta = 0.5;
+    double norm_bad_ratio = 0.02;
+    double norm_bad_threshold = 10.0;
+};
+
+struct EscapeFieldDiffStats {
+    int max_iter_delta = 0;
+    double mean_iter_delta = 0.0;
+    double iter_mismatch_ratio = 0.0;
+    double max_norm_delta = 0.0;
+    double mean_norm_delta = 0.0;
+    double norm_bad_ratio = 0.0;
+    int pixel_count = 0;
+};
+
 struct RenderScene {
     std::string name;
     MapParams params;
@@ -77,6 +97,7 @@ struct Runner {
     int failed = 0;
     std::set<std::string> seen_engines;
     std::set<std::string> seen_scalars;
+    std::set<std::string> seen_field_paths;
 };
 
 bool env_enabled(const char* name) {
@@ -536,6 +557,37 @@ std::vector<TransitionScene> transition_direct_scenes() {
             scenes.push_back({"transition_to_slice_" + variant_slug(variant), p});
         }
     }
+
+    {
+        TransitionParams p = base_transition_params();
+        p.base.center_re = -0.4125;
+        p.base.center_im = 0.21875;
+        p.base.center_re_str = "-0.4125";
+        p.base.center_im_str = "0.21875";
+        p.base.scale = 2.25;
+        p.base.rotation_deg = 37.0;
+        p.from_variant = Variant::Mandelbrot;
+        p.to_variant = Variant::Boat;
+        p.theta_milli_deg = -90 * 1000;
+        scenes.push_back({"transition_to_flipped_slice_rotated", p});
+    }
+
+    {
+        TransitionParams p = base_transition_params();
+        p.base.center_re = 0.1375;
+        p.base.center_im = -0.1625;
+        p.base.center_re_str = "0.1375";
+        p.base.center_im_str = "-0.1625";
+        p.base.scale = 2.4;
+        p.base.rotation_deg = -29.0;
+        p.base.julia = true;
+        p.base.julia_re = -0.25;
+        p.base.julia_im = 0.53;
+        p.from_variant = Variant::Fish;
+        p.to_variant = Variant::Ship;
+        p.theta_milli_deg = 180 * 1000;
+        scenes.push_back({"transition_from_flipped_slice_rotated_julia", p});
+    }
     return scenes;
 }
 
@@ -586,6 +638,66 @@ std::vector<TransitionScene> transition_smoke_scenes() {
         p.base.colormap = Colormap::HsvWheel;
         p.base.smooth = true;
         scenes.push_back({"transition_mid_min_abs_smooth", p});
+    }
+
+    return scenes;
+}
+
+std::vector<TransitionScene> transition_engine_rotation_scenes() {
+    std::vector<TransitionScene> scenes;
+
+    {
+        TransitionParams p = base_transition_params();
+        p.base.center_im = 0.16;
+        p.base.scale = 2.45;
+        p.base.rotation_deg = 31.0;
+        p.theta_milli_deg = 43 * 1000;
+        p.from_variant = Variant::Mandelbrot;
+        p.to_variant = Variant::Boat;
+        p.base.metric = Metric::Escape;
+        scenes.push_back({"transition_rotated_pair_escape", p});
+    }
+
+    {
+        TransitionParams p = base_transition_params();
+        p.base.center_im = -0.21;
+        p.base.scale = 2.2;
+        p.base.rotation_deg = -27.0;
+        p.theta_milli_deg = 38 * 1000;
+        p.from_variant = Variant::Mandelbrot;
+        p.to_variant = Variant::Boat;
+        p.base.metric = Metric::MinAbs;
+        p.base.colormap = Colormap::HsvWheel;
+        scenes.push_back({"transition_rotated_pair_metric", p});
+    }
+
+    {
+        TransitionParams p = base_transition_params();
+        p.base.center_im = 0.19;
+        p.base.scale = 2.35;
+        p.base.rotation_deg = 41.0;
+        p.base.metric = Metric::Escape;
+        p.multi_legs = {
+            {Variant::Mandelbrot, 1.0},
+            {Variant::Boat, 0.8},
+            {Variant::Fish, 0.45},
+        };
+        scenes.push_back({"transition_rotated_multi_escape", p});
+    }
+
+    {
+        TransitionParams p = base_transition_params();
+        p.base.center_im = -0.14;
+        p.base.scale = 2.15;
+        p.base.rotation_deg = -36.0;
+        p.base.metric = Metric::Envelope;
+        p.base.colormap = Colormap::HsRainbow;
+        p.multi_legs = {
+            {Variant::Mandelbrot, 1.0},
+            {Variant::Duck, 0.72},
+            {Variant::Mask, 0.38},
+        };
+        scenes.push_back({"transition_rotated_multi_metric", p});
     }
 
     return scenes;
@@ -694,6 +806,95 @@ DiffStats diff_field_outputs(const FieldOutput& a, const FieldOutput& b, double 
     stats.mean_abs = sum / static_cast<double>(std::max(1, stats.pixel_count));
     stats.bad_pixel_ratio = static_cast<double>(stats.bad_pixels) / static_cast<double>(std::max(1, stats.pixel_count));
     return stats;
+}
+
+EscapeFieldDiffStats diff_escape_field_outputs(const FieldOutput& a, const FieldOutput& b,
+                                                double norm_bad_threshold) {
+    if (a.width != b.width || a.height != b.height ||
+        a.metric != Metric::Escape || b.metric != Metric::Escape ||
+        a.iter_u32.size() != b.iter_u32.size() ||
+        a.norm_f32.size() != b.norm_f32.size() ||
+        a.iter_u32.size() != a.norm_f32.size()) {
+        throw std::runtime_error("escape field buffer mismatch");
+    }
+
+    EscapeFieldDiffStats stats;
+    stats.pixel_count = a.width * a.height;
+    long long iter_sum = 0;
+    int iter_mismatches = 0;
+    double norm_sum = 0.0;
+    int norm_bad = 0;
+
+    for (size_t i = 0; i < a.iter_u32.size(); ++i) {
+        const int iter_delta = std::abs(
+            static_cast<int>(a.iter_u32[i]) - static_cast<int>(b.iter_u32[i]));
+        stats.max_iter_delta = std::max(stats.max_iter_delta, iter_delta);
+        iter_sum += iter_delta;
+        if (iter_delta != 0) ++iter_mismatches;
+
+        const double av = static_cast<double>(a.norm_f32[i]);
+        const double bv = static_cast<double>(b.norm_f32[i]);
+        double norm_delta = 0.0;
+        if (std::isfinite(av) && std::isfinite(bv)) {
+            norm_delta = std::fabs(av - bv);
+        } else if (av == bv || (std::isnan(av) && std::isnan(bv))) {
+            norm_delta = 0.0;
+        } else {
+            norm_delta = std::numeric_limits<double>::infinity();
+        }
+        const double scored_norm_delta = std::isfinite(norm_delta)
+            ? norm_delta
+            : norm_bad_threshold + 1.0;
+        stats.max_norm_delta = std::max(stats.max_norm_delta, scored_norm_delta);
+        norm_sum += scored_norm_delta;
+        if (scored_norm_delta > norm_bad_threshold) ++norm_bad;
+    }
+
+    const double count = static_cast<double>(std::max(1, stats.pixel_count));
+    stats.mean_iter_delta = static_cast<double>(iter_sum) / count;
+    stats.iter_mismatch_ratio = static_cast<double>(iter_mismatches) / count;
+    stats.mean_norm_delta = norm_sum / count;
+    stats.norm_bad_ratio = static_cast<double>(norm_bad) / count;
+    return stats;
+}
+
+bool within_escape_field_limits(const EscapeFieldDiffStats& stats,
+                                const EscapeFieldDiffLimits& limits) {
+    return stats.max_iter_delta <= limits.max_iter_delta &&
+           stats.mean_iter_delta <= limits.mean_iter_delta &&
+           stats.iter_mismatch_ratio <= limits.iter_mismatch_ratio &&
+           stats.max_norm_delta <= limits.max_norm_delta &&
+           stats.mean_norm_delta <= limits.mean_norm_delta &&
+           stats.norm_bad_ratio <= limits.norm_bad_ratio;
+}
+
+void check_escape_field_diff_guard(Runner& runner, const EscapeFieldDiffLimits& limits) {
+    FieldOutput baseline;
+    baseline.width = 8;
+    baseline.height = 8;
+    baseline.metric = Metric::Escape;
+    baseline.iter_u32.assign(64, 7u);
+    baseline.norm_f32.assign(64, 4.0f);
+
+    FieldOutput iter_shifted = baseline;
+    std::fill(iter_shifted.iter_u32.begin(), iter_shifted.iter_u32.end(), 8u);
+    FieldOutput norm_shifted = baseline;
+    std::fill(norm_shifted.norm_f32.begin(), norm_shifted.norm_f32.end(), 5.0f);
+
+    const EscapeFieldDiffStats iter_stats = diff_escape_field_outputs(
+        baseline, iter_shifted, limits.norm_bad_threshold);
+    const EscapeFieldDiffStats norm_stats = diff_escape_field_outputs(
+        baseline, norm_shifted, limits.norm_bad_threshold);
+    const bool ok = !within_escape_field_limits(iter_stats, limits) &&
+                    !within_escape_field_limits(norm_stats, limits);
+    ++runner.compared;
+    std::cout << (ok ? "[PASS] " : "[FAIL] ")
+              << "escape raw-field diff guard rejects systematic +1"
+              << " iter_mismatch=" << std::fixed << std::setprecision(4)
+              << iter_stats.iter_mismatch_ratio
+              << " norm_mean=" << std::setprecision(4) << norm_stats.mean_norm_delta
+              << "\n";
+    if (!ok) ++runner.failed;
 }
 
 bool within_limits(const DiffStats& stats, const DiffLimits& limits) {
@@ -903,15 +1104,16 @@ void compare_field_scalar_pair(
 }
 
 // Escape FIELD parity across engines: the fast SIMD/CUDA field path (iter_u32 + norm_f32)
-// must match the scalar OpenMP field that feeds equalized coloring. A systematic off-by-one
-// in the iteration convention blows past the limit; a handful of boundary float-rounding
-// differences (FMA/order) do not. Skips silently when the engine is unavailable at runtime.
+// must match the scalar OpenMP field that feeds equalized coloring. Iteration mismatches and
+// norm deltas are scored separately, so a systematic off-by-one cannot hide below the norm
+// threshold. AVX2 is mandatory per scene when AVX2+FMA is available; other unavailable
+// engines remain explicit skips.
 void compare_field_engine_pair(
     Runner& runner,
     const RenderScene& scene,
     const std::string& engine,
     const std::string& scalar,
-    const DiffLimits& limits
+    const EscapeFieldDiffLimits& limits
 ) {
     const std::string label = scene.name + " raw-field " + engine + "/" + scalar
         + " vs openmp/" + scalar;
@@ -927,20 +1129,49 @@ void compare_field_engine_pair(
     }
     remember_stats(runner, baseline.stats);
     remember_stats(runner, candidate.stats);
-    if (baseline.stats.engine_used != "openmp") return;
+    if (baseline.stats.engine_used != "openmp" || !scalar_matches(scalar, baseline.stats.scalar_used)) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << label << " baseline actual="
+                  << baseline.stats.engine_used << "/" << baseline.stats.scalar_used << "\n";
+        return;
+    }
     if (candidate.stats.engine_used != engine) {
-        std::cout << "[INFO] " << label << " skipped (engine_used="
-                  << candidate.stats.engine_used << ")\n";
+        bool avx2_required = false;
+        if (engine == "avx2") {
+            const auto caps = fsd::compute::runtime_capabilities();
+            avx2_required = caps.avx2_compiled && caps.avx2_runtime && caps.fma_runtime;
+        }
+        if (avx2_required) {
+            ++runner.failed;
+            std::cerr << "[FAIL] " << label << " AVX2 field path available but actual="
+                      << candidate.stats.engine_used << "/" << candidate.stats.scalar_used << "\n";
+        } else {
+            ++runner.skipped;
+            std::cout << "[SKIP] " << label << " actual="
+                      << candidate.stats.engine_used << "/" << candidate.stats.scalar_used << "\n";
+        }
+        return;
+    }
+    if (!scalar_matches(scalar, candidate.stats.scalar_used)) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << label << " requested=" << engine << "/" << scalar
+                  << " actual=" << candidate.stats.engine_used << "/"
+                  << candidate.stats.scalar_used << "\n";
         return;
     }
 
-    const DiffStats stats = diff_field_outputs(baseline.field, candidate.field, limits.bad_pixel_threshold);
+    runner.seen_field_paths.insert(engine + "/" + scalar);
+    const EscapeFieldDiffStats stats = diff_escape_field_outputs(
+        baseline.field, candidate.field, limits.norm_bad_threshold);
     ++runner.compared;
-    const bool ok = within_limits(stats, limits);
+    const bool ok = within_escape_field_limits(stats, limits);
     std::cout << (ok ? "[PASS] " : "[FAIL] ") << label
-              << " max=" << stats.max_channel
-              << " mean=" << std::fixed << std::setprecision(8) << stats.mean_abs
-              << " bad=" << std::setprecision(4) << stats.bad_pixel_ratio
+              << " iter_max=" << stats.max_iter_delta
+              << " iter_mean=" << std::fixed << std::setprecision(8) << stats.mean_iter_delta
+              << " iter_mismatch=" << std::setprecision(4) << stats.iter_mismatch_ratio
+              << " norm_max=" << std::setprecision(4) << stats.max_norm_delta
+              << " norm_mean=" << std::setprecision(8) << stats.mean_norm_delta
+              << " norm_bad=" << std::setprecision(4) << stats.norm_bad_ratio
               << " elapsed_ms=" << std::setprecision(3) << candidate.stats.elapsed_ms
               << "\n";
     if (!ok) ++runner.failed;
@@ -1580,9 +1811,36 @@ void compare_deep_perturbation_scenes(Runner& runner) {
         /*julia=*/true, -0.5, 0.5);
 }
 
+std::string negate_decimal_for_direct_reference(std::string value) {
+    if (value.empty()) return value;
+    const size_t sign_pos = value.find_first_not_of(" \t\r\n");
+    if (sign_pos == std::string::npos) return value;
+    if (value[sign_pos] == '-') {
+        value.erase(sign_pos, 1);
+    } else if (value[sign_pos] == '+') {
+        value[sign_pos] = '-';
+    } else {
+        value.insert(sign_pos, 1, '-');
+    }
+    return value;
+}
+
+bool direct_transition_reference_flips_y(const TransitionParams& p) {
+    return p.theta_milli_deg == -90 * 1000 ||
+           p.theta_milli_deg == 180 * 1000 ||
+           p.theta_milli_deg == -180 * 1000;
+}
+
 MapParams map_params_for_direct_transition(const TransitionParams& p) {
     MapParams mp = p.base;
-    mp.variant = p.theta_milli_deg == 90 * 1000 ? p.to_variant : p.from_variant;
+    mp.variant = (p.theta_milli_deg == 90 * 1000 || p.theta_milli_deg == -90 * 1000)
+        ? p.to_variant : p.from_variant;
+    if (direct_transition_reference_flips_y(p)) {
+        mp.center_im = -mp.center_im;
+        mp.center_im_str = negate_decimal_for_direct_reference(mp.center_im_str);
+        mp.julia_im = -mp.julia_im;
+        mp.rotation_deg = -mp.rotation_deg;
+    }
     return mp;
 }
 
@@ -1609,12 +1867,69 @@ void compare_transition_direct_to_map(
         std::cerr << "[FAIL] " << label << " threw: " << ex.what() << "\n";
         return;
     }
+    if (direct_transition_reference_flips_y(transition_scene.params)) {
+        cv::Mat flipped;
+        cv::flip(baseline.image, flipped, 0);
+        baseline.image = std::move(flipped);
+    }
     remember(runner, baseline);
     remember(runner, candidate);
     require_actual_or_fail(runner, label + " map baseline", baseline, "openmp", scalar);
     require_actual_or_fail(runner, label + " transition candidate", candidate, "openmp", scalar);
     if (baseline.stats.engine_used != "openmp" || !scalar_matches(scalar, baseline.stats.scalar_used) ||
         candidate.stats.engine_used != "openmp" || !scalar_matches(scalar, candidate.stats.scalar_used)) {
+        return;
+    }
+
+    const DiffStats stats = diff_images(baseline.image, candidate.image, limits.bad_pixel_threshold);
+    ++runner.compared;
+    const bool ok = within_limits(stats, limits);
+    std::cout << (ok ? "[PASS] " : "[FAIL] ") << label
+              << " max=" << stats.max_channel
+              << " mean=" << std::fixed << std::setprecision(4) << stats.mean_abs
+              << " bad=" << std::setprecision(4) << stats.bad_pixel_ratio
+              << " elapsed_ms=" << std::setprecision(3) << candidate.stats.elapsed_ms
+              << "\n";
+    if (!ok) ++runner.failed;
+}
+
+void compare_transition_engine(
+    Runner& runner,
+    const TransitionScene& scene,
+    const std::string& engine,
+    const std::string& scalar,
+    const DiffLimits& limits
+) {
+    const bool multi = !scene.params.multi_legs.empty();
+    const std::string baseline_engine = multi ? "openmp_multi" : "openmp";
+    const std::string candidate_engine = multi ? engine + "_multi" : engine;
+    const std::string label = scene.name + " " + candidate_engine + "/" + scalar
+        + " vs " + baseline_engine + "/fp64";
+
+    Rendered baseline;
+    Rendered candidate;
+    try {
+        baseline = render_transition_scene(scene, "openmp", "fp64");
+        candidate = render_transition_scene(scene, engine, scalar);
+    } catch (const std::exception& ex) {
+        ++runner.failed;
+        std::cerr << "[FAIL] " << label << " threw: " << ex.what() << "\n";
+        return;
+    }
+    remember(runner, baseline);
+    remember(runner, candidate);
+    require_actual_or_fail(runner, label + " baseline", baseline, baseline_engine, "fp64");
+    if (baseline.stats.engine_used != baseline_engine ||
+        !scalar_matches("fp64", baseline.stats.scalar_used)) {
+        return;
+    }
+    if (candidate.stats.engine_used != candidate_engine ||
+        !scalar_matches(scalar, candidate.stats.scalar_used)) {
+        ++runner.skipped;
+        std::cout << "[SKIP] " << label
+                  << " actual=" << candidate.stats.engine_used << "/" << candidate.stats.scalar_used
+                  << " elapsed_ms=" << std::fixed << std::setprecision(3)
+                  << candidate.stats.elapsed_ms << "\n";
         return;
     }
 
@@ -1710,6 +2025,9 @@ int main() {
 
     const DiffLimits same_scalar_limits{255, 2.00, 0.080, 10};
     const DiffLimits exact_scalar_limits{0, 0.0, 0.0, 0};
+    const EscapeFieldDiffLimits same_scalar_field_limits{};
+
+    check_escape_field_diff_guard(runner, same_scalar_field_limits);
 
     std::vector<RenderScene> render_scenes = quick_scenes();
     {
@@ -1744,12 +2062,13 @@ int main() {
                 compare_required(runner, scene, fp64_baseline, engine, "fp64", same_scalar_limits);
                 compare_required(runner, scene, fp32_baseline, engine, "fp32", same_scalar_limits);
             }
-            // Escape FIELD parity (feeds equalized coloring). fp64 only — the field path is
-            // fp64 by design (the scalar dispatch has no fp32 branch).
+            // Escape FIELD parity (feeds equalized coloring). AVX2 has native fp32/fp64
+            // field kernels; AVX-512 field coverage remains fp64-only.
             if (scene.params.metric == Metric::Escape) {
-                compare_field_engine_pair(runner, scene, "avx512", "fp64", same_scalar_limits);
-                compare_field_engine_pair(runner, scene, "avx2", "fp64", same_scalar_limits);
-                compare_field_engine_pair(runner, scene, "cuda", "fp64", same_scalar_limits);
+                compare_field_engine_pair(runner, scene, "avx512", "fp64", same_scalar_field_limits);
+                compare_field_engine_pair(runner, scene, "avx2", "fp64", same_scalar_field_limits);
+                compare_field_engine_pair(runner, scene, "avx2", "fp32", same_scalar_field_limits);
+                compare_field_engine_pair(runner, scene, "cuda", "fp64", same_scalar_field_limits);
             }
         } else {
             std::cout << "[INFO] " << scene.name
@@ -1765,6 +2084,14 @@ int main() {
 
     for (const TransitionScene& scene : transition_smoke_scenes()) {
         compare_transition_theta_encoding(runner, scene, exact_scalar_limits);
+    }
+
+    for (const TransitionScene& scene : transition_engine_rotation_scenes()) {
+        compare_transition_engine(runner, scene, "avx2", "fp64", same_scalar_limits);
+        compare_transition_engine(runner, scene, "cuda", "fp64", same_scalar_limits);
+        if (scene.params.base.metric == Metric::Escape) {
+            compare_transition_engine(runner, scene, "cuda", "fp32", same_scalar_limits);
+        }
     }
 
     compare_deep_perturbation_scenes(runner);
@@ -1826,6 +2153,13 @@ int main() {
     require_seen(runner, runner.seen_scalars, "fp80", "FSD_DIFF_EXPECT_FP80");
     require_seen(runner, runner.seen_scalars, "fp128", "FSD_DIFF_EXPECT_FP128");
 
+    const auto caps = fsd::compute::runtime_capabilities();
+    if (caps.avx2_compiled && caps.avx2_runtime && caps.fma_runtime &&
+        !runner.seen_field_paths.count("avx2/fp32")) {
+        ++runner.failed;
+        std::cerr << "[FAIL] runtime AVX2+FMA is available but avx2/fp32 raw field was not exercised\n";
+    }
+
     std::cout << "[summary] compared=" << runner.compared
               << " skipped=" << runner.skipped
               << " failed=" << runner.failed
@@ -1833,6 +2167,8 @@ int main() {
     for (const auto& engine : runner.seen_engines) std::cout << engine << ",";
     std::cout << " scalars=";
     for (const auto& scalar : runner.seen_scalars) std::cout << scalar << ",";
+    std::cout << " field_paths=";
+    for (const auto& path : runner.seen_field_paths) std::cout << path << ",";
     std::cout << "\n";
 
     return runner.failed == 0 ? 0 : 1;

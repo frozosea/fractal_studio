@@ -1,8 +1,9 @@
 // routes_artifacts.cpp
 //
-// Scan the runtime/runs/<runId>/ directories and expose every file as an
-// artifact. artifactId is "runId:fileName". This keeps artifact listing
-// independent of the sqlite table (useful for debugging and tooling).
+// Scan categorized runtime/runs/<category>/<runId>/ directories (plus the old
+// flat runtime/runs/<runId>/ layout) and expose every file as an artifact.
+// artifactId is "runId:fileName". This keeps artifact listing independent of
+// the sqlite table (useful for debugging and tooling).
 
 #include "routes.hpp"
 #include "routes_common.hpp"

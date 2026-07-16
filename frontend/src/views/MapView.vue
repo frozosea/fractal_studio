@@ -461,6 +461,21 @@ const thetaDeg = computed({
 const transitionThetaMilliDeg = computed(() => normalizeThetaMilliDeg(thetaMilliDeg.value))
 const activeTransitionThetaMilliDeg = computed(() => transitionOn.value ? transitionThetaMilliDeg.value : null)
 const multiTransitionActive = computed(() => transitionOn.value && transitionMode.value === 'multi')
+const customVideoUnsupported = computed(() => !transitionOn.value && variant.value.startsWith('custom:'))
+const videoExportDisabled = computed(() => multiTransitionActive.value || customVideoUnsupported.value)
+const videoExportTitle = computed(() => {
+  if (multiTransitionActive.value) {
+    return lang.value === 'en'
+      ? 'Multi transition video paths are not enabled yet.'
+      : '多变体 transition 暂未启用视频路径。'
+  }
+  if (customVideoUnsupported.value) {
+    return lang.value === 'en'
+      ? 'Custom variants are not supported by ln-map or video export yet.'
+      : '自定义变体暂不支持 ln-map 与视频导出。'
+  }
+  return t('export_video')
+})
 const activeTransitionLegs = computed(() => {
   const cleaned = transitionLegs.value
     .map(leg => ({
@@ -1867,8 +1882,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
       <button @click="exportPng" :disabled="pngExportBusy">{{ pngExportBusy ? t('loading') : t('export_png') }}</button>
       <button
         @click="openExportModal"
-        :disabled="multiTransitionActive"
-        :title="multiTransitionActive ? (lang === 'en' ? 'Multi transition video paths are not enabled yet.' : '多变体 transition 暂未启用视频路径。') : t('export_video')">
+        :disabled="videoExportDisabled"
+        :title="videoExportTitle">
         {{ t('export_video') }}
       </button>
       <progress v-if="pngExportBusy" class="png-export-progress"></progress>
@@ -1945,7 +1960,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
           :pairwise-cap="pairwiseCap"
           :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
           :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
-          :transitionFrom="transitionFrom" :transitionTo="transitionTo"
+          :transitionFrom="transitionOn ? transitionFrom : undefined"
+          :transitionTo="transitionOn ? transitionTo : undefined"
           :transitionVariants="multiTransitionActive ? transitionVariantIds : undefined"
           :transitionWeights="multiTransitionActive ? transitionWeights : undefined"
           :engine="engineMode" :scalarType="scalarMode"
@@ -2006,7 +2022,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :pairwise-cap="pairwiseCap"
                 :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
                 :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
-                :transitionFrom="transitionFrom" :transitionTo="transitionTo"
+                :transitionFrom="transitionOn ? transitionFrom : undefined"
+                :transitionTo="transitionOn ? transitionTo : undefined"
                 :transitionVariants="multiTransitionActive ? transitionVariantIds : undefined"
                 :transitionWeights="multiTransitionActive ? transitionWeights : undefined"
                 :engine="engineMode" :scalarType="scalarMode"
@@ -2044,7 +2061,8 @@ async function pollVideoExport(initial: VideoExportResponse) {
                 :pairwise-cap="pairwiseCap"
                 :transitionTheta="transitionOn ? transitionThetaMilliDeg * Math.PI / (180 * THETA_SCALE) : null"
                 :transition-theta-milli-deg="activeTransitionThetaMilliDeg"
-                :transitionFrom="transitionFrom" :transitionTo="transitionTo"
+                :transitionFrom="transitionOn ? transitionFrom : undefined"
+                :transitionTo="transitionOn ? transitionTo : undefined"
                 :transitionVariants="multiTransitionActive ? transitionVariantIds : undefined"
                 :transitionWeights="multiTransitionActive ? transitionWeights : undefined"
                 :julia="true" :juliaRe="juliaRe" :juliaIm="juliaIm"

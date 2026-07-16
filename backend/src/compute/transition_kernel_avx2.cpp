@@ -26,6 +26,8 @@ namespace fsd::compute {
 
 namespace {
 
+constexpr double PI = 3.14159265358979323846264338327950288;
+
 // ── FoldRules (shared pattern with transition_volume_avx2.cpp) ──────────────
 
 struct FoldRules {
@@ -134,6 +136,11 @@ MapStats render_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     const double bail2   = b.bailout_sq;
     const double cth     = std::cos(p.theta);
     const double sth     = std::sin(p.theta);
+    const bool has_view_rot = b.rotation_deg != 0.0;
+    const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
+    const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
+    const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
+    const double pixel_step = b.scale / static_cast<double>(H);
 
     const FoldRules from = fold_rules(p.from_variant);
     const FoldRules to   = fold_rules(p.to_variant);
@@ -144,6 +151,10 @@ MapStats render_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     const __m256d v_re_min = _mm256_set1_pd(re_min);
     const __m256d v_span_re= _mm256_set1_pd(span_re);
     const __m256d v_inv_W  = _mm256_set1_pd(1.0 / W);
+    const __m256d v_half_W = _mm256_set1_pd(static_cast<double>(W) * 0.5);
+    const __m256d v_pixel_step = _mm256_set1_pd(pixel_step);
+    const __m256d v_view_cos = _mm256_set1_pd(view_cos);
+    const __m256d v_view_sin = _mm256_set1_pd(view_sin);
     const __m256d v_julia_re = _mm256_set1_pd(b.julia_re);
     const __m256d v_julia_cy = _mm256_set1_pd(b.julia_im * cth);
     const __m256d v_julia_cz = _mm256_set1_pd(b.julia_im * sth);
@@ -156,9 +167,10 @@ MapStats render_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     for (int y = 0; y < H; y++) {
         if (should_cancel(p, cancelled)) continue;
         const double v_raw = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
-        const __m256d vy_raw = _mm256_set1_pd(v_raw);
-        const __m256d vy0 = _mm256_mul_pd(vy_raw, v_cth);
-        const __m256d vz0 = _mm256_mul_pd(vy_raw, v_sth);
+        const __m256d vv_unrotated = _mm256_set1_pd(v_raw);
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double u_row_base = b.center_re - dy * view_sin;
+        const double v_row_base = b.center_im + dy * view_cos;
 
         const size_t row_off = static_cast<size_t>(y) * W;
 
@@ -166,8 +178,20 @@ MapStats render_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
             const int remaining = std::min(4, W - x);
 
             const __m256d vxi = _mm256_add_pd(_mm256_set1_pd(static_cast<double>(x)), lane_offsets);
-            const __m256d vu  = _mm256_fmadd_pd(
-                _mm256_mul_pd(vxi, v_inv_W), v_span_re, v_re_min);
+            __m256d vu;
+            __m256d vv_raw;
+            if (has_view_rot) {
+                const __m256d vdx = _mm256_mul_pd(
+                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step);
+                vu = _mm256_fmadd_pd(vdx, v_view_cos, _mm256_set1_pd(u_row_base));
+                vv_raw = _mm256_fmadd_pd(vdx, v_view_sin, _mm256_set1_pd(v_row_base));
+            } else {
+                vu = _mm256_fmadd_pd(
+                    _mm256_mul_pd(vxi, v_inv_W), v_span_re, v_re_min);
+                vv_raw = vv_unrotated;
+            }
+            const __m256d vy0 = _mm256_mul_pd(vv_raw, v_cth);
+            const __m256d vz0 = _mm256_mul_pd(vv_raw, v_sth);
 
             __m256d vx0 = vu;
             __m256d vcx, vcy, vcz;
@@ -275,6 +299,11 @@ MapStats render_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     const double bail2   = b.bailout_sq;
     const double cth     = std::cos(p.theta);
     const double sth     = std::sin(p.theta);
+    const bool has_view_rot = b.rotation_deg != 0.0;
+    const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
+    const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
+    const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
+    const double pixel_step = b.scale / static_cast<double>(H);
 
     const FoldRules from = fold_rules(p.from_variant);
     const FoldRules to   = fold_rules(p.to_variant);
@@ -285,6 +314,10 @@ MapStats render_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     const __m256d v_re_min = _mm256_set1_pd(re_min);
     const __m256d v_span_re = _mm256_set1_pd(span_re);
     const __m256d v_inv_W   = _mm256_set1_pd(1.0 / W);
+    const __m256d v_half_W = _mm256_set1_pd(static_cast<double>(W) * 0.5);
+    const __m256d v_pixel_step = _mm256_set1_pd(pixel_step);
+    const __m256d v_view_cos = _mm256_set1_pd(view_cos);
+    const __m256d v_view_sin = _mm256_set1_pd(view_sin);
     const __m256d v_julia_re = _mm256_set1_pd(b.julia_re);
     const __m256d v_julia_cy = _mm256_set1_pd(b.julia_im * cth);
     const __m256d v_julia_cz = _mm256_set1_pd(b.julia_im * sth);
@@ -304,17 +337,30 @@ MapStats render_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     for (int y = 0; y < H; y++) {
         if (should_cancel(p, cancelled)) continue;
         const double v_raw = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
-        const __m256d vy_raw = _mm256_set1_pd(v_raw);
-        const __m256d vy0 = _mm256_mul_pd(vy_raw, v_cth);
-        const __m256d vz0 = _mm256_mul_pd(vy_raw, v_sth);
+        const __m256d vv_unrotated = _mm256_set1_pd(v_raw);
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double u_row_base = b.center_re - dy * view_sin;
+        const double v_row_base = b.center_im + dy * view_cos;
         const size_t row_off = static_cast<size_t>(y) * W;
 
         for (int x = 0; x < W; x += 4) {
             const int remaining = std::min(4, W - x);
 
             const __m256d vxi = _mm256_add_pd(_mm256_set1_pd(static_cast<double>(x)), lane_offsets);
-            const __m256d vu  = _mm256_fmadd_pd(
-                _mm256_mul_pd(vxi, v_inv_W), v_span_re, v_re_min);
+            __m256d vu;
+            __m256d vv_raw;
+            if (has_view_rot) {
+                const __m256d vdx = _mm256_mul_pd(
+                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step);
+                vu = _mm256_fmadd_pd(vdx, v_view_cos, _mm256_set1_pd(u_row_base));
+                vv_raw = _mm256_fmadd_pd(vdx, v_view_sin, _mm256_set1_pd(v_row_base));
+            } else {
+                vu = _mm256_fmadd_pd(
+                    _mm256_mul_pd(vxi, v_inv_W), v_span_re, v_re_min);
+                vv_raw = vv_unrotated;
+            }
+            const __m256d vy0 = _mm256_mul_pd(vv_raw, v_cth);
+            const __m256d vz0 = _mm256_mul_pd(vv_raw, v_sth);
 
             __m256d vx0 = vu;
             __m256d vcx, vcy, vcz;
@@ -428,11 +474,20 @@ MapStats render_multi_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     const double re_min  = b.center_re - span_re * 0.5;
     const double im_max  = b.center_im + span_im * 0.5;
     const double bail2   = b.bailout_sq;
+    const bool has_view_rot = b.rotation_deg != 0.0;
+    const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
+    const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
+    const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
+    const double pixel_step = b.scale / static_cast<double>(H);
 
     const __m256d vbail2    = _mm256_set1_pd(bail2);
     const __m256d v_re_min  = _mm256_set1_pd(re_min);
     const __m256d v_span_re = _mm256_set1_pd(span_re);
     const __m256d v_inv_W   = _mm256_set1_pd(1.0 / W);
+    const __m256d v_half_W = _mm256_set1_pd(static_cast<double>(W) * 0.5);
+    const __m256d v_pixel_step = _mm256_set1_pd(pixel_step);
+    const __m256d v_view_cos = _mm256_set1_pd(view_cos);
+    const __m256d v_view_sin = _mm256_set1_pd(view_sin);
     const __m256d v_julia_re = _mm256_set1_pd(b.julia_re);
     const __m256d lane_offsets = _mm256_set_pd(3.5, 2.5, 1.5, 0.5);
 
@@ -443,14 +498,27 @@ MapStats render_multi_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     for (int y = 0; y < H; y++) {
         if (should_cancel(p, cancelled)) continue;
         const double v_raw = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
-        const __m256d vv_raw = _mm256_set1_pd(v_raw);
+        const __m256d vv_unrotated = _mm256_set1_pd(v_raw);
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double u_row_base = b.center_re - dy * view_sin;
+        const double v_row_base = b.center_im + dy * view_cos;
         const size_t row_off = static_cast<size_t>(y) * W;
 
         for (int x = 0; x < W; x += 4) {
             const int remaining = std::min(4, W - x);
             const __m256d vxi = _mm256_add_pd(_mm256_set1_pd(static_cast<double>(x)), lane_offsets);
-            const __m256d vu  = _mm256_fmadd_pd(
-                _mm256_mul_pd(vxi, v_inv_W), v_span_re, v_re_min);
+            __m256d vu;
+            __m256d vv_raw;
+            if (has_view_rot) {
+                const __m256d vdx = _mm256_mul_pd(
+                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step);
+                vu = _mm256_fmadd_pd(vdx, v_view_cos, _mm256_set1_pd(u_row_base));
+                vv_raw = _mm256_fmadd_pd(vdx, v_view_sin, _mm256_set1_pd(v_row_base));
+            } else {
+                vu = _mm256_fmadd_pd(
+                    _mm256_mul_pd(vxi, v_inv_W), v_span_re, v_re_min);
+                vv_raw = vv_unrotated;
+            }
 
             __m256d vx = vu;
             __m256d vx2 = _mm256_mul_pd(vx, vx);
@@ -571,11 +639,20 @@ MapStats render_multi_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     const double re_min  = b.center_re - span_re * 0.5;
     const double im_max  = b.center_im + span_im * 0.5;
     const double bail2   = b.bailout_sq;
+    const bool has_view_rot = b.rotation_deg != 0.0;
+    const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
+    const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
+    const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
+    const double pixel_step = b.scale / static_cast<double>(H);
 
     const __m256d vbail2    = _mm256_set1_pd(bail2);
     const __m256d v_re_min  = _mm256_set1_pd(re_min);
     const __m256d v_span_re = _mm256_set1_pd(span_re);
     const __m256d v_inv_W   = _mm256_set1_pd(1.0 / W);
+    const __m256d v_half_W = _mm256_set1_pd(static_cast<double>(W) * 0.5);
+    const __m256d v_pixel_step = _mm256_set1_pd(pixel_step);
+    const __m256d v_view_cos = _mm256_set1_pd(view_cos);
+    const __m256d v_view_sin = _mm256_set1_pd(view_sin);
     const __m256d v_julia_re = _mm256_set1_pd(b.julia_re);
     const __m256d lane_offsets = _mm256_set_pd(3.5, 2.5, 1.5, 0.5);
 
@@ -593,14 +670,27 @@ MapStats render_multi_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     for (int y = 0; y < H; y++) {
         if (should_cancel(p, cancelled)) continue;
         const double v_raw = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
-        const __m256d vv_raw = _mm256_set1_pd(v_raw);
+        const __m256d vv_unrotated = _mm256_set1_pd(v_raw);
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double u_row_base = b.center_re - dy * view_sin;
+        const double v_row_base = b.center_im + dy * view_cos;
         const size_t row_off = static_cast<size_t>(y) * W;
 
         for (int x = 0; x < W; x += 4) {
             const int remaining = std::min(4, W - x);
             const __m256d vxi = _mm256_add_pd(_mm256_set1_pd(static_cast<double>(x)), lane_offsets);
-            const __m256d vu  = _mm256_fmadd_pd(
-                _mm256_mul_pd(vxi, v_inv_W), v_span_re, v_re_min);
+            __m256d vu;
+            __m256d vv_raw;
+            if (has_view_rot) {
+                const __m256d vdx = _mm256_mul_pd(
+                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step);
+                vu = _mm256_fmadd_pd(vdx, v_view_cos, _mm256_set1_pd(u_row_base));
+                vv_raw = _mm256_fmadd_pd(vdx, v_view_sin, _mm256_set1_pd(v_row_base));
+            } else {
+                vu = _mm256_fmadd_pd(
+                    _mm256_mul_pd(vxi, v_inv_W), v_span_re, v_re_min);
+                vv_raw = vv_unrotated;
+            }
 
             __m256d vx = vu;
             __m256d vx2 = _mm256_mul_pd(vx, vx);

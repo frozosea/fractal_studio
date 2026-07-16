@@ -6,7 +6,7 @@
 
 | Endpoint | Route | Purpose |
 |---|---|---|
-| `POST /api/map/render` | `mapRenderRoute` | 渲染 PNG artifact，写入 `runtime/runs/<runId>/`。 |
+| `POST /api/map/render` | `mapRenderRoute` | 渲染 PNG artifact，写入 `runtime/runs/maps/<runId>/`。 |
 | `POST /api/map/render-inline` | `mapRenderInlineRoute` | 直接返回 RGBA8 frame，用于高频交互预览。 |
 | `POST /api/map/preempt` | `mapPreemptRoute` | 标记旧交互请求可取消，避免慢响应覆盖新视图。 |
 | `POST /api/map/field` | `mapFieldRoute` | 返回 raw field base64，不写 run/artifact，供前端重配色。 |
@@ -121,8 +121,8 @@ c = juliaRe + juliaIm * i
 | Engine | Scope | Notes |
 |---|---|---|
 | `openmp` | 所有内置变体、Julia、所有 metric、自定义公式 | 最完整路径。 |
-| `avx2` | 前 10 个二次变体，escape/min/max/envelope | 需要 AVX2 + FMA。 |
-| `avx512` | 前 10 个二次变体，escape/min/max/envelope | 需要 AVX-512F/DQ。 |
+| `avx2` | 前 10 个二次变体，escape/min/max/envelope | 需要 AVX2 + FMA；escape raw field 原生支持 `fp32` 和 `fp64`。 |
+| `avx512` | 前 10 个二次变体，escape/min/max/envelope | 需要 AVX-512F/DQ；escape raw field 当前仅有 `fp64` kernel，`fp32` 会回退到 AVX2 或 OpenMP。 |
 | `cuda` | 前 10 个二次变体，Julia，metric 0..3 | 不支持 `min_pairwise_dist`。 |
 | `hybrid` | 大任务的 CPU + CUDA tile 调度 | 实际返回可能是 `hybrid`、`cuda`、`avx2`、`avx512` 或 `openmp`。 |
 
@@ -140,7 +140,9 @@ y0 = v * cos(theta)
 z0 = v * sin(theta)
 ```
 
-`theta = 0` 对应 `transitionFrom` 平面，`theta = 90deg` 对应 `transitionTo` 平面。`transition_kernel.cpp` 会对精确 cardinal angle 做直接 2D map 快捷路径，避免浮点三角函数漂移。
+`rotationDeg` 先在当前 2D slice 内绕 viewport center 旋转屏幕偏移，再把得到的 `(u, v)` 按上述公式嵌入 3D。OpenMP、AVX2 和 CUDA 的 pair/multi transition 路径使用相同的 viewport 变换。
+
+`theta = 0` 对应 `transitionFrom` 平面，`theta = 90deg` 对应 `transitionTo` 平面。`transition_kernel.cpp` 会对精确 cardinal angle 做直接 2D map 快捷路径，避免浮点三角函数漂移。`theta = -90deg` 和 `theta = ±180deg` 的快捷路径还会一致镜像 center imaginary、Julia imaginary 和 viewport rotation，再翻转输出行。
 
 `transitionFrom` 和 `transitionTo` 只支持前 10 个二次/folded variants，不支持 transcendental 和 custom variants。
 

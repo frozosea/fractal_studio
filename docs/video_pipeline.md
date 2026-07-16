@@ -10,6 +10,10 @@
 | `POST /api/video/preview` | 渲染小尺寸 ln-map、起止预览帧和预览统计，不生成 MP4。 |
 | `POST /api/video/export` | 统一导出：final frame + ln-map + preview frames + MP4 + report。 |
 | `POST /api/video/zoom` | 旧路径：从已有 ln-map artifact 生成 MP4。 |
+| `POST /api/video/transition-preview` | 预览双变体 transition 的 rotation 或 zoom 起止帧。 |
+| `POST /api/video/transition` | 导出双变体 transition rotation 或 zoom 视频。 |
+
+ln-map 与普通 zoom 视频当前只支持内置 variant。自定义公式仍可用于 2D map，但请求 ln-map 或视频时会明确返回 `400`，不会再静默按 Mandelbrot 生成错误产物。多变体 transition 视频和分段 ln-map 产物复用的暂缓原因与恢复条件见 [feature_status.md](feature_status.md)。
 
 主要代码：
 

@@ -127,18 +127,28 @@ make verify-immutable
 
 `verify-system` 当前会检查 `nvcc`，所以它比 CPU-only 后端构建更严格。没有 CUDA 的机器仍然可以构建 CPU 后端。
 
+`verify-immutable` 会把仓库同级的四个 legacy source tree 与本地可信基线比较；校验覆盖文件内容、目录和符号链接增删、权限以及链接目标。首次在存在 legacy tree 的 checkout 中使用时，应先人工确认当前内容，再初始化一次：
+
+```bash
+bash scripts/check_legacy_immutable.sh --init
+```
+
+之后 `make verify-immutable` 会在任意差异上失败。只有确认变更有意且已经审查后，才用 `bash scripts/check_legacy_immutable.sh --update` 接受新状态。基线默认保存在 `.git/fractal-studio/legacy-immutable.sha256`；如果本机没有这些外部目录，检查会明确报告 skipped 并成功。
+
 ## Runtime Directories / 运行时目录
 
 | Path | Purpose |
 |---|---|
 | `runtime/build/` | CMake backend build output. |
 | `runtime/logs/` | `dev.sh` backend/frontend logs. |
-| `runtime/runs/<runId>/` | PNG/MP4/GLB/STL/report/progress artifacts. |
+| `runtime/runs/<category>/<runId>/` | 按产品分类保存 PNG/MP4/GLB/STL/report/progress artifacts。常见分类包括 `maps`、`videos`、`ln-maps`、`meshes`、`points` 和 `benchmark`。 |
 | `runtime/db/fractal_studio.sqlite3` | Run and artifact metadata. |
 | `../runs/custom_variants/` | Custom formula shared library cache in the current checkout layout. |
 | `../fractal_studio.db` | Custom variant registry in the current checkout layout. |
 
 `runId` 使用 `yymmdd-hhmmss`，同一秒内多个任务会追加短数字后缀。
+
+新 run 只写入上述分类布局。后端仍兼容读取历史扁平目录 `runtime/runs/<runId>/`，所以已有产物无需手动移动；排障新任务时应从对应的 `<category>` 子目录查找。
 
 ## Useful Local URLs / 常用地址
 
@@ -166,7 +176,7 @@ Runs: http://localhost:18080/api/runs
 ### MP4 export fails
 
 - 确认系统有 `ffmpeg`。
-- 查看 `runtime/logs/backend.log` 和对应 `runtime/runs/<runId>/progress.json`。
+- 查看 `runtime/logs/backend.log` 和对应 `runtime/runs/<category>/<runId>/progress.json`。
 
 ### Custom formula fails
 

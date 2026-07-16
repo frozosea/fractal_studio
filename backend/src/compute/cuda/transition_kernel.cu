@@ -30,6 +30,21 @@ struct SliceMultiArgs {
     double influence[CUDA_MAX_TRANSITION_LEGS] = {1.0, 0.0, 0.0, 0.0};
 };
 
+template <typename T>
+__device__ inline void rotated_viewport_point(
+    T center_re, T center_im, T scale,
+    T cos_rotation, T sin_rotation,
+    int W, int H, int px, int py,
+    T& u, T& v
+) {
+    const T half = static_cast<T>(0.5);
+    const T pixel_step = scale / static_cast<T>(H);
+    const T dx = (static_cast<T>(px) + half - static_cast<T>(W) * half) * pixel_step;
+    const T dy = -(static_cast<T>(py) + half - static_cast<T>(H) * half) * pixel_step;
+    u = center_re + dx * cos_rotation - dy * sin_rotation;
+    v = center_im + dx * sin_rotation + dy * cos_rotation;
+}
+
 // ── Variant fold helpers (shared with transition_volume.cu pattern) ──────────
 
 __device__ inline double real_projection_d(int v, double x2, double axis2) {
@@ -68,6 +83,7 @@ __device__ inline float imag_projection_f(int v, float x, float axis) {
 
 __global__ void transition_slice_escape_fp64(
     double center_re, double center_im, double scale,
+    double cos_rotation, double sin_rotation,
     int W, int H, int max_iter, double bail2,
     double cth, double sth,
     int from_v, int to_v,
@@ -78,13 +94,9 @@ __global__ void transition_slice_escape_fp64(
     const int py = blockIdx.y * blockDim.y + threadIdx.y;
     if (px >= W || py >= H) return;
 
-    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
-    const double span_im = scale;
-    const double span_re = scale * aspect;
-    const double u = (center_re - span_re * 0.5) +
-                     (static_cast<double>(px) + 0.5) / W * span_re;
-    const double v = (center_im + span_im * 0.5) -
-                     (static_cast<double>(py) + 0.5) / H * span_im;
+    double u, v;
+    rotated_viewport_point(center_re, center_im, scale,
+                           cos_rotation, sin_rotation, W, H, px, py, u, v);
 
     double x0 = u,        y0 = v * cth, z0 = v * sth;
     double cx = julia ? jre       : x0;
@@ -119,6 +131,7 @@ __global__ void transition_slice_escape_fp64(
 
 __global__ void transition_slice_escape_fp32(
     float center_re, float center_im, float scale,
+    float cos_rotation, float sin_rotation,
     int W, int H, int max_iter, float bail2,
     float cth, float sth,
     int from_v, int to_v,
@@ -129,13 +142,9 @@ __global__ void transition_slice_escape_fp32(
     const int py = blockIdx.y * blockDim.y + threadIdx.y;
     if (px >= W || py >= H) return;
 
-    const float aspect  = static_cast<float>(W) / static_cast<float>(H);
-    const float span_im = scale;
-    const float span_re = scale * aspect;
-    const float u = (center_re - span_re * 0.5f) +
-                    (static_cast<float>(px) + 0.5f) / static_cast<float>(W) * span_re;
-    const float v = (center_im + span_im * 0.5f) -
-                    (static_cast<float>(py) + 0.5f) / static_cast<float>(H) * span_im;
+    float u, v;
+    rotated_viewport_point(center_re, center_im, scale,
+                           cos_rotation, sin_rotation, W, H, px, py, u, v);
 
     float x0 = u,        y0 = v * cth, z0 = v * sth;
     float cx = julia ? jre       : x0;
@@ -170,6 +179,7 @@ __global__ void transition_slice_escape_fp32(
 
 __global__ void transition_slice_multi_escape_fp64(
     double center_re, double center_im, double scale,
+    double cos_rotation, double sin_rotation,
     int W, int H, int max_iter, double bail2,
     SliceMultiArgs args,
     bool julia, double jre, double jim,
@@ -179,13 +189,9 @@ __global__ void transition_slice_multi_escape_fp64(
     const int py = blockIdx.y * blockDim.y + threadIdx.y;
     if (px >= W || py >= H) return;
 
-    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
-    const double span_im = scale;
-    const double span_re = scale * aspect;
-    const double u = (center_re - span_re * 0.5) +
-                     (static_cast<double>(px) + 0.5) / W * span_re;
-    const double v = (center_im + span_im * 0.5) -
-                     (static_cast<double>(py) + 0.5) / H * span_im;
+    double u, v;
+    rotated_viewport_point(center_re, center_im, scale,
+                           cos_rotation, sin_rotation, W, H, px, py, u, v);
 
     double axis[CUDA_MAX_TRANSITION_LEGS];
     double axis2[CUDA_MAX_TRANSITION_LEGS];
@@ -243,6 +249,7 @@ __global__ void transition_slice_multi_escape_fp64(
 
 __global__ void transition_slice_multi_escape_fp32(
     float center_re, float center_im, float scale,
+    float cos_rotation, float sin_rotation,
     int W, int H, int max_iter, float bail2,
     SliceMultiArgs args,
     bool julia, float jre, float jim,
@@ -252,13 +259,9 @@ __global__ void transition_slice_multi_escape_fp32(
     const int py = blockIdx.y * blockDim.y + threadIdx.y;
     if (px >= W || py >= H) return;
 
-    const float aspect  = static_cast<float>(W) / static_cast<float>(H);
-    const float span_im = scale;
-    const float span_re = scale * aspect;
-    const float u = (center_re - span_re * 0.5f) +
-                    (static_cast<float>(px) + 0.5f) / static_cast<float>(W) * span_re;
-    const float v = (center_im + span_im * 0.5f) -
-                    (static_cast<float>(py) + 0.5f) / static_cast<float>(H) * span_im;
+    float u, v;
+    rotated_viewport_point(center_re, center_im, scale,
+                           cos_rotation, sin_rotation, W, H, px, py, u, v);
 
     float axis[CUDA_MAX_TRANSITION_LEGS];
     float axis2[CUDA_MAX_TRANSITION_LEGS];
@@ -319,6 +322,7 @@ __global__ void transition_slice_multi_escape_fp32(
 
 __global__ void transition_slice_metric_fp64(
     double center_re, double center_im, double scale,
+    double cos_rotation, double sin_rotation,
     int W, int H, int max_iter, double bail2,
     double cth, double sth,
     int from_v, int to_v, int metric_id,
@@ -329,13 +333,9 @@ __global__ void transition_slice_metric_fp64(
     const int py = blockIdx.y * blockDim.y + threadIdx.y;
     if (px >= W || py >= H) return;
 
-    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
-    const double span_im = scale;
-    const double span_re = scale * aspect;
-    const double u = (center_re - span_re * 0.5) +
-                     (static_cast<double>(px) + 0.5) / W * span_re;
-    const double v = (center_im + span_im * 0.5) -
-                     (static_cast<double>(py) + 0.5) / H * span_im;
+    double u, v;
+    rotated_viewport_point(center_re, center_im, scale,
+                           cos_rotation, sin_rotation, W, H, px, py, u, v);
 
     double x0 = u,        y0 = v * cth, z0 = v * sth;
     double cx = julia ? jre       : x0;
@@ -373,6 +373,7 @@ __global__ void transition_slice_metric_fp64(
 
 __global__ void transition_slice_multi_metric_fp64(
     double center_re, double center_im, double scale,
+    double cos_rotation, double sin_rotation,
     int W, int H, int max_iter, double bail2,
     SliceMultiArgs args,
     int metric_id,
@@ -383,13 +384,9 @@ __global__ void transition_slice_multi_metric_fp64(
     const int py = blockIdx.y * blockDim.y + threadIdx.y;
     if (px >= W || py >= H) return;
 
-    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
-    const double span_im = scale;
-    const double span_re = scale * aspect;
-    const double u = (center_re - span_re * 0.5) +
-                     (static_cast<double>(px) + 0.5) / W * span_re;
-    const double v = (center_im + span_im * 0.5) -
-                     (static_cast<double>(py) + 0.5) / H * span_im;
+    double u, v;
+    rotated_viewport_point(center_re, center_im, scale,
+                           cos_rotation, sin_rotation, W, H, px, py, u, v);
 
     double axis[CUDA_MAX_TRANSITION_LEGS];
     double axis2[CUDA_MAX_TRANSITION_LEGS];
@@ -523,6 +520,7 @@ CudaTransitionSliceStats cuda_render_transition_slice_escape(
             transition_slice_multi_escape_fp32<<<grid, block>>>(
                 static_cast<float>(p.center_re), static_cast<float>(p.center_im),
                 static_cast<float>(p.scale),
+                static_cast<float>(p.cos_rotation), static_cast<float>(p.sin_rotation),
                 p.width, p.height, p.iterations, static_cast<float>(p.bailout_sq),
                 args,
                 p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im),
@@ -530,6 +528,7 @@ CudaTransitionSliceStats cuda_render_transition_slice_escape(
         } else {
             transition_slice_multi_escape_fp64<<<grid, block>>>(
                 p.center_re, p.center_im, p.scale,
+                p.cos_rotation, p.sin_rotation,
                 p.width, p.height, p.iterations, p.bailout_sq,
                 args,
                 p.julia, p.julia_re, p.julia_im,
@@ -539,6 +538,7 @@ CudaTransitionSliceStats cuda_render_transition_slice_escape(
         transition_slice_escape_fp32<<<grid, block>>>(
             static_cast<float>(p.center_re), static_cast<float>(p.center_im),
             static_cast<float>(p.scale),
+            static_cast<float>(p.cos_rotation), static_cast<float>(p.sin_rotation),
             p.width, p.height, p.iterations, static_cast<float>(p.bailout_sq),
             static_cast<float>(p.cos_theta), static_cast<float>(p.sin_theta),
             p.from_variant, p.to_variant,
@@ -547,6 +547,7 @@ CudaTransitionSliceStats cuda_render_transition_slice_escape(
     } else {
         transition_slice_escape_fp64<<<grid, block>>>(
             p.center_re, p.center_im, p.scale,
+            p.cos_rotation, p.sin_rotation,
             p.width, p.height, p.iterations, p.bailout_sq,
             p.cos_theta, p.sin_theta,
             p.from_variant, p.to_variant,
@@ -598,6 +599,7 @@ CudaTransitionSliceStats cuda_render_transition_slice_metric(
         const SliceMultiArgs args = make_slice_multi_args(p);
         transition_slice_multi_metric_fp64<<<grid, block>>>(
             p.center_re, p.center_im, p.scale,
+            p.cos_rotation, p.sin_rotation,
             p.width, p.height, p.iterations, p.bailout_sq,
             args, p.metric_id,
             p.julia, p.julia_re, p.julia_im,
@@ -605,6 +607,7 @@ CudaTransitionSliceStats cuda_render_transition_slice_metric(
     } else {
         transition_slice_metric_fp64<<<grid, block>>>(
             p.center_re, p.center_im, p.scale,
+            p.cos_rotation, p.sin_rotation,
             p.width, p.height, p.iterations, p.bailout_sq,
             p.cos_theta, p.sin_theta,
             p.from_variant, p.to_variant, p.metric_id,

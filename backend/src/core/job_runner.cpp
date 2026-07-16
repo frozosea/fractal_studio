@@ -20,7 +20,8 @@ namespace {
 // produces. Keep this in sync with resolveRunDir() in routes_common.hpp, which finds a run in
 // either this nested layout or the old flat one.
 std::string categoryForModule(const std::string& m) {
-    if (m == "video-export" || m == "zoom-video" || m == "video-preview")               return "videos";
+    if (m == "video-export" || m == "zoom-video" || m == "video-preview" ||
+        m == "transition-video-export" || m == "transition-video-preview")              return "videos";
     if (m == "ln-map")                                                                  return "ln-maps";
     if (m == "map" || m == "map-export")                                                return "maps";
     if (m == "start-frame")                                                             return "frames";

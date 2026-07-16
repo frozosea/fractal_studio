@@ -212,16 +212,25 @@ function invalidateCurrentRender() {
   if (hadRender) notifyPreempt(renderSeq)
 }
 
+function shortestRotationDelta(currentDeg: number, renderedDeg: number): number {
+  const raw = currentDeg - renderedDeg
+  if (!Number.isFinite(raw)) return 0
+  return ((raw + 180) % 360 + 360) % 360 - 180
+}
+
 function previewTransform(): string {
   if (!hasFrame.value || !renderedViewport || domW.value < 16 || domH.value < 16) return 'none'
   const aspect = domW.value / domH.value
   const scaleRatio = renderedViewport.scale / props.scale
-  const rotDelta = (props.rotationDeg ?? 0) - renderedViewport.rotationDeg
+  const rotDelta = shortestRotationDelta(props.rotationDeg ?? 0, renderedViewport.rotationDeg)
   // rendered center − current center, in exact offset space
   const dre = -pendingOffsetRe.value
   const dim = -pendingOffsetIm.value
-  const curRad = (props.rotationDeg ?? 0) * Math.PI / 180
-  const cosR = Math.cos(curRad), sinR = Math.sin(curRad)
+  // Translation is applied by the matrix before the CSS rotation below, so
+  // express it in the rendered frame's axes. The rotation then carries both
+  // the old image and this offset into the current viewport axes exactly once.
+  const renderedRad = renderedViewport.rotationDeg * Math.PI / 180
+  const cosR = Math.cos(renderedRad), sinR = Math.sin(renderedRad)
   const dx = (dre * cosR + dim * sinR) * domW.value / (props.scale * aspect)
   const dy = (-dre * sinR + dim * cosR) * (-domH.value) / props.scale
   const tx = domW.value * (1 - scaleRatio) * 0.5 + dx

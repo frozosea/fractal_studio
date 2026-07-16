@@ -55,8 +55,10 @@ ctest --test-dir runtime/build --output-on-failure
 - HS-style colorized output: `min_abs`、`max_abs`、`envelope`
 - HS rainbow raw-metric coloring (`hs_rainbow`)
 - Escape + `hs_rainbow` fallback consistency across CPU/AVX/CUDA
-- Transition renderer direct slice: `theta=0` 对拍普通 map 的 `from_variant`，`theta=90°` 对拍普通 map 的 `to_variant`
+- Escape raw field 对拍：AVX2 覆盖 `fp32` / `fp64`，AVX512 当前覆盖 `fp64`
+- Transition renderer direct slice: `theta=0/90°` 对拍普通 map；`theta=-90°/180°` 额外覆盖非零 viewport rotation、精确 center 字符串和 Julia imaginary 的镜像变换
 - Transition renderer 非 cardinal slice: milli-degree 输入和 radians 输入对拍，覆盖 escape、HS envelope、pairwise、smooth field
+- Rotated transition engine parity: pair/multi × escape/metric 使用 OpenMP 基准对拍 AVX2/CUDA，并覆盖 CUDA `fp32` escape
 - OpenMP-only HS/scalar fallback smoke: `min_pairwise_dist`、smooth field coloring、transcendental variant
 - `fp64`、`fp32`、`fx64`，以及 OpenMP-only 的 `fp80` / 可选 `fp128`
 - AVX2 / AVX512 / CUDA 可用时自动对拍；不可用时记录 `SKIP`
@@ -68,11 +70,14 @@ ctest --test-dir runtime/build --output-on-failure
 - `openmp/fx64` 对 `cuda/fx64`，仅在该场景支持固定点整数路径时启用
 - `min_pairwise_dist`、smooth coloring、transcendental variant 目前是 OpenMP-only 分支，quick 套件会渲染并标记 `INFO`，但不会把 fallback 当成失败
 
+Escape raw field 不复用 BGR 图像阈值：测试分别约束 iteration mismatch 与 norm delta，避免系统性 iteration `+1/-1` 被宽松的颜色误差掩盖。运行时具备 AVX2 + FMA 时，每个适用场景都必须实际命中 AVX2 field path，不能以回退或其他 AVX2 BGR 覆盖冒充。
+
 Transition 对拍策略：
 
 - Cardinal transition slices 是严格数学等价测试：`theta=0` 必须等于普通 map `from_variant`，`theta=90°` 必须等于普通 map `to_variant`。
-- 上述 direct slice 会分别跑 `fp64`、`fp32`、`fx64`，要求逐像素完全一致。
-- 非 cardinal transition 目前只有 OpenMP fp64 实现，因此使用 milli-degree 参数和 radians 参数互相对拍，防止角度归一化和 HS 着色路径漂移。
+- `theta=-90°/180°` 的翻转 direct slice 也必须等于经过严格镜像变换的普通 map；这些 direct slice 会分别跑 `fp64`、`fp32`、`fx64`，要求逐像素完全一致。
+- 非 cardinal transition 使用 milli-degree 参数和 radians 参数互相对拍，防止角度归一化和 HS 着色路径漂移。
+- 非零 `rotationDeg` 另以 OpenMP fp64 为基准，对拍 AVX2/CUDA 的 pair/multi、escape/metric；escape 还对拍 CUDA fp32。不可用的硬件路径记录 `SKIP`。
 
 跨 scalar 只跑专门构造的 fp32-equivalent 场景：
 
@@ -163,7 +168,7 @@ http://localhost:18080/api/runs
 - 打开 Map 页面。
 - 切换 variant、metric、colormap。
 - 拖拽/缩放，确认旧图不会覆盖新视图。
-- 试一次 still export，确认 `runtime/runs/<runId>/map.png` 存在。
+- 试一次 still export，确认 `runtime/runs/maps/<runId>/map.png` 存在。
 
 ### Recurrence Metric
 

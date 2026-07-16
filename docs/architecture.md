@@ -13,7 +13,7 @@ Browser
   -> native C++ HTTP backend (:18080)
   -> backend/src/api/routes_*.cpp
   -> backend/src/compute/* and backend/src/core/*
-  -> runtime/runs/<runId>/ + runtime/db/fractal_studio.sqlite3
+  -> runtime/runs/<category>/<runId>/ + runtime/db/fractal_studio.sqlite3
 ```
 
 后端是一个本地原生 C++ HTTP 服务，不依赖 Web 框架。`frontend/src/api.ts` 默认请求 `http://<current-host>:18080`，也可以用 `VITE_BACKEND_URL` 覆盖。
@@ -46,12 +46,14 @@ Browser
 
 1. 前端 view 组装 typed request，通过 `api.ts` 发给 `/api/*`。
 2. route 使用 `nlohmann::json` 解析参数，并选择对应 compute pipeline。
-3. 会产生产物的任务通过 `JobRunner::createRun()` 创建 `runtime/runs/<runId>/`。
+3. 会产生产物的任务通过 `JobRunner::createRun()` 创建 `runtime/runs/<category>/<runId>/`；`category` 由 module 映射到 `maps`、`videos`、`ln-maps`、`meshes`、`points` 等产品分类。
 4. route 在计算过程中更新 `progress.json`，结束后调用 `addArtifact()` 写入 artifact 记录。
 5. run 元数据持久化到 `runtime/db/fractal_studio.sqlite3`。
 6. 前端通过 `/api/runs`, `/api/runs/status`, `/api/artifacts/*` 展示历史、进度和文件。
 
 高频交互接口并不总是写 artifact。例如 `/api/map/render-inline` 返回二进制图像帧，`/api/map/field` 返回原始场数据，适合实时预览。
+
+当前写入统一使用分类布局。为兼容已有数据，run 和 artifact 查询仍可读取旧的扁平布局 `runtime/runs/<runId>/`；无需迁移历史目录，新任务也不会继续写入该布局。
 
 ## Pipeline Deep Dives / 计算链路文档
 
@@ -73,7 +75,7 @@ Browser
 
 1. 后端新增 route：在 `backend/src/include/routes.hpp` 声明，在 `http_server.cpp` 分发，在合适的 `routes_*.cpp` 实现。
 2. 计算逻辑放进 `backend/src/compute/`，不要把重计算堆在 route 里。
-3. 如果会生成文件，使用 `JobRunner` 创建 run、写进 `runtime/runs/<runId>/`，并注册 artifacts。
+3. 如果会生成文件，使用 `JobRunner` 创建 run、写进 `runtime/runs/<category>/<runId>/`，并注册 artifacts。
 4. 前端先在 `frontend/src/api.ts` 增加类型和 client 函数，再接入对应 view/component。
 5. 如果新增页面，更新 `frontend/src/router.ts` 和 `components/NavRail.vue`。
 6. 新增移动端 UI 时同步检查 `frontend/src/device.ts`、`assets/base.css` 和目标 view 的 responsive block。
@@ -81,6 +83,7 @@ Browser
 ## Existing Documentation / 现有文档
 
 - `README.md`: 项目简介、最短启动路径和文档索引。
+- [docs/feature_status.md](feature_status.md): 已实现能力与明确暂缓的功能决策。
 - `docs/development.md`: 本地开发、构建和排障。
 - `docs/frontend.md`: 前端结构、移动端/平板适配策略。
 - `docs/render_pipeline.md`: 二维渲染、引擎、变体和自定义公式。

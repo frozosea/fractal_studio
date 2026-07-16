@@ -69,6 +69,19 @@ uint64_t estimateLnMapBytes(int s, int t) {
     return static_cast<uint64_t>(s) * static_cast<uint64_t>(t) * 3u;
 }
 
+compute::Variant requireBuiltinLnMapVariant(const std::string& variant) {
+    compute::Variant resolved;
+    if (compute::variant_from_name(variant.c_str(), resolved)) return resolved;
+
+    const bool custom = variant.rfind("custom:", 0) == 0;
+    throw HttpError(400, Json{
+        {"error", custom
+            ? "custom variants are not supported by ln-map or video export"
+            : "invalid built-in variant"},
+        {"variant", variant},
+    }.dump());
+}
+
 } // namespace
 
 std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
@@ -167,8 +180,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const int t = static_cast<int>(std::ceil(t_exact));
     const uint64_t estimatedPeakMemory = estimateLnMapBytes(s, t);
 
-    compute::Variant v;
-    if (!compute::variant_from_name(variantStr.c_str(), v)) v = compute::Variant::Mandelbrot;
+    const compute::Variant v = requireBuiltinLnMapVariant(variantStr);
     double bailout = j.contains("bailout") && !j["bailout"].is_null()
         ? j.value("bailout", 2.0)
         : compute::variant_default_bailout(v);
