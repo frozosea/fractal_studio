@@ -28,7 +28,7 @@ public:
     void setProgress(const std::string& runId, const std::string& progressJson);
     std::string getProgress(const std::string& runId) const;
     void addArtifact(const std::string& runId, const Artifact& artifact);
-    void requestCancel(const std::string& runId);
+    CancelRequestResult requestCancel(const std::string& runId);
     bool isCancelRequested(const std::string& runId) const;
     // Stable token for tight compute loops. It may be polled concurrently
     // without taking JobRunner's metadata mutex.

@@ -29,6 +29,14 @@ struct ActiveTaskSnapshot {
     long long startedAt = 0;
     long long elapsedMs = 0;
     bool cancelable = false;
+    bool cancelRequested = false;
+};
+
+struct CancelRequestResult {
+    std::string runStatus;
+    bool cancelable = false;
+    bool cancelRequested = false;
+    bool accepted = false;
 };
 
 } // namespace fsd

@@ -1,6 +1,7 @@
 #include "db.hpp"
 #include "job_runner.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -99,6 +100,12 @@ int main() {
             const auto cancelToken = runner.cancelToken(freshRunId);
             require(!cancelToken->load(std::memory_order_relaxed),
                     "new run cancel token started requested");
+            const fsd::CancelRequestResult rejectedCancel = runner.requestCancel(freshRunId);
+            require(!rejectedCancel.accepted && !rejectedCancel.cancelRequested,
+                    "non-cancelable run accepted cancellation");
+            require(!cancelToken->load(std::memory_order_relaxed),
+                    "non-cancelable run published a cancellation token");
+            runner.setCancelable(freshRunId, true);
 
             // A CLI or second backend sharing this runtime must not reconcile
             // work that is still owned by the first JobRunner.
@@ -107,9 +114,27 @@ int main() {
                     "concurrent JobRunner cancelled live work owned by another process");
             peerRunId = peer->createRun("special-points-search", "{}").id;
 
-            runner.requestCancel(freshRunId);
+            const fsd::CancelRequestResult acceptedCancel = runner.requestCancel(freshRunId);
+            require(acceptedCancel.accepted && acceptedCancel.cancelRequested,
+                    "cancelable run rejected cancellation");
             require(cancelToken->load(std::memory_order_relaxed),
                     "run cancellation did not publish to the lock-free token");
+            const auto active = runner.activeTasks();
+            const auto activeIt = std::find_if(active.begin(), active.end(), [&](const auto& task) {
+                return task.runId == freshRunId;
+            });
+            require(activeIt != active.end() && activeIt->cancelRequested,
+                    "active task snapshot did not expose requested cancellation");
+
+            const fsd::RunRecord terminalRun = runner.createRun("special-points-search", "{}");
+            runner.setCancelable(terminalRun.id, true);
+            runner.setStatus(terminalRun.id, "completed");
+            const fsd::CancelRequestResult terminalCancel = runner.requestCancel(terminalRun.id);
+            require(!terminalCancel.accepted && !terminalCancel.cancelRequested &&
+                        terminalCancel.runStatus == "completed",
+                    "terminal run reported a cancellation request");
+            require(db.getRun(terminalRun.id).status == "completed",
+                    "terminal run status changed after cancellation request");
         }
 
         // The first owner has exited, but another live JobRunner still holds a

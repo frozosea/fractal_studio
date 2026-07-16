@@ -76,6 +76,8 @@ std::string runStatusRoute(const std::filesystem::path& repoRoot, JobRunner& run
         {"startedAt", row.startedAt},
         {"finishedAt", row.finishedAt},
         {"outputDir", row.outputDir},
+        {"cancelRequested", (row.status == "queued" || row.status == "running") &&
+                                runner.isCancelRequested(runId)},
         {"progress", progress},
         {"artifacts", artifacts},
     };
@@ -99,7 +101,8 @@ std::string activeTasksRoute(JobRunner& runner) {
             {"scalar", scalar},
             {"startedAt", t.startedAt},
             {"elapsedMs", t.elapsedMs},
-            {"cancelable", progress.value("cancelable", t.cancelable)},
+            {"cancelable", t.cancelable},
+            {"cancelRequested", t.cancelRequested},
             {"progress", progress},
         });
     }
@@ -127,8 +130,20 @@ std::string cancelRunRoute(JobRunner& runner, const std::string& body) {
 }
 
 std::string cancelRunRoute(JobRunner& runner, const std::string& runId, const std::string&) {
-    runner.requestCancel(runId);
-    return Json{{"runId", runId}, {"status", "cancel_requested"}}.dump();
+    const CancelRequestResult result = runner.requestCancel(runId);
+    if ((result.runStatus == "queued" || result.runStatus == "running") && !result.cancelable) {
+        throw HttpError(409, Json{
+            {"error", "run is not cancelable"},
+            {"runId", runId},
+            {"status", result.runStatus},
+        }.dump());
+    }
+    return Json{
+        {"runId", runId},
+        {"status", result.cancelRequested ? "cancel_requested" : result.runStatus},
+        {"accepted", result.accepted},
+        {"cancelRequested", result.cancelRequested},
+    }.dump();
 }
 
 } // namespace fsd

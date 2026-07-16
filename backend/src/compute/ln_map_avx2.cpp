@@ -285,6 +285,7 @@ void render_rows_impl(
     std::atomic<int> rows_done{0};
 
     auto render_row = [&](int row) {
+        if (ln_map_cancel_requested(p)) return;
         uint8_t* rowp = iters_out ? nullptr : out.ptr<uint8_t>(row);
         int* iters_rowp = iters_out ? iters_out + static_cast<size_t>(row) * static_cast<size_t>(s) : nullptr;
         const double global_row = p.row_offset + static_cast<double>(row);
@@ -390,6 +391,7 @@ void render_rows_fp32_impl(
     std::atomic<int> rows_done{0};
 
     auto render_row = [&](int row) {
+        if (ln_map_cancel_requested(p)) return;
         uint8_t* rowp = iters_out ? nullptr : out.ptr<uint8_t>(row);
         int* iters_rowp = iters_out ? iters_out + static_cast<size_t>(row) * static_cast<size_t>(s) : nullptr;
         const float global_row = static_cast<float>(p.row_offset + static_cast<double>(row));

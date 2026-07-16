@@ -57,7 +57,15 @@ struct LnMapParams {
     // Total cycles down the strip = total_octaves * color_cycles_per_octave, i.e.
     // ≈ log2(zoom magnification) cycles when this is 1.0. Default 0.5 (broader bands).
     double color_cycles_per_octave = 0.5;
+    // Optional cooperative cancellation hook. Render workers only observe this
+    // flag and stop claiming rows/chunks; cancellation is raised by the public
+    // render entry point after all worker threads have joined.
+    std::function<bool()> should_cancel;
 };
+
+inline bool ln_map_cancel_requested(const LnMapParams& p) {
+    return p.should_cancel && p.should_cancel();
+}
 
 // Shared periodic coloring for the hist_eq ln-map color mode. Built once from the
 // ln-map strip and reused by the final cartesian frame so any pixel with a given

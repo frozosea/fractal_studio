@@ -726,6 +726,7 @@ export interface RunStatusResponse {
   startedAt: number
   finishedAt: number
   outputDir: string
+  cancelRequested?: boolean
   progress: RunProgress
   artifacts: RunArtifactStatus[]
 }
@@ -749,6 +750,7 @@ export interface ActiveTask {
   startedAt: number
   elapsedMs: number
   cancelable: boolean
+  cancelRequested: boolean
   progress: RunProgress
 }
 
@@ -1078,7 +1080,7 @@ export const api = {
     getJson<RunStatusResponse>(`/api/runs/status?runId=${encodeURIComponent(runId)}`),
   activeTasks: () => getJson<ActiveTasksResponse>('/api/tasks/active'),
   cancelRun: (runId: string) =>
-    postJson<{ runId: string; status: string }>(`/api/runs/${encodeURIComponent(runId)}/cancel`, {}),
+    postJson<{ runId: string; status: string; accepted: boolean; cancelRequested: boolean }>(`/api/runs/${encodeURIComponent(runId)}/cancel`, {}),
   benchmark: (req: Record<string, any> = {}) =>
     postJson<Record<string, any>>('/api/benchmark', req),
 

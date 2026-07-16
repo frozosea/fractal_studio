@@ -245,15 +245,27 @@ void JobRunner::addArtifact(const std::string& runId, const Artifact& artifact) 
     }
 }
 
-void JobRunner::requestCancel(const std::string& runId) {
+CancelRequestResult JobRunner::requestCancel(const std::string& runId) {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = runs_.find(runId);
     if (it == runs_.end()) throw std::runtime_error("run not found: " + runId);
+
+    CancelRequestResult result;
+    result.runStatus = it->second.status;
+    result.cancelable = runCancelable_.count(runId) ? runCancelable_.at(runId) : false;
+    const bool active = result.runStatus == "queued" || result.runStatus == "running";
+    if (!active || !result.cancelable) {
+        return result;
+    }
+
     runCancelRequested_[runId] = true;
     auto tokenIt = runCancelTokens_.find(runId);
     if (tokenIt != runCancelTokens_.end()) {
         tokenIt->second->store(true, std::memory_order_relaxed);
     }
+    result.cancelRequested = true;
+    result.accepted = true;
+    return result;
 }
 
 bool JobRunner::isCancelRequested(const std::string& runId) const {
@@ -316,6 +328,7 @@ std::vector<ActiveTaskSnapshot> JobRunner::activeTasks() const {
         t.startedAt = runStarted_.count(runId) ? runStarted_.at(runId) : 0;
         t.elapsedMs = t.startedAt > 0 ? std::max(0LL, now - t.startedAt) : 0;
         t.cancelable = runCancelable_.count(runId) ? runCancelable_.at(runId) : false;
+        t.cancelRequested = runCancelRequested_.count(runId) ? runCancelRequested_.at(runId) : false;
         tasks.push_back(std::move(t));
     }
     return tasks;

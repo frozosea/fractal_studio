@@ -54,6 +54,14 @@ constexpr double TAU = 6.283185307179586;
 constexpr double LN_TWO = 0.6931471805599453;
 constexpr double LN_FOUR = 1.3862943611198906;
 
+[[noreturn]] void throw_ln_map_cancelled() {
+    throw std::runtime_error("cancelled");
+}
+
+void throw_if_ln_map_cancelled(const LnMapParams& p) {
+    if (ln_map_cancel_requested(p)) throw_ln_map_cancelled();
+}
+
 struct TrigColumns {
     std::vector<double> cos_col;
     std::vector<double> sin_col;
@@ -123,6 +131,7 @@ int rows_for_depth_octaves(const LnMapParams& p, double depth_octaves) {
 
 template <typename RenderFn, typename NotifyFn>
 void render_layer_parallel(
+    const LnMapParams& p,
     int row_start,
     int row_count,
     int batch_rows,
@@ -139,10 +148,12 @@ void render_layer_parallel(
     for (int i = 0; i < thread_count; ++i) {
         workers.emplace_back([&]() {
             while (true) {
+                if (ln_map_cancel_requested(p)) break;
                 const int row0 = next_row.fetch_add(batch, std::memory_order_relaxed);
                 if (row0 >= end) break;
                 const int rows = std::min(batch, end - row0);
                 render_chunk(row0, rows);
+                if (ln_map_cancel_requested(p)) break;
                 notify(rows);
             }
         });
@@ -165,6 +176,7 @@ void render_ln_variant_openmp_rows_impl(
     std::atomic<int> rows_done{0};
 
     auto render_row = [&](int row) {
+        if (ln_map_cancel_requested(p)) return;
         uint8_t* rowp = out.ptr<uint8_t>(row);
         const double global_row = p.row_offset + static_cast<double>(row);
         const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
@@ -256,6 +268,7 @@ void render_ln_variant_fixed_rows_impl(
     std::atomic<int> rows_done{0};
 
     auto render_row = [&](int row) {
+        if (ln_map_cancel_requested(p)) return;
         uint8_t* rowp = out.ptr<uint8_t>(row);
         const double global_row = p.row_offset + static_cast<double>(row);
         const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
@@ -399,9 +412,11 @@ LnMapStats render_ln_map_cuda_with_progress(
 
     double elapsed_ms = 0.0;
     for (int row0 = 0; row0 < p.height_t; row0 += chunk_rows) {
+        if (ln_map_cancel_requested(p)) break;
         const int rows = std::min(chunk_rows, p.height_t - row0);
         const auto stats = fsd_cuda::cuda_render_ln_map_rows(cp, out, row0, rows);
         elapsed_ms += stats.elapsed_ms;
+        if (ln_map_cancel_requested(p)) break;
         if (on_row_done) on_row_done(row0 + rows);
     }
 
@@ -427,9 +442,11 @@ double render_cuda_fp32_rows_with_progress(
     double elapsed_ms = 0.0;
     const int row_end = row_start + row_count;
     for (int row0 = row_start; row0 < row_end; row0 += chunk_rows) {
+        if (ln_map_cancel_requested(p)) break;
         const int rows = std::min(chunk_rows, row_end - row0);
         const auto stats = fsd_cuda::cuda_render_ln_map_fp32_rows(cp, out, row0, rows);
         elapsed_ms += stats.elapsed_ms;
+        if (ln_map_cancel_requested(p)) break;
         if (on_rows_done) on_rows_done(rows);
     }
     return elapsed_ms;
@@ -448,9 +465,11 @@ double render_cuda_fx64_rows_with_progress(
     double elapsed_ms = 0.0;
     const int row_end = row_start + row_count;
     for (int row0 = row_start; row0 < row_end; row0 += chunk_rows) {
+        if (ln_map_cancel_requested(p)) break;
         const int rows = std::min(chunk_rows, row_end - row0);
         const auto stats = fsd_cuda::cuda_render_ln_map_fx64_rows(cp, out, row0, rows);
         elapsed_ms += stats.elapsed_ms;
+        if (ln_map_cancel_requested(p)) break;
         if (on_rows_done) on_rows_done(rows);
     }
     return elapsed_ms;
@@ -770,6 +789,7 @@ void compute_ln_iters_fp64_variant(
     std::atomic<int> rows_done{0};
 
     auto compute_row = [&](int row) {
+        if (ln_map_cancel_requested(p)) return;
         const double global_row = p.row_offset + static_cast<double>(row);
         const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
         const double r_mag = std::exp(k);
@@ -944,6 +964,7 @@ void accumulate_ln_map_equalization_histograms(
 
     auto accumulate_rows = [&](int row_begin, int row_end, LnEqHistogram& local_disk, LnEqHistogram& local_all) {
         for (int row = row_begin; row < row_end; ++row) {
+            if (ln_map_cancel_requested(p)) break;
             const double global_row = p.row_offset + static_cast<double>(row);
             const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
             const double r_mag = std::exp(k);
@@ -1000,6 +1021,7 @@ void accumulate_ln_map_equalization_histograms(
     const int thread_count = histogram_accum_threads(p.iterations, h);
     if (thread_count <= 1) {
         accumulate_rows(0, h, disk_hist, all_hist);
+        throw_if_ln_map_cancelled(p);
         return;
     }
 
@@ -1019,6 +1041,7 @@ void accumulate_ln_map_equalization_histograms(
     for (int tid = 0; tid < thread_count; ++tid) {
         workers.emplace_back([&, tid]() {
             while (true) {
+                if (ln_map_cancel_requested(p)) break;
                 const int row0 = next_row.fetch_add(batch_rows, std::memory_order_relaxed);
                 if (row0 >= h) break;
                 accumulate_rows(row0, std::min(h, row0 + batch_rows),
@@ -1028,6 +1051,7 @@ void accumulate_ln_map_equalization_histograms(
         });
     }
     for (auto& worker : workers) worker.join();
+    throw_if_ln_map_cancelled(p);
 
     for (int tid = 0; tid < thread_count; ++tid) {
         disk_hist.merge_from(local_disk[static_cast<size_t>(tid)]);
@@ -1222,8 +1246,21 @@ std::string compute_ln_field(
 #if USE_CUDA_LN_MAP
     if (simd_variant && engine_allows_cuda(p) && fsd_cuda::cuda_ln_map_available()) {
         try {
-            fsd_cuda::cuda_render_ln_map_iters_rows(make_cuda_params(p), iters.data(), 0, h, want_fx64);
-            if (on_row_done) on_row_done(h);
+            const auto cp = make_cuda_params(p);
+            if (p.should_cancel || on_row_done) {
+                const int chunk_rows = cuda_progress_chunk_rows(p);
+                for (int row0 = 0; row0 < h; row0 += chunk_rows) {
+                    if (ln_map_cancel_requested(p)) break;
+                    const int rows = std::min(chunk_rows, h - row0);
+                    fsd_cuda::cuda_render_ln_map_iters_rows(
+                        cp, iters.data(), row0, rows, want_fx64);
+                    if (ln_map_cancel_requested(p)) break;
+                    if (on_row_done) on_row_done(row0 + rows);
+                }
+            } else {
+                fsd_cuda::cuda_render_ln_map_iters_rows(
+                    cp, iters.data(), 0, h, want_fx64);
+            }
             return want_fx64 ? "cuda_fx64" : "cuda_fp64";
         } catch (...) {
             if (p.engine == "cuda") throw;  // explicitly requested CUDA → surface the error
@@ -1286,6 +1323,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
         } else {
             field_engine = compute_ln_field(p, iters, cols, on_row_done);
         }
+        throw_if_ln_map_cancelled(p);
         std::lock_guard<std::mutex> lk(g_ln_field_cache_mu);
         g_ln_field_cache = LnFieldCache{true, p.julia, p.center_re, p.center_im, p.julia_re,
                                         p.julia_im, p.bailout, p.bailout_sq,
@@ -1294,6 +1332,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
                                         static_cast<int>(p.variant), p.precision_mode,
                                         field_engine, iters};
     }
+    throw_if_ln_map_cancelled(p);
 
     // hist_eq → periodic equalized coloring via the shared LUT (also reused by the
     // final cartesian frame for a seamless warp blend). bands/frontier keep the older
@@ -1323,6 +1362,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
         } else {
             hist.assign(static_cast<size_t>(p.iterations), 0ULL);
             for (int row = 0; row < h; ++row) {
+                if (ln_map_cancel_requested(p)) break;
                 const double global_row = p.row_offset + static_cast<double>(row);
                 const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
                 const double r_mag = std::exp(k);
@@ -1356,6 +1396,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
             local_global_cdf.first_iter = first_hist_iter == p.iterations ? 0 : first_hist_iter;
         }
     }
+    throw_if_ln_map_cancelled(p);
 
     auto raw_q_for_iter = [&](int it) {
         const double q = (static_cast<double>(it) + 1.0) / (static_cast<double>(p.iterations) + 1.0);
@@ -1382,6 +1423,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
     const int thread_count = default_render_threads();
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 8)
     for (int row = 0; row < h; ++row) {
+        if (ln_map_cancel_requested(p)) continue;
         uint8_t* rowp = out.ptr<uint8_t>(row);
         const double depth01 = std::clamp(
             static_cast<double>(row) / static_cast<double>(depth_den),
@@ -1473,6 +1515,7 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
             colorize_field_bgr(mapped, p.colormap, px[0], px[1], px[2]);
         }
     }
+    throw_if_ln_map_cancelled(p);
 
     const auto t1 = std::chrono::steady_clock::now();
     LnMapStats stats;
@@ -1532,6 +1575,7 @@ LnValidationResult validate_ln_band(
     long long color_delta_sum = 0;
 
     for (int ri = 0; ri < sample_rows; ++ri) {
+        throw_if_ln_map_cancelled(p);
         const int local_row = sample_position(ri, sample_rows, rows);
         const int row = row_start + local_row;
         for (int ci = 0; ci < sample_cols; ++ci) {
@@ -1752,6 +1796,7 @@ std::string compute_ln_field_fast(
     };
 
     for (const LnRenderBand& band : bands) {
+        if (ln_map_cancel_requested(p)) break;
         const int band_rows = band.end - band.start;
         if (band_rows <= 0) continue;
 
@@ -1847,7 +1892,9 @@ LnMapStats render_ln_map_hybrid(const LnMapParams& p, cv::Mat& out, const LnMapP
     };
 
     auto render_cpu = [&](int row0, int rows) {
+        if (ln_map_cancel_requested(p)) return;
         render_ln_cpu_rows_serial(p, out, row0, rows, cpu_backend);
+        if (ln_map_cancel_requested(p)) return;
         cpu_rows.fetch_add(rows, std::memory_order_relaxed);
         notify(rows);
     };
@@ -1858,6 +1905,7 @@ LnMapStats render_ln_map_hybrid(const LnMapParams& p, cv::Mat& out, const LnMapP
         gpu_thread = std::thread([&]() {
             fsd_cuda::CudaLnMapParams cp = make_cuda_params(p);
             while (true) {
+                if (ln_map_cancel_requested(p)) break;
                 const int row0 = next_row.fetch_add(gpu_batch, std::memory_order_relaxed);
                 if (row0 >= h) break;
                 const int rows = std::min(gpu_batch, h - row0);
@@ -1867,6 +1915,7 @@ LnMapStats render_ln_map_hybrid(const LnMapParams& p, cv::Mat& out, const LnMapP
                 }
                 try {
                     fsd_cuda::cuda_render_ln_map_rows(cp, out, row0, rows);
+                    if (ln_map_cancel_requested(p)) break;
                     gpu_rows.fetch_add(rows, std::memory_order_relaxed);
                     notify(rows);
                 } catch (...) {
@@ -1888,6 +1937,7 @@ LnMapStats render_ln_map_hybrid(const LnMapParams& p, cv::Mat& out, const LnMapP
     for (int i = 0; i < cpu_threads; ++i) {
         workers.emplace_back([&]() {
             while (true) {
+                if (ln_map_cancel_requested(p)) break;
                 const int row0 = next_row.fetch_add(cpu_batch, std::memory_order_relaxed);
                 if (row0 >= h) break;
                 const int rows = std::min(cpu_batch, h - row0);
@@ -1923,7 +1973,7 @@ LnMapStats render_ln_map_standard(const LnMapParams& p, cv::Mat& out, const LnMa
 #if USE_CUDA_LN_MAP
         if (should_try_cuda_fx64(p)) {
             try {
-                if (on_row_done) {
+                if (on_row_done || p.should_cancel) {
                     LnMapStats stats = render_ln_map_cuda_fx64_with_progress(p, out, on_row_done);
                     stats.precision_mode = "standard";
                     return stats;
@@ -1955,7 +2005,7 @@ LnMapStats render_ln_map_standard(const LnMapParams& p, cv::Mat& out, const LnMa
     if (should_try_cuda(p)) {
 #if USE_CUDA_LN_MAP
         try {
-            if (on_row_done) {
+            if (on_row_done || p.should_cancel) {
                 LnMapStats stats = render_ln_map_cuda_with_progress(p, out, on_row_done);
                 stats.precision_mode = "standard";
                 return stats;
@@ -2065,6 +2115,7 @@ LnMapStats render_ln_map_fast(const LnMapParams& p, cv::Mat& out, const LnMapPro
     };
 
     for (const LnRenderBand& band : bands) {
+        if (ln_map_cancel_requested(p)) break;
         const int band_rows = band.end - band.start;
         if (band_rows <= 0) continue;
 
@@ -2084,6 +2135,7 @@ LnMapStats render_ln_map_fast(const LnMapParams& p, cv::Mat& out, const LnMapPro
 #endif
             if (!rendered && cpu_fp32_available) {
                 render_layer_parallel(
+                    p,
                     band.start,
                     band_rows,
                     fp32_backend == LnCpuBackend::Avx512 ? 8 : 4,
@@ -2114,6 +2166,7 @@ LnMapStats render_ln_map_fast(const LnMapParams& p, cv::Mat& out, const LnMapPro
 #endif
             if (!rendered && requested_fx64) {
                 render_layer_parallel(
+                    p,
                     band.start,
                     band_rows,
                     2,
@@ -2131,6 +2184,7 @@ LnMapStats render_ln_map_fast(const LnMapParams& p, cv::Mat& out, const LnMapPro
         LnMapParams fp64p = p;
         fp64p.scalar_type = "fp64";
         render_layer_parallel(
+            p,
             band.start,
             band_rows,
             fp64_backend == LnCpuBackend::Openmp ? 2 : 4,
@@ -2198,13 +2252,15 @@ static bool accumulate_ln_map_histograms_streamed(
     const int h = p.height_t;
     if (s <= 0 || h <= 0 || p.iterations <= 0) return false;
 
-    const int chunk_rows = std::clamp(max_rows, 1, h);
+    const int requested_chunk_rows = p.should_cancel ? std::min(max_rows, 64) : max_rows;
+    const int chunk_rows = std::clamp(requested_chunk_rows, 1, h);
     std::optional<TrigColumns> cols;
     auto get_cols = [&]() -> const TrigColumns& {
         if (!cols) cols = make_trig_columns(s);
         return *cols;
     };
     for (int row0 = 0; row0 < h; row0 += chunk_rows) {
+        if (ln_map_cancel_requested(p)) return false;
         const int rows = std::min(chunk_rows, h - row0);
         LnMapParams chunk = p;
         chunk.height_t = rows;
@@ -2213,6 +2269,7 @@ static bool accumulate_ln_map_histograms_streamed(
         chunk.global_cdf_override = nullptr;
 
         if (try_accumulate_ln_map_equalization_histograms_cuda(chunk, disk_hist, all_hist)) {
+            if (ln_map_cancel_requested(p)) return false;
             if (on_row_done) on_row_done(row0 + rows);
             continue;
         }
@@ -2230,7 +2287,9 @@ static bool accumulate_ln_map_histograms_streamed(
         } else {
             compute_ln_field(chunk, iters, chunk_cols, report_chunk_progress);
         }
+        if (ln_map_cancel_requested(p)) return false;
         accumulate_ln_map_equalization_histograms(chunk, iters, chunk_cols, disk_hist, all_hist);
+        if (ln_map_cancel_requested(p)) return false;
         if (on_row_done) on_row_done(row0 + rows);
     }
     return true;
@@ -2242,8 +2301,10 @@ LnMapEqualization build_ln_map_equalization_streamed(
     LnEqHistogram disk_hist(p.iterations);
     LnEqHistogram all_hist(p.iterations);
     if (!accumulate_ln_map_histograms_streamed(p, max_rows, on_row_done, disk_hist, all_hist)) {
+        throw_if_ln_map_cancelled(p);
         return LnMapEqualization{};
     }
+    throw_if_ln_map_cancelled(p);
 
     const LnEqHistogram& selected = disk_hist.valid() ? disk_hist : all_hist;
     return finalize_ln_map_equalization_histogram(p, selected);
@@ -2255,8 +2316,10 @@ LnMapGlobalCdf build_ln_map_global_cdf_streamed(
     LnEqHistogram disk_hist(p.iterations);
     LnEqHistogram all_hist(p.iterations);
     if (!accumulate_ln_map_histograms_streamed(p, max_rows, on_row_done, disk_hist, all_hist)) {
+        throw_if_ln_map_cancelled(p);
         return LnMapGlobalCdf{};
     }
+    throw_if_ln_map_cancelled(p);
 
     const LnEqHistogram& selected = disk_hist.valid() ? disk_hist : all_hist;
     return finalize_ln_map_global_cdf_histogram(selected);
@@ -2448,6 +2511,7 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
     // the critical orbit of c_julia as the rebase target (see perturbation.hpp).
     RefOrbit ref;
     RefOrbit crit;
+    throw_if_ln_map_cancelled(p);
     if (is_julia) {
         ref = compute_reference_orbit_julia_auto(
             p.center_re_str, p.center_im_str,
@@ -2461,6 +2525,7 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
         ref = compute_reference_orbit_auto(
             p.center_re_str, p.center_im_str, max_iter, bail2, r_min);
     }
+    throw_if_ln_map_cancelled(p);
     const RefOrbit& kref = is_julia ? crit : ref;
 
     const double* Rr = ref.z_re.data();
@@ -2571,6 +2636,7 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
         bool cuda_used_fp32 = false;
         int rows_filled = 0;
         for (int row0 = 0; row0 < T; row0 += kCudaPerturbChunkRows) {
+            throw_if_ln_map_cancelled(p);
             const int rows = std::min(kCudaPerturbChunkRows, T - row0);
             fsd_cuda::CudaPerturbParams cp;
             cp.width = S; cp.height = rows; cp.iterations = max_iter;
@@ -2593,14 +2659,17 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
                 cuda_ok = false;
                 break;
             }
+            throw_if_ln_map_cancelled(p);
             #pragma omp parallel for num_threads(thread_count) schedule(static)
             for (int local_row = 0; local_row < rows; ++local_row) {
+                if (ln_map_cancel_requested(p)) continue;
                 const size_t row_base = static_cast<size_t>(row0 + local_row) * S;
                 const size_t src_base = static_cast<size_t>(local_row) * S;
                 for (int x = 0; x < S; ++x) {
                     sink(row_base + x, static_cast<int>(iters[src_base + static_cast<size_t>(x)]));
                 }
             }
+            throw_if_ln_map_cancelled(p);
             rows_filled = row0 + rows;
             if (on_row_done) on_row_done(rows_filled);
 
@@ -2618,9 +2687,11 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
                 // identical argument) — fill it directly, no further launches.
                 #pragma omp parallel for num_threads(thread_count) schedule(static)
                 for (int row = rows_filled; row < T; ++row) {
+                    if (ln_map_cancel_requested(p)) continue;
                     const size_t row_base = static_cast<size_t>(row) * S;
                     for (int x = 0; x < S; ++x) sink(row_base + x, max_iter);
                 }
+                throw_if_ln_map_cancelled(p);
                 if (on_row_done) on_row_done(T);
                 rows_filled = T;
                 break;
@@ -2681,6 +2752,7 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
 
             #pragma omp for schedule(dynamic, 8)
             for (int row = 0; row < T; ++row) {
+                if (ln_map_cancel_requested(p)) continue;
                 const size_t row_base = static_cast<size_t>(row) * S;
 
                 if (row >= first_interior_row.load(std::memory_order_relaxed)) {
@@ -2781,6 +2853,7 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
                 }
             }
         }
+        throw_if_ln_map_cancelled(p);
         engine_used = fp32_rows > 0 ? std::string(batch_engine) + "+fp32"
                                     : std::string(batch_engine);
     }
@@ -2833,17 +2906,20 @@ LnMapStats render_ln_map(const LnMapParams& p, cv::Mat& out, const LnMapProgress
     if (!ln_map_color_mode_supported(p.color_mode)) {
         throw std::runtime_error("invalid ln-map color mode");
     }
+    throw_if_ln_map_cancelled(p);
+    LnMapStats stats;
     if (p.color_mode != "escape") {
         // Mapped modes route deep strips through perturbation internally.
-        return render_ln_map_mapped(p, out, on_row_done);
+        stats = render_ln_map_mapped(p, out, on_row_done);
+    } else if (lnmap_perturbation_applicable(p)) {
+        stats = render_ln_map_perturbation(p, out, on_row_done);
+    } else if (ln_map_fast_mode(p)) {
+        stats = render_ln_map_fast(p, out, on_row_done);
+    } else {
+        stats = render_ln_map_standard(p, out, on_row_done);
     }
-    if (lnmap_perturbation_applicable(p)) {
-        return render_ln_map_perturbation(p, out, on_row_done);
-    }
-    if (ln_map_fast_mode(p)) {
-        return render_ln_map_fast(p, out, on_row_done);
-    }
-    return render_ln_map_standard(p, out, on_row_done);
+    throw_if_ln_map_cancelled(p);
+    return stats;
 }
 
 } // namespace fsd::compute

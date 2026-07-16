@@ -14,8 +14,11 @@ defineEmits<{ (e: 'toggle'): void }>()
 const hw = ref<any>(null)
 const tasks = ref<ActiveTask[]>([])
 const locks = ref<ResourceLockStatus[]>([])
+const cancellingRunIds = ref<Set<string>>(new Set())
+const cancelErrors = ref<Record<string, string>>({})
 let interval: any
 let taskInterval: any
+let taskRefreshSeq = 0
 
 async function refresh() {
   try {
@@ -24,18 +27,45 @@ async function refresh() {
 }
 
 async function refreshTasks() {
+  const seq = ++taskRefreshSeq
   try {
     const r = await api.activeTasks()
+    if (seq !== taskRefreshSeq) return
     tasks.value = r.items
     locks.value = r.resourceLocks
+    const activeRunIds = new Set(r.items.map(task => task.runId))
+    cancellingRunIds.value = new Set(
+      [...cancellingRunIds.value].filter(runId => activeRunIds.has(runId)),
+    )
+    cancelErrors.value = Object.fromEntries(
+      Object.entries(cancelErrors.value).filter(([runId]) => activeRunIds.has(runId)),
+    )
   } catch {}
 }
 
 async function cancelTask(runId: string) {
+  if (cancellingRunIds.value.has(runId)) return
+  cancellingRunIds.value = new Set([...cancellingRunIds.value, runId])
+  const nextErrors = { ...cancelErrors.value }
+  delete nextErrors[runId]
+  cancelErrors.value = nextErrors
   try {
-    await api.cancelRun(runId)
+    const result = await api.cancelRun(runId)
+    if (!result.cancelRequested) {
+      cancellingRunIds.value = new Set([...cancellingRunIds.value].filter(id => id !== runId))
+    }
     await refreshTasks()
-  } catch {}
+  } catch (e: any) {
+    cancellingRunIds.value = new Set([...cancellingRunIds.value].filter(id => id !== runId))
+    cancelErrors.value = {
+      ...cancelErrors.value,
+      [runId]: e?.data?.error || e?.message || String(e),
+    }
+  }
+}
+
+function taskIsCancelling(task: ActiveTask): boolean {
+  return task.cancelRequested || cancellingRunIds.value.has(task.runId)
 }
 
 onMounted(() => {
@@ -156,14 +186,23 @@ function taskEta(task: ActiveTask): string {
       <div v-for="task in tasks" :key="task.runId" class="task">
         <div class="task-head">
           <span class="mono task-type">{{ task.taskType }}</span>
-          <button v-if="task.cancelable" class="cancel" @click="cancelTask(task.runId)">{{ lang === 'en' ? 'cancel' : '取消' }}</button>
+          <button
+            v-if="task.cancelable"
+            class="cancel"
+            :disabled="taskIsCancelling(task)"
+            @click="cancelTask(task.runId)">
+            {{ taskIsCancelling(task) ? (lang === 'en' ? 'stopping…' : '中断中…') : (lang === 'en' ? 'stop' : '中断') }}
+          </button>
         </div>
-        <div class="row"><span class="k">{{ lang === 'en' ? 'stage' : '阶段' }}</span><span class="v mono">{{ task.stage || task.status }}</span></div>
+        <div class="row"><span class="k">{{ lang === 'en' ? 'stage' : '阶段' }}</span><span class="v mono">{{ taskIsCancelling(task) ? (lang === 'en' ? 'stop requested' : '已请求中断') : (task.stage || task.status) }}</span></div>
         <div class="row"><span class="k">{{ lang === 'en' ? 'engine' : '引擎' }}</span><span class="v mono">{{ task.engine || '—' }}</span></div>
         <div class="row"><span class="k">{{ lang === 'en' ? 'progress' : '进度' }}</span><span class="v num">{{ taskPercent(task) }}</span></div>
         <div class="bar"><span :style="{ width: taskPercent(task) === '—' ? '0%' : taskPercent(task) }"></span></div>
         <div class="row"><span class="k">{{ lang === 'en' ? 'elapsed' : '已用时' }}</span><span class="v num">{{ fmtElapsed(task.elapsedMs) }}</span></div>
         <div class="row"><span class="k">{{ lang === 'en' ? 'eta' : '预计剩余' }}</span><span class="v num">{{ taskEta(task) }}</span></div>
+        <div v-if="cancelErrors[task.runId]" class="cancel-error mono">
+          {{ lang === 'en' ? 'stop failed: ' : '中断失败：' }}{{ cancelErrors[task.runId] }}
+        </div>
       </div>
     </div>
     </template>
@@ -362,6 +401,20 @@ function taskEta(task: ActiveTask): string {
 .cancel:hover {
   border-color: var(--bad);
   color: var(--bad);
+}
+
+.cancel:disabled {
+  cursor: wait;
+  border-color: var(--warn);
+  color: var(--warn);
+  opacity: 0.8;
+}
+
+.cancel-error {
+  margin-top: 4px;
+  color: var(--bad);
+  font-size: 9px;
+  overflow-wrap: anywhere;
 }
 
 .bar {

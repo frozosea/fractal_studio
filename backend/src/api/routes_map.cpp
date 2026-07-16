@@ -640,7 +640,9 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
             {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
             {"details", Json::object()},
         }.dump());
-        std::thread([execute]() mutable {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
             try {
                 (void)execute();
             } catch (...) {}

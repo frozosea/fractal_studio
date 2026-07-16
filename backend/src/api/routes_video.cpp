@@ -1906,6 +1906,10 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     mp.rotation_deg = std::isfinite(rotationDeg) ? rotationDeg : 0.0;
 
     auto run = runner.createRun("zoom-video", body);
+    const auto cancelToken = runner.cancelToken(run.id);
+    mp.should_cancel = [cancelToken]() {
+        return cancelToken->load(std::memory_order_relaxed);
+    };
     ResourceManager::Lease videoLeaseRaw;
     std::string conflictLock, activeRunId;
     if (!resourceManager().tryAcquire(run.id, "video_export", {"video_export", "cuda_heavy", "cpu_heavy"}, videoLeaseRaw, conflictLock, activeRunId)) {
@@ -1951,9 +1955,10 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
             j.value("cudaWarp", true),
             &warpMethod,
             &warpStats,
-            [&]() { return runner.isCancelRequested(run.id); },
+            [cancelToken]() { return cancelToken->load(std::memory_order_relaxed); },
             resolveVideoEncodeOptions(j, finalImg)
         );
+        if (cancelToken->load(std::memory_order_relaxed)) throw std::runtime_error("cancelled");
         const auto t1 = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
         Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
@@ -2435,6 +2440,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const bool lnMapStatsReused = previewEqualizationOverride.has_value() && lnMapColorMode == "hist_eq";
 
     auto run = runner.createRun("video-export", body);
+    const auto cancelToken = runner.cancelToken(run.id);
     ResourceManager::Lease videoLeaseRaw;
     std::string conflictLock, activeRunId;
     if (!resourceManager().tryAcquire(run.id, "video_export", {"video_export", "cuda_heavy", "cpu_heavy"}, videoLeaseRaw, conflictLock, activeRunId)) {
@@ -2481,6 +2487,9 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         mp.engine     = "auto";
         mp.scalar_type = "auto";
         mp.rotation_deg = rotationDeg;
+        mp.should_cancel = [cancelToken]() {
+            return cancelToken->load(std::memory_order_relaxed);
+        };
 
         // Fast mode: render the final frame with fp32 perturbation deltas while
         // safely above the fp32 depth floor (~1e-30; see perturbation.hpp).
@@ -2587,6 +2596,9 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 lp.fast_validation_max_mismatch_ratio = lnMapFastValidationMaxMismatchRatio;
                 lp.fast_validation_max_p99_iter_delta = lnMapFastValidationMaxP99IterDelta;
                 lp.fast_validation_max_mean_color_delta = lnMapFastValidationMaxMeanColorDelta;
+                lp.should_cancel = [cancelToken]() {
+                    return cancelToken->load(std::memory_order_relaxed);
+                };
                 return lp;
             };
 
@@ -2602,7 +2614,6 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 throwIfCancelled(runner, run.id);
                 compute::LnMapParams eqParams = makeLnParams(stripPlan.heightT, 0.0);
                 auto reportStatsRows = [&](int rowsDone) {
-                    throwIfCancelled(runner, run.id);
                     const double octave = depth * static_cast<double>(rowsDone) / std::max(1, stripPlan.heightT);
                     setVideoProgress(runner, run.id, "ln_map_equalization", rowsDone, stripPlan.heightT, octave, depth,
                                      "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapPass", statsPass}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", stripPlan.heightT}, {"lnMapSegmentCount", stripPlan.segmentCount}});
@@ -2659,7 +2670,6 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                     segStats = compute::render_ln_map(
                         lp, segStrip,
                         [&](int rowsDone) {
-                            throwIfCancelled(runner, run.id);
                             const int currentRows = std::min(stripPlan.totalSegmentRows, rowBase + rowsDone);
                             const double local = std::clamp(
                                 static_cast<double>(rowsDone) / static_cast<double>(std::max(1, seg.heightT)),
@@ -2927,7 +2937,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 preferCudaWarp,
                 &warpMethod,
                 &warpStats,
-                [&]() { return runner.isCancelRequested(run.id); },
+                [cancelToken]() { return cancelToken->load(std::memory_order_relaxed); },
                 resolveVideoEncodeOptions(j, finalImg));
             throwIfCancelled(runner, run.id);
 
@@ -3157,13 +3167,15 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             lp.fast_validation_max_mismatch_ratio = lnMapFastValidationMaxMismatchRatio;
             lp.fast_validation_max_p99_iter_delta = lnMapFastValidationMaxP99IterDelta;
             lp.fast_validation_max_mean_color_delta = lnMapFastValidationMaxMeanColorDelta;
+            lp.should_cancel = [cancelToken]() {
+                return cancelToken->load(std::memory_order_relaxed);
+            };
             setVideoProgress(runner, run.id, "ln_map", 0, t, 0.0, depth,
                              "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", 0}, {"totalLnMapRows", t}});
             throwIfCancelled(runner, run.id);
             lnStats = compute::render_ln_map(
                 lp, strip,
                 [&](int rowsDone) {
-                    throwIfCancelled(runner, run.id);
                     const double octave = depth * static_cast<double>(rowsDone) / std::max(1, t);
                     setVideoProgress(runner, run.id, "ln_map", rowsDone, t, octave, depth,
                                      "", "", Json{{"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"currentLnMapRow", rowsDone}, {"totalLnMapRows", t}});
@@ -3264,7 +3276,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             preferCudaWarp,
             &warpMethod,
             &warpStats,
-            [&]() { return runner.isCancelRequested(run.id); },
+            [cancelToken]() { return cancelToken->load(std::memory_order_relaxed); },
             resolveVideoEncodeOptions(j, finalImg)
         );
         throwIfCancelled(runner, run.id);
@@ -3398,7 +3410,9 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const bool background = j.value("background", true);
     if (background) {
         setVideoProgress(runner, run.id, "queued", 0, frameCount, 0.0, depth);
-        std::thread([execute]() mutable {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
             try {
                 (void)execute();
             } catch (...) {}
@@ -3710,6 +3724,7 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
     else if (metricStr == "envelope")  metric = compute::Metric::Envelope;
 
     auto run = runner.createRun("transition-video-export", body);
+    const auto cancelToken = runner.cancelToken(run.id);
     ResourceManager::Lease videoLeaseRaw;
     std::string conflictLock, activeRunId;
     if (!resourceManager().tryAcquire(run.id, "video_export", {"video_export", "cuda_heavy", "cpu_heavy"}, videoLeaseRaw, conflictLock, activeRunId)) {
@@ -3753,7 +3768,9 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
             tp.base.engine     = engineStr;
             tp.base.scalar_type = scalarStr;
             tp.base.rotation_deg = rotationDeg;
-            tp.base.should_cancel = [&runner, runId = run.id]() { return runner.isCancelRequested(runId); };
+            tp.base.should_cancel = [cancelToken]() {
+                return cancelToken->load(std::memory_order_relaxed);
+            };
             tp.theta           = thetaDeg * PI / 180.0;
             tp.from_variant    = fromV;
             tp.to_variant      = toV;
@@ -3881,6 +3898,12 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
             }
 
             const int rc = pclose(pipe);
+            if (cancelToken->load(std::memory_order_relaxed)) {
+                std::error_code ec;
+                std::filesystem::remove(tmpMp4, ec);
+                std::filesystem::remove(ffmpegErrTmp, ec);
+                throw std::runtime_error("cancelled");
+            }
             {
                 std::ifstream errIn(ffmpegErrTmp);
                 std::ostringstream ss; ss << errIn.rdbuf();
@@ -4018,7 +4041,9 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
         const double queuedEnd = animationMode == "zoom" ? zoomDepth : thetaEndDeg;
         setVideoProgress(runner, run.id, "queued", 0, frameCount, queuedStart, queuedEnd,
                          "", "", Json{{"animationMode", animationMode}, {"thetaDeg", thetaFixedDeg}});
-        std::thread([execute]() mutable {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
             try {
                 (void)execute();
             } catch (...) {}

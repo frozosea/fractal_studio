@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, onMounted, ref, watch, computed } from 'vue'
+import { inject, onMounted, onBeforeUnmount, ref, watch, computed } from 'vue'
 import MapCanvas from '../components/MapCanvas.vue'
 import SpecialPointList from '../components/SpecialPointList.vue'
 import TransitionLegEditor from '../components/TransitionLegEditor.vue'
@@ -1007,7 +1007,11 @@ const lnMapColdRender = ref(false)   // true only while computing the field (not
 const LN_PREVIEW_WIDTH_S = 256   // small res: cheap cold field, approximate equalization
 let lnPreviewDebounce: ReturnType<typeof setTimeout> | undefined
 let lnPreviewRerun = false
+let exportViewActive = true
 const exportJobId     = ref('')
+const exportCancelIntent = ref(false)
+const exportCancelling = ref(false)
+const exportJobKind = ref<'video' | 'transition'>('video')
 const exportProgress  = ref<RunProgress>({})
 const exportDepthDirty = ref(false)
 const transitionVideoMode = ref<TransitionVideoMode>('rotation')
@@ -1186,7 +1190,10 @@ function activeProgressStage(): string {
 }
 
 function exportStageOrder(): string[] {
-  if (transitionOn.value) return ['transition_preview', 'transition_render']
+  const transitionJob = (exportBusy.value || !!exportJobId.value)
+    ? exportJobKind.value === 'transition'
+    : transitionOn.value
+  if (transitionJob) return ['transition_preview', 'transition_render']
   return exportShowsSeparateLnMapPass.value
     ? ['final_frame', 'ln_map_equalization', 'ln_map_render', 'video_warp_encode']
     : ['final_frame', 'ln_map', 'video_warp_encode']
@@ -1360,6 +1367,10 @@ function onExportDepthInput() {
 }
 
 function openExportModal() {
+  if (exportBusy.value) {
+    exportModalOpen.value = true
+    return
+  }
   exportDepthDirty.value = false
   syncExportDepthToCurrentView()
   exportModalOpen.value = true
@@ -1369,7 +1380,50 @@ function openExportModal() {
   exportQueuedResult.value = null
   exportPreviewResult.value = null
   exportJobId.value = ''
+  exportCancelIntent.value = false
+  exportCancelling.value = false
   exportProgress.value = {}
+}
+
+function dismissExportModal() {
+  exportModalOpen.value = false
+}
+
+async function sendExportCancellation(runId: string) {
+  if (!runId || exportCancelling.value) return
+  exportCancelling.value = true
+  exportStatus.value = lang.value === 'en' ? 'stopping…' : '正在中断…'
+  const stillOwnsActiveJob = () => exportBusy.value && exportJobId.value === runId
+  try {
+    const result = await api.cancelRun(runId)
+    if (!stillOwnsActiveJob()) return
+    if (!result.cancelRequested) {
+      exportCancelIntent.value = false
+      exportStatus.value = result.status === 'completed'
+        ? (lang.value === 'en' ? 'already completed' : '任务已完成')
+        : (lang.value === 'en' ? `cannot stop: ${result.status}` : `无法中断：${result.status}`)
+    }
+  } catch (e: any) {
+    if (!stillOwnsActiveJob()) return
+    exportCancelIntent.value = false
+    exportStatus.value = (lang.value === 'en' ? 'stop failed: ' : '中断失败：') + (e?.data?.error || e?.message || e)
+  } finally {
+    if (!exportBusy.value || exportJobId.value === runId) exportCancelling.value = false
+  }
+}
+
+function cancelOrDismissExport() {
+  if (!exportBusy.value) {
+    exportModalOpen.value = false
+    return
+  }
+  if (exportCancelIntent.value) return
+  exportCancelIntent.value = true
+  exportStatus.value = lang.value === 'en' ? 'stop requested…' : '已请求中断…'
+  // The background start request normally returns quickly, but a stop can be
+  // clicked before its run id arrives. Keep the intent and send it as soon as
+  // runExport receives that id so the late response cannot orphan a job.
+  if (exportJobId.value) void sendExportCancellation(exportJobId.value)
 }
 
 function videoRequestBase() {
@@ -1496,19 +1550,26 @@ function scheduleLnMapPreview() {
 }
 
 async function runExport() {
+  if (exportBusy.value) return
+  const transitionJob = transitionOn.value
   exportBusy.value   = true
+  exportJobKind.value = transitionJob ? 'transition' : 'video'
   exportStatus.value = lang.value === 'en' ? 'queued…' : '排队中…'
   exportResult.value = null
   exportQueuedResult.value = null
+  exportJobId.value = ''
+  exportCancelIntent.value = false
+  exportCancelling.value = false
   exportProgress.value = {}
   try {
-    if (transitionOn.value) {
+    if (transitionJob) {
       exportQueuedResult.value = null
       const resp = await api.transitionVideoExport(transitionVideoRequestBase())
       exportJobId.value = resp.runId
-      exportStatus.value = transitionVideoMode.value === 'zoom'
-        ? `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s · ${lang.value === 'en' ? 'zoom depth' : 'zoom 深度'} ${(resp.depthOctaves ?? exportDepth.value).toFixed(2)}`
+      exportStatus.value = resp.animationMode === 'zoom'
+        ? `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s · ${lang.value === 'en' ? 'zoom depth' : 'zoom 深度'} ${(resp.depthOctaves ?? 0).toFixed(2)}`
         : `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s · θ ${resp.thetaStartDeg}°→${resp.thetaEndDeg}°`
+      if (exportCancelIntent.value) await sendExportCancellation(resp.runId)
       await pollVideoExport(resp as any)
     } else {
       const req: Record<string, any> = { ...videoRequestBase() }
@@ -1516,12 +1577,15 @@ async function runExport() {
       exportQueuedResult.value = resp
       exportJobId.value = resp.runId
       exportStatus.value = `${resp.runId} · ${resp.frameCount} ${lang.value === 'en' ? 'frames' : '帧'} · ${resp.durationSec.toFixed(2)}s`
+      if (exportCancelIntent.value) await sendExportCancellation(resp.runId)
       await pollVideoExport(resp)
     }
   } catch (e: any) {
     exportStatus.value = (lang.value === 'en' ? 'failed: ' : '失败：') + (e?.data?.error || e?.message || e)
   } finally {
     exportBusy.value = false
+    exportCancelIntent.value = false
+    exportCancelling.value = false
   }
 }
 
@@ -1536,10 +1600,28 @@ function artifactByName(status: RunStatusResponse, name: string) {
 }
 
 async function pollVideoExport(initial: VideoExportResponse) {
+  let pollFailures = 0
   for (;;) {
+    if (!exportViewActive) return
     await new Promise(resolve => setTimeout(resolve, 700))
-    const status = await api.runStatus(initial.runId)
+    if (!exportViewActive) return
+    let status: RunStatusResponse
+    try {
+      status = await api.runStatus(initial.runId)
+      if (!exportViewActive) return
+      pollFailures = 0
+    } catch (e: any) {
+      if (!exportViewActive) return
+      pollFailures += 1
+      const retry = Math.min(10, pollFailures)
+      exportStatus.value = (lang.value === 'en' ? 'status connection lost; still tracking' : '状态连接中断，仍在跟踪') + ` · ${retry}`
+      continue
+    }
     exportProgress.value = status.progress || {}
+    if (status.cancelRequested) {
+      exportCancelIntent.value = true
+      exportStatus.value = lang.value === 'en' ? 'stopping…' : '正在中断…'
+    }
     if (status.status === 'failed') {
       const msg = status.progress?.errorMessage || (lang.value === 'en' ? 'video export failed' : '视频导出失败')
       exportStatus.value = `${lang.value === 'en' ? 'failed: ' : '失败：'}${status.progress?.failedStage || status.progress?.stage || 'video_export'} · ${msg}`
@@ -1591,6 +1673,11 @@ async function pollVideoExport(initial: VideoExportResponse) {
     return
   }
 }
+
+onBeforeUnmount(() => {
+  exportViewActive = false
+  if (lnPreviewDebounce) clearTimeout(lnPreviewDebounce)
+})
 </script>
 
 <template>
@@ -2078,7 +2165,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
 
     <!-- ── Unified video export modal ───────────────────────────────────── -->
     <Teleport to="body">
-      <div v-if="exportModalOpen" class="modal-backdrop" @click.self="exportModalOpen = false">
+      <div v-if="exportModalOpen" class="modal-backdrop" @click.self="dismissExportModal">
         <div class="modal" :class="{ 'modal-with-preview': lnMapPreviewUrl }">
           <div class="modal-main">
           <div class="modal-title">
@@ -2225,7 +2312,14 @@ async function pollVideoExport(initial: VideoExportResponse) {
             </div>
           </div>
           <div class="modal-footer">
-            <button @click="exportModalOpen = false" class="btn-cancel">{{ t('video_cancel') }}</button>
+            <button v-if="exportBusy" @click="dismissExportModal" class="btn-cancel">
+              {{ lang === 'en' ? 'close' : '关闭' }}
+            </button>
+            <button @click="cancelOrDismissExport" :disabled="exportCancelIntent" class="btn-cancel">
+              {{ exportBusy
+                ? (exportCancelIntent ? (lang === 'en' ? 'stopping…' : '中断中…') : (lang === 'en' ? 'stop' : '中断'))
+                : t('video_cancel') }}
+            </button>
             <button v-if="!transitionOn" @click="runLnMapPreview" :disabled="exportBusy || exportPreviewBusy || lnMapPreviewBusy" class="btn-preview">
               {{ lnMapPreviewBusy ? t('loading') : (lang === 'en' ? 'ln-map preview' : 'ln-map 预览') }}
             </button>
@@ -2242,7 +2336,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
           </div>
           <div v-if="exportPreviewStatus" class="modal-status mono">{{ exportPreviewStatus }}</div>
           <div v-if="exportStatus" class="modal-status mono">{{ exportStatus }}</div>
-          <div v-if="(exportBusy || exportJobId) && transitionOn" class="progress-stack">
+          <div v-if="(exportBusy || exportJobId) && exportJobKind === 'transition'" class="progress-stack">
             <div class="progress-row">
               <span>{{ lang === 'en' ? 'preview' : '预览' }}</span>
               <progress :value="progressRatio('transition_preview')" max="1"></progress>
@@ -2252,7 +2346,7 @@ async function pollVideoExport(initial: VideoExportResponse) {
               <progress :value="progressRatio('transition_render')" max="1"></progress>
             </div>
           </div>
-          <div v-if="(exportBusy || exportJobId) && !transitionOn" class="progress-stack">
+          <div v-if="(exportBusy || exportJobId) && exportJobKind === 'video'" class="progress-stack">
             <div class="progress-row">
               <span>{{ lang === 'en' ? 'final' : '终帧' }}</span>
               <progress :value="progressRatio('final_frame')" max="1"></progress>
