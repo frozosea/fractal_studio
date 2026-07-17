@@ -313,6 +313,20 @@ const EXPORT_PRESETS: ExportPreset[] = [
   { key: 'phone_qhd', label: { en: 'Phone 9:16 QHD', zh: '手机 9:16 QHD' },  width: 1440, height: 2560 },
 ]
 
+const PNG_EXPORT_PRESETS: ExportPreset[] = [
+  ...EXPORT_PRESETS,
+  { key: 'square_2k',     label: { en: 'Square 1:1',       zh: '方图 1:1' },       width: 2048, height: 2048 },
+  { key: 'square_4k',     label: { en: 'Square 1:1 4K',    zh: '方图 1:1 4K' },    width: 4096, height: 4096 },
+  { key: 'photo_3_2',     label: { en: 'Photo 3:2',        zh: '照片 3:2' },       width: 2400, height: 1600 },
+  { key: 'photo_3_2_hi',  label: { en: 'Photo 3:2 High',   zh: '照片 3:2 高' },    width: 3600, height: 2400 },
+  { key: 'classic_4_3',   label: { en: 'Classic 4:3',      zh: '经典 4:3' },       width: 2048, height: 1536 },
+  { key: 'print_5_4',     label: { en: 'Print 5:4',        zh: '印刷 5:4' },       width: 2560, height: 2048 },
+  { key: 'portrait_4_5',  label: { en: 'Portrait 4:5',     zh: '竖图 4:5' },       width: 2160, height: 2700 },
+  { key: 'tablet_3_4',    label: { en: 'Tablet 3:4',       zh: '平板 3:4' },       width: 1536, height: 2048 },
+  { key: 'poster_2_3',    label: { en: 'Poster 2:3',       zh: '海报 2:3' },       width: 2400, height: 3600 },
+  { key: 'superwide_32_9', label: { en: 'Superwide 32:9',  zh: '超宽 32:9' },      width: 5120, height: 1440 },
+]
+
 // ── Left / Mandelbrot viewport ────────────────────────────────────────────────
 import { type BigDec, bdFromString, bdFromNumber, bdAddNumber, bdSub, bdToString, bdToNumber } from '../bigdec'
 
@@ -915,7 +929,7 @@ const copiedCliTarget = ref<'png' | 'video' | 'error-png' | 'error-video' | null
 let copyResetTimer: number | undefined
 
 const pngPreset = computed(() =>
-  EXPORT_PRESETS.find(p => p.key === pngPresetKey.value) ?? EXPORT_PRESETS[0]
+  PNG_EXPORT_PRESETS.find(p => p.key === pngPresetKey.value) ?? PNG_EXPORT_PRESETS[0]
 )
 const videoPreset = computed(() =>
   EXPORT_PRESETS.find(p => p.key === videoPresetKey.value) ?? EXPORT_PRESETS[0]
@@ -1951,9 +1965,9 @@ onBeforeUnmount(() => {
       <div class="spacer"></div>
 
       <div class="group export-preset-group">
-        <label>{{ lang === 'en' ? 'Wallpaper' : '壁纸尺寸' }}</label>
+        <label>{{ lang === 'en' ? 'Image size' : '图片尺寸' }}</label>
         <select v-model="pngPresetKey">
-          <option v-for="p in EXPORT_PRESETS" :key="p.key" :value="p.key">
+          <option v-for="p in PNG_EXPORT_PRESETS" :key="p.key" :value="p.key">
             {{ p.label[lang] }} · {{ p.width }}×{{ p.height }}
           </option>
         </select>
