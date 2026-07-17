@@ -14,6 +14,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 namespace fsd::compute {
 
@@ -25,24 +26,26 @@ bool perturb_avx2_available() noexcept;
 // Outputs per pixel: escape iteration (max_iter when the pixel never
 // escapes) and |z|^2 at escape (0 when it never escapes).
 // Requires start_len >= 2 and k_len >= 2.
-void perturb_iterate_batch_avx2(
+bool perturb_iterate_batch_avx2(
     const double* tab_re, const double* tab_im,
     int start_off, int start_len,
     int k_off, int k_len,
     const double* dz0_re, const double* dz0_im,
     const double* dc_re, const double* dc_im,
     int count, int max_iter, double bail2,
-    int32_t* out_iter, double* out_mag2) noexcept;
+    int32_t* out_iter, double* out_mag2,
+    const std::function<bool()>* should_cancel = nullptr) noexcept;
 
 // fp32-delta variant: eight lanes per vector against a float reference
 // table (the driver downconverts the double orbit once per render).
-void perturb_iterate_batch_avx2_fp32(
+bool perturb_iterate_batch_avx2_fp32(
     const float* tab_re, const float* tab_im,
     int start_off, int start_len,
     int k_off, int k_len,
     const float* dz0_re, const float* dz0_im,
     const float* dc_re, const float* dc_im,
     int count, int max_iter, float bail2,
-    int32_t* out_iter, float* out_mag2) noexcept;
+    int32_t* out_iter, float* out_mag2,
+    const std::function<bool()>* should_cancel = nullptr) noexcept;
 
 } // namespace fsd::compute

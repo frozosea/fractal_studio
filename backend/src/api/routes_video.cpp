@@ -49,7 +49,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
@@ -71,6 +73,12 @@
 #include <utility>
 #include <vector>
 
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 namespace fsd {
 
 namespace {
@@ -79,6 +87,152 @@ constexpr double TAU     = 6.283185307179586;
 constexpr double PI      = 3.141592653589793;
 constexpr double LN_TWO  = 0.6931471805599453;
 constexpr double LN_FOUR = 1.3862943611198906;
+
+// A cancellable stdin pipe for ffmpeg. Unlike popen/pclose this retains the
+// child process group, uses non-blocking writes, and can terminate an encoder
+// that is stalled or flushing after cancellation.
+class ManagedEncoderPipe {
+public:
+    explicit ManagedEncoderPipe(const std::string& command) {
+        int fds[2] = {-1, -1};
+        if (::pipe(fds) != 0) return;
+        pid_ = ::fork();
+        if (pid_ == 0) {
+            ::setpgid(0, 0);
+            ::dup2(fds[0], STDIN_FILENO);
+            ::close(fds[0]);
+            ::close(fds[1]);
+            ::execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
+            ::_exit(127);
+        }
+        ::close(fds[0]);
+        if (pid_ < 0) {
+            ::close(fds[1]);
+            pid_ = -1;
+            return;
+        }
+        fd_ = fds[1];
+        ::setpgid(pid_, pid_);
+        const int flags = ::fcntl(fd_, F_GETFL, 0);
+        if (flags >= 0) ::fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    ManagedEncoderPipe(const ManagedEncoderPipe&) = delete;
+    ManagedEncoderPipe& operator=(const ManagedEncoderPipe&) = delete;
+
+    ~ManagedEncoderPipe() {
+        if (pid_ > 0) terminate();
+        else closeInput();
+    }
+
+    explicit operator bool() const noexcept { return pid_ > 0 && fd_ >= 0; }
+
+    bool writeAll(
+        const unsigned char* data,
+        size_t bytes,
+        const std::function<bool()>& shouldCancel)
+    {
+        size_t offset = 0;
+        while (offset < bytes) {
+            if (shouldCancel && shouldCancel()) {
+                terminate();
+                throw std::runtime_error("cancelled");
+            }
+            const ssize_t written = ::write(fd_, data + offset, bytes - offset);
+            if (written > 0) {
+                offset += static_cast<size_t>(written);
+                continue;
+            }
+            if (written < 0 && errno == EINTR) continue;
+            if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                pollfd pfd{fd_, POLLOUT, 0};
+                const int rc = ::poll(&pfd, 1, 50);
+                if (rc < 0 && errno == EINTR) continue;
+                if (rc < 0 || (rc > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))) {
+                    return false;
+                }
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    int finish(const std::function<bool()>& shouldCancel) {
+        closeInput();
+        for (;;) {
+            int status = 0;
+            const pid_t rc = ::waitpid(pid_, &status, WNOHANG);
+            if (rc == pid_) {
+                pid_ = -1;
+                if (WIFEXITED(status)) return WEXITSTATUS(status);
+                return 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+            }
+            if (rc < 0 && errno == EINTR) continue;
+            if (rc < 0) {
+                pid_ = -1;
+                return -1;
+            }
+            if (shouldCancel && shouldCancel()) {
+                terminate();
+                throw std::runtime_error("cancelled");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+
+    void terminate() noexcept {
+        closeInput();
+        if (pid_ <= 0) return;
+        const pid_t child = pid_;
+        ::kill(-child, SIGTERM);
+        ::kill(child, SIGTERM);
+        bool childReaped = false;
+        for (int i = 0; i < 25; ++i) {
+            if (!childReaped) {
+                int status = 0;
+                const pid_t rc = ::waitpid(child, &status, WNOHANG);
+                if (rc == child || (rc < 0 && errno != EINTR)) {
+                    childReaped = true;
+                }
+            }
+            errno = 0;
+            const bool groupAlive =
+                ::kill(-child, 0) == 0 || errno == EPERM;
+            if (childReaped && !groupAlive) {
+                pid_ = -1;
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        ::kill(-child, SIGKILL);
+        ::kill(child, SIGKILL);
+        if (!childReaped) {
+            int status = 0;
+            while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+        }
+        // The shell can exit just before its encoder grandchild.  Do not
+        // publish a terminal job state while anything in that process group
+        // is still consuming CPU/GPU.
+        for (int i = 0; i < 25; ++i) {
+            errno = 0;
+            if (::kill(-child, 0) != 0 && errno != EPERM) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        pid_ = -1;
+    }
+
+private:
+    void closeInput() noexcept {
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+
+    int fd_ = -1;
+    pid_t pid_ = -1;
+};
 
 compute::Variant requireBuiltinVideoVariant(const std::string& variant) {
     compute::Variant resolved;
@@ -1343,6 +1497,7 @@ static std::string encodeZoomVideoFrames(
     std::string* ffmpeg_stderr_out,
     std::string* encoder_out,
     VideoWarpStats* stats_out,
+    const std::function<bool()>& shouldCancel,
     const VideoEncodeOptions& enc = {}
 ) {
     if (encoder_out) *encoder_out = "";
@@ -1428,20 +1583,21 @@ static std::string encodeZoomVideoFrames(
         "\" 2>\"" + ffmpegErrTmp.string() + "\""});
 
     for (const auto& [encoderName, ffmpegCmd] : ffmpegCmds) {
-        if (FILE* pipe = popen(ffmpegCmd.c_str(), "w")) {
+        ManagedEncoderPipe pipe(ffmpegCmd);
+        if (pipe) {
             bool ok = true;
             VideoWarpStats attemptStats = baseStats;
             attemptStats.encoder = encoderName;
             try {
                 renderFrames([&](const cv::Mat& rendered) {
                     const size_t bytes = static_cast<size_t>(rendered.rows) * rendered.step;
-                    if (std::fwrite(rendered.data, 1, bytes, pipe) != bytes) {
+                    if (!pipe.writeAll(rendered.data, bytes, shouldCancel)) {
                         ok = false;
                         throw std::runtime_error("ffmpeg pipe write failed");
                     }
                 }, attemptStats);
             } catch (const std::exception& e) {
-                pclose(pipe);
+                pipe.terminate();
                 std::error_code ec;
                 std::filesystem::remove(tmpMp4, ec);
                 std::filesystem::remove(tmpAvi, ec);
@@ -1451,7 +1607,7 @@ static std::string encodeZoomVideoFrames(
                 }
                 throw;
             } catch (...) {
-                pclose(pipe);
+                pipe.terminate();
                 std::error_code ec;
                 std::filesystem::remove(tmpMp4, ec);
                 std::filesystem::remove(tmpAvi, ec);
@@ -1459,7 +1615,7 @@ static std::string encodeZoomVideoFrames(
                 throw;
             }
             const auto closeStart = std::chrono::steady_clock::now();
-            const int rc = pclose(pipe);
+            const int rc = pipe.finish(shouldCancel);
             const auto closeEnd = std::chrono::steady_clock::now();
             attemptStats.encodeCloseMs = std::chrono::duration<double, std::milli>(closeEnd - closeStart).count();
             if (ffmpeg_stderr_out) {
@@ -1594,7 +1750,7 @@ static std::string generateZoomVideo(
 
     return encodeZoomVideoFrames(
         W, H, fps, outDir, baseName, renderFrames, baseStats,
-        ffmpeg_stderr_out, encoder_out, stats_out, encodeOptions);
+        ffmpeg_stderr_out, encoder_out, stats_out, should_cancel, encodeOptions);
 }
 
 static std::string generateZoomVideoSequence(
@@ -1655,7 +1811,7 @@ static std::string generateZoomVideoSequence(
 
     return encodeZoomVideoFrames(
         W, H, fps, outDir, baseName, renderFrames, baseStats,
-        ffmpeg_stderr_out, encoder_out, stats_out, encodeOptions);
+        ffmpeg_stderr_out, encoder_out, stats_out, should_cancel, encodeOptions);
 }
 
 struct LnMapLookup {
@@ -1788,6 +1944,7 @@ void setVideoProgress(
     const std::string& errorMessage = "",
     Json details = Json::object()
 ) {
+    const bool terminalStage = stage == "cancelled" || stage == "failed";
     const double percent = total > 0 ? (100.0 * static_cast<double>(current) / static_cast<double>(total)) : 0.0;
     const long long elapsedMs = runner.runElapsedMs(runId);
     const long long estimatedRemainingMs = estimateStageRemainingMs(runId, stage, current, total);
@@ -1799,7 +1956,7 @@ void setVideoProgress(
         {"percent", percent},
         {"elapsedMs", elapsedMs},
         {"estimatedRemainingMs", estimatedRemainingMs >= 0 ? Json(estimatedRemainingMs) : Json(nullptr)},
-        {"cancelable", true},
+        {"cancelable", !terminalStage},
         {"resourceLocks", Json::array({"video_export", "cuda_heavy", "cpu_heavy"})},
         {"depthOctave", depthCurrent},
         {"totalDepthOctaves", depthTotal},
@@ -1810,6 +1967,7 @@ void setVideoProgress(
     for (const char* key : {"engine", "scalar", "finalFrameEngine", "finalFrameScalar", "lnMapEngine", "lnMapScalar", "lnMapMode", "lnMapColorMode", "lnMapPass", "lnMapStatsSource", "lnMapStatsReused", "lnMapLayerSummary", "lnMapValidationSummary", "currentLnMapSegment", "lnMapSegmentCount", "lnMapSegmentHeight", "warpMethod", "encoder", "currentFrame", "totalFrames", "currentLnMapRow", "totalLnMapRows", "warpTotalMs", "copyTotalMs", "writeTotalMs", "encodeCloseMs", "avgWarpMs", "avgCopyMs", "avgWriteMs", "rawVideoBytes", "stripWidth", "stripHeight", "opencvRemapSafe"}) {
         if (details.contains(key)) j[key] = details[key];
     }
+    if (terminalStage) runner.setCancelable(runId, false);
     runner.setProgress(runId, j.dump());
 }
 
@@ -3844,7 +4002,7 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
 
         for (const auto& [encoderName, ffmpegCmd] : ffmpegCmds) {
             if (encodingDone) break;
-            FILE* pipe = popen(ffmpegCmd.c_str(), "w");
+            ManagedEncoderPipe pipe(ffmpegCmd);
             if (!pipe) continue;
 
             bool pipeOk = true;
@@ -3867,7 +4025,12 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
                     compute::render_transition(tp, frame);
 
                     const size_t bytes = static_cast<size_t>(frame.rows) * frame.step;
-                    if (std::fwrite(frame.data, 1, bytes, pipe) != bytes) {
+                    if (!pipe.writeAll(
+                            frame.data,
+                            bytes,
+                            [cancelToken]() {
+                                return cancelToken->load(std::memory_order_relaxed);
+                            })) {
                         pipeOk = false;
                         throw std::runtime_error("ffmpeg pipe write failed");
                     }
@@ -3881,7 +4044,7 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
                                           {"depthOctave", progressValue}});
                 }
             } catch (const std::exception& e) {
-                pclose(pipe);
+                pipe.terminate();
                 std::error_code ec;
                 std::filesystem::remove(tmpMp4, ec);
                 std::filesystem::remove(ffmpegErrTmp, ec);
@@ -3890,14 +4053,16 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
                 }
                 throw;
             } catch (...) {
-                pclose(pipe);
+                pipe.terminate();
                 std::error_code ec;
                 std::filesystem::remove(tmpMp4, ec);
                 std::filesystem::remove(ffmpegErrTmp, ec);
                 throw;
             }
 
-            const int rc = pclose(pipe);
+            const int rc = pipe.finish([cancelToken]() {
+                return cancelToken->load(std::memory_order_relaxed);
+            });
             if (cancelToken->load(std::memory_order_relaxed)) {
                 std::error_code ec;
                 std::filesystem::remove(tmpMp4, ec);

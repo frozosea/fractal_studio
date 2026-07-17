@@ -1252,6 +1252,22 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
             rendered = renderMapImage(repoRoot, in, shouldCancel);
             throwIfMapRenderCancelled(shouldCancel);
             imagePath = std::filesystem::path(run.outputDir) / rendered.artifactName;
+            if (in.stillExport) {
+                runner.setCancelable(run.id, false);
+                runner.setProgress(run.id, Json{
+                    {"taskType", "map_export"},
+                    {"stage", "png_encode"},
+                    {"current", 0},
+                    {"total", 1},
+                    {"percent", 99.0},
+                    {"engine", rendered.engineUsed},
+                    {"scalar", rendered.scalarUsed},
+                    {"elapsedMs", runner.runElapsedMs(run.id)},
+                    {"cancelable", false},
+                    {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
+                    {"details", Json::object()},
+                }.dump());
+            }
             compute::write_png(imagePath.string(), rendered.image);
             runner.addArtifact(run.id, Artifact{"map", imagePath.string(), "image"});
             if (in.stillExport) {

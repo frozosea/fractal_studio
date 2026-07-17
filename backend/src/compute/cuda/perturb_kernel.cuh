@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 namespace fsd_cuda {
 
@@ -53,6 +54,11 @@ struct CudaPerturbParams {
     int tab_len = 0;
     int start_off = 0, start_len = 0;      // start_len >= 2
     int k_off = 0, k_len = 0;              // k_len >= 2
+
+    // Optional host-side cancellation probe. Long renders are split into row
+    // bands while device buffers/reference tables stay resident, so polling
+    // does not add repeated upload/allocation cost.
+    const std::function<bool()>* should_cancel = nullptr;
 };
 
 // Renders the escape field: per-pixel iteration counts (== iterations when

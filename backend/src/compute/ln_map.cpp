@@ -2591,14 +2591,16 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
         else want = "openmp";
     }
     [[maybe_unused]] const bool wants_cuda = want == "cuda" || want == "hybrid";
-    using PerturbBatchFn = void (*)(
+    using PerturbBatchFn = bool (*)(
         const double*, const double*, int, int, int, int,
         const double*, const double*, const double*, const double*,
-        int, int, double, int32_t*, double*) noexcept;
-    using PerturbBatchFn32 = void (*)(
+        int, int, double, int32_t*, double*,
+        const std::function<bool()>*) noexcept;
+    using PerturbBatchFn32 = bool (*)(
         const float*, const float*, int, int, int, int,
         const float*, const float*, const float*, const float*,
-        int, int, float, int32_t*, float*) noexcept;
+        int, int, float, int32_t*, float*,
+        const std::function<bool()>*) noexcept;
     // Best CPU batch kernel — the primary path for the AVX engines and the
     // fallback when a CUDA render fails. batch32 handles the fp32-delta rows
     // of fast mode with the same SIMD tier.
@@ -2780,10 +2782,12 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
                                 bdc_im32[static_cast<size_t>(x)] = static_cast<float>(off_im);
                             }
                         }
-                        batch32(tab32_re, tab32_im, start_off, start_len, k_off, Klen,
-                                bdz_re32.data(), bdz_im32.data(), bdc_re32.data(), bdc_im32.data(),
-                                S, max_iter, static_cast<float>(bail2),
-                                b_iter.data(), b_mag232.data());
+                        const bool batch_completed = batch32(
+                            tab32_re, tab32_im, start_off, start_len, k_off, Klen,
+                            bdz_re32.data(), bdz_im32.data(), bdc_re32.data(), bdc_im32.data(),
+                            S, max_iter, static_cast<float>(bail2),
+                            b_iter.data(), b_mag232.data(), &p.should_cancel);
+                        if (!batch_completed) continue;
                         for (int x = 0; x < S; ++x) {
                             const int32_t it = b_iter[static_cast<size_t>(x)];
                             if (it < max_iter) row_all_interior = false;
@@ -2805,9 +2809,12 @@ static std::string run_ln_perturbation_field(const LnMapParams& p,
                                 bdc_im[static_cast<size_t>(x)] = off_im;
                             }
                         }
-                        batch(tab_re, tab_im, start_off, start_len, k_off, Klen,
-                              bdz_re.data(), bdz_im.data(), bdc_re.data(), bdc_im.data(),
-                              S, max_iter, bail2, b_iter.data(), b_mag2.data());
+                        const bool batch_completed = batch(
+                            tab_re, tab_im, start_off, start_len, k_off, Klen,
+                            bdz_re.data(), bdz_im.data(), bdc_re.data(), bdc_im.data(),
+                            S, max_iter, bail2, b_iter.data(), b_mag2.data(),
+                            &p.should_cancel);
+                        if (!batch_completed) continue;
                         for (int x = 0; x < S; ++x) {
                             const int32_t it = b_iter[static_cast<size_t>(x)];
                             if (it < max_iter) row_all_interior = false;

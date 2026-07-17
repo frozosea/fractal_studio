@@ -752,16 +752,21 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
     // The current CUDA perturbation launch only publishes a complete frame.
     // Progressive sessions need the CPU tile loop below so completed samples
     // can be exposed while the same render continues.
+    // Progressive sessions need tile publication from the CPU path. Ordinary
+    // cancellable CUDA work stays on-device and is launched in bounded row
+    // bands by cuda_render_perturb_field.
     [[maybe_unused]] const bool wants_cuda = !p.on_field_tile_done &&
         (want == "cuda" || want == "hybrid");
-    using BatchFn = void (*)(
+    using BatchFn = bool (*)(
         const double*, const double*, int, int, int, int,
         const double*, const double*, const double*, const double*,
-        int, int, double, int32_t*, double*) noexcept;
-    using BatchFn32 = void (*)(
+        int, int, double, int32_t*, double*,
+        const std::function<bool()>*) noexcept;
+    using BatchFn32 = bool (*)(
         const float*, const float*, int, int, int, int,
         const float*, const float*, const float*, const float*,
-        int, int, float, int32_t*, float*) noexcept;
+        int, int, float, int32_t*, float*,
+        const std::function<bool()>*) noexcept;
     // Min/max metrics run scalar-only: the batch kernels track escape state
     // per lane but not orbit extrema.
     const bool track_minmax = p.metric != Metric::Escape;
@@ -815,6 +820,7 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
         cp.tab_re = tab_re; cp.tab_im = tab_im; cp.tab_len = tab_len;
         cp.start_off = start_off; cp.start_len = start_len;
         cp.k_off = k_off; cp.k_len = Klen;
+        cp.should_cancel = p.should_cancel ? &p.should_cancel : nullptr;
         std::vector<uint32_t> iters(static_cast<size_t>(W) * H);
         std::vector<float> norms(static_cast<size_t>(W) * H);
         if (fsd_cuda::cuda_render_perturb_field(cp, iters.data(), norms.data(), nullptr)) {
@@ -829,6 +835,8 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
             if (p.on_field_tile_done) p.on_field_tile_done(0, 0, W, H);
             engine_used = "cuda";
             rendered = true;
+        } else if (map_render_cancel_requested(p)) {
+            throw std::runtime_error("cancelled");
         }
     }
 #endif
@@ -872,10 +880,9 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
 #endif
 
         constexpr int kBatchTileSize = 32;
-        // A progressive field exposes the same native-resolution samples as
-        // they complete.  Small tiles reduce both its first-preview latency
-        // and its cancellation bound; the non-session path keeps 32x32 tiles
-        // for its established batch throughput.
+        // Keep the throughput-oriented 32x32 batch for one-shot exports. A
+        // progressive field retains its small publication tiles; the AVX
+        // kernels poll inside long-lived lane groups in either case.
         const int tile_size = p.on_field_tile_done ? 8 : kBatchTileSize;
         const int tiles_x = (W + tile_size - 1) / tile_size;
         const int tiles_y = (H + tile_size - 1) / tile_size;
@@ -887,7 +894,7 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
             ? map_field_progressive_order(tiles_x, tiles_y, true)
             : std::vector<int>{};
         const PerturbPixelCancelProbe* pixel_cancel_probe =
-            p.on_field_tile_done && p.should_cancel ? &p.should_cancel : nullptr;
+            p.should_cancel ? &p.should_cancel : nullptr;
         std::atomic<bool> cancelled{false};
 
         #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 1)
@@ -948,20 +955,22 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
                             }
                         }
                     }
-                    batch32(tab32_re.data(), tab32_im.data(),
-                            start_off, start_len, k_off, Klen,
-                            bdz_re, bdz_im, bdc_re, bdc_im,
-                            cnt, max_iter, static_cast<float>(bail2),
-                            b_iter, b_mag2);
-
-                    int j = 0;
-                    for (int y = y0; y < y1; ++y) {
-                        for (int x = x0; x < x1; ++x, ++j) {
-                            PerturbPixel res;
-                            res.iter = b_iter[j];
-                            res.escaped = res.iter < max_iter;
-                            res.escape_mag2 = b_mag2[j];
-                            emit(static_cast<size_t>(y) * W + x, x, y, res);
+                    if (!batch32(tab32_re.data(), tab32_im.data(),
+                                 start_off, start_len, k_off, Klen,
+                                 bdz_re, bdz_im, bdc_re, bdc_im,
+                                 cnt, max_iter, static_cast<float>(bail2),
+                                 b_iter, b_mag2, pixel_cancel_probe)) {
+                        tile_cancelled = true;
+                    } else {
+                        int j = 0;
+                        for (int y = y0; y < y1; ++y) {
+                            for (int x = x0; x < x1; ++x, ++j) {
+                                PerturbPixel res;
+                                res.iter = b_iter[j];
+                                res.escaped = res.iter < max_iter;
+                                res.escape_mag2 = b_mag2[j];
+                                emit(static_cast<size_t>(y) * W + x, x, y, res);
+                            }
                         }
                     }
                 } else {
@@ -988,20 +997,26 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
                             }
                         }
                     }
-                    batch(tab_re, tab_im, start_off, start_len, k_off, Klen,
-                          bdz_re, bdz_im, bdc_re, bdc_im,
-                          cnt, max_iter, bail2, b_iter, b_mag2);
-
-                    int j = 0;
-                    for (int y = y0; y < y1; ++y) {
-                        for (int x = x0; x < x1; ++x, ++j) {
-                            PerturbPixel res;
-                            res.iter = b_iter[j];
-                            res.escaped = res.iter < max_iter;
-                            res.escape_mag2 = b_mag2[j];
-                            emit(static_cast<size_t>(y) * W + x, x, y, res);
+                    if (!batch(tab_re, tab_im, start_off, start_len, k_off, Klen,
+                               bdz_re, bdz_im, bdc_re, bdc_im,
+                               cnt, max_iter, bail2, b_iter, b_mag2,
+                               pixel_cancel_probe)) {
+                        tile_cancelled = true;
+                    } else {
+                        int j = 0;
+                        for (int y = y0; y < y1; ++y) {
+                            for (int x = x0; x < x1; ++x, ++j) {
+                                PerturbPixel res;
+                                res.iter = b_iter[j];
+                                res.escaped = res.iter < max_iter;
+                                res.escape_mag2 = b_mag2[j];
+                                emit(static_cast<size_t>(y) * W + x, x, y, res);
+                            }
                         }
                     }
+                }
+                if (tile_cancelled) {
+                    cancelled.store(true, std::memory_order_relaxed);
                 }
             } else {
                 for (int y = y0; y < y1 && !tile_cancelled; ++y) {

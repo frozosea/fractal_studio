@@ -817,7 +817,7 @@ MapStats render_transition_multi_field(const TransitionParams& p, FieldOutput& f
 // ── CUDA bridge ─────────────────────────────────────────────────────────────
 
 #if defined(HAS_CUDA_KERNEL)
-MapStats render_transition_cuda(const TransitionParams& p, FieldOutput& fo) {
+MapStats render_transition_cuda_single(const TransitionParams& p, FieldOutput& fo) {
     const auto& b = p.base;
     const int W = b.width, H = b.height;
     const size_t npx = static_cast<size_t>(W) * H;
@@ -893,6 +893,105 @@ MapStats render_transition_cuda(const TransitionParams& p, FieldOutput& fo) {
     fo.engine_used = s.engine_used;
     fo.elapsed_ms  = s.elapsed_ms;
     return s;
+}
+
+MapStats render_transition_cuda(const TransitionParams& p, FieldOutput& fo) {
+    // Cheap frames finish faster than the overhead of thousands of tiny CUDA
+    // launches and already provide a natural frame-boundary cancellation
+    // point (important for video throughput).  Scale tile size down only as
+    // the iteration cap makes a single launch capable of monopolising the
+    // device for a noticeable time.
+    if (!p.base.should_cancel || p.base.iterations <= 2048) {
+        return render_transition_cuda_single(p, fo);
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const MapParams& base = p.base;
+    const int W = base.width;
+    const int H = base.height;
+    const size_t npx = static_cast<size_t>(W) * static_cast<size_t>(H);
+    const int tileSize = p.base.iterations > 262144
+        ? 32
+        : (p.base.iterations > 32768 ? 64 : 256);
+
+    fo.width = W;
+    fo.height = H;
+    fo.metric = base.metric;
+    if (base.metric == Metric::Escape) {
+        fo.iter_u32.assign(npx, 0u);
+        fo.norm_f32.assign(npx, 0.0f);
+    } else {
+        fo.field_f64.assign(npx, 0.0);
+        fo.field_min = std::numeric_limits<double>::infinity();
+        fo.field_max = -std::numeric_limits<double>::infinity();
+    }
+
+    const double aspect = map_viewport_aspect(base);
+    const double spanRe = base.scale * aspect;
+    const double stepRe = spanRe / static_cast<double>(W);
+    const double stepIm = base.scale / static_cast<double>(H);
+    const double rotation = base.rotation_deg * PI / 180.0;
+    const double cosR = std::cos(rotation);
+    const double sinR = std::sin(rotation);
+    std::string scalarUsed;
+    std::string engineUsed;
+
+    for (int y = 0; y < H; y += tileSize) {
+        for (int x = 0; x < W; x += tileSize) {
+            if (transition_cancel_requested(p)) throw_transition_cancelled();
+            const int tw = std::min(tileSize, W - x);
+            const int th = std::min(tileSize, H - y);
+            const double dx = (static_cast<double>(x) + tw * 0.5 - W * 0.5) * stepRe;
+            const double dy = -(static_cast<double>(y) + th * 0.5 - H * 0.5) * stepIm;
+
+            TransitionParams tileParams = p;
+            tileParams.base.center_re = base.center_re + dx * cosR - dy * sinR;
+            tileParams.base.center_im = base.center_im + dx * sinR + dy * cosR;
+            tileParams.base.center_re_str.clear();
+            tileParams.base.center_im_str.clear();
+            tileParams.base.scale = th * stepIm;
+            tileParams.base.viewport_aspect =
+                (tw * stepRe) / std::max(std::numeric_limits<double>::min(), th * stepIm);
+            tileParams.base.width = tw;
+            tileParams.base.height = th;
+
+            FieldOutput tile;
+            const MapStats tileStats = render_transition_cuda_single(tileParams, tile);
+            if (transition_cancel_requested(p)) throw_transition_cancelled();
+            scalarUsed = tileStats.scalar_used;
+            engineUsed = tileStats.engine_used;
+
+            for (int row = 0; row < th; ++row) {
+                const size_t src = static_cast<size_t>(row) * static_cast<size_t>(tw);
+                const size_t dst = static_cast<size_t>(y + row) * static_cast<size_t>(W) +
+                                   static_cast<size_t>(x);
+                if (base.metric == Metric::Escape) {
+                    std::copy_n(tile.iter_u32.data() + src, static_cast<size_t>(tw),
+                                fo.iter_u32.data() + dst);
+                    std::copy_n(tile.norm_f32.data() + src, static_cast<size_t>(tw),
+                                fo.norm_f32.data() + dst);
+                } else {
+                    std::copy_n(tile.field_f64.data() + src, static_cast<size_t>(tw),
+                                fo.field_f64.data() + dst);
+                }
+            }
+            if (base.metric != Metric::Escape) {
+                fo.field_min = std::min(fo.field_min, tile.field_min);
+                fo.field_max = std::max(fo.field_max, tile.field_max);
+            }
+        }
+    }
+
+    const auto t1 = std::chrono::steady_clock::now();
+    MapStats stats;
+    stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    stats.pixel_count = W * H;
+    stats.scalar_used = scalarUsed;
+    stats.engine_used = engineUsed;
+    fo.scalar_used = scalarUsed;
+    fo.engine_used = engineUsed;
+    fo.elapsed_ms = stats.elapsed_ms;
+    return stats;
 }
 #endif
 

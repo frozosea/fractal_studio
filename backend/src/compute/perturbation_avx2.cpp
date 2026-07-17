@@ -29,16 +29,28 @@ inline __m256i blend_epi64(__m256i a, __m256i b, __m256d mask) {
         _mm256_castsi256_pd(a), _mm256_castsi256_pd(b), mask));
 }
 
+inline bool batch_cancel_requested(
+    const std::function<bool()>* should_cancel) noexcept
+{
+    if (should_cancel == nullptr || !*should_cancel) return false;
+    try {
+        return (*should_cancel)();
+    } catch (...) {
+        return true;
+    }
+}
+
 } // namespace
 
-void perturb_iterate_batch_avx2(
+bool perturb_iterate_batch_avx2(
     const double* tab_re, const double* tab_im,
     int start_off, int start_len,
     int k_off, int k_len,
     const double* dz0_re, const double* dz0_im,
     const double* dc_re, const double* dc_im,
     int count, int max_iter, double bail2,
-    int32_t* out_iter, double* out_mag2) noexcept
+    int32_t* out_iter, double* out_mag2,
+    const std::function<bool()>* should_cancel) noexcept
 {
     const __m256d vbail2 = _mm256_set1_pd(bail2);
     const __m256d vtwo   = _mm256_set1_pd(2.0);
@@ -48,6 +60,8 @@ void perturb_iterate_batch_avx2(
     const __m256i vklen1 = _mm256_set1_epi64x(static_cast<int64_t>(k_len) - 1);
 
     for (int i = 0; i < count; i += 4) {
+        if (i != 0 && (i & 63) == 0 &&
+            batch_cancel_requested(should_cancel)) return false;
         const int lanes = (count - i) < 4 ? (count - i) : 4;
 
         alignas(32) double b_dzr[4] = {0, 0, 0, 0};
@@ -78,6 +92,8 @@ void perturb_iterate_batch_avx2(
             _mm256_load_si256(reinterpret_cast<const __m256i*>(amask)));
 
         for (int n = 0; n < max_iter; ++n) {
+            if (n != 0 && (n & 1023) == 0 &&
+                batch_cancel_requested(should_cancel)) return false;
             const __m256i idx  = _mm256_add_epi64(base, m);
             const __m256i idx1 = _mm256_add_epi64(idx, vone);
             const __m256d Zr  = _mm256_i64gather_pd(tab_re, idx, 8);
@@ -135,19 +151,21 @@ void perturb_iterate_batch_avx2(
             out_mag2[i + l] = mg[l];
         }
     }
+    return true;
 }
 
 // fp32 deltas: eight lanes per vector, 32-bit lane indices, same rebasing
 // state machine as the fp64 kernel above. Lane masks live in float vectors
 // (sign-bit convention, like the fp64 kernel's double masks).
-void perturb_iterate_batch_avx2_fp32(
+bool perturb_iterate_batch_avx2_fp32(
     const float* tab_re, const float* tab_im,
     int start_off, int start_len,
     int k_off, int k_len,
     const float* dz0_re, const float* dz0_im,
     const float* dc_re, const float* dc_im,
     int count, int max_iter, float bail2,
-    int32_t* out_iter, float* out_mag2) noexcept
+    int32_t* out_iter, float* out_mag2,
+    const std::function<bool()>* should_cancel) noexcept
 {
     const __m256 vbail2 = _mm256_set1_ps(bail2);
     const __m256 vtwo   = _mm256_set1_ps(2.0f);
@@ -162,6 +180,8 @@ void perturb_iterate_batch_avx2_fp32(
     };
 
     for (int i = 0; i < count; i += 8) {
+        if (i != 0 && (i & 127) == 0 &&
+            batch_cancel_requested(should_cancel)) return false;
         const int lanes = (count - i) < 8 ? (count - i) : 8;
 
         alignas(32) float b_dzr[8] = {0};
@@ -192,6 +212,8 @@ void perturb_iterate_batch_avx2_fp32(
             _mm256_load_si256(reinterpret_cast<const __m256i*>(amask)));
 
         for (int n = 0; n < max_iter; ++n) {
+            if (n != 0 && (n & 1023) == 0 &&
+                batch_cancel_requested(should_cancel)) return false;
             const __m256i idx  = _mm256_add_epi32(base, m);
             const __m256i idx1 = _mm256_add_epi32(idx, vone);
             const __m256 Zr  = _mm256_i32gather_ps(tab_re, idx, 4);
@@ -249,26 +271,31 @@ void perturb_iterate_batch_avx2_fp32(
             out_mag2[i + l] = mg[l];
         }
     }
+    return true;
 }
 
 #else // !(__AVX2__ && __FMA__)
 
 bool perturb_avx2_available() noexcept { return false; }
 
-void perturb_iterate_batch_avx2(
+bool perturb_iterate_batch_avx2(
     const double*, const double*, int, int, int, int,
     const double*, const double*, const double*, const double*,
-    int, int, double, int32_t*, double*) noexcept
+    int, int, double, int32_t*, double*,
+    const std::function<bool()>*) noexcept
 {
     // Unreachable: callers gate on perturb_avx2_available().
+    return false;
 }
 
-void perturb_iterate_batch_avx2_fp32(
+bool perturb_iterate_batch_avx2_fp32(
     const float*, const float*, int, int, int, int,
     const float*, const float*, const float*, const float*,
-    int, int, float, int32_t*, float*) noexcept
+    int, int, float, int32_t*, float*,
+    const std::function<bool()>*) noexcept
 {
     // Unreachable: callers gate on perturb_avx2_available().
+    return false;
 }
 
 #endif

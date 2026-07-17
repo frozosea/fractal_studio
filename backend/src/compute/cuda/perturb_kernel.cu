@@ -13,6 +13,7 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <chrono>
 #include <vector>
 
@@ -22,6 +23,7 @@ namespace {
 
 struct DeviceParams {
     int width, height, iterations;
+    int row_offset, render_height;
     double bailout_sq;
     int offset_mode;
     double span_re, span_im, cos_t, sin_t;
@@ -40,8 +42,9 @@ __global__ void perturb_field_kernel(
     float* __restrict__ out_norm)
 {
     const int x = blockIdx.x * blockDim.x + threadIdx.x;
-    const int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x >= p.width || y >= p.height) return;
+    const int local_y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= p.width || local_y >= p.render_height) return;
+    const int y = p.row_offset + local_y;
 
     double off_re, off_im;
     if (p.offset_mode == 0) {
@@ -148,6 +151,7 @@ bool run_perturb_field(
 
     DeviceParams dp;
     dp.width = p.width;           dp.height = p.height;
+    dp.row_offset = 0;            dp.render_height = p.height;
     dp.iterations = p.iterations; dp.bailout_sq = p.bailout_sq;
     dp.offset_mode = p.offset_mode;
     dp.span_re = p.span_re;       dp.span_im = p.span_im;
@@ -159,12 +163,32 @@ bool run_perturb_field(
     dp.start_off = p.start_off;   dp.start_len = p.start_len;
     dp.k_off = p.k_off;           dp.k_len = p.k_len;
 
+    auto cancel_requested = [&]() noexcept {
+        if (p.should_cancel == nullptr || !*p.should_cancel) return false;
+        try {
+            return (*p.should_cancel)();
+        } catch (...) {
+            return true;
+        }
+    };
+
     const dim3 block(16, 16);
-    const dim3 grid((p.width + block.x - 1) / block.x,
-                    (p.height + block.y - 1) / block.y);
-    perturb_field_kernel<T><<<grid, block>>>(dp, d_tab_re, d_tab_im, d_iter, d_norm);
-    if (cudaGetLastError() != cudaSuccess) return fail();
-    if (cudaDeviceSynchronize() != cudaSuccess) return fail();
+    const int chunk_rows = !p.should_cancel || p.iterations <= 2048
+        ? p.height
+        : (p.iterations > 262144 ? 16
+           : (p.iterations > 32768 ? 64 : 256));
+    for (int row = 0; row < p.height; row += chunk_rows) {
+        if (cancel_requested()) return fail();
+        dp.row_offset = row;
+        dp.render_height = std::min(chunk_rows, p.height - row);
+        const dim3 grid((p.width + block.x - 1) / block.x,
+                        (dp.render_height + block.y - 1) / block.y);
+        perturb_field_kernel<T><<<grid, block>>>(
+            dp, d_tab_re, d_tab_im, d_iter, d_norm);
+        if (cudaGetLastError() != cudaSuccess) return fail();
+        if (cudaDeviceSynchronize() != cudaSuccess) return fail();
+        if (cancel_requested()) return fail();
+    }
 
     if (cudaMemcpy(iter_u32, d_iter, px_count * sizeof(uint32_t),
                    cudaMemcpyDeviceToHost) != cudaSuccess) return fail();

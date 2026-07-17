@@ -1483,6 +1483,20 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
         // non-cuda result, fall through to the CPU SIMD paths below.
         if (field_plan.engine == "cuda" && fsd_cuda::cuda_available()) {
             try {
+                // Cheap launches finish before tiled scheduling pays for
+                // itself. Only potentially long cancellable work uses the
+                // existing tiled CPU/GPU scheduler.
+                if (p.should_cancel && p.iterations > 2048) {
+                    auto ts = render_map_field_hybrid(p, fo, 64);
+                    MapStats s;
+                    s.elapsed_ms = ts.total_ms;
+                    s.pixel_count = p.width * p.height;
+                    s.scalar_used = ts.scalar_used;
+                    s.engine_used = ts.engine_used;
+                    fo.scalar_used = s.scalar_used;
+                    fo.engine_used = s.engine_used;
+                    return s;
+                }
                 fsd_cuda::CudaMapParams cp;
                 cp.center_re = p.center_re;
                 cp.center_im = p.center_im;
@@ -1513,6 +1527,7 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
                 fo.engine_used = s.engine_used;
                 return s;
             } catch (...) {
+                if (map_render_cancel_requested(p)) throw;
                 // CUDA launch/runtime failure → CPU fallback below.
             }
         }
