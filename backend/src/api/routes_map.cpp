@@ -1185,12 +1185,15 @@ std::string inlineMapHeaders(const MapRenderInput& in, const MapRenderImage& ren
 std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
     const MapRenderInput in = parseMapRenderInput(body);
     auto preemptFlag = registerMapRenderPreempt(in);
-    std::function<bool()> shouldCancel = [preemptFlag]() {
-        return preemptFlag && preemptFlag->load(std::memory_order_relaxed);
-    };
-
     auto run = runner.createRun(in.stillExport ? "map-export" : "map", body);
+    if (in.stillExport) runner.setCancelable(run.id, true);
+    const auto runCancelToken = runner.cancelToken(run.id);
+    std::function<bool()> shouldCancel = [preemptFlag, runCancelToken]() {
+        return (preemptFlag && preemptFlag->load(std::memory_order_relaxed)) ||
+               (runCancelToken && runCancelToken->load(std::memory_order_relaxed));
+    };
     if (shouldCancel()) {
+        runner.setCancelable(run.id, false);
         runner.setStatus(run.id, "cancelled");
         return cancelledMapRenderJson(run.id, in).dump();
     }
@@ -1199,6 +1202,7 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
     if (in.stillExport) {
         std::string conflictLock, activeRunId;
         if (!resourceManager().tryAcquire(run.id, "still_export", {"cuda_heavy", "cpu_heavy"}, heavyLeaseRaw, conflictLock, activeRunId)) {
+            runner.setCancelable(run.id, false);
             runner.setStatus(run.id, "failed");
             throw HttpError(409, Json{
                 {"error", "heavy render already running"},
@@ -1207,7 +1211,6 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
                 {"resourceLock", conflictLock},
             }.dump());
         }
-        runner.setCancelable(run.id, false);
         runner.setProgress(run.id, Json{
             {"taskType", "map_export"},
             {"stage", "render"},
@@ -1217,7 +1220,7 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
             {"engine", in.engine},
             {"scalar", in.scalarType},
             {"elapsedMs", runner.runElapsedMs(run.id)},
-            {"cancelable", false},
+            {"cancelable", true},
             {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
             {"details", Json::object()},
         }.dump());
@@ -1227,6 +1230,21 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
     auto execute = [=, &runner]() mutable -> Json {
         (void)heavyLease;
         runner.setStatus(run.id, "running");
+        if (in.stillExport) {
+            runner.setProgress(run.id, Json{
+                {"taskType", "map_export"},
+                {"stage", "render"},
+                {"current", 0},
+                {"total", 1},
+                {"percent", 0.0},
+                {"engine", in.engine},
+                {"scalar", in.scalarType},
+                {"elapsedMs", runner.runElapsedMs(run.id)},
+                {"cancelable", true},
+                {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
+                {"details", Json::object()},
+            }.dump());
+        }
 
         MapRenderImage rendered;
         std::filesystem::path imagePath;
@@ -1251,9 +1269,26 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
                     {"details", Json::object()},
                 }.dump());
             }
+            runner.setCancelable(run.id, false);
             runner.setStatus(run.id, "completed");
         } catch (const std::exception& ex) {
             if (isCancelledException(ex)) {
+                if (in.stillExport) {
+                    runner.setProgress(run.id, Json{
+                        {"taskType", "map_export"},
+                        {"stage", "cancelled"},
+                        {"current", 0},
+                        {"total", 1},
+                        {"percent", 0.0},
+                        {"engine", in.engine},
+                        {"scalar", in.scalarType},
+                        {"elapsedMs", runner.runElapsedMs(run.id)},
+                        {"cancelable", false},
+                        {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
+                        {"details", Json::object()},
+                    }.dump());
+                }
+                runner.setCancelable(run.id, false);
                 runner.setStatus(run.id, "cancelled");
                 return cancelledMapRenderJson(run.id, in);
             }
@@ -1273,6 +1308,7 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
                     {"details", Json::object()},
                 }.dump());
             }
+            runner.setCancelable(run.id, false);
             runner.setStatus(run.id, "failed");
             throw;
         }
@@ -1306,7 +1342,7 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
             {"engine", in.engine},
             {"scalar", in.scalarType},
             {"elapsedMs", runner.runElapsedMs(run.id)},
-            {"cancelable", false},
+            {"cancelable", true},
             {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
             {"details", Json::object()},
         }.dump());

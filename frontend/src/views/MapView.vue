@@ -340,6 +340,8 @@ const centerRe   = ref(-0.75)
 const centerIm   = ref( 0.0)
 const scale      = ref( 3.0)
 const iterations = ref(1024)
+const renderDensityPercent = ref(100)
+const juliaOn = ref(false)
 const viewportReInput = ref('')
 const viewportImInput = ref('')
 const viewportZoomInput = ref('')
@@ -593,7 +595,6 @@ function mergeSpecialPointCache(points: SpecialPointEnumResult[]) {
 }
 
 // ── Julia mode ────────────────────────────────────────────────────────────────
-const juliaOn  = ref(false)
 const juliaRe  = ref(-0.7)
 const juliaIm  = ref(0.27)
 
@@ -1814,6 +1815,25 @@ onBeforeUnmount(() => {
         <input type="number" v-model.number="iterations" min="16" max="1000000" step="128" />
       </div>
 
+      <div class="group render-density-group">
+        <label>{{ lang === 'en' ? 'Interactive quality' : '交互画质' }}</label>
+        <select
+          v-model.number="renderDensityPercent"
+          :title="lang === 'en'
+            ? 'Fixed render density. Pixel count and approximate work scale with density squared; it never changes during a render.'
+            : '固定渲染密度。像素数和近似运算量按密度平方变化，渲染过程中不会动态切换。'">
+          <option :value="35">35% · {{ lang === 'en' ? 'fastest' : '最快' }}</option>
+          <option :value="50">50% · {{ lang === 'en' ? 'fast' : '快速' }}</option>
+          <option :value="70">70% · {{ lang === 'en' ? 'balanced' : '均衡' }}</option>
+          <option :value="85">85% · {{ lang === 'en' ? 'fine' : '精细' }}</option>
+          <option :value="100">100% · {{ lang === 'en' ? 'native' : '原生' }}</option>
+        </select>
+        <div class="render-density-note mono">
+          {{ renderDensityPercent }}% · ≈{{ Math.round(renderDensityPercent * renderDensityPercent / 100) }}%
+          {{ lang === 'en' ? 'pixels' : '像素量' }}
+        </div>
+      </div>
+
       <div class="group viewport-edit-group">
         <label>{{ lang === 'en' ? 'viewport' : '视口' }}</label>
         <div class="viewport-edit-row">
@@ -2083,6 +2103,7 @@ onBeforeUnmount(() => {
           :transitionWeights="multiTransitionActive ? transitionWeights : undefined"
           :engine="engineMode" :scalarType="scalarMode"
           :rotationDeg="rotationDeg"
+          :render-density="renderDensityPercent / 100"
           :showExportFrame="showExportFrame"
           :exportFrameWidth="pngPreset.width"
           :exportFrameHeight="pngPreset.height"
@@ -2145,6 +2166,7 @@ onBeforeUnmount(() => {
                 :transitionWeights="multiTransitionActive ? transitionWeights : undefined"
                 :engine="engineMode" :scalarType="scalarMode"
                 :rotationDeg="rotationDeg"
+                :render-density="renderDensityPercent / 100"
                 :special-points="renderedSpecialPoints"
                 :hovered-special-point-id="hoveredSpecialPointId"
                 :selected-special-point-id="selectedSpecialPointId"
@@ -2185,6 +2207,7 @@ onBeforeUnmount(() => {
                 :julia="true" :juliaRe="juliaRe" :juliaIm="juliaIm"
                 :engine="engineMode" :scalarType="scalarMode"
                 :rotationDeg="rotationDeg"
+                :render-density="renderDensityPercent / 100"
                 :showExportFrame="showExportFrame"
                 :exportFrameWidth="pngPreset.width"
                 :exportFrameHeight="pngPreset.height"
@@ -2470,6 +2493,17 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 100px;
+}
+
+.group.render-density-group {
+  min-width: 140px;
+}
+
+.render-density-note {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.25;
 }
 
 /* Resolved engine/scalar shown under an "auto" select after each render. */
