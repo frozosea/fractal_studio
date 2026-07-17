@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { api, type MapRenderRequest, type MapFieldRequest, type Metric, type ColorMap, type SpecialPointEnumResult } from '../api'
+import { api, type MapRenderRequest, type MapFieldRequest, type MapFieldSessionStartRequest, type MapFieldSessionStatus, type MapFieldSessionResult, type Metric, type ColorMap, type SpecialPointEnumResult } from '../api'
 import { promptSlowRenderWarning, slowRenderWarningsDisabled } from '../slowWarnings'
 import { lang } from '../i18n'
 import { GlColorizer, isWebGL2Available } from '../gl-colorize'
@@ -67,22 +67,40 @@ const frameW   = ref(0)
 const frameH   = ref(0)
 const activeCanvas = ref(0)
 const hasFrame = ref(false)
+// Once a slow native session has supplied a usable snapshot, it is the live
+// interaction frame rather than a stale placeholder.  Keeping this separate
+// from `pending` lets the backend continue refining without dimming or
+// repeatedly fading the preview.
+const interactivePreviewVisible = ref(false)
+// The previous canvas remains a stable transformed interaction preview until
+// the backend itself says this native field missed its latency budget. This
+// prevents an immediate dim/bright flash for renders that complete quickly.
+const interactiveSessionPending = ref(false)
+const interactiveDeadlineMissed = ref(false)
+const showPendingIndicator = computed(() => pending.value && !interactivePreviewVisible.value &&
+  (!interactiveSessionPending.value || interactiveDeadlineMissed.value))
 let   ro: ResizeObserver | null = null
 let   dprMedia: MediaQueryList | null = null
 let   renderTimer: ReturnType<typeof setTimeout> | null = null
 let   currentRender: AbortController | null = null
+let   activeFieldSession: { seq: number; sessionId?: string } | null = null
 let   renderSeq = 0
 let   slowRenderWarnKey = ''
 const renderClientId = `map-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 const MIN_FRAME_DIM = 64
 const MAX_FRAME_DIM = 4096
-const PREVIEW_RENDER_DELAY_MS = 35
 const FULL_RENDER_DELAY_MS = 140
-const REFINE_RENDER_DELAY_MS = 260
+// The backend owns this deadline, measured from the lifetime of one native
+// field session. It only changes when we begin showing its completed samples;
+// it never starts a second, lower-resolution fractal calculation.
+const INTERACTIVE_SLOW_AFTER_MS = 450
+const INTERACTIVE_SESSION_POLL_MS = 90
 const SLOW_RENDER_TARGET_MS = 700
 const FAST_RENDER_TARGET_MS = 220
 const MIN_ADAPTIVE_QUALITY = 0.35
-let adaptiveQuality = 1
+// This affects only the display density of progressive snapshots. The native
+// field calculation always starts at frameW × frameH.
+let adaptiveSnapshotQuality = 1
 
 // ── WebGL colorizer state ────────────────────────────────────────────────────
 const glCanvas = ref<HTMLCanvasElement | null>(null)
@@ -92,10 +110,9 @@ let   cachedField: { iter: Uint32Array; norm: Float32Array; w: number; h: number
 
 type ViewportSnapshot = {
   scale: number
+  aspect: number
   rotationDeg: number
 }
-
-type RenderPhase = 'preview' | 'refine'
 
 let renderedViewport: ViewportSnapshot | null = null
 
@@ -107,8 +124,6 @@ let renderedViewport: ViewportSnapshot | null = null
 // to pans even when the double center prop cannot change.
 const pendingOffsetRe = ref(0)
 const pendingOffsetIm = ref(0)
-let renderStartOffsetRe = 0   // pendingOffset snapshot when the render was issued
-let renderStartOffsetIm = 0
 
 function trackDelta(deltaRe: number, deltaIm: number) {
   pendingOffsetRe.value += deltaRe
@@ -203,10 +218,10 @@ function heuristicPreviewQuality(): number {
 }
 
 function preferredPreviewQuality(): number {
-  return clampQuality(Math.min(adaptiveQuality, heuristicPreviewQuality()))
+  return clampQuality(Math.min(adaptiveSnapshotQuality, heuristicPreviewQuality()))
 }
 
-function renderSizeForQuality(quality: number): { width: number; height: number; quality: number } {
+function snapshotSizeForQuality(quality: number): { width: number; height: number; quality: number } {
   if (!renderableSize()) return { width: 0, height: 0, quality: 1 }
   const minQuality = Math.max(MIN_FRAME_DIM / frameW.value, MIN_FRAME_DIM / frameH.value)
   const q = Math.min(1, Math.max(minQuality, clampQuality(quality)))
@@ -217,17 +232,17 @@ function renderSizeForQuality(quality: number): { width: number; height: number;
   }
 }
 
-function updateAdaptiveQuality(generatedMs: number, renderQuality: number, phase: RenderPhase) {
+function updateAdaptiveQuality(generatedMs: number, renderQuality = 1) {
   if (!(generatedMs > 0) || !Number.isFinite(generatedMs)) return
   const q = Math.max(MIN_ADAPTIVE_QUALITY, Math.min(1, renderQuality))
   const estimatedFullMs = generatedMs / Math.max(0.01, q * q)
   if (estimatedFullMs > SLOW_RENDER_TARGET_MS) {
-    const next = adaptiveQuality * Math.sqrt(SLOW_RENDER_TARGET_MS / estimatedFullMs) * 0.95
-    adaptiveQuality = Math.min(0.95, clampQuality(next))
+    const next = adaptiveSnapshotQuality * Math.sqrt(SLOW_RENDER_TARGET_MS / estimatedFullMs) * 0.95
+    adaptiveSnapshotQuality = Math.min(0.95, clampQuality(next))
     return
   }
-  if (phase === 'refine' && generatedMs < FAST_RENDER_TARGET_MS && adaptiveQuality < 1) {
-    adaptiveQuality = Math.min(1, adaptiveQuality * 1.18)
+  if (generatedMs < FAST_RENDER_TARGET_MS && adaptiveSnapshotQuality < 1) {
+    adaptiveSnapshotQuality = Math.min(1, adaptiveSnapshotQuality * 1.18)
   }
 }
 
@@ -281,9 +296,20 @@ function updateViewportSizeFromWrapper() {
 }
 
 function invalidateCurrentRender() {
-  const hadRender = currentRender !== null
+  // A preempt is reserved for an actual view/request invalidation. In
+  // particular, crossing the interactive deadline does not abort the native
+  // field session: it keeps computing while we show a snapshot of its work.
+  const hadRender = currentRender !== null || activeFieldSession !== null
   currentRender?.abort()
   currentRender = null
+  activeFieldSession = null
+  interactivePreviewVisible.value = false
+  interactiveSessionPending.value = false
+  interactiveDeadlineMissed.value = false
+  // Preserve the pixels already on screen for a transformed interaction
+  // preview, but never let a color-only watcher recolorize their old raw
+  // field while the replacement view is still inside its debounce window.
+  cachedField = null
   renderSeq += 1
   if (hadRender) notifyPreempt(renderSeq)
 }
@@ -297,7 +323,8 @@ function shortestRotationDelta(currentDeg: number, renderedDeg: number): number 
 function previewTransform(): string {
   if (!hasFrame.value || !renderedViewport || domW.value < 16 || domH.value < 16) return 'none'
   const aspect = domW.value / domH.value
-  const scaleRatio = renderedViewport.scale / props.scale
+  const scaleRatioY = renderedViewport.scale / props.scale
+  const scaleRatioX = scaleRatioY * renderedViewport.aspect / aspect
   const rotDelta = shortestRotationDelta(props.rotationDeg ?? 0, renderedViewport.rotationDeg)
   // rendered center − current center, in exact offset space
   const dre = -pendingOffsetRe.value
@@ -309,15 +336,17 @@ function previewTransform(): string {
   const cosR = Math.cos(renderedRad), sinR = Math.sin(renderedRad)
   const dx = (dre * cosR + dim * sinR) * domW.value / (props.scale * aspect)
   const dy = (-dre * sinR + dim * cosR) * (-domH.value) / props.scale
-  const tx = domW.value * (1 - scaleRatio) * 0.5 + dx
-  const ty = domH.value * (1 - scaleRatio) * 0.5 + dy
-  const noChange = Math.abs(scaleRatio - 1) < 0.000001 && Math.abs(tx) < 0.01 && Math.abs(ty) < 0.01 && Math.abs(rotDelta) < 0.001
+  const tx = domW.value * (1 - scaleRatioX) * 0.5 + dx
+  const ty = domH.value * (1 - scaleRatioY) * 0.5 + dy
+  const noChange = Math.abs(scaleRatioX - 1) < 0.000001 &&
+    Math.abs(scaleRatioY - 1) < 0.000001 &&
+    Math.abs(tx) < 0.01 && Math.abs(ty) < 0.01 && Math.abs(rotDelta) < 0.001
   if (noChange) return 'none'
   const cx = domW.value * 0.5, cy = domH.value * 0.5
   if (Math.abs(rotDelta) > 0.001) {
-    return `translate(${cx}px,${cy}px) rotate(${rotDelta}deg) translate(${-cx}px,${-cy}px) matrix(${scaleRatio},0,0,${scaleRatio},${tx},${ty})`
+    return `translate(${cx}px,${cy}px) rotate(${rotDelta}deg) translate(${-cx}px,${-cy}px) matrix(${scaleRatioX},0,0,${scaleRatioY},${tx},${ty})`
   }
-  return `matrix(${scaleRatio}, 0, 0, ${scaleRatio}, ${tx}, ${ty})`
+  return `matrix(${scaleRatioX}, 0, 0, ${scaleRatioY}, ${tx}, ${ty})`
 }
 
 function canvasStyle(index: number) {
@@ -342,6 +371,22 @@ function drawRgbaFrame(data: ArrayBuffer, width: number, height: number): number
   return next
 }
 
+// After the first progressive snapshot is visible, update that same canvas in
+// place. This avoids repeatedly toggling the two opacity-transition layers as
+// new published tiles arrive from one backend session.
+function updateActiveRgbaFrame(data: ArrayBuffer, width: number, height: number): boolean {
+  const expectedBytes = width * height * 4
+  if (data.byteLength !== expectedBytes) {
+    throw new Error(`interactive snapshot size mismatch: got ${data.byteLength}, expected ${expectedBytes}`)
+  }
+  const target = canvasByIndex(activeCanvas.value)
+  resizeCanvas(target, width, height)
+  const ctx = target?.getContext('2d')
+  if (!ctx) return false
+  ctx.putImageData(new ImageData(new Uint8ClampedArray(data), width, height), 0, 0)
+  return true
+}
+
 function base64ToArrayBuffer(b64: string): Uint8Array {
   const bin = atob(b64)
   const bytes = new Uint8Array(bin.length)
@@ -360,7 +405,7 @@ function shouldUseFieldPath(): boolean {
 }
 
 /** Re-colorize cached field data via WebGL — no backend round-trip. */
-function recolorize() {
+function recolorize(inPlace = false) {
   if (!cachedField || !glColorizer) return
   const glc = glCanvas.value
   if (!glc) return
@@ -379,146 +424,314 @@ function recolorize() {
     smooth:   props.smooth ?? false,
   })
 
-  // Copy GL result to display canvas via dual-canvas swap
-  const next   = activeCanvas.value === 0 ? 1 : 0
+  // A normal complete render swaps canvases once.  A progressive session has
+  // already installed a stable low-density frame, so promote its final raw
+  // field into that same canvas and avoid a second opacity transition.
+  const next = inPlace ? activeCanvas.value : (activeCanvas.value === 0 ? 1 : 0)
   const target = canvasByIndex(next)
   resizeCanvas(target, cachedField.w, cachedField.h)
   const ctx = target?.getContext('2d')
   if (!ctx) return
   ctx.drawImage(glc, 0, 0)
-  activeCanvas.value = next
+  if (!inPlace) activeCanvas.value = next
   hasFrame.value = true
 }
 
-function scheduleRefine(parentSeq: number) {
-  if (renderTimer) clearTimeout(renderTimer)
-  pending.value = true
-  renderTimer = setTimeout(() => {
-    renderTimer = null
-    if (renderSeq !== parentSeq || !renderableSize()) return
-    void renderFrame('refine', 1, parentSeq)
-  }, REFINE_RENDER_DELAY_MS)
+function fieldSessionState(response: { state?: string; status?: string }): string {
+  return response.state ?? response.status ?? ''
 }
 
-async function renderFrame(phase: RenderPhase = 'refine', quality = 1, parentSeq?: number) {
-  if (parentSeq !== undefined && renderSeq !== parentSeq) return
-  if (!renderableSize()) return
-  const renderSize = renderSizeForQuality(phase === 'refine' ? 1 : quality)
-  if (renderSize.width < MIN_FRAME_DIM || renderSize.height < MIN_FRAME_DIM) return
-  pending.value = true
-  error.value   = ''
+function waitForSessionPoll(signal: AbortSignal, delayMs = INTERACTIVE_SESSION_POLL_MS): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('The operation was aborted', 'AbortError'))
+      return
+    }
+    const safeDelayMs = Number.isFinite(delayMs)
+      ? Math.max(20, Math.min(1000, Math.round(delayMs)))
+      : INTERACTIVE_SESSION_POLL_MS
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, safeDelayMs)
+    const onAbort = () => {
+      window.clearTimeout(timeout)
+      reject(new DOMException('The operation was aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
-  // Abort any in-flight render
+async function renderFrame() {
+  if (!renderableSize()) return
+  const reqW = frameW.value
+  const reqH = frameH.value
+  const viewportAspect = domW.value / domH.value
+  if (reqW < MIN_FRAME_DIM || reqH < MIN_FRAME_DIM) return
+  if (!(viewportAspect > 0) || !Number.isFinite(viewportAspect)) return
+  pending.value = true
+  error.value = ''
+
+  // Render calls normally follow invalidateCurrentRender(). Keep this local
+  // abort as a safety net, but do not preempt here: a preempt belongs only to
+  // a real replacement of the current view/request.
   currentRender?.abort()
   const controller = new AbortController()
   currentRender = controller
   const seq = ++renderSeq
-  const requestId = `${renderClientId}-${seq}-${phase}`
-  const reqW = renderSize.width
-  const reqH = renderSize.height
-  let completed = false
-  let shouldRefine = false
-  // This render is issued at the current viewport: once it lands, only the
-  // deltas accumulated after this point remain pending.
-  renderStartOffsetRe = pendingOffsetRe.value
-  renderStartOffsetIm = pendingOffsetIm.value
+  const requestId = `${renderClientId}-${seq}`
+  const startOffsetRe = pendingOffsetRe.value
+  const startOffsetIm = pendingOffsetIm.value
+  const requestRotationDeg = props.rotationDeg ?? 0
+  let committedViewport = false
+  const commitViewport = (scale: number) => {
+    if (!committedViewport) {
+      pendingOffsetRe.value -= startOffsetRe
+      pendingOffsetIm.value -= startOffsetIm
+      committedViewport = true
+    }
+    renderedViewport = {
+      scale,
+      aspect: viewportAspect,
+      rotationDeg: requestRotationDeg,
+    }
+  }
 
   if (shouldUseFieldPath()) {
-    // ── WebGL field path: fetch raw iteration data, colorize client-side ──
+    // ── Native field session: progressive presentation without duplicate math ──
     const fieldReq: MapFieldRequest = {
       requestId,
       preemptKey: renderClientId,
       preemptSeq: seq,
-      centerRe:   props.centerRe,
-      centerIm:   props.centerIm,
-      scale:      props.scale,
-      width:      reqW,
-      height:     reqH,
+      centerRe: props.centerRe,
+      centerIm: props.centerIm,
+      scale: props.scale,
+      viewportAspect,
+      width: reqW,
+      height: reqH,
       iterations: props.iterations,
-      variant:    props.variant,
-      metric:     props.metric,
+      variant: props.variant,
+      metric: props.metric,
       pairwiseCap: props.pairwiseCap,
-      julia:      props.julia,
-      juliaRe:    props.juliaRe ?? 0,
-      juliaIm:    props.juliaIm ?? 0,
+      julia: props.julia,
+      juliaRe: props.juliaRe ?? 0,
+      juliaIm: props.juliaIm ?? 0,
     }
-    if (props.engine)      fieldReq.engine      = props.engine
-    if (props.scalarType)  fieldReq.scalarType  = props.scalarType
+    if (props.engine) fieldReq.engine = props.engine
+    if (props.scalarType) fieldReq.scalarType = props.scalarType
     if (props.rotationDeg) fieldReq.rotationDeg = props.rotationDeg
     if (props.centerReStr) fieldReq.centerReStr = props.centerReStr
     if (props.centerImStr) fieldReq.centerImStr = props.centerImStr
 
+    const sessionReq: MapFieldSessionStartRequest = {
+      ...fieldReq,
+      colorMap: props.colorMap,
+      smooth: props.smooth,
+      colorMode: 'direct',
+      slowAfterMs: INTERACTIVE_SLOW_AFTER_MS,
+    }
+
+    // Mark the session before the start response arrives so a view change can
+    // preempt the backend work even while this request is in flight.
+    activeFieldSession = { seq }
+    interactiveSessionPending.value = true
+    interactiveDeadlineMissed.value = false
     try {
-      const resp = await api.mapField(fieldReq, controller.signal)
-      if (seq !== renderSeq) return
-      if (resp.requestId && resp.requestId !== requestId) return
-      if (resp.status === 'cancelled') return
-      if (!resp.iterB64 || !resp.finalMagB64) {
-        throw new Error('field response missing iterB64/finalMagB64')
+      let status: MapFieldSessionStatus
+      for (;;) {
+        if (seq !== renderSeq || activeFieldSession?.seq !== seq) return
+        try {
+          status = await api.mapFieldSessionStart(sessionReq, controller.signal)
+          break
+        } catch (e: any) {
+          // A replacement view never creates a third detached native render.
+          // The backend has already asked any superseded worker to stop, and
+          // returns 429 until its slot/buffer is genuinely released. Keep the
+          // current transformed frame visible and retry this identical native
+          // request rather than falling back to a fresh low-resolution job.
+          if (e?.status !== 429 || e?.data?.retryable !== true) throw e
+          const retryAfterMs = Number(e?.data?.retryAfterMs)
+          await waitForSessionPoll(controller.signal, retryAfterMs)
+        }
       }
-
-      const iterBuf = new Uint32Array(base64ToArrayBuffer(resp.iterB64).buffer)
-      const normBuf = new Float32Array(base64ToArrayBuffer(resp.finalMagB64).buffer)
-
-      cachedField = {
-        iter: iterBuf,
-        norm: normBuf,
-        w: resp.width,
-        h: resp.height,
-        maxIter: resp.maxIter ?? props.iterations,
+      if (seq !== renderSeq || activeFieldSession?.seq !== seq) return
+      if (status.requestId && status.requestId !== requestId) return
+      if (status.viewportAspect !== undefined &&
+          Math.abs(status.viewportAspect - viewportAspect) >
+            1e-12 * Math.max(1, Math.abs(viewportAspect))) {
+        throw new Error('interactive field viewport aspect mismatch')
       }
+      let state = fieldSessionState(status)
+      if (state === 'cancelled') return
+      if (state === 'failed') throw new Error(status.error ?? 'interactive field session failed')
+      const sessionId = status.sessionId
+      if (!sessionId) throw new Error('interactive field session missing sessionId')
+      activeFieldSession = { seq, sessionId }
 
-      if (seq !== renderSeq) return
-      pendingOffsetRe.value -= renderStartOffsetRe
-      pendingOffsetIm.value -= renderStartOffsetIm
-      renderedViewport = {
-        scale:    fieldReq.scale,
-        rotationDeg: props.rotationDeg ?? 0,
+      let snapshotShown = false
+      let snapshotRevision = -1
+      let snapshotAttemptedWithoutRevision = false
+      let lastSnapshotAt = 0
+      while (seq === renderSeq && activeFieldSession?.seq === seq) {
+        state = fieldSessionState(status)
+        if (state === 'cancelled') return
+        if (state === 'failed') throw new Error(status.error ?? 'interactive field session failed')
+
+        if (state === 'completed') {
+          let result: MapFieldSessionResult
+          try {
+            result = await api.mapFieldSessionResult(sessionId, controller.signal)
+          } catch (e: any) {
+            // Result encoding is intentionally serialized server-side to
+            // bound temporary transport memory across multiple explorer tabs.
+            // This is transport back-pressure only; the completed native
+            // field remains intact and the same session is retried.
+            if (e?.status === 429 && e?.data?.retryable === true) {
+              await waitForSessionPoll(controller.signal, Number(e?.data?.retryAfterMs))
+              status = await api.mapFieldSessionStatus(sessionId, controller.signal)
+              continue
+            }
+            throw e
+          }
+          if (seq !== renderSeq || activeFieldSession?.seq !== seq) return
+          const resultState = fieldSessionState(result)
+          if (resultState === 'cancelled') return
+          if (resultState === 'failed') throw new Error(result.error ?? 'interactive field session failed')
+          if (resultState !== 'completed') {
+            await waitForSessionPoll(controller.signal)
+            status = await api.mapFieldSessionStatus(sessionId, controller.signal)
+            continue
+          }
+          if (!result.iterB64 || !result.finalMagB64 || !result.width || !result.height) {
+            throw new Error('interactive field result missing iterB64/finalMagB64')
+          }
+
+          const iterBuf = new Uint32Array(base64ToArrayBuffer(result.iterB64).buffer)
+          const normBuf = new Float32Array(base64ToArrayBuffer(result.finalMagB64).buffer)
+          const pixelCount = result.width * result.height
+          if (!Number.isSafeInteger(pixelCount) || iterBuf.length !== pixelCount || normBuf.length !== pixelCount) {
+            throw new Error('interactive field result buffer size mismatch')
+          }
+          cachedField = {
+            iter: iterBuf,
+            norm: normBuf,
+            w: result.width,
+            h: result.height,
+            maxIter: result.maxIter ?? props.iterations,
+          }
+          // The backend keeps the immutable native field until this browser
+          // has fully decoded it. A failed/aborted result response sends no
+          // acknowledgement, so the same session can still be retrieved.
+          void api.mapFieldSessionAcknowledge(sessionId, requestId).catch(() => {})
+          if (seq !== renderSeq || activeFieldSession?.seq !== seq) return
+          commitViewport(fieldReq.scale)
+          recolorize(snapshotShown)
+          const generatedMs = result.generatedMs ?? status.generatedMs ?? 0
+          updateAdaptiveQuality(generatedMs)
+          maybeWarnSlowRender(generatedMs)
+          emit('rendered', {
+            generatedMs,
+            artifactId: '',
+            engineUsed: result.engineUsed,
+            scalarUsed: result.scalarUsed,
+          })
+          return
+        }
+
+        // The backend, not a frontend timer, determines when the session has
+        // crossed the interactive budget. A snapshot is a display-only view
+        // of published samples from this exact native-size calculation.
+        if (status.deadlinePassed) {
+          interactiveDeadlineMissed.value = true
+          const revision = status.revision
+          const newPublishedData = revision === undefined
+            ? !snapshotAttemptedWithoutRevision
+            : revision !== snapshotRevision
+          const snapshotThrottlePassed = Date.now() - lastSnapshotAt >= 160
+          if (newPublishedData && snapshotThrottlePassed) {
+            if (revision === undefined) snapshotAttemptedWithoutRevision = true
+            else snapshotRevision = revision
+            lastSnapshotAt = Date.now()
+            // Once the backend has observed an actual latency miss, lower the
+            // *presentation* resolution even for a shallow/default view. The
+            // native field keeps its full dimensions and continues unchanged.
+            const snapshotSize = snapshotSizeForQuality(Math.min(0.7, preferredPreviewQuality()))
+            const snapshot = await api.mapFieldSessionSnapshot(
+              sessionId,
+              snapshotSize.width,
+              snapshotSize.height,
+              { colorMap: props.colorMap, smooth: props.smooth },
+              controller.signal,
+            )
+            if (seq !== renderSeq || activeFieldSession?.seq !== seq) return
+            const snapshotState = fieldSessionState(snapshot)
+            if (snapshotState === 'cancelled') return
+            if (snapshotState === 'failed') throw new Error(snapshot.error ?? 'interactive field session failed')
+            status = snapshot
+            if (snapshotState !== 'completed' && snapshot.previewAvailable && snapshot.rgbaB64 &&
+                snapshot.previewWidth && snapshot.previewHeight) {
+              const preview = base64ToArrayBuffer(snapshot.rgbaB64)
+              let painted = false
+              if (snapshotShown) {
+                painted = updateActiveRgbaFrame(preview.buffer as ArrayBuffer, snapshot.previewWidth, snapshot.previewHeight)
+              } else {
+                const next = drawRgbaFrame(preview.buffer as ArrayBuffer, snapshot.previewWidth, snapshot.previewHeight)
+                if (next !== null) {
+                  activeCanvas.value = next
+                  painted = true
+                }
+              }
+              if (painted && seq === renderSeq) {
+                commitViewport(fieldReq.scale)
+                hasFrame.value = true
+                snapshotShown = true
+                interactivePreviewVisible.value = true
+              }
+            }
+            continue
+          }
+        }
+
+        await waitForSessionPoll(controller.signal)
+        status = await api.mapFieldSessionStatus(sessionId, controller.signal)
       }
-      recolorize()
-      updateAdaptiveQuality(resp.generatedMs, renderSize.quality, phase)
-      if (phase === 'refine') maybeWarnSlowRender(resp.generatedMs)
-      emit('rendered', {
-        generatedMs: resp.generatedMs,
-        artifactId:  '',
-        engineUsed:  resp.engineUsed,
-        scalarUsed:  resp.scalarUsed,
-      })
-      completed = true
-      shouldRefine = phase === 'preview' && renderSize.quality < 0.99
     } catch (e: any) {
       if (seq === renderSeq && e?.name !== 'AbortError') error.value = e?.message ?? String(e)
     } finally {
+      if (activeFieldSession?.seq === seq) activeFieldSession = null
       if (currentRender === controller) currentRender = null
       if (seq === renderSeq) {
-        if (completed && shouldRefine) scheduleRefine(seq)
-        else pending.value = false
+        pending.value = false
+        interactivePreviewVisible.value = false
+        interactiveSessionPending.value = false
+        interactiveDeadlineMissed.value = false
       }
     }
     return
   }
 
-  // ── Legacy inline-render path (non-escape metrics, equalized color, transitions) ──
+  // ── Inline path (non-escape metrics, equalized color, transitions): one full render ──
   const req: MapRenderRequest = {
     requestId,
     preemptKey: renderClientId,
     preemptSeq: seq,
-    centerRe:   props.centerRe,
-    centerIm:   props.centerIm,
-    scale:      props.scale,
-    width:      reqW,
-    height:     reqH,
+    centerRe: props.centerRe,
+    centerIm: props.centerIm,
+    scale: props.scale,
+    viewportAspect,
+    width: reqW,
+    height: reqH,
     iterations: props.iterations,
-    variant:    props.variant,
-    metric:     props.metric,
-    colorMap:   props.colorMap,
-    smooth:     props.smooth,
-    colorMode:  props.colorMode,
+    variant: props.variant,
+    metric: props.metric,
+    colorMap: props.colorMap,
+    smooth: props.smooth,
+    colorMode: props.colorMode,
     cyclesPerOctave: props.cyclesPerOctave,
     pairwiseCap: props.pairwiseCap,
-    julia:      props.julia,
-    juliaRe:    props.juliaRe ?? 0,
-    juliaIm:    props.juliaIm ?? 0,
+    julia: props.julia,
+    juliaRe: props.juliaRe ?? 0,
+    juliaIm: props.juliaIm ?? 0,
   }
   if (props.transitionThetaMilliDeg !== null && props.transitionThetaMilliDeg !== undefined) {
     req.transitionThetaMilliDeg = props.transitionThetaMilliDeg
@@ -526,57 +739,46 @@ async function renderFrame(phase: RenderPhase = 'refine', quality = 1, parentSeq
   } else if (props.transitionTheta !== null) {
     req.transitionTheta = props.transitionTheta
   }
-  if (props.transitionFrom)           req.transitionFrom           = props.transitionFrom
-  if (props.transitionTo)             req.transitionTo             = props.transitionTo
+  if (props.transitionFrom) req.transitionFrom = props.transitionFrom
+  if (props.transitionTo) req.transitionTo = props.transitionTo
   if (props.transitionVariants?.length) {
     req.transitionVariants = props.transitionVariants
     req.transitionWeights = props.transitionWeights ?? props.transitionVariants.map(() => 1)
   }
-  if (props.engine)                   req.engine                    = props.engine
-  if (props.scalarType)               req.scalarType                = props.scalarType
-  if (props.centerReStr)              (req as any).centerReStr      = props.centerReStr
-  if (props.centerImStr)              (req as any).centerImStr      = props.centerImStr
-  if (props.rotationDeg)              req.rotationDeg               = props.rotationDeg
+  if (props.engine) req.engine = props.engine
+  if (props.scalarType) req.scalarType = props.scalarType
+  if (props.centerReStr) (req as any).centerReStr = props.centerReStr
+  if (props.centerImStr) (req as any).centerImStr = props.centerImStr
+  if (props.rotationDeg) req.rotationDeg = props.rotationDeg
 
   try {
-    cachedField = null  // invalidate field cache when using inline path
+    cachedField = null
     const resp = await api.mapRenderInline(req, controller.signal) as any
     if (seq !== renderSeq || (resp.requestId && resp.requestId !== requestId)) return
     if (resp.status === 'cancelled' || !resp.data) return
     if (resp.pixelFormat && resp.pixelFormat !== 'rgba8') {
       throw new Error(`unsupported inline frame format: ${resp.pixelFormat}`)
     }
-    const frameW = resp.width || reqW
-    const frameH = resp.height || reqH
-    const next = drawRgbaFrame(resp.data, frameW, frameH)
-    if (next === null) return
-    if (seq !== renderSeq) return
-    pendingOffsetRe.value -= renderStartOffsetRe
-    pendingOffsetIm.value -= renderStartOffsetIm
-    renderedViewport = {
-      scale: req.scale,
-      rotationDeg: props.rotationDeg ?? 0,
-    }
+    const responseWidth = resp.width || reqW
+    const responseHeight = resp.height || reqH
+    const next = drawRgbaFrame(resp.data, responseWidth, responseHeight)
+    if (next === null || seq !== renderSeq) return
+    commitViewport(req.scale)
     hasFrame.value = true
     activeCanvas.value = next
-    updateAdaptiveQuality(resp.generatedMs, renderSize.quality, phase)
-    if (phase === 'refine') maybeWarnSlowRender(resp.generatedMs)
+    updateAdaptiveQuality(resp.generatedMs)
+    maybeWarnSlowRender(resp.generatedMs)
     emit('rendered', {
       generatedMs: resp.generatedMs,
-      artifactId:  '',
-      engineUsed:  resp.engineUsed,
-      scalarUsed:  resp.scalarUsed,
+      artifactId: '',
+      engineUsed: resp.engineUsed,
+      scalarUsed: resp.scalarUsed,
     })
-    completed = true
-    shouldRefine = phase === 'preview' && renderSize.quality < 0.99
   } catch (e: any) {
     if (seq === renderSeq && e?.name !== 'AbortError') error.value = e?.message ?? String(e)
   } finally {
     if (currentRender === controller) currentRender = null
-    if (seq === renderSeq) {
-      if (completed && shouldRefine) scheduleRefine(seq)
-      else pending.value = false
-    }
+    if (seq === renderSeq) pending.value = false
   }
 }
 
@@ -587,13 +789,10 @@ function scheduleRender(delay = FULL_RENDER_DELAY_MS) {
     error.value = ''
   }
   if (renderTimer) clearTimeout(renderTimer)
-  const previewQuality = preferredPreviewQuality()
-  const usePreview = previewQuality < 0.98
-  const waitMs = usePreview ? Math.min(delay, PREVIEW_RENDER_DELAY_MS) : delay
   renderTimer = setTimeout(() => {
     renderTimer = null
-    void renderFrame(usePreview ? 'preview' : 'refine', usePreview ? previewQuality : 1)
-  }, waitMs)
+    void renderFrame()
+  }, delay)
 }
 
 // ── Watchers ──────────────────────────────────────────────────────────────────
@@ -603,7 +802,7 @@ watch(() => [
   props.centerRe, props.centerIm, props.scale,
   props.centerReStr, props.centerImStr, props.viewEpoch,
   props.variant, props.metric,
-  props.colorMode, props.cyclesPerOctave,
+  props.colorMode, props.colorMode === 'direct' ? null : props.cyclesPerOctave,
   props.iterations, props.pairwiseCap, props.julia, props.juliaRe, props.juliaIm,
   props.engine, props.scalarType, props.rotationDeg, props.transitionTheta, props.transitionThetaMilliDeg,
   props.transitionFrom, props.transitionTo,
@@ -613,11 +812,19 @@ watch(() => [
 
 // Color-only watch — instant re-colorize from cached field data when possible
 watch(() => [props.colorMap, props.smooth], () => {
-  if (useGl.value && cachedField && shouldUseFieldPath()) {
-    recolorize()
-  } else {
-    scheduleRender()
+  if (useGl.value && shouldUseFieldPath()) {
+    // Palette/smoothing do not alter the native escape field. Keep a live
+    // session running. `cachedField` may still belong to the previous view,
+    // so never draw it over the current session's progressive snapshot.
+    // Subsequent snapshots carry the newest presentation options and the
+    // completed raw field is recolorized below.
+    if (activeFieldSession) return
+    if (cachedField) {
+      recolorize()
+      return
+    }
   }
+  scheduleRender()
 })
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -981,16 +1188,16 @@ const exportFrameStyle = computed(() => {
     <canvas
       ref="canvasA"
       class="frame"
-      :class="{ active: activeCanvas === 0, stale: pending && activeCanvas === 0 }"
+      :class="{ active: activeCanvas === 0, stale: showPendingIndicator && activeCanvas === 0 }"
       :style="canvasStyle(0)"
     />
     <canvas
       ref="canvasB"
       class="frame"
-      :class="{ active: activeCanvas === 1, stale: pending && activeCanvas === 1 }"
+      :class="{ active: activeCanvas === 1, stale: showPendingIndicator && activeCanvas === 1 }"
       :style="canvasStyle(1)"
     />
-    <div v-if="pending" class="busy-line"></div>
+    <div v-if="showPendingIndicator" class="busy-line"></div>
     <div v-if="specialPoints?.length" class="markers">
       <button
         v-for="p in specialPoints"

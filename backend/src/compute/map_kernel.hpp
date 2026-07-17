@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cmath>
 #include <functional>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -25,13 +26,22 @@ namespace fsd::compute {
 // Signature: step_fn(zr, zi, cr, ci, &zr_out, &zi_out)
 using CustomStepFn = void(*)(double, double, double, double, double*, double*);
 
+// Called after a rectangular region of a raw FieldOutput has been fully
+// written.  Interactive sessions use this to publish immutable patches while
+// the same native-resolution render continues in the background.
+using FieldTileCallback = std::function<void(int x, int y, int width, int height)>;
+
 struct MapParams {
-    // Center in parameter space and axis-aligned scale:
+    // Center in parameter space and logical viewport:
     //   - `scale` is the HEIGHT of the viewport in complex units.
-    //   - width span is scale * width/height.
+    //   - width span is scale * viewport_aspect.
+    // `viewport_aspect <= 0` keeps the legacy width/height fallback.  Render
+    // resolution controls sampling density only; it must not change the
+    // logical complex-plane bounds.
     double center_re = -0.75;
     double center_im =  0.0;
     double scale     =  3.0;
+    double viewport_aspect = 0.0;
 
     // Arbitrary-precision center (decimal string). When non-empty, the
     // perturbation reference orbit uses these instead of center_re/im.
@@ -83,7 +93,21 @@ struct MapParams {
     // check it at row/tile boundaries so stale viewport requests can exit
     // before finishing a full frame.
     std::function<bool()> should_cancel;
+
+    // Optional publication hook for incremental raw-field consumers. It is
+    // invoked only after the indicated output rectangle is complete; callers
+    // must keep the FieldOutput storage alive until the render returns.
+    FieldTileCallback on_field_tile_done;
 };
+
+inline double map_viewport_aspect(const MapParams& p) noexcept {
+    if (std::isfinite(p.viewport_aspect) && p.viewport_aspect > 0.0) {
+        return p.viewport_aspect;
+    }
+    return p.width > 0 && p.height > 0
+        ? static_cast<double>(p.width) / static_cast<double>(p.height)
+        : 1.0;
+}
 
 inline bool map_scalar_type_is_fp32(const std::string& scalar) noexcept {
     return scalar == "fp32" || scalar == "float32" || scalar == "float";
@@ -221,10 +245,65 @@ inline bool map_render_cancel_requested(const MapParams& p) {
     return p.should_cancel && p.should_cancel();
 }
 
+// Order independent raw-field work so its earliest completed tiles cover the
+// whole viewport instead of only its top-left corner.  This changes scheduling
+// order, not coordinates or the number of native pixels computed.  Reversing
+// coordinate bits before Morton interleaving yields a coarse-to-fine lattice:
+// e.g. the first 4x4 tile positions visit the quadrant anchors first.
+inline uint32_t map_progressive_reverse_bits(uint32_t value, unsigned bits) noexcept {
+    uint32_t reversed = 0;
+    for (unsigned bit = 0; bit < bits; ++bit) {
+        reversed = (reversed << 1u) | ((value >> bit) & 1u);
+    }
+    return reversed;
+}
+
+inline uint64_t map_progressive_work_rank(uint32_t x, uint32_t y, unsigned bits) noexcept {
+    const uint32_t rx = map_progressive_reverse_bits(x, bits);
+    const uint32_t ry = map_progressive_reverse_bits(y, bits);
+    uint64_t rank = 0;
+    for (unsigned bit = 0; bit < bits; ++bit) {
+        rank |= static_cast<uint64_t>((rx >> bit) & 1u) << (2u * bit);
+        rank |= static_cast<uint64_t>((ry >> bit) & 1u) << (2u * bit + 1u);
+    }
+    return rank;
+}
+
+inline std::vector<int> map_field_progressive_order(int columns, int rows, bool progressive) {
+    if (columns <= 0 || rows <= 0) return {};
+    const size_t count = static_cast<size_t>(columns) * static_cast<size_t>(rows);
+    std::vector<int> order(count);
+    if (!progressive) {
+        std::iota(order.begin(), order.end(), 0);
+        return order;
+    }
+
+    const unsigned extent = static_cast<unsigned>(std::max(columns, rows));
+    unsigned bits = 0;
+    while ((1u << bits) < extent) ++bits;
+
+    std::vector<std::pair<uint64_t, int>> ranked;
+    ranked.reserve(count);
+    for (int y = 0; y < rows; ++y) {
+        for (int x = 0; x < columns; ++x) {
+            ranked.emplace_back(
+                map_progressive_work_rank(static_cast<uint32_t>(x), static_cast<uint32_t>(y), bits),
+                y * columns + x);
+        }
+    }
+    std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
+    for (size_t i = 0; i < ranked.size(); ++i) order[i] = ranked[i].second;
+    return order;
+}
+
 // Raw field output — no colorization.
 // Escape metric  → iter_u32[W*H] (uint32 iter count) + norm_f32[W*H] (float32 |z|² at escape, 0 if bounded).
 // Non-escape     → field_f64[W*H] (float64 raw metric value) + field_min/field_max.
-// Always uses the OpenMP path (CUDA/AVX paths output BGR and can't easily expose raw data).
+// Uses a CPU scalar/SIMD field path when available. Progressive consumers may
+// request tile publication; whole-frame CUDA/hybrid plans then fall back to a
+// CPU path so the same FieldOutput can be published while it is computed.
 struct FieldOutput {
     int    width  = 0;
     int    height = 0;

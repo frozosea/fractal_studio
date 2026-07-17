@@ -161,6 +161,7 @@ export interface MapRenderRequest {
   centerReStr?: string
   centerImStr?: string
   scale: number          // height in complex units
+  viewportAspect?: number // logical viewport width/height; independent of render resolution
   width: number
   height: number
   iterations: number
@@ -238,6 +239,7 @@ export interface SpecialPointViewport {
   scale: number
   width: number
   height: number
+  rotationDeg?: number
 }
 
 export interface SpecialPointEnumRequest {
@@ -371,6 +373,7 @@ export interface MapFieldRequest {
   centerReStr?: string
   centerImStr?: string
   scale: number
+  viewportAspect?: number
   width: number
   height: number
   iterations: number
@@ -395,6 +398,7 @@ export interface MapFieldResponse {
   requestId?: string
   width: number
   height: number
+  viewportAspect?: number
   metric: string
   maxIter?: number
   iterB64?: string
@@ -405,6 +409,60 @@ export interface MapFieldResponse {
   generatedMs: number
   scalarUsed?: string
   engineUsed?: string
+}
+
+// Interactive field sessions keep one native-size field calculation alive on
+// the backend.  A snapshot is presentation data derived from the completed
+// portion of that same field; it is never a second, lower-resolution render.
+export interface MapFieldSessionStartRequest extends MapFieldRequest {
+  colorMap?: ColorMap
+  smooth?: boolean
+  colorMode?: 'direct' | 'eq_full' | 'eq_center'
+  slowAfterMs?: number
+}
+
+export type MapFieldSessionState = 'running' | 'completed' | 'cancelled' | 'failed'
+
+export interface MapFieldSessionStatus {
+  sessionId?: string
+  requestId?: string
+  status: MapFieldSessionState | string
+  state: MapFieldSessionState | string
+  width?: number
+  height?: number
+  viewportAspect?: number
+  centerRe?: number
+  centerIm?: number
+  scale?: number
+  rotationDeg?: number
+  elapsedMs?: number
+  slowAfterMs?: number
+  deadlinePassed?: boolean
+  presentationPhase?: 'native_wait' | 'degraded' | 'full' | string
+  revision?: number
+  completedPixels?: number
+  totalPixels?: number
+  coverage?: number
+  generatedMs?: number
+  scalarUsed?: string
+  engineUsed?: string
+  error?: string
+  started?: boolean
+  resultAcknowledged?: boolean
+}
+
+export interface MapFieldSessionSnapshot extends MapFieldSessionStatus {
+  previewWidth?: number
+  previewHeight?: number
+  previewAvailable?: boolean
+  rgbaB64?: string
+}
+
+export interface MapFieldSessionResult extends Partial<MapFieldResponse> {
+  sessionId?: string
+  state?: MapFieldSessionState | string
+  status: string
+  error?: string
 }
 
 export interface LnMapRequest {
@@ -1037,6 +1095,25 @@ export const api = {
   mapPreempt: (req: Pick<MapRenderRequest, 'preemptKey' | 'preemptSeq'>) =>
     postJson<{ status: string; preemptKey?: string; preemptSeq?: number }>('/api/map/preempt', req),
   mapField:   (req: MapFieldRequest, signal?: AbortSignal)   => postJson<MapFieldResponse>('/api/map/field', req, signal),
+  mapFieldSessionStart: (req: MapFieldSessionStartRequest, signal?: AbortSignal) =>
+    postJson<MapFieldSessionStatus>('/api/map/field/session/start', req, signal),
+  mapFieldSessionStatus: (sessionId: string, signal?: AbortSignal) =>
+    postJson<MapFieldSessionStatus>('/api/map/field/session/status', { sessionId }, signal),
+  mapFieldSessionSnapshot: (
+    sessionId: string,
+    previewWidth: number,
+    previewHeight: number,
+    presentation?: Pick<MapFieldSessionStartRequest, 'colorMap' | 'smooth'>,
+    signal?: AbortSignal,
+  ) => postJson<MapFieldSessionSnapshot>(
+    '/api/map/field/session/snapshot',
+    { sessionId, previewWidth, previewHeight, ...presentation },
+    signal,
+  ),
+  mapFieldSessionResult: (sessionId: string, signal?: AbortSignal) =>
+    postJson<MapFieldSessionResult>('/api/map/field/session/result', { sessionId }, signal),
+  mapFieldSessionAcknowledge: (sessionId: string, requestId: string) =>
+    postJson<MapFieldSessionStatus>('/api/map/field/session/ack', { sessionId, requestId }),
   lnMap:      (req: LnMapRequest)      => postJson<LnMapResponse>('/api/map/ln', req),
 
   specialPointsAuto: (k: number, p: number, pointType?: string) =>

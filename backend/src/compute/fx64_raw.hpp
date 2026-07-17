@@ -19,6 +19,12 @@ inline constexpr uint64_t TWO_SQRT2_Q60_FLOOR = 0x2D413CCCFE779921ULL;
 
 template <int FRAC>
 struct FixedViewportRaw {
+    int64_t center_re_raw = 0;
+    int64_t center_im_raw = 0;
+    int64_t span_re_raw = 0;
+    int64_t span_im_raw = 0;
+    int32_t width = 0;
+    int32_t height = 0;
     int64_t first_re_raw = 0;
     int64_t first_im_raw = 0;
     int64_t step_re_raw = 0;
@@ -168,6 +174,7 @@ inline FixedViewportRaw<FRAC> make_fixed_viewport_raw(
     double center_re,
     double center_im,
     double scale,
+    double viewport_aspect,
     int width,
     int height,
     double julia_re,
@@ -179,10 +186,17 @@ inline FixedViewportRaw<FRAC> make_fixed_viewport_raw(
     const int64_t center_re_raw = fixed_round_to_raw_sat<FRAC>(center_re);
     const int64_t center_im_raw = fixed_round_to_raw_sat<FRAC>(center_im);
     const int64_t scale_raw = fixed_round_to_raw_sat<FRAC>(scale);
+    const int64_t span_re_value_raw =
+        fixed_round_to_raw_sat<FRAC>(scale * viewport_aspect);
 
     const __int128 span_im_raw = static_cast<__int128>(scale_raw);
-    const __int128 span_re_raw =
-        height > 0 ? (static_cast<__int128>(scale_raw) * width) / height : 0;
+    const __int128 span_re_raw = static_cast<__int128>(span_re_value_raw);
+    v.center_re_raw = center_re_raw;
+    v.center_im_raw = center_im_raw;
+    v.span_re_raw = span_re_value_raw;
+    v.span_im_raw = scale_raw;
+    v.width = width;
+    v.height = height;
     v.step_re_raw = width > 0
         ? fixed_saturate_i128(span_re_raw / width)
         : 0;
@@ -206,6 +220,15 @@ inline FixedViewportRaw<FRAC> make_fixed_viewport_raw(
 
 template <int FRAC>
 inline int64_t fixed_pixel_re_raw(const FixedViewportRaw<FRAC>& v, int x) noexcept {
+    if (v.width > 0) {
+        const int64_t denominator = 2LL * v.width;
+        const int64_t numerator_factor = 2LL * x + 1LL;
+        const int64_t quotient = v.span_re_raw / denominator;
+        const int64_t remainder = v.span_re_raw % denominator;
+        const int64_t offset = quotient * numerator_factor +
+            (remainder * numerator_factor) / denominator;
+        return v.center_re_raw - v.span_re_raw / 2 + offset;
+    }
     return fixed_saturate_i128(
         static_cast<__int128>(v.first_re_raw) +
         static_cast<__int128>(x) * v.step_re_raw);
@@ -213,6 +236,15 @@ inline int64_t fixed_pixel_re_raw(const FixedViewportRaw<FRAC>& v, int x) noexce
 
 template <int FRAC>
 inline int64_t fixed_pixel_im_raw(const FixedViewportRaw<FRAC>& v, int y) noexcept {
+    if (v.height > 0) {
+        const int64_t denominator = 2LL * v.height;
+        const int64_t numerator_factor = 2LL * y + 1LL;
+        const int64_t quotient = v.span_im_raw / denominator;
+        const int64_t remainder = v.span_im_raw % denominator;
+        const int64_t offset = quotient * numerator_factor +
+            (remainder * numerator_factor) / denominator;
+        return v.center_im_raw + v.span_im_raw / 2 - offset;
+    }
     return fixed_saturate_i128(
         static_cast<__int128>(v.first_im_raw) -
         static_cast<__int128>(y) * v.step_im_raw);
@@ -282,6 +314,7 @@ inline Fx64ViewportRaw make_fx64_viewport_raw(
     double center_re,
     double center_im,
     double scale,
+    double viewport_aspect,
     int width,
     int height,
     double julia_re,
@@ -290,7 +323,7 @@ inline Fx64ViewportRaw make_fx64_viewport_raw(
     double bailout_sq
 ) noexcept {
     return make_fixed_viewport_raw<57>(
-        center_re, center_im, scale, width, height,
+        center_re, center_im, scale, viewport_aspect, width, height,
         julia_re, julia_im, bailout, bailout_sq);
 }
 

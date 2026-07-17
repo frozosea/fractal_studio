@@ -28,6 +28,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <limits>
 #include <set>
@@ -44,8 +45,10 @@ namespace {
 
 std::mutex g_mu;
 
-// hash → dlopen handle (for closing on delete)
-std::map<std::string, void*> g_libs;
+// hash → dlopen handle. A custom render can hold a shared lease after the
+// registry entry is deleted, keeping its function pointer valid until that
+// render actually finishes.
+std::map<std::string, std::shared_ptr<void>> g_libs;
 
 // hash → resolved step_fn pointer
 std::map<std::string, compute::CustomStepFn> g_fns;
@@ -365,7 +368,9 @@ bool loadLibLocked(const std::string& hash, const std::filesystem::path& so,
         return false;
     }
 
-    g_libs[hash] = handle;
+    g_libs[hash] = std::shared_ptr<void>(handle, [](void* h) {
+        if (h) ::dlclose(h);
+    });
     // POSIX C standard mandates this cast pattern for function pointers via dlsym.
     compute::CustomStepFn fn;
     std::memcpy(&fn, &sym, sizeof(fn));
@@ -402,6 +407,42 @@ void ensureDbLoadedLocked(const std::filesystem::path& repoRoot) {
 } // namespace
 
 // ─── Public lookup (called from routes_map.cpp) ───────────────────────────────
+
+CustomVariantLease acquireCustomVariantLease(
+    const std::filesystem::path& repoRoot,
+    const std::string& hash
+) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    ensureDbLoadedLocked(repoRoot);
+
+    Db db(repoRoot / "fractal_studio.db");
+    CustomVariantRecord rec;
+    if (!db.getCustomVariantByHash(hash, rec)) return {};
+
+    if (!g_fns.count(hash)) {
+        std::string err;
+        if (!loadLibLocked(hash, rec.soPath, err)) {
+            std::string compileError;
+            if (!compileSo(rec.formula, rec.bailout, hash, rec.soPath, compileError) ||
+                !loadLibLocked(hash, rec.soPath, err)) {
+                return {};
+            }
+        }
+    }
+
+    const auto fnIt = g_fns.find(hash);
+    const auto libIt = g_libs.find(hash);
+    if (fnIt == g_fns.end() || libIt == g_libs.end()) return {};
+
+    void* raw = nullptr;
+    std::memcpy(&raw, &fnIt->second, sizeof(raw));
+    return {
+        libIt->second,
+        raw,
+        effectiveCustomBailout(rec.formula, rec.bailout),
+        effectiveCustomBailoutSq(rec.formula, rec.bailout),
+    };
+}
 
 void* lookupCustomFn(const std::filesystem::path& repoRoot, const std::string& hash) {
     std::lock_guard<std::mutex> lock(g_mu);
@@ -608,7 +649,6 @@ std::string variantDeleteRoute(const std::filesystem::path& repoRoot, const std:
         std::lock_guard<std::mutex> lock(g_mu);
         const auto lit = g_libs.find(hash);
         if (lit != g_libs.end()) {
-            ::dlclose(lit->second);
             g_libs.erase(lit);
         }
         g_fns.erase(hash);

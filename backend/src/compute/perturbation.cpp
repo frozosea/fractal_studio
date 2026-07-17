@@ -168,10 +168,22 @@ JuliaAutoOrbitCacheEntry g_julia_auto_orbit_cache;
 // references pass the viewport center) and stores each step as double.
 // ---------------------------------------------------------------------------
 
+constexpr int kReferenceOrbitCancelStride = 1024;
+
+void throw_if_reference_orbit_cancelled(
+    const ReferenceOrbitCancelCallback& should_cancel)
+{
+    if (should_cancel && should_cancel()) {
+        throw std::runtime_error("cancelled");
+    }
+}
+
 RefOrbit ref_orbit_run_fp64(
     double zr, double zi, double cr, double ci,
-    int max_iter, double bailout_sq)
+    int max_iter, double bailout_sq,
+    const ReferenceOrbitCancelCallback& should_cancel)
 {
+    throw_if_reference_orbit_cancelled(should_cancel);
     RefOrbit ref;
     ref.bail2 = bailout_sq;
     ref.prec_used = "fp64";
@@ -181,6 +193,9 @@ RefOrbit ref_orbit_run_fp64(
     ref.z_im.push_back(zi);
 
     for (int n = 0; n < max_iter; ++n) {
+        if (n != 0 && (n % kReferenceOrbitCancelStride) == 0) {
+            throw_if_reference_orbit_cancelled(should_cancel);
+        }
         const double zr2 = zr * zr;
         const double zi2 = zi * zi;
         if (zr2 + zi2 > bailout_sq) {
@@ -203,8 +218,10 @@ RefOrbit ref_orbit_run_fp64(
 #if defined(FSD_HAS_FLOAT128)
 RefOrbit ref_orbit_run_fp128(
     __float128 zr, __float128 zi, __float128 cr, __float128 ci,
-    int max_iter, double bailout_sq)
+    int max_iter, double bailout_sq,
+    const ReferenceOrbitCancelCallback& should_cancel)
 {
+    throw_if_reference_orbit_cancelled(should_cancel);
     RefOrbit ref;
     ref.bail2 = bailout_sq;
     ref.prec_used = "fp128";
@@ -216,6 +233,9 @@ RefOrbit ref_orbit_run_fp128(
     const __float128 b2 = static_cast<__float128>(bailout_sq);
     const __float128 two = (__float128)2.0;
     for (int n = 0; n < max_iter; ++n) {
+        if (n != 0 && (n % kReferenceOrbitCancelStride) == 0) {
+            throw_if_reference_orbit_cancelled(should_cancel);
+        }
         const __float128 zr2 = zr * zr;
         const __float128 zi2 = zi * zi;
         if (zr2 + zi2 > b2) {
@@ -249,8 +269,10 @@ struct MpfrGuard {
 // zr/zi arrive seeded with Z_0; cr/ci with c. Iterates in place.
 RefOrbit ref_orbit_run_mpfr(
     mpfr_ptr zr, mpfr_ptr zi, mpfr_ptr cr, mpfr_ptr ci,
-    int max_iter, double bailout_sq, mpfr_prec_t prec)
+    int max_iter, double bailout_sq, mpfr_prec_t prec,
+    const ReferenceOrbitCancelCallback& should_cancel)
 {
+    throw_if_reference_orbit_cancelled(should_cancel);
     RefOrbit ref;
     ref.bail2 = bailout_sq;
     ref.prec_used = "mpfr" + std::to_string(static_cast<long>(prec));
@@ -264,6 +286,9 @@ RefOrbit ref_orbit_run_mpfr(
     ref.z_im.push_back(mpfr_get_d(zi, MPFR_RNDN));
 
     for (int n = 0; n < max_iter; ++n) {
+        if (n != 0 && (n % kReferenceOrbitCancelStride) == 0) {
+            throw_if_reference_orbit_cancelled(should_cancel);
+        }
         mpfr_mul(zr2, zr, zr, MPFR_RNDN);  // zr²
         mpfr_mul(zi2, zi, zi, MPFR_RNDN);  // zi²
         mpfr_add(mag, zr2, zi2, MPFR_RNDN);
@@ -297,19 +322,20 @@ RefOrbit ref_orbit_run_mpfr(
 
 RefOrbit mandel_orbit_from_strings(
     const std::string& cre_str, const std::string& cim_str,
-    int max_iter, double bailout_sq, const ResolvedRefPrec& rp)
+    int max_iter, double bailout_sq, const ResolvedRefPrec& rp,
+    const ReferenceOrbitCancelCallback& should_cancel)
 {
     switch (rp.prec) {
         case PerturbRefPrec::Fp64:
             return ref_orbit_run_fp64(0.0, 0.0,
                                       std::stod(cre_str), std::stod(cim_str),
-                                      max_iter, bailout_sq);
+                                      max_iter, bailout_sq, should_cancel);
 #if defined(FSD_HAS_FLOAT128)
         case PerturbRefPrec::Fp128:
             return ref_orbit_run_fp128(0, 0,
                                        strtoflt128(cre_str.c_str(), nullptr),
                                        strtoflt128(cim_str.c_str(), nullptr),
-                                       max_iter, bailout_sq);
+                                       max_iter, bailout_sq, should_cancel);
 #endif
 #if defined(FSD_HAS_MPFR)
         case PerturbRefPrec::Mpfr: {
@@ -319,29 +345,32 @@ RefOrbit mandel_orbit_from_strings(
             mpfr_set_d(zi, 0.0, MPFR_RNDN);
             mpfr_set_str(cr, cre_str.c_str(), 10, MPFR_RNDN);
             mpfr_set_str(ci, cim_str.c_str(), 10, MPFR_RNDN);
-            return ref_orbit_run_mpfr(zr, zi, cr, ci, max_iter, bailout_sq, prec);
+            return ref_orbit_run_mpfr(zr, zi, cr, ci, max_iter, bailout_sq,
+                                      prec, should_cancel);
         }
 #endif
         default:
             return ref_orbit_run_fp64(0.0, 0.0,
                                       std::stod(cre_str), std::stod(cim_str),
-                                      max_iter, bailout_sq);
+                                      max_iter, bailout_sq, should_cancel);
     }
 }
 
 RefOrbit mandel_orbit_from_doubles(
     double cre, double cim,
-    int max_iter, double bailout_sq, const ResolvedRefPrec& rp)
+    int max_iter, double bailout_sq, const ResolvedRefPrec& rp,
+    const ReferenceOrbitCancelCallback& should_cancel)
 {
     switch (rp.prec) {
         case PerturbRefPrec::Fp64:
-            return ref_orbit_run_fp64(0.0, 0.0, cre, cim, max_iter, bailout_sq);
+            return ref_orbit_run_fp64(0.0, 0.0, cre, cim, max_iter, bailout_sq,
+                                      should_cancel);
 #if defined(FSD_HAS_FLOAT128)
         case PerturbRefPrec::Fp128:
             return ref_orbit_run_fp128(0, 0,
                                        static_cast<__float128>(cre),
                                        static_cast<__float128>(cim),
-                                       max_iter, bailout_sq);
+                                       max_iter, bailout_sq, should_cancel);
 #endif
 #if defined(FSD_HAS_MPFR)
         case PerturbRefPrec::Mpfr: {
@@ -351,11 +380,13 @@ RefOrbit mandel_orbit_from_doubles(
             mpfr_set_d(zi, 0.0, MPFR_RNDN);
             mpfr_set_d(cr, cre, MPFR_RNDN);  // doubles are exact in MPFR
             mpfr_set_d(ci, cim, MPFR_RNDN);
-            return ref_orbit_run_mpfr(zr, zi, cr, ci, max_iter, bailout_sq, prec);
+            return ref_orbit_run_mpfr(zr, zi, cr, ci, max_iter, bailout_sq,
+                                      prec, should_cancel);
         }
 #endif
         default:
-            return ref_orbit_run_fp64(0.0, 0.0, cre, cim, max_iter, bailout_sq);
+            return ref_orbit_run_fp64(0.0, 0.0, cre, cim, max_iter, bailout_sq,
+                                      should_cancel);
     }
 }
 
@@ -368,8 +399,10 @@ RefOrbit mandel_orbit_from_doubles(
 RefOrbit compute_reference_orbit_scaled(
     double center_re, double center_im,
     int max_iter, double bailout_sq, double scale,
-    PerturbRefPrec ref_prec)
+    PerturbRefPrec ref_prec,
+    ReferenceOrbitCancelCallback should_cancel)
 {
+    throw_if_reference_orbit_cancelled(should_cancel);
     const ResolvedRefPrec rp = resolve_ref_prec(ref_prec, scale);
     {
         std::lock_guard<std::mutex> lk(g_plain_orbit_cache_mu);
@@ -381,7 +414,11 @@ RefOrbit compute_reference_orbit_scaled(
         }
     }
     RefOrbit ref = mandel_orbit_from_doubles(center_re, center_im,
-                                             max_iter, bailout_sq, rp);
+                                             max_iter, bailout_sq, rp,
+                                             should_cancel);
+    // Do not replace a reusable orbit with a request that was cancelled just
+    // after the runner's final periodic check.
+    throw_if_reference_orbit_cancelled(should_cancel);
     {
         std::lock_guard<std::mutex> lk(g_plain_orbit_cache_mu);
         g_plain_orbit_cache = PlainOrbitCacheEntry{
@@ -393,18 +430,21 @@ RefOrbit compute_reference_orbit_scaled(
 
 RefOrbit compute_reference_orbit(
     double center_re, double center_im,
-    int max_iter, double bailout_sq)
+    int max_iter, double bailout_sq,
+    ReferenceOrbitCancelCallback should_cancel)
 {
     // Legacy scale-less entry: shallow-tier resolution (fp128 when built in),
     // matching its historical behavior.
     return compute_reference_orbit_scaled(center_re, center_im,
                                           max_iter, bailout_sq,
-                                          /*scale=*/1.0, PerturbRefPrec::Auto);
+                                          /*scale=*/1.0, PerturbRefPrec::Auto,
+                                          should_cancel);
 }
 
 static RefOrbit compute_reference_orbit_auto_impl(
     const std::string& cre_str, const std::string& cim_str,
-    int max_iter, double bailout_sq, double scale, const ResolvedRefPrec& rp)
+    int max_iter, double bailout_sq, double scale, const ResolvedRefPrec& rp,
+    const ReferenceOrbitCancelCallback& should_cancel)
 {
     // If the UI supplied decimal center strings, keep them through the reference
     // orbit. Perturbation starts at scale < 1e-13, where rounding the center to
@@ -413,16 +453,19 @@ static RefOrbit compute_reference_orbit_auto_impl(
         const double cre = cre_str.empty() ? 0.0 : std::stod(cre_str);
         const double cim = cim_str.empty() ? 0.0 : std::stod(cim_str);
         return compute_reference_orbit_scaled(cre, cim, max_iter, bailout_sq,
-                                              scale, rp.prec);
+                                              scale, rp.prec, should_cancel);
     }
-    return mandel_orbit_from_strings(cre_str, cim_str, max_iter, bailout_sq, rp);
+    return mandel_orbit_from_strings(cre_str, cim_str, max_iter, bailout_sq,
+                                     rp, should_cancel);
 }
 
 RefOrbit compute_reference_orbit_auto(
     const std::string& cre_str, const std::string& cim_str,
     int max_iter, double bailout_sq, double scale,
-    PerturbRefPrec ref_prec)
+    PerturbRefPrec ref_prec,
+    ReferenceOrbitCancelCallback should_cancel)
 {
+    throw_if_reference_orbit_cancelled(should_cancel);
     const ResolvedRefPrec rp = resolve_ref_prec(ref_prec, scale);
     const bool cacheable = !cre_str.empty() && !cim_str.empty();
     if (cacheable) {
@@ -435,7 +478,10 @@ RefOrbit compute_reference_orbit_auto(
         }
     }
     RefOrbit ref = compute_reference_orbit_auto_impl(cre_str, cim_str, max_iter,
-                                                     bailout_sq, scale, rp);
+                                                     bailout_sq, scale, rp,
+                                                     should_cancel);
+    // A cancelled construction never enters the reuse cache.
+    throw_if_reference_orbit_cancelled(should_cancel);
     if (cacheable) {
         std::lock_guard<std::mutex> lk(g_mandel_auto_orbit_cache_mu);
         g_mandel_auto_orbit_cache = AutoOrbitCacheEntry{
@@ -452,43 +498,47 @@ RefOrbit compute_reference_orbit_auto(
 RefOrbit compute_reference_orbit_julia(
     double z0_re, double z0_im,
     double julia_re, double julia_im,
-    int max_iter, double bailout_sq)
+    int max_iter, double bailout_sq,
+    ReferenceOrbitCancelCallback should_cancel)
 {
+    throw_if_reference_orbit_cancelled(should_cancel);
 #if defined(FSD_HAS_FLOAT128)
     return ref_orbit_run_fp128(static_cast<__float128>(z0_re),
                                static_cast<__float128>(z0_im),
                                static_cast<__float128>(julia_re),
                                static_cast<__float128>(julia_im),
-                               max_iter, bailout_sq);
+                               max_iter, bailout_sq, should_cancel);
 #else
     return ref_orbit_run_fp64(z0_re, z0_im, julia_re, julia_im,
-                              max_iter, bailout_sq);
+                              max_iter, bailout_sq, should_cancel);
 #endif
 }
 
 static RefOrbit compute_reference_orbit_julia_auto_impl(
     const std::string& z0_re_str, const std::string& z0_im_str,
     double julia_re, double julia_im,
-    int max_iter, double bailout_sq, const ResolvedRefPrec& rp)
+    int max_iter, double bailout_sq, const ResolvedRefPrec& rp,
+    const ReferenceOrbitCancelCallback& should_cancel)
 {
     if (z0_re_str.empty() || z0_im_str.empty()) {
         const double z0re = z0_re_str.empty() ? 0.0 : std::stod(z0_re_str);
         const double z0im = z0_im_str.empty() ? 0.0 : std::stod(z0_im_str);
         return compute_reference_orbit_julia(z0re, z0im, julia_re, julia_im,
-                                             max_iter, bailout_sq);
+                                             max_iter, bailout_sq, should_cancel);
     }
 
     switch (rp.prec) {
         case PerturbRefPrec::Fp64:
             return ref_orbit_run_fp64(std::stod(z0_re_str), std::stod(z0_im_str),
-                                      julia_re, julia_im, max_iter, bailout_sq);
+                                      julia_re, julia_im, max_iter, bailout_sq,
+                                      should_cancel);
 #if defined(FSD_HAS_FLOAT128)
         case PerturbRefPrec::Fp128:
             return ref_orbit_run_fp128(strtoflt128(z0_re_str.c_str(), nullptr),
                                        strtoflt128(z0_im_str.c_str(), nullptr),
                                        static_cast<__float128>(julia_re),
                                        static_cast<__float128>(julia_im),
-                                       max_iter, bailout_sq);
+                                       max_iter, bailout_sq, should_cancel);
 #endif
 #if defined(FSD_HAS_MPFR)
         case PerturbRefPrec::Mpfr: {
@@ -498,12 +548,14 @@ static RefOrbit compute_reference_orbit_julia_auto_impl(
             mpfr_set_str(zi, z0_im_str.c_str(), 10, MPFR_RNDN);
             mpfr_set_d(cr, julia_re, MPFR_RNDN);
             mpfr_set_d(ci, julia_im, MPFR_RNDN);
-            return ref_orbit_run_mpfr(zr, zi, cr, ci, max_iter, bailout_sq, prec);
+            return ref_orbit_run_mpfr(zr, zi, cr, ci, max_iter, bailout_sq,
+                                      prec, should_cancel);
         }
 #endif
         default:
             return ref_orbit_run_fp64(std::stod(z0_re_str), std::stod(z0_im_str),
-                                      julia_re, julia_im, max_iter, bailout_sq);
+                                      julia_re, julia_im, max_iter, bailout_sq,
+                                      should_cancel);
     }
 }
 
@@ -511,8 +563,10 @@ RefOrbit compute_reference_orbit_julia_auto(
     const std::string& z0_re_str, const std::string& z0_im_str,
     double julia_re, double julia_im,
     int max_iter, double bailout_sq, double scale,
-    PerturbRefPrec ref_prec)
+    PerturbRefPrec ref_prec,
+    ReferenceOrbitCancelCallback should_cancel)
 {
+    throw_if_reference_orbit_cancelled(should_cancel);
     const ResolvedRefPrec rp = resolve_ref_prec(ref_prec, scale);
     const bool cacheable = !z0_re_str.empty() && !z0_im_str.empty();
     if (cacheable) {
@@ -526,7 +580,10 @@ RefOrbit compute_reference_orbit_julia_auto(
         }
     }
     RefOrbit ref = compute_reference_orbit_julia_auto_impl(
-        z0_re_str, z0_im_str, julia_re, julia_im, max_iter, bailout_sq, rp);
+        z0_re_str, z0_im_str, julia_re, julia_im, max_iter, bailout_sq, rp,
+        should_cancel);
+    // A cancelled construction never enters the reuse cache.
+    throw_if_reference_orbit_cancelled(should_cancel);
     if (cacheable) {
         std::lock_guard<std::mutex> lk(g_julia_auto_orbit_cache_mu);
         g_julia_auto_orbit_cache = JuliaAutoOrbitCacheEntry{
@@ -576,7 +633,7 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
 
     const int W = p.width;
     const int H = p.height;
-    const double aspect  = static_cast<double>(W) / H;
+    const double aspect  = map_viewport_aspect(p);
     const double span_im = p.scale;
     const double span_re = p.scale * aspect;
     const double bail2   = p.bailout_sq;
@@ -608,18 +665,23 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
     if (is_julia) {
         ref = p.center_re_str.empty()
             ? compute_reference_orbit_julia(p.center_re, p.center_im,
-                                             p.julia_re, p.julia_im, max_iter, bail2)
+                                             p.julia_re, p.julia_im, max_iter, bail2,
+                                             p.should_cancel)
             : compute_reference_orbit_julia_auto(p.center_re_str, p.center_im_str,
                                                   p.julia_re, p.julia_im,
-                                                  max_iter, bail2, p.scale, mode.ref);
+                                                  max_iter, bail2, p.scale, mode.ref,
+                                                  p.should_cancel);
         crit = compute_reference_orbit_scaled(p.julia_re, p.julia_im,
-                                              max_iter, bail2, p.scale, mode.ref);
+                                              max_iter, bail2, p.scale, mode.ref,
+                                              p.should_cancel);
     } else {
         ref = p.center_re_str.empty()
             ? compute_reference_orbit_scaled(p.center_re, p.center_im,
-                                             max_iter, bail2, p.scale, mode.ref)
+                                             max_iter, bail2, p.scale, mode.ref,
+                                             p.should_cancel)
             : compute_reference_orbit_auto(p.center_re_str, p.center_im_str,
-                                           max_iter, bail2, p.scale, mode.ref);
+                                           max_iter, bail2, p.scale, mode.ref,
+                                           p.should_cancel);
     }
     const RefOrbit& kref = is_julia ? crit : ref;
 
@@ -687,7 +749,11 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
             else want = "openmp";
         }
     }
-    [[maybe_unused]] const bool wants_cuda = want == "cuda" || want == "hybrid";
+    // The current CUDA perturbation launch only publishes a complete frame.
+    // Progressive sessions need the CPU tile loop below so completed samples
+    // can be exposed while the same render continues.
+    [[maybe_unused]] const bool wants_cuda = !p.on_field_tile_done &&
+        (want == "cuda" || want == "hybrid");
     using BatchFn = void (*)(
         const double*, const double*, int, int, int, int,
         const double*, const double*, const double*, const double*,
@@ -705,7 +771,13 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
     BatchFn   batch   = nullptr;
     BatchFn32 batch32 = nullptr;
     const char* batch_engine = "openmp";
-    if (batch_ok && !track_minmax && want != "openmp" && !d128) {
+    // The AVX batch kernels process a whole tile without a cooperative
+    // cancellation point.  A progressive session must keep cancellation
+    // bounded and publish only completed tiles, so it deliberately uses the
+    // scalar tile loop below.  Ordinary one-shot renders retain the batch
+    // fast path unchanged.
+    if (!p.on_field_tile_done && batch_ok && !track_minmax &&
+        want != "openmp" && !d128) {
         if (d32) {
             if (want != "avx2" && perturb_avx512_available()) {
                 batch32 = perturb_iterate_batch_avx512_fp32;
@@ -754,6 +826,7 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
                 res.escape_mag2 = norms[idx];
                 emit(static_cast<size_t>(idx), idx % W, idx / W, res);
             }
+            if (p.on_field_tile_done) p.on_field_tile_done(0, 0, W, H);
             engine_used = "cuda";
             rendered = true;
         }
@@ -798,14 +871,30 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
         const __float128 bail2_q = static_cast<__float128>(bail2);
 #endif
 
-        constexpr int tile_size = 32;
+        constexpr int kBatchTileSize = 32;
+        // A progressive field exposes the same native-resolution samples as
+        // they complete.  Small tiles reduce both its first-preview latency
+        // and its cancellation bound; the non-session path keeps 32x32 tiles
+        // for its established batch throughput.
+        const int tile_size = p.on_field_tile_done ? 8 : kBatchTileSize;
         const int tiles_x = (W + tile_size - 1) / tile_size;
         const int tiles_y = (H + tile_size - 1) / tile_size;
         const int tile_count = tiles_x * tiles_y;
+        // The preview samples this same native field while it is being
+        // computed.  Spread the earliest completed tiles over the viewport;
+        // no extra low-resolution perturbation pass is introduced.
+        const std::vector<int> progressive_tile_order = p.on_field_tile_done
+            ? map_field_progressive_order(tiles_x, tiles_y, true)
+            : std::vector<int>{};
+        const PerturbPixelCancelProbe* pixel_cancel_probe =
+            p.on_field_tile_done && p.should_cancel ? &p.should_cancel : nullptr;
         std::atomic<bool> cancelled{false};
 
         #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 1)
-        for (int tile = 0; tile < tile_count; ++tile) {
+        for (int work_index = 0; work_index < tile_count; ++work_index) {
+            const int tile = progressive_tile_order.empty()
+                ? work_index
+                : progressive_tile_order[static_cast<size_t>(work_index)];
             if (cancelled.load(std::memory_order_relaxed)) continue;
             if (map_render_cancel_requested(p)) {
                 cancelled.store(true, std::memory_order_relaxed);
@@ -830,16 +919,17 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
                 }
             };
 
+            bool tile_cancelled = false;
             if (batch || batch32) {
-                int32_t b_iter[tile_size * tile_size];
+                int32_t b_iter[kBatchTileSize * kBatchTileSize];
                 int cnt = 0;
 
                 if (batch32) {
-                    alignas(64) float bdz_re[tile_size * tile_size];
-                    alignas(64) float bdz_im[tile_size * tile_size];
-                    alignas(64) float bdc_re[tile_size * tile_size];
-                    alignas(64) float bdc_im[tile_size * tile_size];
-                    alignas(64) float b_mag2[tile_size * tile_size];
+                    alignas(64) float bdz_re[kBatchTileSize * kBatchTileSize];
+                    alignas(64) float bdz_im[kBatchTileSize * kBatchTileSize];
+                    alignas(64) float bdc_re[kBatchTileSize * kBatchTileSize];
+                    alignas(64) float bdc_im[kBatchTileSize * kBatchTileSize];
+                    alignas(64) float b_mag2[kBatchTileSize * kBatchTileSize];
 
                     for (int y = y0; y < y1; ++y) {
                         for (int x = x0; x < x1; ++x, ++cnt) {
@@ -875,11 +965,11 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
                         }
                     }
                 } else {
-                    alignas(64) double bdz_re[tile_size * tile_size];
-                    alignas(64) double bdz_im[tile_size * tile_size];
-                    alignas(64) double bdc_re[tile_size * tile_size];
-                    alignas(64) double bdc_im[tile_size * tile_size];
-                    double b_mag2[tile_size * tile_size];
+                    alignas(64) double bdz_re[kBatchTileSize * kBatchTileSize];
+                    alignas(64) double bdz_im[kBatchTileSize * kBatchTileSize];
+                    alignas(64) double bdc_re[kBatchTileSize * kBatchTileSize];
+                    alignas(64) double bdc_im[kBatchTileSize * kBatchTileSize];
+                    double b_mag2[kBatchTileSize * kBatchTileSize];
 
                     for (int y = y0; y < y1; ++y) {
                         for (int x = x0; x < x1; ++x, ++cnt) {
@@ -914,7 +1004,12 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
                     }
                 }
             } else {
-                for (int y = y0; y < y1; ++y) {
+                for (int y = y0; y < y1 && !tile_cancelled; ++y) {
+                    if (cancelled.load(std::memory_order_relaxed) ||
+                        map_render_cancel_requested(p)) {
+                        tile_cancelled = true;
+                        break;
+                    }
                     for (int x = x0; x < x1; ++x) {
                         PerturbPixel res;
 #if defined(FSD_HAS_FLOAT128)
@@ -941,10 +1036,16 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
                             res = track_minmax
                                 ? perturb_iterate<true, __float128>(
                                       Rrq, Riq, Rlen, Krq, Kiq, Klen,
-                                      dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2_q)
+                                      dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2_q,
+                                      pixel_cancel_probe)
                                 : perturb_iterate<false, __float128>(
                                       Rrq, Riq, Rlen, Krq, Kiq, Klen,
-                                      dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2_q);
+                                      dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2_q,
+                                      pixel_cancel_probe);
+                            if (res.cancelled) {
+                                tile_cancelled = true;
+                                break;
+                            }
                             emit(static_cast<size_t>(y) * W + x, x, y, res);
                             continue;
                         }
@@ -965,25 +1066,40 @@ MapStats run_perturbation_driver(const MapParams& p, Emit&& emit)
                                       Rr32, Ri32, Rlen, Kr32, Ki32, Klen,
                                       static_cast<float>(dz0_re), static_cast<float>(dz0_im),
                                       static_cast<float>(dc_re), static_cast<float>(dc_im),
-                                      max_iter, static_cast<float>(bail2))
+                                      max_iter, static_cast<float>(bail2),
+                                      pixel_cancel_probe)
                                 : perturb_iterate<false, float>(
                                       Rr32, Ri32, Rlen, Kr32, Ki32, Klen,
                                       static_cast<float>(dz0_re), static_cast<float>(dz0_im),
                                       static_cast<float>(dc_re), static_cast<float>(dc_im),
-                                      max_iter, static_cast<float>(bail2));
+                                      max_iter, static_cast<float>(bail2),
+                                      pixel_cancel_probe);
                         } else {
                             res = track_minmax
                                 ? perturb_iterate<true>(
                                       Rr, Ri, Rlen, Kr, Ki, Klen,
-                                      dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2)
+                                      dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2,
+                                      pixel_cancel_probe)
                                 : perturb_iterate<false>(
                                       Rr, Ri, Rlen, Kr, Ki, Klen,
-                                      dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2);
+                                      dz0_re, dz0_im, dc_re, dc_im, max_iter, bail2,
+                                      pixel_cancel_probe);
                         }
 
+                        if (res.cancelled) {
+                            tile_cancelled = true;
+                            break;
+                        }
                         emit(static_cast<size_t>(y) * W + x, x, y, res);
                     }
                 }
+            }
+            if (tile_cancelled || map_render_cancel_requested(p)) {
+                cancelled.store(true, std::memory_order_relaxed);
+                continue;
+            }
+            if (p.on_field_tile_done) {
+                p.on_field_tile_done(x0, y0, x1 - x0, y1 - y0);
             }
         }
 

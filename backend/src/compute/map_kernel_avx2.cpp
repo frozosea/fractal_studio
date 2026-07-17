@@ -220,7 +220,7 @@ inline void avx2_step_ps(
 }
 
 template <int VariantId>
-void avx2_fp64_row(
+bool avx2_fp64_row(
     int y, int W, int H,
     double re_min, double im_max,
     double span_re, double span_im,
@@ -231,28 +231,46 @@ void avx2_fp64_row(
     uint32_t* iter_row = nullptr,
     float* norm_row = nullptr,
     double center_re = 0.0, double center_im = 0.0,
-    double cos_theta = 1.0, double sin_theta = 0.0
+    double cos_theta = 1.0, double sin_theta = 0.0,
+    const std::function<bool()>* cancel_probe = nullptr,
+    std::atomic<bool>* cancelled = nullptr,
+    int x_begin = 0,
+    int x_end = -1
 ) {
+    const auto cancel_requested = [&]() {
+        if (cancelled && cancelled->load(std::memory_order_relaxed)) return true;
+        if (cancel_probe && *cancel_probe && (*cancel_probe)()) {
+            if (cancelled) cancelled->store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    };
     const bool has_rot = sin_theta != 0.0;
     const double im_d = has_rot ? 0.0 : (im_max - (static_cast<double>(y) + 0.5) / H * span_im);
-    const double pixel_step = span_im / H;
+    const double pixel_step_x = span_re / W;
+    const double pixel_step_y = span_im / H;
     const double half_w = static_cast<double>(W) * 0.5;
-    const double dy_base = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+    const double dy_base = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step_y;
     const __m256d vbail2 = _mm256_set1_pd(bail2);
     const __m256d vzero = _mm256_setzero_pd();
     const bool track_min = (metric == Metric::MinAbs || metric == Metric::Envelope);
     const bool track_max = (metric == Metric::MaxAbs || metric == Metric::Envelope);
+    const int first_x = std::max(0, x_begin);
+    const int x_limit = x_end < 0
+        ? W
+        : std::min(W, std::max(first_x, x_end));
 
-    for (int x = 0; x < W; x += 4) {
+    for (int x = first_x; x < x_limit; x += 4) {
+        if (cancel_requested()) return false;
         double re_arr[4], im_arr[4];
         int iter_arr[4] = {max_iter, max_iter, max_iter, max_iter};
         double norm_arr[4] = {0.0, 0.0, 0.0, 0.0};
         int lane_mask = 0;
         for (int k = 0; k < 4; ++k) {
             const int px_x = x + k;
-            if (px_x < W) {
+            if (px_x < x_limit) {
                 if (has_rot) {
-                    const double dx = (static_cast<double>(px_x) + 0.5 - half_w) * pixel_step;
+                    const double dx = (static_cast<double>(px_x) + 0.5 - half_w) * pixel_step_x;
                     re_arr[k] = center_re + dx * cos_theta - dy_base * sin_theta;
                     im_arr[k] = center_im + dx * sin_theta + dy_base * cos_theta;
                 } else {
@@ -289,6 +307,7 @@ void avx2_fp64_row(
 
         int active = lane_mask;
         for (int i = 0; i < max_iter && active; ++i) {
+            if ((i & 511) == 0 && cancel_requested()) return false;
             const __m256d active_vec = avx2_lane_mask_pd(active);
             __m256d new_re, new_im;
             avx2_step<VariantId>(zre, zim, zre2, zim2, cre, cim, new_re, new_im);
@@ -328,7 +347,7 @@ void avx2_fp64_row(
         if (track_min) _mm256_storeu_pd(mn_arr, vmn);
         if (track_max) _mm256_storeu_pd(mx_arr, vmx);
 
-        for (int k = 0; k < 4 && (x + k) < W; ++k) {
+        for (int k = 0; k < 4 && (x + k) < x_limit; ++k) {
             const bool escaped_k = !((active >> k) & 1);
 
             // Field mode (Escape only): raw iter + |z|² at escape (bounded → max_iter, 0).
@@ -352,10 +371,11 @@ void avx2_fp64_row(
             }
         }
     }
+    return true;
 }
 
 template <int VariantId>
-void avx2_fp32_row(
+bool avx2_fp32_row(
     int y, int W, int H,
     float re_min, float im_max,
     float span_re, float span_im,
@@ -366,19 +386,37 @@ void avx2_fp32_row(
     uint32_t* iter_row = nullptr,
     float* norm_row = nullptr,
     float center_re = 0.0f, float center_im = 0.0f,
-    float cos_theta = 1.0f, float sin_theta = 0.0f
+    float cos_theta = 1.0f, float sin_theta = 0.0f,
+    const std::function<bool()>* cancel_probe = nullptr,
+    std::atomic<bool>* cancelled = nullptr,
+    int x_begin = 0,
+    int x_end = -1
 ) {
+    const auto cancel_requested = [&]() {
+        if (cancelled && cancelled->load(std::memory_order_relaxed)) return true;
+        if (cancel_probe && *cancel_probe && (*cancel_probe)()) {
+            if (cancelled) cancelled->store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    };
     const bool has_rot = sin_theta != 0.0f;
     const float im_d = has_rot ? 0.0f : (im_max - (static_cast<float>(y) + 0.5f) / static_cast<float>(H) * span_im);
-    const float pixel_step = span_im / static_cast<float>(H);
+    const float pixel_step_x = span_re / static_cast<float>(W);
+    const float pixel_step_y = span_im / static_cast<float>(H);
     const float half_w = static_cast<float>(W) * 0.5f;
-    const float dy_base = -(static_cast<float>(y) + 0.5f - static_cast<float>(H) * 0.5f) * pixel_step;
+    const float dy_base = -(static_cast<float>(y) + 0.5f - static_cast<float>(H) * 0.5f) * pixel_step_y;
     const __m256 vbail2 = _mm256_set1_ps(bail2);
     const __m256 vzero = _mm256_setzero_ps();
     const bool track_min = (metric == Metric::MinAbs || metric == Metric::Envelope);
     const bool track_max = (metric == Metric::MaxAbs || metric == Metric::Envelope);
+    const int first_x = std::max(0, x_begin);
+    const int x_limit = x_end < 0
+        ? W
+        : std::min(W, std::max(first_x, x_end));
 
-    for (int x = 0; x < W; x += 8) {
+    for (int x = first_x; x < x_limit; x += 8) {
+        if (cancel_requested()) return false;
         float re_arr[8], im_arr[8];
         int iter_arr[8] = {
             max_iter, max_iter, max_iter, max_iter,
@@ -388,9 +426,9 @@ void avx2_fp32_row(
         int lane_mask = 0;
         for (int k = 0; k < 8; ++k) {
             const int px_x = x + k;
-            if (px_x < W) {
+            if (px_x < x_limit) {
                 if (has_rot) {
-                    const float dx = (static_cast<float>(px_x) + 0.5f - half_w) * pixel_step;
+                    const float dx = (static_cast<float>(px_x) + 0.5f - half_w) * pixel_step_x;
                     re_arr[k] = center_re + dx * cos_theta - dy_base * sin_theta;
                     im_arr[k] = center_im + dx * sin_theta + dy_base * cos_theta;
                 } else {
@@ -427,6 +465,7 @@ void avx2_fp32_row(
 
         int active = lane_mask;
         for (int i = 0; i < max_iter && active; ++i) {
+            if ((i & 511) == 0 && cancel_requested()) return false;
             const __m256 active_vec = avx2_lane_mask_ps(active);
             __m256 new_re, new_im;
             avx2_step_ps<VariantId>(zre, zim, zre2, zim2, cre, cim, new_re, new_im);
@@ -463,7 +502,7 @@ void avx2_fp32_row(
         if (track_min) _mm256_storeu_ps(mn_arr, vmn);
         if (track_max) _mm256_storeu_ps(mx_arr, vmx);
 
-        for (int k = 0; k < 8 && (x + k) < W; ++k) {
+        for (int k = 0; k < 8 && (x + k) < x_limit; ++k) {
             const bool escaped_k = !((active >> k) & 1);
             if (iter_row) {
                 iter_row[x + k] = escaped_k ? static_cast<uint32_t>(iter_arr[k])
@@ -485,6 +524,7 @@ void avx2_fp32_row(
             }
         }
     }
+    return true;
 }
 
 template <int VariantId, bool Fp32>
@@ -495,7 +535,7 @@ MapStats render_avx2_variant(const MapParams& p, cv::Mat& out) {
 
     const int W = p.width;
     const int H = p.height;
-    const double aspect = static_cast<double>(W) / H;
+    const double aspect = map_viewport_aspect(p);
     const double span_im = p.scale;
     const double span_re = p.scale * aspect;
     const double re_min = p.center_re - span_re * 0.5;
@@ -560,7 +600,7 @@ MapStats render_avx2_field_variant(const MapParams& p, FieldOutput& out) {
     out.iter_u32.assign(static_cast<size_t>(W) * static_cast<size_t>(H), 0u);
     out.norm_f32.assign(static_cast<size_t>(W) * static_cast<size_t>(H), 0.0f);
 
-    const double aspect = static_cast<double>(W) / H;
+    const double aspect = map_viewport_aspect(p);
     const double span_im = p.scale;
     const double span_re = p.scale * aspect;
     const double re_min = p.center_re - span_re * 0.5;
@@ -571,10 +611,29 @@ MapStats render_avx2_field_variant(const MapParams& p, FieldOutput& out) {
     const double sin_t = has_rot ? std::sin(rot_rad) : 0.0;
     const int thread_count = resolve_render_threads(p.render_threads);
     std::atomic<bool> cancelled{false};
+    // A high-iteration row can itself take longer than the interaction
+    // deadline.  Session-only work is therefore segmented horizontally; each
+    // completed segment is part of the same full-resolution FieldOutput and
+    // can be published immediately.  Ordinary field callers retain whole-row
+    // work units and their previous throughput characteristics.
+    constexpr int progressive_segment_width = 64;
+    const int segment_width = p.on_field_tile_done ? progressive_segment_width : W;
+    const int segments_x = (W + segment_width - 1) / segment_width;
+    const int work_count = segments_x * H;
+    const std::vector<int> progressive_work_order = p.on_field_tile_done
+        ? map_field_progressive_order(segments_x, H, true)
+        : std::vector<int>{};
 
     const auto t0 = std::chrono::steady_clock::now();
-    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 4)
-    for (int y = 0; y < H; ++y) {
+    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 1)
+    for (int work_index = 0; work_index < work_count; ++work_index) {
+        const int work = progressive_work_order.empty()
+            ? work_index
+            : progressive_work_order[static_cast<size_t>(work_index)];
+        const int segment_x = work % segments_x;
+        const int y = work / segments_x;
+        const int x0 = segment_x * segment_width;
+        const int x1 = std::min(W, x0 + segment_width);
         if (cancelled.load(std::memory_order_relaxed)) continue;
         if (map_render_cancel_requested(p)) {
             cancelled.store(true, std::memory_order_relaxed);
@@ -591,15 +650,19 @@ MapStats render_avx2_field_variant(const MapParams& p, FieldOutput& out) {
                 p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im),
                 Metric::Escape, p.colormap, nullptr, iter_row, norm_row,
                 static_cast<float>(p.center_re), static_cast<float>(p.center_im),
-                static_cast<float>(cos_t), static_cast<float>(sin_t));
+                static_cast<float>(cos_t), static_cast<float>(sin_t),
+                &p.should_cancel, &cancelled, x0, x1);
         } else {
             avx2_fp64_row<VariantId>(
                 y, W, H, re_min, im_max, span_re, span_im,
                 p.bailout_sq, p.iterations,
                 p.julia, p.julia_re, p.julia_im,
                 Metric::Escape, p.colormap, nullptr, iter_row, norm_row,
-                p.center_re, p.center_im, cos_t, sin_t);
+                p.center_re, p.center_im, cos_t, sin_t,
+                &p.should_cancel, &cancelled, x0, x1);
         }
+        if (cancelled.load(std::memory_order_relaxed)) continue;
+        if (p.on_field_tile_done) p.on_field_tile_done(x0, y, x1 - x0, 1);
     }
     if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
         throw std::runtime_error("cancelled");

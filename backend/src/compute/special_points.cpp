@@ -191,9 +191,14 @@ double viewport_half_width(const SpecialPointSearchRequest& req) {
 Z viewport_seed_at(const SpecialPointSearchRequest& req, double u, double v) {
     const double half_w = viewport_half_width(req);
     const double half_h = viewport_half_height(req);
+    const double view_x = (u - 0.5) * 2.0 * half_w;
+    const double view_y = (v - 0.5) * 2.0 * half_h;
+    const double radians = req.viewport.rotation_deg * PI / 180.0;
+    const double cos_r = std::cos(radians);
+    const double sin_r = std::sin(radians);
     return {
-        req.viewport.center_re + (u - 0.5) * 2.0 * half_w,
-        req.viewport.center_im + (v - 0.5) * 2.0 * half_h,
+        req.viewport.center_re + view_x * cos_r - view_y * sin_r,
+        req.viewport.center_im + view_x * sin_r + view_y * cos_r,
     };
 }
 
@@ -1077,10 +1082,15 @@ bool point_in_viewport(const SpecialPointViewport& viewport, Z c) {
     const double aspect = static_cast<double>(std::max(1, viewport.width)) / static_cast<double>(std::max(1, viewport.height));
     const double half_h = viewport.scale * 0.5;
     const double half_w = half_h * aspect;
-    return c.real() >= viewport.center_re - half_w
-        && c.real() <= viewport.center_re + half_w
-        && c.imag() >= viewport.center_im - half_h
-        && c.imag() <= viewport.center_im + half_h;
+    const double d_re = c.real() - viewport.center_re;
+    const double d_im = c.imag() - viewport.center_im;
+    const double radians = viewport.rotation_deg * PI / 180.0;
+    const double cos_r = std::cos(radians);
+    const double sin_r = std::sin(radians);
+    const double view_x = d_re * cos_r + d_im * sin_r;
+    const double view_y = -d_re * sin_r + d_im * cos_r;
+    return view_x >= -half_w && view_x <= half_w
+        && view_y >= -half_h && view_y <= half_h;
 }
 
 SpecialPointEnumResponse enumerate_special_points(

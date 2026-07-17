@@ -129,7 +129,7 @@ MapStats render_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     fo.iter_u32.resize(npx);
     fo.norm_f32.resize(npx);
 
-    const double aspect  = static_cast<double>(W) / H;
+    const double aspect  = map_viewport_aspect(b);
     const double span_im = b.scale;
     const double span_re = b.scale * aspect;
     const double re_min  = b.center_re - span_re * 0.5;
@@ -141,7 +141,8 @@ MapStats render_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
     const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
     const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
-    const double pixel_step = b.scale / static_cast<double>(H);
+    const double pixel_step_x = span_re / static_cast<double>(W);
+    const double pixel_step_y = span_im / static_cast<double>(H);
 
     const FoldRules from = fold_rules(p.from_variant);
     const FoldRules to   = fold_rules(p.to_variant);
@@ -153,7 +154,7 @@ MapStats render_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     const __m256d v_span_re= _mm256_set1_pd(span_re);
     const __m256d v_inv_W  = _mm256_set1_pd(1.0 / W);
     const __m256d v_half_W = _mm256_set1_pd(static_cast<double>(W) * 0.5);
-    const __m256d v_pixel_step = _mm256_set1_pd(pixel_step);
+    const __m256d v_pixel_step_x = _mm256_set1_pd(pixel_step_x);
     const __m256d v_view_cos = _mm256_set1_pd(view_cos);
     const __m256d v_view_sin = _mm256_set1_pd(view_sin);
     const __m256d v_julia_re = _mm256_set1_pd(b.julia_re);
@@ -169,7 +170,7 @@ MapStats render_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
         if (should_cancel(p, cancelled)) continue;
         const double v_raw = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
         const __m256d vv_unrotated = _mm256_set1_pd(v_raw);
-        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step_y;
         const double u_row_base = b.center_re - dy * view_sin;
         const double v_row_base = b.center_im + dy * view_cos;
 
@@ -183,7 +184,7 @@ MapStats render_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
             __m256d vv_raw;
             if (has_view_rot) {
                 const __m256d vdx = _mm256_mul_pd(
-                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step);
+                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step_x);
                 vu = _mm256_fmadd_pd(vdx, v_view_cos, _mm256_set1_pd(u_row_base));
                 vv_raw = _mm256_fmadd_pd(vdx, v_view_sin, _mm256_set1_pd(v_row_base));
             } else {
@@ -292,7 +293,7 @@ MapStats render_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     fo.width = W; fo.height = H; fo.metric = b.metric;
     fo.field_f64.resize(npx);
 
-    const double aspect  = static_cast<double>(W) / H;
+    const double aspect  = map_viewport_aspect(b);
     const double span_im = b.scale;
     const double span_re = b.scale * aspect;
     const double re_min  = b.center_re - span_re * 0.5;
@@ -304,7 +305,8 @@ MapStats render_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
     const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
     const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
-    const double pixel_step = b.scale / static_cast<double>(H);
+    const double pixel_step_x = span_re / static_cast<double>(W);
+    const double pixel_step_y = span_im / static_cast<double>(H);
 
     const FoldRules from = fold_rules(p.from_variant);
     const FoldRules to   = fold_rules(p.to_variant);
@@ -316,7 +318,7 @@ MapStats render_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     const __m256d v_span_re = _mm256_set1_pd(span_re);
     const __m256d v_inv_W   = _mm256_set1_pd(1.0 / W);
     const __m256d v_half_W = _mm256_set1_pd(static_cast<double>(W) * 0.5);
-    const __m256d v_pixel_step = _mm256_set1_pd(pixel_step);
+    const __m256d v_pixel_step_x = _mm256_set1_pd(pixel_step_x);
     const __m256d v_view_cos = _mm256_set1_pd(view_cos);
     const __m256d v_view_sin = _mm256_set1_pd(view_sin);
     const __m256d v_julia_re = _mm256_set1_pd(b.julia_re);
@@ -339,7 +341,7 @@ MapStats render_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
         if (should_cancel(p, cancelled)) continue;
         const double v_raw = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
         const __m256d vv_unrotated = _mm256_set1_pd(v_raw);
-        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step_y;
         const double u_row_base = b.center_re - dy * view_sin;
         const double v_row_base = b.center_im + dy * view_cos;
         const size_t row_off = static_cast<size_t>(y) * W;
@@ -352,7 +354,7 @@ MapStats render_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
             __m256d vv_raw;
             if (has_view_rot) {
                 const __m256d vdx = _mm256_mul_pd(
-                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step);
+                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step_x);
                 vu = _mm256_fmadd_pd(vdx, v_view_cos, _mm256_set1_pd(u_row_base));
                 vv_raw = _mm256_fmadd_pd(vdx, v_view_sin, _mm256_set1_pd(v_row_base));
             } else {
@@ -469,7 +471,7 @@ MapStats render_multi_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     fo.iter_u32.resize(npx);
     fo.norm_f32.resize(npx);
 
-    const double aspect  = static_cast<double>(W) / H;
+    const double aspect  = map_viewport_aspect(b);
     const double span_im = b.scale;
     const double span_re = b.scale * aspect;
     const double re_min  = b.center_re - span_re * 0.5;
@@ -479,14 +481,15 @@ MapStats render_multi_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
     const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
     const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
     const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
-    const double pixel_step = b.scale / static_cast<double>(H);
+    const double pixel_step_x = span_re / static_cast<double>(W);
+    const double pixel_step_y = span_im / static_cast<double>(H);
 
     const __m256d vbail2    = _mm256_set1_pd(bail2);
     const __m256d v_re_min  = _mm256_set1_pd(re_min);
     const __m256d v_span_re = _mm256_set1_pd(span_re);
     const __m256d v_inv_W   = _mm256_set1_pd(1.0 / W);
     const __m256d v_half_W = _mm256_set1_pd(static_cast<double>(W) * 0.5);
-    const __m256d v_pixel_step = _mm256_set1_pd(pixel_step);
+    const __m256d v_pixel_step_x = _mm256_set1_pd(pixel_step_x);
     const __m256d v_view_cos = _mm256_set1_pd(view_cos);
     const __m256d v_view_sin = _mm256_set1_pd(view_sin);
     const __m256d v_julia_re = _mm256_set1_pd(b.julia_re);
@@ -500,7 +503,7 @@ MapStats render_multi_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
         if (should_cancel(p, cancelled)) continue;
         const double v_raw = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
         const __m256d vv_unrotated = _mm256_set1_pd(v_raw);
-        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step_y;
         const double u_row_base = b.center_re - dy * view_sin;
         const double v_row_base = b.center_im + dy * view_cos;
         const size_t row_off = static_cast<size_t>(y) * W;
@@ -512,7 +515,7 @@ MapStats render_multi_escape_fp64(const TransitionParams& p, FieldOutput& fo) {
             __m256d vv_raw;
             if (has_view_rot) {
                 const __m256d vdx = _mm256_mul_pd(
-                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step);
+                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step_x);
                 vu = _mm256_fmadd_pd(vdx, v_view_cos, _mm256_set1_pd(u_row_base));
                 vv_raw = _mm256_fmadd_pd(vdx, v_view_sin, _mm256_set1_pd(v_row_base));
             } else {
@@ -634,7 +637,7 @@ MapStats render_multi_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     fo.width = W; fo.height = H; fo.metric = b.metric;
     fo.field_f64.resize(npx);
 
-    const double aspect  = static_cast<double>(W) / H;
+    const double aspect  = map_viewport_aspect(b);
     const double span_im = b.scale;
     const double span_re = b.scale * aspect;
     const double re_min  = b.center_re - span_re * 0.5;
@@ -644,14 +647,15 @@ MapStats render_multi_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
     const double view_rad = has_view_rot ? b.rotation_deg * PI / 180.0 : 0.0;
     const double view_cos = has_view_rot ? std::cos(view_rad) : 1.0;
     const double view_sin = has_view_rot ? std::sin(view_rad) : 0.0;
-    const double pixel_step = b.scale / static_cast<double>(H);
+    const double pixel_step_x = span_re / static_cast<double>(W);
+    const double pixel_step_y = span_im / static_cast<double>(H);
 
     const __m256d vbail2    = _mm256_set1_pd(bail2);
     const __m256d v_re_min  = _mm256_set1_pd(re_min);
     const __m256d v_span_re = _mm256_set1_pd(span_re);
     const __m256d v_inv_W   = _mm256_set1_pd(1.0 / W);
     const __m256d v_half_W = _mm256_set1_pd(static_cast<double>(W) * 0.5);
-    const __m256d v_pixel_step = _mm256_set1_pd(pixel_step);
+    const __m256d v_pixel_step_x = _mm256_set1_pd(pixel_step_x);
     const __m256d v_view_cos = _mm256_set1_pd(view_cos);
     const __m256d v_view_sin = _mm256_set1_pd(view_sin);
     const __m256d v_julia_re = _mm256_set1_pd(b.julia_re);
@@ -672,7 +676,7 @@ MapStats render_multi_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
         if (should_cancel(p, cancelled)) continue;
         const double v_raw = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
         const __m256d vv_unrotated = _mm256_set1_pd(v_raw);
-        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step_y;
         const double u_row_base = b.center_re - dy * view_sin;
         const double v_row_base = b.center_im + dy * view_cos;
         const size_t row_off = static_cast<size_t>(y) * W;
@@ -684,7 +688,7 @@ MapStats render_multi_metric_fp64(const TransitionParams& p, FieldOutput& fo) {
             __m256d vv_raw;
             if (has_view_rot) {
                 const __m256d vdx = _mm256_mul_pd(
-                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step);
+                    _mm256_sub_pd(vxi, v_half_W), v_pixel_step_x);
                 vu = _mm256_fmadd_pd(vdx, v_view_cos, _mm256_set1_pd(u_row_base));
                 vv_raw = _mm256_fmadd_pd(vdx, v_view_sin, _mm256_set1_pd(v_row_base));
             } else {

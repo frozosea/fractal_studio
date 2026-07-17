@@ -858,6 +858,7 @@ const specialPointViewport = computed(() => ({
   scale: scale.value,
   width: mapViewportW.value,
   height: mapViewportH.value,
+  rotationDeg: rotationDeg.value,
 }))
 
 // Offset from the current precise center. Deep-zoom points carry full
@@ -878,7 +879,15 @@ function pointInCurrentView(p: SpecialPointEnumResult) {
   const halfH = scale.value * 0.5
   const halfW = halfH * aspect
   const { dRe, dIm } = specialPointOffset(p)
-  return dRe >= -halfW && dRe <= halfW && dIm >= -halfH && dIm <= halfH
+  // Apply the same inverse viewport rotation used by MapCanvas.worldToScreen.
+  // Filtering in unrotated complex axes drops points from the corners of a
+  // rotated viewport even though their marker projection is on-screen.
+  const rad = rotationDeg.value * Math.PI / 180
+  const cosR = Math.cos(rad)
+  const sinR = Math.sin(rad)
+  const viewX = dRe * cosR + dIm * sinR
+  const viewY = -dRe * sinR + dIm * cosR
+  return viewX >= -halfW && viewX <= halfW && viewY >= -halfH && viewY <= halfH
 }
 
 const visibleSpecialPoints = computed(() =>

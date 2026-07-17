@@ -114,6 +114,402 @@ inline void throw_if_cancelled(const MapParams& p, const std::atomic<bool>& canc
     }
 }
 
+// The normal scalar kernels deliberately keep their compact, branch-free
+// per-pixel iteration helpers.  Interactive field sessions are different: a
+// stale view must be able to leave an in-flight, high-iteration pixel without
+// waiting for the rest of its tile.  Keep the cancellation-aware copies local
+// to this translation unit and call them only from the progressive field path,
+// so ordinary one-shot renders retain their existing hot loops.
+inline constexpr int kProgressiveFieldCancelStride = 512;
+
+template <IterResultMask NeedMask, Variant V, typename S>
+bool iterate_quadratic_field_cancellable(
+    Cx<S> z,
+    const Cx<S>& c,
+    int max_iter,
+    double bailout_sq,
+    const MapParams& p,
+    std::atomic<bool>& cancelled,
+    IterResult& result
+) {
+    IterResult r = make_iter_result<NeedMask>();
+
+    S x = z.re;
+    S y = z.im;
+    S x2 = x * x;
+    S y2 = y * y;
+    const S bailout_sq_s = scalar_from_double<S>(bailout_sq);
+
+    for (int i = 0; i < max_iter; i++) {
+        if ((i & (kProgressiveFieldCancelStride - 1)) == 0 &&
+            mark_cancelled_if_requested(p, cancelled)) {
+            return false;
+        }
+
+        S nx{};
+        S ny{};
+        step_cached<V, S>(x, y, x2, y2, c.re, c.im, nx, ny);
+
+        const bool finite_z =
+            std::isfinite(scalar_to_double(nx)) && std::isfinite(scalar_to_double(ny));
+        S nx2{};
+        S ny2{};
+        S n2_s{};
+        double n2 = std::numeric_limits<double>::infinity();
+        if (finite_z) {
+            nx2 = nx * nx;
+            ny2 = ny * ny;
+            n2_s = nx2 + ny2;
+            n2 = scalar_to_double(n2_s);
+        }
+
+        if constexpr (iter_result_wants(NeedMask, IterResultField::MinAbs)) {
+            if (n2 < r.min_abs) r.min_abs = n2;
+        }
+        if constexpr (iter_result_wants(NeedMask, IterResultField::MaxAbs)) {
+            if (n2 > r.max_abs) r.max_abs = n2;
+        }
+
+        const bool escaped_now = !finite_z || n2_s > bailout_sq_s;
+        if (escaped_now) {
+            if constexpr (iter_result_wants(NeedMask, IterResultField::Iter))    r.iter = i;
+            if constexpr (iter_result_wants(NeedMask, IterResultField::Norm))    r.norm = n2;
+            if constexpr (iter_result_wants(NeedMask, IterResultField::Escaped)) r.escaped = true;
+            if constexpr (iter_result_wants(NeedMask, IterResultField::MinAbs)) {
+                if (r.min_abs != std::numeric_limits<double>::infinity()) r.min_abs = scalar_sqrt(r.min_abs);
+            }
+            if constexpr (iter_result_wants(NeedMask, IterResultField::MaxAbs)) {
+                if (r.max_abs != 0.0) r.max_abs = scalar_sqrt(r.max_abs);
+            }
+            result = r;
+            return true;
+        }
+
+        x = nx;
+        y = ny;
+        x2 = nx2;
+        y2 = ny2;
+    }
+
+    if constexpr (iter_result_wants(NeedMask, IterResultField::Iter))    r.iter = max_iter;
+    if constexpr (iter_result_wants(NeedMask, IterResultField::Escaped)) r.escaped = false;
+    if constexpr (iter_result_wants(NeedMask, IterResultField::MinAbs)) {
+        if (r.min_abs != std::numeric_limits<double>::infinity()) r.min_abs = scalar_sqrt(r.min_abs);
+    }
+    if constexpr (iter_result_wants(NeedMask, IterResultField::MaxAbs)) {
+        if (r.max_abs != 0.0) r.max_abs = scalar_sqrt(r.max_abs);
+    }
+    result = r;
+    return true;
+}
+
+template <IterResultMask NeedMask, Variant V, typename S>
+bool iterate_field_cancellable(
+    Cx<S> z,
+    const Cx<S>& c,
+    int max_iter,
+    double bailout,
+    double bailout_sq,
+    const MapParams& p,
+    std::atomic<bool>& cancelled,
+    IterResult& result
+) {
+    static_assert(!iter_result_wants(NeedMask, IterResultField::Extra),
+        "Use iterate_pairwise_field_cancellable for MinPairwiseDist.");
+    static_assert(!is_fixed64_v<S>,
+        "Use iterate_fixed_field_cancellable for fixed-point render paths.");
+
+    if constexpr (!variant_is_transcendental_v<V>()) {
+        return iterate_quadratic_field_cancellable<NeedMask, V, S>(
+            z, c, max_iter, bailout_sq, p, cancelled, result);
+    } else {
+        IterResult r = make_iter_result<NeedMask>();
+
+        for (int i = 0; i < max_iter; i++) {
+            if ((i & (kProgressiveFieldCancelStride - 1)) == 0 &&
+                mark_cancelled_if_requested(p, cancelled)) {
+                return false;
+            }
+
+            z = variant_step<V, S>(z, c);
+            const double zre = scalar_to_double(z.re);
+            const double zim = scalar_to_double(z.im);
+            const bool finite_z = std::isfinite(zre) && std::isfinite(zim);
+            const double n2 = finite_z
+                ? (zre * zre + zim * zim)
+                : std::numeric_limits<double>::infinity();
+
+            if constexpr (iter_result_wants(NeedMask, IterResultField::MinAbs)) {
+                if (n2 < r.min_abs) r.min_abs = n2;
+            }
+            if constexpr (iter_result_wants(NeedMask, IterResultField::MaxAbs)) {
+                if (n2 > r.max_abs) r.max_abs = n2;
+            }
+
+            const double component = std::max(std::fabs(zre), std::fabs(zim));
+            const bool escaped_now = !finite_z || component >= bailout;
+            if (escaped_now) {
+                if constexpr (iter_result_wants(NeedMask, IterResultField::Iter))    r.iter = i;
+                if constexpr (iter_result_wants(NeedMask, IterResultField::Norm))    r.norm = n2;
+                if constexpr (iter_result_wants(NeedMask, IterResultField::Escaped)) r.escaped = true;
+                if constexpr (iter_result_wants(NeedMask, IterResultField::MinAbs)) {
+                    if (r.min_abs != std::numeric_limits<double>::infinity()) r.min_abs = scalar_sqrt(r.min_abs);
+                }
+                if constexpr (iter_result_wants(NeedMask, IterResultField::MaxAbs)) {
+                    if (r.max_abs != 0.0) r.max_abs = scalar_sqrt(r.max_abs);
+                }
+                result = r;
+                return true;
+            }
+        }
+
+        if constexpr (iter_result_wants(NeedMask, IterResultField::Iter))    r.iter = max_iter;
+        if constexpr (iter_result_wants(NeedMask, IterResultField::Escaped)) r.escaped = false;
+        if constexpr (iter_result_wants(NeedMask, IterResultField::MinAbs)) {
+            if (r.min_abs != std::numeric_limits<double>::infinity()) r.min_abs = scalar_sqrt(r.min_abs);
+        }
+        if constexpr (iter_result_wants(NeedMask, IterResultField::MaxAbs)) {
+            if (r.max_abs != 0.0) r.max_abs = scalar_sqrt(r.max_abs);
+        }
+        result = r;
+        return true;
+    }
+}
+
+template <Variant V, typename S>
+bool iterate_pairwise_field_cancellable(
+    Cx<S> z,
+    const Cx<S>& c,
+    int max_iter,
+    double bailout,
+    double bailout_sq,
+    int pairwise_cap,
+    std::vector<Cx<S>>& orbit_scratch,
+    const MapParams& p,
+    std::atomic<bool>& cancelled,
+    IterResult& result
+) {
+    static_assert(!is_fixed64_v<S>,
+        "Fixed-point MinPairwiseDist currently falls back to the fp64 CPU path.");
+    IterResult r{};
+    r.iter    = 0;
+    r.min_abs = std::numeric_limits<double>::infinity();
+    r.max_abs = 0.0;
+    r.extra   = std::numeric_limits<double>::infinity();
+    r.norm    = 0.0;
+    r.escaped = false;
+    r.valid_mask = IterResultField::Extra;
+
+    if (pairwise_cap <= 0) {
+        result = r;
+        return true;
+    }
+    orbit_scratch.clear();
+    orbit_scratch.reserve(static_cast<size_t>(pairwise_cap));
+
+    const int n_iter = std::min(max_iter, pairwise_cap);
+    for (int i = 0; i < n_iter; i++) {
+        if ((i & (kProgressiveFieldCancelStride - 1)) == 0 &&
+            mark_cancelled_if_requested(p, cancelled)) {
+            return false;
+        }
+
+        z = variant_step<V, S>(z, c);
+        const double zre = scalar_to_double(z.re);
+        const double zim = scalar_to_double(z.im);
+        const bool finite_z = std::isfinite(zre) && std::isfinite(zim);
+        const double n2 = finite_z
+            ? (zre * zre + zim * zim)
+            : std::numeric_limits<double>::infinity();
+
+        for (size_t prior_index = 0; prior_index < orbit_scratch.size(); ++prior_index) {
+            if ((prior_index & (kProgressiveFieldCancelStride - 1)) == 0 &&
+                mark_cancelled_if_requested(p, cancelled)) {
+                return false;
+            }
+            const auto& prior = orbit_scratch[prior_index];
+            const double dr = zre - scalar_to_double(prior.re);
+            const double di = zim - scalar_to_double(prior.im);
+            const double d2 = dr * dr + di * di;
+            if (d2 < r.extra) r.extra = d2;
+        }
+        orbit_scratch.push_back(z);
+
+        bool escaped_now = !finite_z;
+        if constexpr (variant_is_transcendental_v<V>()) {
+            const double component = std::max(std::fabs(zre), std::fabs(zim));
+            escaped_now = escaped_now || component >= bailout;
+        } else {
+            escaped_now = escaped_now || n2 > bailout_sq;
+        }
+        if (escaped_now) break;
+    }
+
+    if (r.extra != std::numeric_limits<double>::infinity()) {
+        r.extra = scalar_sqrt(r.extra);
+    }
+    result = r;
+    return true;
+}
+
+template <int FRAC, FixedEscapeGate Gate, IterResultMask NeedMask, Variant V>
+bool iterate_fixed_field_cancellable(
+    Cx<Fixed64<FRAC>> z,
+    const Cx<Fixed64<FRAC>>& c,
+    int max_iter,
+    uint64_t bailout_raw,
+    uint64_t bailout2_raw,
+    uint64_t two_raw,
+    uint64_t two_sqrt2_floor_raw,
+    bool precheck_initial_z0,
+    const MapParams& p,
+    std::atomic<bool>& cancelled,
+    IterResult& result
+) {
+    static_assert(!iter_result_wants(NeedMask, IterResultField::Extra),
+        "Use iterate_pairwise for MinPairwiseDist.");
+    static_assert(!variant_is_transcendental_v<V>(),
+        "Fixed-point integer iteration only supports quadratic variants.");
+
+    using S = Fixed64<FRAC>;
+    IterResult r = make_iter_result<NeedMask>();
+
+    constexpr bool track_min = iter_result_wants(NeedMask, IterResultField::MinAbs);
+    constexpr bool track_max = iter_result_wants(NeedMask, IterResultField::MaxAbs);
+    constexpr bool wants_norm = iter_result_wants(NeedMask, IterResultField::Norm);
+    constexpr bool can_gate_without_mag2 = !(track_min || track_max || wants_norm);
+
+    uint64_t min_mag2_raw = std::numeric_limits<uint64_t>::max();
+    uint64_t max_mag2_raw = 0;
+
+    S x = z.re;
+    S y = z.im;
+    uint64_t x2_raw = 0;
+    uint64_t y2_raw = 0;
+
+    if (precheck_initial_z0) {
+        bool escaped_initial = false;
+        uint64_t mag2_raw = 0;
+        uint64_t l1_raw = 0;
+        bool have_mag2 = false;
+
+        if constexpr (Gate != FixedEscapeGate::Direct) {
+            const uint64_t ax = abs_i64_to_u64(x.raw);
+            const uint64_t ay = abs_i64_to_u64(y.raw);
+            escaped_initial = ax > bailout_raw || ay > bailout_raw;
+            if constexpr (Gate == FixedEscapeGate::L1) {
+                if (!escaped_initial) {
+                    l1_raw = add_u64_sat(ax, ay);
+                    escaped_initial = l1_raw > two_sqrt2_floor_raw;
+                }
+            }
+        }
+
+        if constexpr (Gate == FixedEscapeGate::Direct || track_min || track_max || wants_norm) {
+            x2_raw = fixed_square_q_sat_raw_cpu<FRAC>(x.raw);
+            y2_raw = fixed_square_q_sat_raw_cpu<FRAC>(y.raw);
+            mag2_raw = add_u64_sat(x2_raw, y2_raw);
+            have_mag2 = true;
+            if constexpr (track_min) min_mag2_raw = std::min(min_mag2_raw, mag2_raw);
+            if constexpr (track_max) max_mag2_raw = std::max(max_mag2_raw, mag2_raw);
+        }
+
+        if (!escaped_initial) {
+            if (!have_mag2) {
+                x2_raw = fixed_square_q_sat_raw_cpu<FRAC>(x.raw);
+                y2_raw = fixed_square_q_sat_raw_cpu<FRAC>(y.raw);
+                mag2_raw = add_u64_sat(x2_raw, y2_raw);
+                have_mag2 = true;
+            }
+            if constexpr (Gate == FixedEscapeGate::L1) {
+                escaped_initial = l1_raw > two_raw && mag2_raw > bailout2_raw;
+            } else {
+                escaped_initial = mag2_raw > bailout2_raw;
+            }
+        } else if (!have_mag2 && (track_min || track_max || wants_norm)) {
+            x2_raw = fixed_square_q_sat_raw_cpu<FRAC>(x.raw);
+            y2_raw = fixed_square_q_sat_raw_cpu<FRAC>(y.raw);
+            mag2_raw = add_u64_sat(x2_raw, y2_raw);
+            if constexpr (track_min) min_mag2_raw = std::min(min_mag2_raw, mag2_raw);
+            if constexpr (track_max) max_mag2_raw = std::max(max_mag2_raw, mag2_raw);
+        }
+
+        if (escaped_initial) {
+            finish_fixed_escape<NeedMask, FRAC>(r, 0, mag2_raw, min_mag2_raw, max_mag2_raw);
+            result = r;
+            return true;
+        }
+    }
+
+    if (x2_raw == 0 && y2_raw == 0 && (x.raw != 0 || y.raw != 0)) {
+        x2_raw = fixed_square_q_sat_raw_cpu<FRAC>(x.raw);
+        y2_raw = fixed_square_q_sat_raw_cpu<FRAC>(y.raw);
+    }
+    S x2{u64_to_i64_sat(x2_raw)};
+    S y2{u64_to_i64_sat(y2_raw)};
+
+    for (int i = 0; i < max_iter; i++) {
+        if ((i & (kProgressiveFieldCancelStride - 1)) == 0 &&
+            mark_cancelled_if_requested(p, cancelled)) {
+            return false;
+        }
+
+        S nx{};
+        S ny{};
+        step_cached<V, S>(x, y, x2, y2, c.re, c.im, nx, ny);
+
+        bool escaped_now = false;
+        uint64_t mag2_raw = 0;
+        uint64_t nx2_raw = 0;
+        uint64_t ny2_raw = 0;
+        uint64_t l1_raw = 0;
+
+        if constexpr (can_gate_without_mag2 && Gate != FixedEscapeGate::Direct) {
+            const uint64_t ax = abs_i64_to_u64(nx.raw);
+            const uint64_t ay = abs_i64_to_u64(ny.raw);
+            escaped_now = ax > bailout_raw || ay > bailout_raw;
+            if constexpr (Gate == FixedEscapeGate::L1) {
+                if (!escaped_now) {
+                    l1_raw = add_u64_sat(ax, ay);
+                    escaped_now = l1_raw > two_sqrt2_floor_raw;
+                }
+            }
+        }
+
+        if (!escaped_now) {
+            nx2_raw = fixed_square_q_sat_raw_cpu<FRAC>(nx.raw);
+            ny2_raw = fixed_square_q_sat_raw_cpu<FRAC>(ny.raw);
+            mag2_raw = add_u64_sat(nx2_raw, ny2_raw);
+
+            if constexpr (track_min) min_mag2_raw = std::min(min_mag2_raw, mag2_raw);
+            if constexpr (track_max) max_mag2_raw = std::max(max_mag2_raw, mag2_raw);
+            if constexpr (can_gate_without_mag2 && Gate == FixedEscapeGate::L1) {
+                escaped_now = l1_raw > two_raw && mag2_raw > bailout2_raw;
+            } else {
+                escaped_now = mag2_raw > bailout2_raw;
+            }
+        }
+
+        if (escaped_now) {
+            finish_fixed_escape<NeedMask, FRAC>(r, i, mag2_raw, min_mag2_raw, max_mag2_raw);
+            result = r;
+            return true;
+        }
+
+        x = nx;
+        y = ny;
+        x2 = S{u64_to_i64_sat(nx2_raw)};
+        y2 = S{u64_to_i64_sat(ny2_raw)};
+    }
+
+    if constexpr (iter_result_wants(NeedMask, IterResultField::Iter))    r.iter = max_iter;
+    if constexpr (iter_result_wants(NeedMask, IterResultField::Escaped)) r.escaped = false;
+    if constexpr (track_min) r.min_abs = fixed_mag2_q_to_abs<FRAC>(min_mag2_raw);
+    if constexpr (track_max) r.max_abs = fixed_mag2_q_to_abs<FRAC>(max_mag2_raw);
+    result = r;
+    return true;
+}
+
 } // namespace
 
 enum class FixedPrecision {
@@ -193,10 +589,12 @@ static bool fixed_viewport_representable(const MapParams& p) {
 
     const int64_t center_re_raw = fixed_round_to_raw_sat<FRAC>(p.center_re);
     const int64_t center_im_raw = fixed_round_to_raw_sat<FRAC>(p.center_im);
+    const double span_re = p.scale * map_viewport_aspect(p);
+    if (!fixed_double_fits_raw<FRAC>(span_re)) return false;
     const int64_t scale_raw = fixed_round_to_raw_sat<FRAC>(p.scale);
     const __int128 span_im_raw = static_cast<__int128>(scale_raw);
-    const __int128 span_re_raw =
-        (static_cast<__int128>(scale_raw) * p.width) / p.height;
+    const __int128 span_re_raw = static_cast<__int128>(
+        fixed_round_to_raw_sat<FRAC>(span_re));
     const __int128 step_re_raw = span_re_raw / p.width;
     const __int128 step_im_raw = span_im_raw / p.height;
     const __int128 first_re_raw =
@@ -288,7 +686,7 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
     CustomStepFn fn = p.custom_step_fn;
 
     const int W = p.width, H = p.height;
-    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
+    const double aspect  = map_viewport_aspect(p);
     const double span_im = p.scale;
     const double span_re = p.scale * aspect;
     const double re_min  = p.center_re - span_re * 0.5;
@@ -300,14 +698,19 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
     const double rot_rad = has_rot ? p.rotation_deg * M_PI / 180.0 : 0.0;
     const double cos_t = has_rot ? std::cos(rot_rad) : 1.0;
     const double sin_t = has_rot ? std::sin(rot_rad) : 0.0;
-    const double pixel_step = p.scale / static_cast<double>(H);
+    const double pixel_step_x = span_re / static_cast<double>(W);
+    const double pixel_step_y = span_im / static_cast<double>(H);
     const double half_w = static_cast<double>(W) * 0.5;
     const double half_h = static_cast<double>(H) * 0.5;
     const int thread_count = resolve_render_threads(p.render_threads);
-    constexpr int tile_size = 32;
+    const int tile_size = p.on_field_tile_done ? 8 : 32;
     const int tiles_x = ceil_div(W, tile_size);
     const int tiles_y = ceil_div(H, tile_size);
     const int tile_count = tiles_x * tiles_y;
+    const std::vector<int> progressive_tile_order = p.on_field_tile_done
+        ? map_field_progressive_order(tiles_x, tiles_y, true)
+        : std::vector<int>{};
+    std::atomic<bool> cancelled{false};
 
     fo.iter_u32.assign(static_cast<size_t>(W) * H, 0u);
     fo.norm_f32.assign(static_cast<size_t>(W) * H, 0.0f);
@@ -315,7 +718,13 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
     const auto t0 = std::chrono::steady_clock::now();
 
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 1)
-    for (int tile = 0; tile < tile_count; tile++) {
+    for (int work_index = 0; work_index < tile_count; work_index++) {
+        const int tile = progressive_tile_order.empty() ? work_index : progressive_tile_order[work_index];
+        if (cancelled.load(std::memory_order_relaxed)) continue;
+        if (map_render_cancel_requested(p)) {
+            cancelled.store(true, std::memory_order_relaxed);
+            continue;
+        }
         const int tile_x = tile % tiles_x;
         const int tile_y = tile / tiles_x;
         const int x0 = tile_x * tile_size;
@@ -323,13 +732,24 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
         const int x1 = std::min(W, x0 + tile_size);
         const int y1 = std::min(H, y0 + tile_size);
 
+        bool tile_cancelled = false;
         for (int y = y0; y < y1; y++) {
-            const double dy_base = -(static_cast<double>(y) + 0.5 - half_h) * pixel_step;
+            if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+                cancelled.store(true, std::memory_order_relaxed);
+                tile_cancelled = true;
+                break;
+            }
+            const double dy_base = -(static_cast<double>(y) + 0.5 - half_h) * pixel_step_y;
             const double im_norot = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
             for (int x = x0; x < x1; x++) {
+                if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+                    cancelled.store(true, std::memory_order_relaxed);
+                    tile_cancelled = true;
+                    break;
+                }
                 double re_c, im_c;
                 if (has_rot) {
-                    const double dx = (static_cast<double>(x) + 0.5 - half_w) * pixel_step;
+                    const double dx = (static_cast<double>(x) + 0.5 - half_w) * pixel_step_x;
                     re_c = p.center_re + dx * cos_t - dy_base * sin_t;
                     im_c = p.center_im + dx * sin_t + dy_base * cos_t;
                 } else {
@@ -344,6 +764,11 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
                 int   it    = 0;
                 double norm2 = 0.0;
                 for (; it < p.iterations; it++) {
+                    if ((it & 511) == 0 && map_render_cancel_requested(p)) {
+                        cancelled.store(true, std::memory_order_relaxed);
+                        tile_cancelled = true;
+                        break;
+                    }
                     double nr = 0.0, ni = 0.0;
                     fn(zr, zi, cr, ci, &nr, &ni);
                     zr = nr; zi = ni;
@@ -352,13 +777,20 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
                                      : std::numeric_limits<double>::infinity();
                     if (!finite_z || norm2 > bail2) break;
                 }
+                if (tile_cancelled) break;
 
                 const bool escaped = (norm2 > bail2);
                 const size_t idx = static_cast<size_t>(y) * W + x;
                 fo.iter_u32[idx] = escaped ? static_cast<uint32_t>(it) : static_cast<uint32_t>(p.iterations);
                 fo.norm_f32[idx] = escaped ? static_cast<float>(norm2) : 0.0f;
             }
+            if (tile_cancelled) break;
         }
+        if (!tile_cancelled && p.on_field_tile_done) p.on_field_tile_done(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+        throw_render_cancelled();
     }
 
     const auto t1 = std::chrono::steady_clock::now();
@@ -380,7 +812,7 @@ template <Variant V, typename S, Metric M, IterResultMask NeedMask>
 void field_variant_impl(const MapParams& p, FieldOutput& out) {
     const int W = p.width;
     const int H = p.height;
-    const double aspect  = static_cast<double>(W) / static_cast<double>(H);
+    const double aspect  = map_viewport_aspect(p);
     const double span_im = p.scale;
     const double span_re = p.scale * aspect;
     const double bail2   = p.bailout_sq;
@@ -399,7 +831,8 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
     const double rot_rad = has_rot ? p.rotation_deg * M_PI / 180.0 : 0.0;
     const S s_cos_t = scalar_from_double<S>(has_rot ? std::cos(rot_rad) : 1.0);
     const S s_sin_t = scalar_from_double<S>(has_rot ? std::sin(rot_rad) : 0.0);
-    const S s_pixel_step = scalar_from_double<S>(p.scale / static_cast<double>(H));
+    const S s_pixel_step_x = scalar_from_double<S>(span_re / static_cast<double>(W));
+    const S s_pixel_step_y = scalar_from_double<S>(span_im / static_cast<double>(H));
     const S s_half_w     = scalar_from_double<S>(static_cast<double>(W) * 0.5);
     const S s_half_h     = scalar_from_double<S>(static_cast<double>(H) * 0.5);
 
@@ -409,10 +842,14 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
 
     const int thread_count = resolve_render_threads(p.render_threads);
     constexpr bool is_escape = (M == Metric::Escape);
-    constexpr int tile_size = 32;
+    const int tile_size = p.on_field_tile_done ? 8 : 32;
     const int tiles_x = ceil_div(W, tile_size);
     const int tiles_y = ceil_div(H, tile_size);
     const int tile_count = tiles_x * tiles_y;
+    const std::vector<int> progressive_tile_order = p.on_field_tile_done
+        ? map_field_progressive_order(tiles_x, tiles_y, true)
+        : std::vector<int>{};
+    const bool cancellable_progressive = static_cast<bool>(p.on_field_tile_done);
 
     if constexpr (is_escape) {
         out.iter_u32.assign(static_cast<size_t>(W) * H, 0u);
@@ -420,6 +857,8 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
     } else {
         out.field_f64.assign(static_cast<size_t>(W) * H, 0.0);
     }
+
+    std::atomic<bool> cancelled{false};
 
     #pragma omp parallel num_threads(thread_count)
     {
@@ -429,7 +868,13 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
         }
 
         #pragma omp for schedule(dynamic, 1)
-        for (int tile = 0; tile < tile_count; tile++) {
+        for (int work_index = 0; work_index < tile_count; work_index++) {
+            const int tile = progressive_tile_order.empty() ? work_index : progressive_tile_order[work_index];
+            if (cancelled.load(std::memory_order_relaxed)) continue;
+            if (map_render_cancel_requested(p)) {
+                cancelled.store(true, std::memory_order_relaxed);
+                continue;
+            }
             const int tile_x = tile % tiles_x;
             const int tile_y = tile / tiles_x;
             const int x0 = tile_x * tile_size;
@@ -437,13 +882,23 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
             const int x1 = std::min(W, x0 + tile_size);
             const int y1 = std::min(H, y0 + tile_size);
 
+            bool tile_cancelled = false;
             for (int y = y0; y < y1; y++) {
+                if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+                    cancelled.store(true, std::memory_order_relaxed);
+                    tile_cancelled = true;
+                    break;
+                }
                 const S im_norot = s_im_max - scalar_from_double<S>(static_cast<double>(y) + 0.5) * s_inv_H * s_span_im;
-                const S dy_base = -(scalar_from_double<S>(static_cast<double>(y) + 0.5) - s_half_h) * s_pixel_step;
+                const S dy_base = -(scalar_from_double<S>(static_cast<double>(y) + 0.5) - s_half_h) * s_pixel_step_y;
                 for (int x = x0; x < x1; x++) {
+                    if (cancellable_progressive && mark_cancelled_if_requested(p, cancelled)) {
+                        tile_cancelled = true;
+                        break;
+                    }
                     S re, im;
                     if (has_rot) {
-                        const S dx = (scalar_from_double<S>(static_cast<double>(x) + 0.5) - s_half_w) * s_pixel_step;
+                        const S dx = (scalar_from_double<S>(static_cast<double>(x) + 0.5) - s_half_w) * s_pixel_step_x;
                         re = s_center_re + dx * s_cos_t - dy_base * s_sin_t;
                         im = s_center_im + dx * s_sin_t + dy_base * s_cos_t;
                     } else {
@@ -461,12 +916,28 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
                     }
 
                     IterResult r;
+                    bool pixel_complete = true;
                     if constexpr (M == Metric::MinPairwiseDist) {
-                        r = iterate_pairwise<V, S>(
-                            z0, c, p.iterations, p.bailout, bail2, p.pairwise_cap, orbit);
+                        if (cancellable_progressive) {
+                            pixel_complete = iterate_pairwise_field_cancellable<V, S>(
+                                z0, c, p.iterations, p.bailout, bail2, p.pairwise_cap,
+                                orbit, p, cancelled, r);
+                        } else {
+                            r = iterate_pairwise<V, S>(
+                                z0, c, p.iterations, p.bailout, bail2, p.pairwise_cap, orbit);
+                        }
                     } else {
-                        r = iterate_masked<NeedMask, V, S>(
-                            z0, c, p.iterations, p.bailout, bail2);
+                        if (cancellable_progressive) {
+                            pixel_complete = iterate_field_cancellable<NeedMask, V, S>(
+                                z0, c, p.iterations, p.bailout, bail2, p, cancelled, r);
+                        } else {
+                            r = iterate_masked<NeedMask, V, S>(
+                                z0, c, p.iterations, p.bailout, bail2);
+                        }
+                    }
+                    if (!pixel_complete) {
+                        tile_cancelled = true;
+                        break;
                     }
 
                     const size_t idx = static_cast<size_t>(y) * W + x;
@@ -479,9 +950,13 @@ void field_variant_impl(const MapParams& p, FieldOutput& out) {
                         out.field_f64[idx] = raw_field_value<M>(r);
                     }
                 }
+                if (tile_cancelled) break;
             }
+            if (!tile_cancelled && p.on_field_tile_done) p.on_field_tile_done(x0, y0, x1 - x0, y1 - y0);
         }
     }
+
+    throw_if_cancelled(p, cancelled);
 
     if constexpr (!is_escape) {
         double lo =  std::numeric_limits<double>::infinity();
@@ -508,15 +983,19 @@ void field_variant_fixed_impl(const MapParams& p, FieldOutput& out) {
     const int W = p.width;
     const int H = p.height;
     const FixedViewportRaw<FRAC> vp = make_fixed_viewport_raw<FRAC>(
-        p.center_re, p.center_im, p.scale, W, H,
+        p.center_re, p.center_im, p.scale, map_viewport_aspect(p), W, H,
         p.julia_re, p.julia_im, p.bailout, p.bailout_sq);
 
     const int thread_count = resolve_render_threads(p.render_threads);
     constexpr bool is_escape = (M == Metric::Escape);
-    constexpr int tile_size = 32;
+    const int tile_size = p.on_field_tile_done ? 8 : 32;
     const int tiles_x = ceil_div(W, tile_size);
     const int tiles_y = ceil_div(H, tile_size);
     const int tile_count = tiles_x * tiles_y;
+    const std::vector<int> progressive_tile_order = p.on_field_tile_done
+        ? map_field_progressive_order(tiles_x, tiles_y, true)
+        : std::vector<int>{};
+    const bool cancellable_progressive = static_cast<bool>(p.on_field_tile_done);
 
     if constexpr (is_escape) {
         out.iter_u32.assign(static_cast<size_t>(W) * H, 0u);
@@ -526,9 +1005,16 @@ void field_variant_fixed_impl(const MapParams& p, FieldOutput& out) {
     }
 
     const Cx<S> c_const{S{vp.julia_re_raw}, S{vp.julia_im_raw}};
+    std::atomic<bool> cancelled{false};
 
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 1)
-    for (int tile = 0; tile < tile_count; tile++) {
+    for (int work_index = 0; work_index < tile_count; work_index++) {
+        const int tile = progressive_tile_order.empty() ? work_index : progressive_tile_order[work_index];
+        if (cancelled.load(std::memory_order_relaxed)) continue;
+        if (map_render_cancel_requested(p)) {
+            cancelled.store(true, std::memory_order_relaxed);
+            continue;
+        }
         const int tile_x = tile % tiles_x;
         const int tile_y = tile / tiles_x;
         const int x0 = tile_x * tile_size;
@@ -536,9 +1022,19 @@ void field_variant_fixed_impl(const MapParams& p, FieldOutput& out) {
         const int x1 = std::min(W, x0 + tile_size);
         const int y1 = std::min(H, y0 + tile_size);
 
+        bool tile_cancelled = false;
         for (int y = y0; y < y1; y++) {
+            if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+                cancelled.store(true, std::memory_order_relaxed);
+                tile_cancelled = true;
+                break;
+            }
             const S im{fixed_pixel_im_raw<FRAC>(vp, y)};
             for (int x = x0; x < x1; x++) {
+                if (cancellable_progressive && mark_cancelled_if_requested(p, cancelled)) {
+                    tile_cancelled = true;
+                    break;
+                }
                 const S re{fixed_pixel_re_raw<FRAC>(vp, x)};
 
                 Cx<S> z0, c;
@@ -553,9 +1049,21 @@ void field_variant_fixed_impl(const MapParams& p, FieldOutput& out) {
                 constexpr FixedEscapeGate gate = FRAC == 60
                     ? FixedEscapeGate::L1
                     : (FRAC == 59 ? FixedEscapeGate::Component : FixedEscapeGate::Direct);
-                const IterResult r = iterate_fixed_int_masked<FRAC, gate, NeedMask, V>(
-                    z0, c, p.iterations, vp.bailout_raw, vp.bailout2_raw,
-                    vp.two_raw, vp.two_sqrt2_floor_raw, p.julia);
+                IterResult r;
+                bool pixel_complete = true;
+                if (cancellable_progressive) {
+                    pixel_complete = iterate_fixed_field_cancellable<FRAC, gate, NeedMask, V>(
+                        z0, c, p.iterations, vp.bailout_raw, vp.bailout2_raw,
+                        vp.two_raw, vp.two_sqrt2_floor_raw, p.julia, p, cancelled, r);
+                } else {
+                    r = iterate_fixed_int_masked<FRAC, gate, NeedMask, V>(
+                        z0, c, p.iterations, vp.bailout_raw, vp.bailout2_raw,
+                        vp.two_raw, vp.two_sqrt2_floor_raw, p.julia);
+                }
+                if (!pixel_complete) {
+                    tile_cancelled = true;
+                    break;
+                }
 
                 const size_t idx = static_cast<size_t>(y) * W + x;
                 if constexpr (is_escape) {
@@ -567,8 +1075,12 @@ void field_variant_fixed_impl(const MapParams& p, FieldOutput& out) {
                     out.field_f64[idx] = raw_field_value<M>(r);
                 }
             }
+            if (tile_cancelled) break;
         }
+        if (!tile_cancelled && p.on_field_tile_done) p.on_field_tile_done(x0, y0, x1 - x0, y1 - y0);
     }
+
+    throw_if_cancelled(p, cancelled);
 
     if constexpr (!is_escape) {
         double lo =  std::numeric_limits<double>::infinity();
@@ -802,7 +1314,7 @@ inline void variant_explore_orbit(Cx<double> z, const Cx<double>& c, int max_ite
 template <Variant V, class Write>
 void explore_pixels(const MapParams& p, Write&& write) {
     const int W = p.width, H = p.height;
-    const double aspect = static_cast<double>(W) / static_cast<double>(H);
+    const double aspect = map_viewport_aspect(p);
     const double span_im = p.scale, span_re = p.scale * aspect;
     const double re_min = p.center_re - span_re * 0.5;
     const double im_max = p.center_im + span_im * 0.5;
@@ -933,7 +1445,16 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
     // non-escape metrics, fp80/fp128, fixed-point (no SIMD field yet), custom/trig, or an
     // explicit "openmp" engine — falls through to the scalar dispatch below. Engines are
     // tried fastest-first; a stub/unavailable backend is skipped via its availability gate.
-    const MapEnginePlan field_plan = select_map_engine_plan(p, /*field_output=*/true);
+    MapEnginePlan field_plan = select_map_engine_plan(p, /*field_output=*/true);
+    // A progressive field consumer needs published CPU-visible row/tile
+    // boundaries. CUDA and the current hybrid field path only expose a whole
+    // frame (or use a separate tiled viewport), so keep the same native
+    // geometry on an incremental SIMD/OpenMP path instead.
+    if (p.on_field_tile_done && (field_plan.engine == "cuda" || field_plan.engine == "hybrid")) {
+        if (!field_plan.fp32 && avx512_available()) field_plan.engine = "avx512";
+        else if (avx2_available() && fma_available()) field_plan.engine = "avx2";
+        else field_plan.engine = "openmp";
+    }
     const bool can_fast_field =
         !field_plan.scalar_fallback && p.metric == Metric::Escape &&
         !field_plan.fp80 && !field_plan.fp128 && !field_plan.fx &&
@@ -966,6 +1487,7 @@ MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
                 cp.center_re = p.center_re;
                 cp.center_im = p.center_im;
                 cp.scale     = p.scale;
+                cp.viewport_aspect = map_viewport_aspect(p);
                 cp.width     = p.width;
                 cp.height    = p.height;
                 cp.iterations = p.iterations;

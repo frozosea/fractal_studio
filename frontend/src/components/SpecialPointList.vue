@@ -481,7 +481,7 @@ watch(
   () => ({
     mode: panelMode.value,
     auto: autoSearch.value,
-    viewport: props.viewport ? `${props.viewport.centerReStr ?? props.viewport.centerRe}:${props.viewport.centerImStr ?? props.viewport.centerIm}:${props.viewport.scale}:${props.viewport.width}:${props.viewport.height}` : '',
+    viewport: props.viewport ? `${props.viewport.centerReStr ?? props.viewport.centerRe}:${props.viewport.centerImStr ?? props.viewport.centerIm}:${props.viewport.scale}:${props.viewport.width}:${props.viewport.height}:${props.viewport.rotationDeg ?? 0}` : '',
     periodMin: periodMin.value,
     periodMax: periodMax.value,
     preperiodMin: preperiodMin.value,

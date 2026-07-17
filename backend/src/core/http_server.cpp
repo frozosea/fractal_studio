@@ -64,7 +64,10 @@ std::string HttpServer::makeHttpResponse(int status, const std::string& body, co
     if (status == 404) statusText = "Not Found";
     if (status == 405) statusText = "Method Not Allowed";
     if (status == 409) statusText = "Conflict";
+    if (status == 410) statusText = "Gone";
+    if (status == 429) statusText = "Too Many Requests";
     if (status == 500) statusText = "Internal Server Error";
+    if (status == 503) statusText = "Service Unavailable";
 
     std::ostringstream ss;
     ss << "HTTP/1.1 " << status << " " << statusText << "\r\n"
@@ -117,6 +120,16 @@ std::string HttpServer::handleRequest(const std::string& request) const {
         return makeHttpResponse(status, bodyText, contentType, extraHeaders);
     }
     if (method == "POST" && path == "/api/map/preempt") return makeHttpResponse(200, mapPreemptRoute(body));
+    if (method == "POST" && path == "/api/map/field/session/start")
+        return makeHttpResponse(200, mapFieldSessionStartRoute(repoRoot_, body));
+    if (method == "POST" && path == "/api/map/field/session/status")
+        return makeHttpResponse(200, mapFieldSessionStatusRoute(body));
+    if (method == "POST" && path == "/api/map/field/session/snapshot")
+        return makeHttpResponse(200, mapFieldSessionSnapshotRoute(body));
+    if (method == "POST" && path == "/api/map/field/session/result")
+        return makeHttpResponse(200, mapFieldSessionResultRoute(body));
+    if (method == "POST" && path == "/api/map/field/session/ack")
+        return makeHttpResponse(200, mapFieldSessionAcknowledgeRoute(body));
     if (method == "POST" && path == "/api/map/field")  return makeHttpResponse(200, mapFieldRoute(repoRoot_, body));
     if (method == "POST" && path == "/api/map/ln")     return makeHttpResponse(200, lnMapRenderRoute(repoRoot_, runner_, body));
     if (method == "POST" && path == "/api/video/zoom")       return makeHttpResponse(200, zoomVideoRoute(repoRoot_, runner_, body));

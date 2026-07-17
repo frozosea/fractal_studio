@@ -18,6 +18,7 @@ struct SpecialPointViewport {
     double center_re = -0.75;
     double center_im = 0.0;
     double scale = 3.0;
+    double rotation_deg = 0.0;
     int width = 1200;
     int height = 800;
     // Optional decimal strings for deep zoom; when non-empty they carry the

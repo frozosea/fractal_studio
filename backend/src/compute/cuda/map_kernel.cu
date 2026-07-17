@@ -435,7 +435,7 @@ __device__ inline void step_fp32_cached(
 
 template <int VariantId, int MetricId>
 __global__ void fractal_fp32(
-    float center_re, float center_im, float scale,
+    float center_re, float center_im, float scale, float viewport_aspect,
     int W, int H, int max_iter, float bail2, int colormap_id,
     bool julia, float julia_re_p, float julia_im_p,
     float cos_t, float sin_t,
@@ -447,15 +447,15 @@ __global__ void fractal_fp32(
 
     float re, im;
     if (sin_t != 0.0f) {
-        const float pixel_step = scale / static_cast<float>(H);
-        const float dx = (static_cast<float>(px_x) + 0.5f - static_cast<float>(W) * 0.5f) * pixel_step;
-        const float dy = -(static_cast<float>(px_y) + 0.5f - static_cast<float>(H) * 0.5f) * pixel_step;
+        const float pixel_step_x = scale * viewport_aspect / static_cast<float>(W);
+        const float pixel_step_y = scale / static_cast<float>(H);
+        const float dx = (static_cast<float>(px_x) + 0.5f - static_cast<float>(W) * 0.5f) * pixel_step_x;
+        const float dy = -(static_cast<float>(px_y) + 0.5f - static_cast<float>(H) * 0.5f) * pixel_step_y;
         re = center_re + dx * cos_t - dy * sin_t;
         im = center_im + dx * sin_t + dy * cos_t;
     } else {
-        const float aspect = static_cast<float>(W) / static_cast<float>(H);
         const float span_im = scale;
-        const float span_re = scale * aspect;
+        const float span_re = scale * viewport_aspect;
         re = (center_re - span_re * 0.5f) +
             (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
         im = (center_im + span_im * 0.5f) -
@@ -528,7 +528,7 @@ __global__ void fractal_fp32(
 
 template <int VariantId, int MetricId>
 __global__ void fractal_fp64(
-    double center_re, double center_im, double scale,
+    double center_re, double center_im, double scale, double viewport_aspect,
     int W, int H, int max_iter, double bail2, int colormap_id,
     bool julia, double julia_re_p, double julia_im_p,
     double cos_t, double sin_t,
@@ -540,15 +540,15 @@ __global__ void fractal_fp64(
 
     double re, im;
     if (sin_t != 0.0) {
-        const double pixel_step = scale / static_cast<double>(H);
-        const double dx = (static_cast<double>(px_x) + 0.5 - static_cast<double>(W) * 0.5) * pixel_step;
-        const double dy = -(static_cast<double>(px_y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double pixel_step_x = scale * viewport_aspect / static_cast<double>(W);
+        const double pixel_step_y = scale / static_cast<double>(H);
+        const double dx = (static_cast<double>(px_x) + 0.5 - static_cast<double>(W) * 0.5) * pixel_step_x;
+        const double dy = -(static_cast<double>(px_y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step_y;
         re = center_re + dx * cos_t - dy * sin_t;
         im = center_im + dx * sin_t + dy * cos_t;
     } else {
-        const double aspect  = static_cast<double>(W) / static_cast<double>(H);
         const double span_im = scale;
-        const double span_re = scale * aspect;
+        const double span_re = scale * viewport_aspect;
         re = (center_re - span_re * 0.5) + (static_cast<double>(px_x) + 0.5) / W * span_re;
         im = (center_im + span_im * 0.5) - (static_cast<double>(px_y) + 0.5) / H * span_im;
     }
@@ -624,7 +624,7 @@ __global__ void fractal_fp64(
 
 template <int VariantId>
 __global__ void fractal_field_fp64(
-    double center_re, double center_im, double scale,
+    double center_re, double center_im, double scale, double viewport_aspect,
     int W, int H, int max_iter, double bail2,
     bool julia, double julia_re_p, double julia_im_p,
     double cos_t, double sin_t,
@@ -636,15 +636,15 @@ __global__ void fractal_field_fp64(
 
     double re, im;
     if (sin_t != 0.0) {
-        const double pixel_step = scale / static_cast<double>(H);
-        const double dx = (static_cast<double>(px_x) + 0.5 - static_cast<double>(W) * 0.5) * pixel_step;
-        const double dy = -(static_cast<double>(px_y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double pixel_step_x = scale * viewport_aspect / static_cast<double>(W);
+        const double pixel_step_y = scale / static_cast<double>(H);
+        const double dx = (static_cast<double>(px_x) + 0.5 - static_cast<double>(W) * 0.5) * pixel_step_x;
+        const double dy = -(static_cast<double>(px_y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step_y;
         re = center_re + dx * cos_t - dy * sin_t;
         im = center_im + dx * sin_t + dy * cos_t;
     } else {
-        const double aspect  = static_cast<double>(W) / static_cast<double>(H);
         const double span_im = scale;
-        const double span_re = scale * aspect;
+        const double span_re = scale * viewport_aspect;
         re = (center_re - span_re * 0.5) + (static_cast<double>(px_x) + 0.5) / W * span_re;
         im = (center_im + span_im * 0.5) - (static_cast<double>(px_y) + 0.5) / H * span_im;
     }
@@ -677,7 +677,7 @@ __global__ void fractal_field_fp64(
 
 template <int VariantId>
 __global__ void fractal_field_fp32(
-    float center_re, float center_im, float scale,
+    float center_re, float center_im, float scale, float viewport_aspect,
     int W, int H, int max_iter, float bail2,
     bool julia, float julia_re_p, float julia_im_p,
     float cos_t, float sin_t,
@@ -689,15 +689,15 @@ __global__ void fractal_field_fp32(
 
     float re, im;
     if (sin_t != 0.0f) {
-        const float pixel_step = scale / static_cast<float>(H);
-        const float dx = (static_cast<float>(px_x) + 0.5f - static_cast<float>(W) * 0.5f) * pixel_step;
-        const float dy = -(static_cast<float>(px_y) + 0.5f - static_cast<float>(H) * 0.5f) * pixel_step;
+        const float pixel_step_x = scale * viewport_aspect / static_cast<float>(W);
+        const float pixel_step_y = scale / static_cast<float>(H);
+        const float dx = (static_cast<float>(px_x) + 0.5f - static_cast<float>(W) * 0.5f) * pixel_step_x;
+        const float dy = -(static_cast<float>(px_y) + 0.5f - static_cast<float>(H) * 0.5f) * pixel_step_y;
         re = center_re + dx * cos_t - dy * sin_t;
         im = center_im + dx * sin_t + dy * cos_t;
     } else {
-        const float aspect  = static_cast<float>(W) / static_cast<float>(H);
         const float span_im = scale;
-        const float span_re = scale * aspect;
+        const float span_re = scale * viewport_aspect;
         re = (center_re - span_re * 0.5f) +
             (static_cast<float>(px_x) + 0.5f) / static_cast<float>(W) * span_re;
         im = (center_im + span_im * 0.5f) -
@@ -822,6 +822,17 @@ __device__ inline void step_fixed_cached(
     }
 }
 
+__device__ inline int64_t fixed_rational_pixel_offset(
+    int64_t span, int index, int count
+) {
+    const int64_t denominator = 2LL * count;
+    const int64_t numerator_factor = 2LL * index + 1LL;
+    const int64_t quotient = span / denominator;
+    const int64_t remainder = span % denominator;
+    return quotient * numerator_factor +
+           (remainder * numerator_factor) / denominator;
+}
+
 template <int FRAC, int VariantId, int MetricId, bool Julia>
 __global__ void fractal_fx64_int_kernel(
     Fx64ViewportRaw vp,
@@ -832,8 +843,14 @@ __global__ void fractal_fx64_int_kernel(
     const int px_y = blockIdx.y * blockDim.y + threadIdx.y;
     if (px_x >= W || px_y >= H) return;
 
-    const int64_t pixel_re_raw = vp.first_re_raw + static_cast<int64_t>(px_x) * vp.step_re_raw;
-    const int64_t pixel_im_raw = vp.first_im_raw - static_cast<int64_t>(px_y) * vp.step_im_raw;
+    const int64_t pixel_re_raw = vp.width > 0
+        ? vp.center_re_raw - vp.span_re_raw / 2 +
+          fixed_rational_pixel_offset(vp.span_re_raw, px_x, vp.width)
+        : vp.first_re_raw + static_cast<int64_t>(px_x) * vp.step_re_raw;
+    const int64_t pixel_im_raw = vp.height > 0
+        ? vp.center_im_raw + vp.span_im_raw / 2 -
+          fixed_rational_pixel_offset(vp.span_im_raw, px_y, vp.height)
+        : vp.first_im_raw - static_cast<int64_t>(px_y) * vp.step_im_raw;
     (void)pixel_re_raw;
     (void)pixel_im_raw;
 
@@ -1061,7 +1078,7 @@ static void launch_fp32_metric(const CudaMapParams& p, dim3 grid, dim3 block, fl
     const float sin_t_f = static_cast<float>(sin(rot_rad));
 #define FSD_LAUNCH_FP32(VID) \
     fractal_fp32<VID, MetricId><<<grid, block>>>( \
-        static_cast<float>(p.center_re), static_cast<float>(p.center_im), static_cast<float>(p.scale), \
+        static_cast<float>(p.center_re), static_cast<float>(p.center_im), static_cast<float>(p.scale), static_cast<float>(p.viewport_aspect), \
         p.width, p.height, p.iterations, bail2, p.colormap_id, \
         p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im), \
         cos_t_f, sin_t_f, out)
@@ -1097,7 +1114,7 @@ static void launch_fp64_metric(const CudaMapParams& p, dim3 grid, dim3 block, do
     const double sin_t_d = sin(rot_rad);
 #define FSD_LAUNCH_FP64(VID) \
     fractal_fp64<VID, MetricId><<<grid, block>>>( \
-        p.center_re, p.center_im, p.scale, \
+        p.center_re, p.center_im, p.scale, p.viewport_aspect, \
         p.width, p.height, p.iterations, bail2, p.colormap_id, \
         p.julia, p.julia_re, p.julia_im, \
         cos_t_d, sin_t_d, out)
@@ -1134,7 +1151,7 @@ static void launch_field_fp32(const CudaMapParams& p, dim3 grid, dim3 block, flo
     const float sin_t_f = static_cast<float>(sin(rot_rad));
 #define FSD_LAUNCH_FIELD_FP32(VID) \
     fractal_field_fp32<VID><<<grid, block>>>( \
-        static_cast<float>(p.center_re), static_cast<float>(p.center_im), static_cast<float>(p.scale), \
+        static_cast<float>(p.center_re), static_cast<float>(p.center_im), static_cast<float>(p.scale), static_cast<float>(p.viewport_aspect), \
         p.width, p.height, p.iterations, bail2, \
         p.julia, static_cast<float>(p.julia_re), static_cast<float>(p.julia_im), \
         cos_t_f, sin_t_f, d_iter, d_norm)
@@ -1160,7 +1177,7 @@ static void launch_field_fp64(const CudaMapParams& p, dim3 grid, dim3 block, dou
     const double sin_t_d = sin(rot_rad);
 #define FSD_LAUNCH_FIELD_FP64(VID) \
     fractal_field_fp64<VID><<<grid, block>>>( \
-        p.center_re, p.center_im, p.scale, \
+        p.center_re, p.center_im, p.scale, p.viewport_aspect, \
         p.width, p.height, p.iterations, bail2, \
         p.julia, p.julia_re, p.julia_im, \
         cos_t_d, sin_t_d, d_iter, d_norm)

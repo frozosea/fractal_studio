@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -39,6 +40,15 @@ std::string mapPreemptRoute(const std::string& body);
 
 // Raw field data (no colorization) — high-frequency tile endpoint, no artifact storage.
 std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::string& body);
+
+// Interactive raw-field sessions. A session keeps one native-resolution
+// FieldOutput alive while the browser optionally presents its completed tiles
+// at a lower display resolution after a latency threshold.
+std::string mapFieldSessionStartRoute(const std::filesystem::path& repoRoot, const std::string& body);
+std::string mapFieldSessionStatusRoute(const std::string& body);
+std::string mapFieldSessionSnapshotRoute(const std::string& body);
+std::string mapFieldSessionResultRoute(const std::string& body);
+std::string mapFieldSessionAcknowledgeRoute(const std::string& body);
 
 // ln-map renderer (Phase 1 ships this; Phase 2 adds the video exporter that
 // consumes its output).
@@ -84,6 +94,17 @@ std::string variantDeleteRoute(const std::filesystem::path& repoRoot, const std:
 // Registry lookup — returns the step_fn pointer for a compiled custom variant.
 // Returns nullptr if the hash is unknown or compilation failed.
 // Called from routes_map.cpp when variant string starts with "custom:".
+struct CustomVariantLease {
+    std::shared_ptr<void> library;
+    void* function = nullptr;
+    double bailout = 0.0;
+    double bailoutSq = 0.0;
+};
+
+// Keeps the custom shared object loaded until the returned lease is released.
+// Detached interactive sessions must hold this rather than retaining only the
+// raw function pointer, because a user can delete a custom variant mid-render.
+CustomVariantLease acquireCustomVariantLease(const std::filesystem::path& repoRoot, const std::string& hash);
 void* lookupCustomFn(const std::filesystem::path& repoRoot, const std::string& hash);
 double lookupCustomBailout(const std::filesystem::path& repoRoot, const std::string& hash);
 double lookupCustomBailoutSq(const std::filesystem::path& repoRoot, const std::string& hash);

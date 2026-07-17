@@ -16,6 +16,12 @@ namespace cv { class Mat; }
 namespace fsd_cuda {
 
 struct Fx64ViewportRaw {
+    int64_t center_re_raw = 0;
+    int64_t center_im_raw = 0;
+    int64_t span_re_raw = 0;
+    int64_t span_im_raw = 0;
+    int32_t width = 0;
+    int32_t height = 0;
     int64_t first_re_raw = 0;
     int64_t first_im_raw = 0;
     int64_t step_re_raw = 0;
@@ -33,6 +39,7 @@ struct CudaMapParams {
     double center_re = -0.75;
     double center_im =  0.0;
     double scale     =  3.0;
+    double viewport_aspect = 4.0 / 3.0;
 
     int width       = 1024;
     int height      = 768;

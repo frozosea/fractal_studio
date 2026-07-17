@@ -145,20 +145,24 @@ static double render_tile_cpu(
 ) {
     // Build a MapParams for this tile.
     MapParams p = base;
-    const double aspect  = static_cast<double>(base.width) / base.height;
+    const double aspect  = map_viewport_aspect(base);
     const double span_im = base.scale;
     const double span_re = base.scale * aspect;
     const double re_step = span_re / base.width;
     const double im_step = span_im / base.height;
 
-    // Tile center_re/center_im: re/im at the tile's top-left pixel center,
-    // then re-center for the tile viewport.
-    const double re_min = (base.center_re - span_re * 0.5) + t.x * re_step;
-    const double im_max = (base.center_im + span_im * 0.5) - t.y * im_step;
+    const double tile_dx = (static_cast<double>(t.x) + t.w * 0.5 -
+                            base.width * 0.5) * re_step;
+    const double tile_dy = -(static_cast<double>(t.y) + t.h * 0.5 -
+                             base.height * 0.5) * im_step;
+    const double rotation_rad = base.rotation_deg * M_PI / 180.0;
+    const double cos_rotation = std::cos(rotation_rad);
+    const double sin_rotation = std::sin(rotation_rad);
 
-    p.center_re = re_min + (t.w * 0.5) * re_step;
-    p.center_im = im_max - (t.h * 0.5) * im_step;
+    p.center_re = base.center_re + tile_dx * cos_rotation - tile_dy * sin_rotation;
+    p.center_im = base.center_im + tile_dx * sin_rotation + tile_dy * cos_rotation;
     p.scale     = t.h * im_step;    // height of this tile in complex units
+    p.viewport_aspect = (t.w * re_step) / (t.h * im_step);
     p.width     = t.w;
     p.height    = t.h;
     p.engine    = use_avx512 ? "avx512" : (use_avx2 ? "avx2" : "openmp");
@@ -187,6 +191,12 @@ static void assign_cuda_fixed_viewport(
     fsd_cuda::CudaMapParams& cp,
     const FixedViewportRaw<FRAC>& vp
 ) {
+    cp.fx64_viewport.center_re_raw = vp.center_re_raw;
+    cp.fx64_viewport.center_im_raw = vp.center_im_raw;
+    cp.fx64_viewport.span_re_raw = vp.span_re_raw;
+    cp.fx64_viewport.span_im_raw = vp.span_im_raw;
+    cp.fx64_viewport.width = vp.width;
+    cp.fx64_viewport.height = vp.height;
     cp.fx64_viewport.first_re_raw = vp.first_re_raw;
     cp.fx64_viewport.first_im_raw = vp.first_im_raw;
     cp.fx64_viewport.step_re_raw = vp.step_re_raw;
@@ -206,18 +216,24 @@ static double render_tile_gpu(
     const std::string& fixed_scalar_type
 ) {
     MapParams p = base;
-    const double aspect  = static_cast<double>(base.width) / base.height;
+    const double aspect  = map_viewport_aspect(base);
     const double span_re = base.scale * aspect;
     const double span_im = base.scale;
     const double re_step = span_re / base.width;
     const double im_step = span_im / base.height;
-    const double re_min  = (base.center_re - span_re * 0.5) + t.x * re_step;
-    const double im_max  = (base.center_im + span_im * 0.5) - t.y * im_step;
+    const double tile_dx = (static_cast<double>(t.x) + t.w * 0.5 -
+                            base.width * 0.5) * re_step;
+    const double tile_dy = -(static_cast<double>(t.y) + t.h * 0.5 -
+                             base.height * 0.5) * im_step;
+    const double rotation_rad = base.rotation_deg * M_PI / 180.0;
+    const double cos_rotation = std::cos(rotation_rad);
+    const double sin_rotation = std::sin(rotation_rad);
 
     fsd_cuda::CudaMapParams cp;
-    cp.center_re  = re_min + (t.w * 0.5) * re_step;
-    cp.center_im  = im_max - (t.h * 0.5) * im_step;
+    cp.center_re  = base.center_re + tile_dx * cos_rotation - tile_dy * sin_rotation;
+    cp.center_im  = base.center_im + tile_dx * sin_rotation + tile_dy * cos_rotation;
     cp.scale      = t.h * im_step;
+    cp.viewport_aspect = (t.w * re_step) / (t.h * im_step);
     cp.width      = t.w;
     cp.height     = t.h;
     cp.iterations = base.iterations;
@@ -233,17 +249,17 @@ static double render_tile_gpu(
     cp.rotation_deg = base.rotation_deg;
     if (use_fx && fixed_scalar_type == "q3.60") {
         const FixedViewportRaw<60> vp = make_fixed_viewport_raw<60>(
-            cp.center_re, cp.center_im, cp.scale, cp.width, cp.height,
+            cp.center_re, cp.center_im, cp.scale, cp.viewport_aspect, cp.width, cp.height,
             cp.julia_re, cp.julia_im, cp.bailout, cp.bailout_sq);
         assign_cuda_fixed_viewport(cp, vp);
     } else if (use_fx && fixed_scalar_type == "q4.59") {
         const FixedViewportRaw<59> vp = make_fixed_viewport_raw<59>(
-            cp.center_re, cp.center_im, cp.scale, cp.width, cp.height,
+            cp.center_re, cp.center_im, cp.scale, cp.viewport_aspect, cp.width, cp.height,
             cp.julia_re, cp.julia_im, cp.bailout, cp.bailout_sq);
         assign_cuda_fixed_viewport(cp, vp);
     } else if (use_fx) {
         const FixedViewportRaw<57> vp = make_fixed_viewport_raw<57>(
-            cp.center_re, cp.center_im, cp.scale, cp.width, cp.height,
+            cp.center_re, cp.center_im, cp.scale, cp.viewport_aspect, cp.width, cp.height,
             cp.julia_re, cp.julia_im, cp.bailout, cp.bailout_sq);
         assign_cuda_fixed_viewport(cp, vp);
     }
@@ -433,17 +449,23 @@ static double render_tile_cpu_field(
     FieldOutput& fo, bool use_avx2, bool use_avx512
 ) {
     MapParams p = base;
-    const double aspect  = static_cast<double>(base.width) / base.height;
+    const double aspect  = map_viewport_aspect(base);
     const double span_im = base.scale;
     const double span_re = base.scale * aspect;
     const double re_step = span_re / base.width;
     const double im_step = span_im / base.height;
-    const double re_min  = (base.center_re - span_re * 0.5) + t.x * re_step;
-    const double im_max  = (base.center_im + span_im * 0.5) - t.y * im_step;
+    const double tile_dx = (static_cast<double>(t.x) + t.w * 0.5 -
+                            base.width * 0.5) * re_step;
+    const double tile_dy = -(static_cast<double>(t.y) + t.h * 0.5 -
+                             base.height * 0.5) * im_step;
+    const double rotation_rad = base.rotation_deg * M_PI / 180.0;
+    const double cos_rotation = std::cos(rotation_rad);
+    const double sin_rotation = std::sin(rotation_rad);
 
-    p.center_re = re_min + (t.w * 0.5) * re_step;
-    p.center_im = im_max - (t.h * 0.5) * im_step;
+    p.center_re = base.center_re + tile_dx * cos_rotation - tile_dy * sin_rotation;
+    p.center_im = base.center_im + tile_dx * sin_rotation + tile_dy * cos_rotation;
     p.scale     = t.h * im_step;
+    p.viewport_aspect = (t.w * re_step) / (t.h * im_step);
     p.width     = t.w;
     p.height    = t.h;
     p.engine    = use_avx512 ? "avx512" : (use_avx2 ? "avx2" : "openmp");
@@ -475,18 +497,24 @@ static double render_tile_gpu_field(
     const MapParams& base, const Tile& t,
     FieldOutput& fo
 ) {
-    const double aspect  = static_cast<double>(base.width) / base.height;
+    const double aspect  = map_viewport_aspect(base);
     const double span_re = base.scale * aspect;
     const double span_im = base.scale;
     const double re_step = span_re / base.width;
     const double im_step = span_im / base.height;
-    const double re_min  = (base.center_re - span_re * 0.5) + t.x * re_step;
-    const double im_max  = (base.center_im + span_im * 0.5) - t.y * im_step;
+    const double tile_dx = (static_cast<double>(t.x) + t.w * 0.5 -
+                            base.width * 0.5) * re_step;
+    const double tile_dy = -(static_cast<double>(t.y) + t.h * 0.5 -
+                             base.height * 0.5) * im_step;
+    const double rotation_rad = base.rotation_deg * M_PI / 180.0;
+    const double cos_rotation = std::cos(rotation_rad);
+    const double sin_rotation = std::sin(rotation_rad);
 
     fsd_cuda::CudaMapParams cp;
-    cp.center_re  = re_min + (t.w * 0.5) * re_step;
-    cp.center_im  = im_max - (t.h * 0.5) * im_step;
+    cp.center_re  = base.center_re + tile_dx * cos_rotation - tile_dy * sin_rotation;
+    cp.center_im  = base.center_im + tile_dx * sin_rotation + tile_dy * cos_rotation;
     cp.scale      = t.h * im_step;
+    cp.viewport_aspect = (t.w * re_step) / (t.h * im_step);
     cp.width      = t.w;
     cp.height     = t.h;
     cp.iterations = base.iterations;

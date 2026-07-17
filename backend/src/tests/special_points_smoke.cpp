@@ -375,6 +375,22 @@ SpecialPointSearchRequest base_search_request() {
     return req;
 }
 
+void expect_rotated_viewport_filter() {
+    fsd::compute::SpecialPointViewport viewport;
+    viewport.enabled = true;
+    viewport.center_re = 0.0;
+    viewport.center_im = 0.0;
+    viewport.scale = 2.0;
+    viewport.width = 200;
+    viewport.height = 100;
+    viewport.rotation_deg = 90.0;
+
+    require(fsd::compute::point_in_viewport(viewport, {0.0, 1.5}),
+            "rotated viewport rejected a point on its long axis");
+    require(!fsd::compute::point_in_viewport(viewport, {1.5, 0.0}),
+            "rotated viewport accepted a point beyond its short axis");
+}
+
 void expect_local_center_search() {
     SpecialPointSearchRequest req = base_search_request();
     const auto near_period_2 = fsd::compute::find_hyperbolic_center_near({-0.85, 0.05}, 2, req);
@@ -506,6 +522,7 @@ int main() {
         expect_center_period(2, 1);
         expect_center_period(3, 3);
         expect_center_period(4, 6);
+        expect_rotated_viewport_filter();
         expect_misiurewicz_2_1();
         expect_local_center_search();
         expect_overview_period_ordered_center_search();

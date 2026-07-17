@@ -233,6 +233,7 @@ compute::SpecialPointViewport parseViewport(const Json& j) {
         viewport.center_re = v.value("centerRe", -0.75);
         viewport.center_im = v.value("centerIm", 0.0);
         viewport.scale = v.value("scale", 3.0);
+        viewport.rotation_deg = v.value("rotationDeg", 0.0);
         viewport.width = v.value("width", 1200);
         viewport.height = v.value("height", 800);
         if (v.contains("centerReStr") && v["centerReStr"].is_string())
@@ -388,7 +389,8 @@ void validateSearchRequest(const compute::SpecialPointSearchRequest& req) {
     }
     if (!req.viewport.enabled || req.viewport.width < 1 || req.viewport.height < 1 ||
         !std::isfinite(req.viewport.center_re) || !std::isfinite(req.viewport.center_im) ||
-        !std::isfinite(req.viewport.scale) || req.viewport.scale <= 0.0) {
+        !std::isfinite(req.viewport.scale) || req.viewport.scale <= 0.0 ||
+        !std::isfinite(req.viewport.rotation_deg)) {
         throw HttpError(400, Json{{"error", "valid viewport required"}}.dump());
     }
     if ((!req.viewport.center_re_str.empty() && !parsesAsDecimal(req.viewport.center_re_str)) ||

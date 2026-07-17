@@ -43,6 +43,7 @@ namespace fsd::compute {
 namespace {
 
 constexpr double HP_DEFAULT_SCALE_THRESHOLD = 1e-8;
+constexpr double HP_PI = 3.14159265358979323846264338327950288;
 constexpr int HP_MAX_BALL_CANDIDATES = 12;
 constexpr int HP_NEWTON_MAX_ITER = 64;
 constexpr long long HP_CENTER_STEP_BUDGET = 48'000'000;
@@ -248,6 +249,8 @@ struct HpContext {
     double scale;
     double half_w;
     double half_h;
+    double cos_rotation;
+    double sin_rotation;
     int out_digits;   // digits for re_str/im_str
     int id_digits;    // digits used inside point ids
     HpC center;
@@ -263,6 +266,8 @@ struct HpContext {
           scale(v.scale),
           half_w(0.0),
           half_h(0.0),
+          cos_rotation(std::cos(v.rotation_deg * HP_PI / 180.0)),
+          sin_rotation(std::sin(v.rotation_deg * HP_PI / 180.0)),
           out_digits(0),
           id_digits(0),
           center(prec),
@@ -300,11 +305,17 @@ struct HpContext {
 
 bool hp_in_viewport(const HpContext& ctx, const HpC& c, HpWork& w) {
     mpfr_sub(w.t0, c.re, ctx.center.re, MPFR_RNDN);
-    mpfr_abs(w.t0, w.t0, MPFR_RNDN);
-    if (mpfr_cmp_d(w.t0, ctx.half_w) > 0) return false;
-    mpfr_sub(w.t0, c.im, ctx.center.im, MPFR_RNDN);
-    mpfr_abs(w.t0, w.t0, MPFR_RNDN);
-    return mpfr_cmp_d(w.t0, ctx.half_h) <= 0;
+    mpfr_sub(w.t1, c.im, ctx.center.im, MPFR_RNDN);
+    mpfr_mul_d(w.t2, w.t0, ctx.cos_rotation, MPFR_RNDN);
+    mpfr_mul_d(w.t3, w.t1, ctx.sin_rotation, MPFR_RNDN);
+    mpfr_add(w.t2, w.t2, w.t3, MPFR_RNDN);
+    mpfr_abs(w.t2, w.t2, MPFR_RNDN);
+    if (mpfr_cmp_d(w.t2, ctx.half_w) > 0) return false;
+    mpfr_mul_d(w.t2, w.t0, -ctx.sin_rotation, MPFR_RNDN);
+    mpfr_mul_d(w.t3, w.t1, ctx.cos_rotation, MPFR_RNDN);
+    mpfr_add(w.t2, w.t2, w.t3, MPFR_RNDN);
+    mpfr_abs(w.t2, w.t2, MPFR_RNDN);
+    return mpfr_cmp_d(w.t2, ctx.half_h) <= 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -677,9 +688,13 @@ std::vector<std::pair<double, double>> hp_seed_offsets(const HpContext& ctx) {
 }
 
 void hp_seed_at(const HpContext& ctx, HpC& seed, double off_re, double off_im) {
-    mpfr_set_d(seed.re, off_re, MPFR_RNDN);
+    const double rotated_re =
+        off_re * ctx.cos_rotation - off_im * ctx.sin_rotation;
+    const double rotated_im =
+        off_re * ctx.sin_rotation + off_im * ctx.cos_rotation;
+    mpfr_set_d(seed.re, rotated_re, MPFR_RNDN);
     mpfr_add(seed.re, seed.re, ctx.center.re, MPFR_RNDN);
-    mpfr_set_d(seed.im, off_im, MPFR_RNDN);
+    mpfr_set_d(seed.im, rotated_im, MPFR_RNDN);
     mpfr_add(seed.im, seed.im, ctx.center.im, MPFR_RNDN);
 }
 

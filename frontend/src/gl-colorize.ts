@@ -170,7 +170,15 @@ vec4 gradient_palette(float t, int palette) {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 void main() {
-  ivec2 coord = ivec2(gl_FragCoord.xy);
+  // Backend fields and Canvas ImageData are top-to-bottom (row 0 is the
+  // viewport's +imaginary/top edge), while WebGL fragment coordinates start
+  // at the bottom. Sample the opposite texture row so WebGL colorization has
+  // exactly the same orientation as render-inline/progressive RGBA frames.
+  ivec2 fieldSize = textureSize(u_iter, 0);
+  ivec2 coord = ivec2(
+    int(gl_FragCoord.x),
+    fieldSize.y - 1 - int(gl_FragCoord.y)
+  );
   uint  iterU = texelFetch(u_iter, coord, 0).r;
   float norm  = texelFetch(u_norm, coord, 0).r;
   int   iter  = int(iterU);

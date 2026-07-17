@@ -47,6 +47,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <string>
 #include <vector>
@@ -74,9 +75,16 @@ struct RefOrbit {
     std::string prec_used = "fp64";
 };
 
+// Optional cooperative cancellation hook for constructing a high-precision
+// reference orbit.  The runners check it periodically; an affirmative result
+// throws std::runtime_error("cancelled").  Keep it optional so existing
+// offline callers retain their current API and behaviour.
+using ReferenceOrbitCancelCallback = std::function<bool()>;
+
 RefOrbit compute_reference_orbit(
     double center_re, double center_im,
-    int max_iter, double bailout_sq);
+    int max_iter, double bailout_sq,
+    ReferenceOrbitCancelCallback should_cancel = {});
 
 // Scale-aware variant for double-defined centers (Julia critical orbits, API
 // calls without decimal strings): tiers fp128 / MPFR like the string path —
@@ -85,25 +93,29 @@ RefOrbit compute_reference_orbit(
 RefOrbit compute_reference_orbit_scaled(
     double center_re, double center_im,
     int max_iter, double bailout_sq, double scale,
-    PerturbRefPrec ref_prec = PerturbRefPrec::Auto);
+    PerturbRefPrec ref_prec = PerturbRefPrec::Auto,
+    ReferenceOrbitCancelCallback should_cancel = {});
 
 // Precision-tiered overload: selects fp128 / MPFR based on scale (or the
 // explicit `ref_prec`). String coordinates parsed at full precision.
 RefOrbit compute_reference_orbit_auto(
     const std::string& center_re_str, const std::string& center_im_str,
     int max_iter, double bailout_sq, double scale,
-    PerturbRefPrec ref_prec = PerturbRefPrec::Auto);
+    PerturbRefPrec ref_prec = PerturbRefPrec::Auto,
+    ReferenceOrbitCancelCallback should_cancel = {});
 
 RefOrbit compute_reference_orbit_julia(
     double z0_re, double z0_im,
     double julia_re, double julia_im,
-    int max_iter, double bailout_sq);
+    int max_iter, double bailout_sq,
+    ReferenceOrbitCancelCallback should_cancel = {});
 
 RefOrbit compute_reference_orbit_julia_auto(
     const std::string& z0_re_str, const std::string& z0_im_str,
     double julia_re, double julia_im,
     int max_iter, double bailout_sq, double scale,
-    PerturbRefPrec ref_prec = PerturbRefPrec::Auto);
+    PerturbRefPrec ref_prec = PerturbRefPrec::Auto,
+    ReferenceOrbitCancelCallback should_cancel = {});
 
 // ---------------------------------------------------------------------------
 // Per-pixel delta iteration with rebasing, shared by the cartesian and
@@ -115,6 +127,10 @@ RefOrbit compute_reference_orbit_julia_auto(
 struct PerturbPixel {
     int     iter        = 0;      // escape iteration; == max_iter if inside
     bool    escaped     = false;
+    // Set only by an optional cooperative probe.  The OpenMP driver observes
+    // this marker outside the per-pixel loop, so cancellation never throws
+    // through an OpenMP region or publishes a partial tile.
+    bool    cancelled   = false;
     double  escape_mag2 = 0.0;    // |z|^2 at escape (smooth/equalized coloring)
     // Populated only by perturb_iterate<true> (min/max metrics): extrema of
     // |z_n|^2 over the post-step orbit values z_1..z_N, matching
@@ -122,6 +138,26 @@ struct PerturbPixel {
     double  min_mag2    = std::numeric_limits<double>::infinity();
     double  max_mag2    = 0.0;
 };
+
+// Optional, non-throwing cooperative cancellation hook for a single pixel's
+// delta iteration.  Pass a pointer so the hot loop does not copy a
+// std::function for every pixel.  `perturb_iterate` turns an affirmative (or
+// unexpectedly throwing) probe into PerturbPixel::cancelled; callers running
+// in an OpenMP region must handle that marker after leaving the pixel loop.
+using PerturbPixelCancelProbe = std::function<bool()>;
+
+inline bool perturb_pixel_cancel_requested(
+    const PerturbPixelCancelProbe* should_cancel) noexcept
+{
+    if (should_cancel == nullptr || !*should_cancel) return false;
+    try {
+        return (*should_cancel)();
+    } catch (...) {
+        // Never let a user callback unwind through OpenMP.  Treat an invalid
+        // probe as a cancellation, which is the safe outcome for a stale view.
+        return true;
+    }
+}
 
 // Iterate one pixel.
 //   R          primary reference orbit (Mandelbrot: center orbit; Julia:
@@ -144,7 +180,8 @@ inline PerturbPixel perturb_iterate(
     const D* Kr, const D* Ki, int k_len,
     D dz0_re, D dz0_im,
     D dc_re, D dc_im,
-    int max_iter, D bail2) noexcept
+    int max_iter, D bail2,
+    const PerturbPixelCancelProbe* should_cancel = nullptr) noexcept
 {
     PerturbPixel out;
     out.iter = max_iter;
@@ -172,6 +209,13 @@ inline PerturbPixel perturb_iterate(
 
     const D two = D(2);
     for (int n = 0; n < max_iter; ++n) {
+        // Deep interior pixels can otherwise monopolize a worker for the
+        // entire iteration cap.  Poll at a coarse, fixed interval so normal
+        // non-interactive renders keep their existing fast path.
+        if ((n & 511) == 0 && perturb_pixel_cancel_requested(should_cancel)) {
+            out.cancelled = true;
+            return out;
+        }
         const D two_Zr = two * Or[m];
         const D two_Zi = two * Oi[m];
 

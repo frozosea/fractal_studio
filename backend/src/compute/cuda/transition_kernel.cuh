@@ -15,6 +15,7 @@ struct CudaTransitionSliceParams {
     double center_re = -0.75;
     double center_im =  0.0;
     double scale     =  3.0;
+    double viewport_aspect = 4.0 / 3.0;
     double cos_rotation = 1.0;
     double sin_rotation = 0.0;
     int    width     = 1024;

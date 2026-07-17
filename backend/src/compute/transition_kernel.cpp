@@ -168,9 +168,10 @@ inline void transition_viewport_point(
     double& v
 ) {
     if (has_rot) {
-        const double pixel_step = b.scale / static_cast<double>(H);
-        const double dx = (static_cast<double>(x) + 0.5 - static_cast<double>(W) * 0.5) * pixel_step;
-        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step;
+        const double pixel_step_x = span_re / static_cast<double>(W);
+        const double pixel_step_y = span_im / static_cast<double>(H);
+        const double dx = (static_cast<double>(x) + 0.5 - static_cast<double>(W) * 0.5) * pixel_step_x;
+        const double dy = -(static_cast<double>(y) + 0.5 - static_cast<double>(H) * 0.5) * pixel_step_y;
         u = b.center_re + dx * cos_t - dy * sin_t;
         v = b.center_im + dx * sin_t + dy * cos_t;
     } else {
@@ -572,7 +573,7 @@ MapStats render_transition_metric_field(const TransitionParams& p, FieldOutput& 
         fo.field_f64.resize(npx);
     }
 
-    const double aspect  = static_cast<double>(W) / H;
+    const double aspect  = map_viewport_aspect(b);
     const double span_im = b.scale;
     const double span_re = b.scale * aspect;
     const double re_min  = b.center_re - span_re * 0.5;
@@ -701,7 +702,7 @@ MapStats render_transition_multi_field(const TransitionParams& p, FieldOutput& f
         fo.field_f64.resize(npx);
     }
 
-    const double aspect  = static_cast<double>(W) / H;
+    const double aspect  = map_viewport_aspect(b);
     const double span_im = b.scale;
     const double span_re = b.scale * aspect;
     const double re_min  = b.center_re - span_re * 0.5;
@@ -825,6 +826,7 @@ MapStats render_transition_cuda(const TransitionParams& p, FieldOutput& fo) {
     cp.center_re  = b.center_re;
     cp.center_im  = b.center_im;
     cp.scale      = b.scale;
+    cp.viewport_aspect = map_viewport_aspect(b);
     const double rotation_rad = b.rotation_deg * PI / 180.0;
     cp.cos_rotation = std::cos(rotation_rad);
     cp.sin_rotation = std::sin(rotation_rad);
@@ -942,8 +944,7 @@ MapStats render_transition_scalar(const TransitionParams& p, FieldOutput& fo) {
     const S s_center_re = scalar_from_string<S>(b.center_re_str, b.center_re);
     const S s_center_im = scalar_from_string<S>(b.center_im_str, b.center_im);
     const S s_scale     = scalar_from_double<S>(b.scale);
-    const S s_aspect    = scalar_from_double<S>(static_cast<double>(W)) /
-                          scalar_from_double<S>(static_cast<double>(H));
+    const S s_aspect    = scalar_from_double<S>(map_viewport_aspect(b));
     const S s_span_im   = s_scale;
     const S s_span_re   = s_scale * s_aspect;
     const S s_half      = scalar_from_double<S>(0.5);
@@ -961,7 +962,8 @@ MapStats render_transition_scalar(const TransitionParams& p, FieldOutput& fo) {
         : scalar_from_double<S>(0.0);
     const S s_view_cos = has_view_rot ? scalar_cos(s_view_rad) : scalar_from_double<S>(1.0);
     const S s_view_sin = has_view_rot ? scalar_sin(s_view_rad) : scalar_from_double<S>(0.0);
-    const S s_pixel_step = s_scale / scalar_from_double<S>(static_cast<double>(H));
+    const S s_pixel_step_x = s_span_re / scalar_from_double<S>(static_cast<double>(W));
+    const S s_pixel_step_y = s_span_im / scalar_from_double<S>(static_cast<double>(H));
     const S s_half_w = scalar_from_double<S>(static_cast<double>(W) * 0.5);
     const S s_half_h = scalar_from_double<S>(static_cast<double>(H) * 0.5);
     const S s_bail2 = scalar_from_double<S>(b.bailout_sq);
@@ -989,14 +991,14 @@ MapStats render_transition_scalar(const TransitionParams& p, FieldOutput& fo) {
     for (int y = 0; y < H; y++) {
         if (mark_cancelled_if_requested(p, cancelled)) continue;
         const S s_v_norot = s_im_max - scalar_from_double<S>(static_cast<double>(y) + 0.5) * s_inv_H * s_span_im;
-        const S s_dy = -(scalar_from_double<S>(static_cast<double>(y) + 0.5) - s_half_h) * s_pixel_step;
+        const S s_dy = -(scalar_from_double<S>(static_cast<double>(y) + 0.5) - s_half_h) * s_pixel_step_y;
         const size_t row_off = static_cast<size_t>(y) * W;
 
         for (int x = 0; x < W; x++) {
             S s_u;
             S s_v;
             if (has_view_rot) {
-                const S s_dx = (scalar_from_double<S>(static_cast<double>(x) + 0.5) - s_half_w) * s_pixel_step;
+                const S s_dx = (scalar_from_double<S>(static_cast<double>(x) + 0.5) - s_half_w) * s_pixel_step_x;
                 s_u = s_center_re + s_dx * s_view_cos - s_dy * s_view_sin;
                 s_v = s_center_im + s_dx * s_view_sin + s_dy * s_view_cos;
             } else {

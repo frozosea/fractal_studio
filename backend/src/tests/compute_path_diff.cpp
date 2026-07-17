@@ -528,6 +528,7 @@ TransitionParams base_transition_params() {
     p.base.center_re = -0.45;
     p.base.center_im = 0.0;
     p.base.scale = 3.0;
+    p.base.viewport_aspect = 1.7;
     p.base.width = 96;
     p.base.height = 72;
     p.base.iterations = 96;
@@ -2408,6 +2409,69 @@ void print_capabilities() {
     std::cout << "\n";
 }
 
+void verify_logical_viewport_resolution_invariance(Runner& runner) {
+    auto verify = [&](const char* scalar, double rotation_deg) {
+        MapParams high;
+        high.center_re = -0.743643887037151;
+        high.center_im = 0.13182590420533;
+        high.scale = 0.014;
+        high.viewport_aspect = 1.7;
+        high.width = 303;
+        high.height = 183;
+        high.iterations = 700;
+        high.variant = Variant::Mandelbrot;
+        high.metric = Metric::Escape;
+        high.engine = "openmp";
+        high.scalar_type = scalar;
+        high.rotation_deg = rotation_deg;
+
+        MapParams low = high;
+        low.width = 101;
+        low.height = 61;
+
+        FieldOutput high_field;
+        FieldOutput low_field;
+        const MapStats high_stats = fsd::compute::render_map_field(high, high_field);
+        const MapStats low_stats = fsd::compute::render_map_field(low, low_field);
+        if (!scalar_matches(scalar, high_stats.scalar_used) ||
+            !scalar_matches(scalar, low_stats.scalar_used)) {
+            ++runner.failed;
+            std::cerr << "[FAIL] viewport invariance " << scalar
+                      << " used " << high_stats.scalar_used << "/"
+                      << low_stats.scalar_used << "\n";
+            return;
+        }
+
+        size_t mismatches = 0;
+        for (int y = 0; y < low.height; ++y) {
+            for (int x = 0; x < low.width; ++x) {
+                const size_t low_index = static_cast<size_t>(y) * low.width + x;
+                const size_t high_index =
+                    static_cast<size_t>(3 * y + 1) * high.width + (3 * x + 1);
+                if (low_field.iter_u32[low_index] != high_field.iter_u32[high_index]) {
+                    ++mismatches;
+                }
+            }
+        }
+        ++runner.compared;
+        if (mismatches != 0) {
+            ++runner.failed;
+            std::cerr << "[FAIL] viewport invariance " << scalar
+                      << " rotation=" << rotation_deg
+                      << " mismatches=" << mismatches << "\n";
+        } else {
+            std::cout << "[PASS] viewport invariance " << scalar
+                      << " rotation=" << rotation_deg << "\n";
+        }
+    };
+
+    // A 3x refinement has exactly nested pixel centers. Both floating-point
+    // rotation and fixed-point rational sampling must therefore reuse the
+    // same complex coordinates at every low-resolution sample.
+    verify("fp64", 17.0);
+    verify("fx64", 0.0);
+}
+
 } // namespace
 
 int main() {
@@ -2420,6 +2484,7 @@ int main() {
     const EscapeFieldDiffLimits same_scalar_field_limits{};
 
     check_escape_field_diff_guard(runner, same_scalar_field_limits);
+    verify_logical_viewport_resolution_invariance(runner);
 
     std::vector<RenderScene> render_scenes = quick_scenes();
     {
