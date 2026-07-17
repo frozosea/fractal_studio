@@ -76,6 +76,13 @@ let   slowRenderWarnKey = ''
 const renderClientId = `map-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 const MIN_FRAME_DIM = 64
 const MAX_FRAME_DIM = 4096
+const PREVIEW_RENDER_DELAY_MS = 35
+const FULL_RENDER_DELAY_MS = 140
+const REFINE_RENDER_DELAY_MS = 260
+const SLOW_RENDER_TARGET_MS = 700
+const FAST_RENDER_TARGET_MS = 220
+const MIN_ADAPTIVE_QUALITY = 0.35
+let adaptiveQuality = 1
 
 // ── WebGL colorizer state ────────────────────────────────────────────────────
 const glCanvas = ref<HTMLCanvasElement | null>(null)
@@ -87,6 +94,8 @@ type ViewportSnapshot = {
   scale: number
   rotationDeg: number
 }
+
+type RenderPhase = 'preview' | 'refine'
 
 let renderedViewport: ViewportSnapshot | null = null
 
@@ -153,6 +162,73 @@ function devicePixelBoxSize(entry: ResizeObserverEntry): { width: number; height
 
 function renderableSize(): boolean {
   return frameW.value >= MIN_FRAME_DIM && frameH.value >= MIN_FRAME_DIM
+}
+
+function clampQuality(q: number): number {
+  if (!Number.isFinite(q)) return 1
+  return Math.max(MIN_ADAPTIVE_QUALITY, Math.min(1, q))
+}
+
+function viewportDepthOctaves(): number {
+  const s = props.scale
+  return s > 0 && Number.isFinite(s) ? Math.log2(4 / s) : 0
+}
+
+function heuristicPreviewQuality(): number {
+  const pixels = Math.max(1, frameW.value * frameH.value)
+  const iterations = Math.max(1, props.iterations)
+  const depth = viewportDepthOctaves()
+  let q = 1
+
+  if (pixels > 4_000_000) q = Math.min(q, 0.7)
+  else if (pixels > 2_000_000) q = Math.min(q, 0.85)
+
+  if (iterations >= 32768) q = Math.min(q, 0.45)
+  else if (iterations >= 16384) q = Math.min(q, 0.55)
+  else if (iterations >= 8192) q = Math.min(q, 0.7)
+  else if (iterations >= 4096) q = Math.min(q, 0.85)
+
+  if (depth >= 120) q = Math.min(q, 0.45)
+  else if (depth >= 80) q = Math.min(q, 0.6)
+  else if (depth >= 48) q = Math.min(q, 0.75)
+
+  if (props.transitionTheta !== null || props.transitionFrom || props.transitionVariants?.length) {
+    q = Math.min(q, 0.75)
+  }
+  if (props.metric === 'min_pairwise_dist' || props.metric === 'mandel_ship_agree') {
+    q = Math.min(q, 0.75)
+  }
+
+  return clampQuality(q)
+}
+
+function preferredPreviewQuality(): number {
+  return clampQuality(Math.min(adaptiveQuality, heuristicPreviewQuality()))
+}
+
+function renderSizeForQuality(quality: number): { width: number; height: number; quality: number } {
+  if (!renderableSize()) return { width: 0, height: 0, quality: 1 }
+  const minQuality = Math.max(MIN_FRAME_DIM / frameW.value, MIN_FRAME_DIM / frameH.value)
+  const q = Math.min(1, Math.max(minQuality, clampQuality(quality)))
+  return {
+    width: Math.max(1, Math.round(frameW.value * q)),
+    height: Math.max(1, Math.round(frameH.value * q)),
+    quality: q,
+  }
+}
+
+function updateAdaptiveQuality(generatedMs: number, renderQuality: number, phase: RenderPhase) {
+  if (!(generatedMs > 0) || !Number.isFinite(generatedMs)) return
+  const q = Math.max(MIN_ADAPTIVE_QUALITY, Math.min(1, renderQuality))
+  const estimatedFullMs = generatedMs / Math.max(0.01, q * q)
+  if (estimatedFullMs > SLOW_RENDER_TARGET_MS) {
+    const next = adaptiveQuality * Math.sqrt(SLOW_RENDER_TARGET_MS / estimatedFullMs) * 0.95
+    adaptiveQuality = Math.min(0.95, clampQuality(next))
+    return
+  }
+  if (phase === 'refine' && generatedMs < FAST_RENDER_TARGET_MS && adaptiveQuality < 1) {
+    adaptiveQuality = Math.min(1, adaptiveQuality * 1.18)
+  }
 }
 
 function notifyPreempt(seq: number) {
@@ -314,8 +390,21 @@ function recolorize() {
   hasFrame.value = true
 }
 
-async function renderFrame() {
+function scheduleRefine(parentSeq: number) {
+  if (renderTimer) clearTimeout(renderTimer)
+  pending.value = true
+  renderTimer = setTimeout(() => {
+    renderTimer = null
+    if (renderSeq !== parentSeq || !renderableSize()) return
+    void renderFrame('refine', 1, parentSeq)
+  }, REFINE_RENDER_DELAY_MS)
+}
+
+async function renderFrame(phase: RenderPhase = 'refine', quality = 1, parentSeq?: number) {
+  if (parentSeq !== undefined && renderSeq !== parentSeq) return
   if (!renderableSize()) return
+  const renderSize = renderSizeForQuality(phase === 'refine' ? 1 : quality)
+  if (renderSize.width < MIN_FRAME_DIM || renderSize.height < MIN_FRAME_DIM) return
   pending.value = true
   error.value   = ''
 
@@ -324,9 +413,11 @@ async function renderFrame() {
   const controller = new AbortController()
   currentRender = controller
   const seq = ++renderSeq
-  const requestId = `${renderClientId}-${seq}`
-  const reqW = frameW.value
-  const reqH = frameH.value
+  const requestId = `${renderClientId}-${seq}-${phase}`
+  const reqW = renderSize.width
+  const reqH = renderSize.height
+  let completed = false
+  let shouldRefine = false
   // This render is issued at the current viewport: once it lands, only the
   // deltas accumulated after this point remain pending.
   renderStartOffsetRe = pendingOffsetRe.value
@@ -335,6 +426,9 @@ async function renderFrame() {
   if (shouldUseFieldPath()) {
     // ── WebGL field path: fetch raw iteration data, colorize client-side ──
     const fieldReq: MapFieldRequest = {
+      requestId,
+      preemptKey: renderClientId,
+      preemptSeq: seq,
       centerRe:   props.centerRe,
       centerIm:   props.centerIm,
       scale:      props.scale,
@@ -357,6 +451,7 @@ async function renderFrame() {
     try {
       const resp = await api.mapField(fieldReq, controller.signal)
       if (seq !== renderSeq) return
+      if (resp.requestId && resp.requestId !== requestId) return
       if (resp.status === 'cancelled') return
       if (!resp.iterB64 || !resp.finalMagB64) {
         throw new Error('field response missing iterB64/finalMagB64')
@@ -381,18 +476,24 @@ async function renderFrame() {
         rotationDeg: props.rotationDeg ?? 0,
       }
       recolorize()
-      maybeWarnSlowRender(resp.generatedMs)
+      updateAdaptiveQuality(resp.generatedMs, renderSize.quality, phase)
+      if (phase === 'refine') maybeWarnSlowRender(resp.generatedMs)
       emit('rendered', {
         generatedMs: resp.generatedMs,
         artifactId:  '',
         engineUsed:  resp.engineUsed,
         scalarUsed:  resp.scalarUsed,
       })
+      completed = true
+      shouldRefine = phase === 'preview' && renderSize.quality < 0.99
     } catch (e: any) {
       if (seq === renderSeq && e?.name !== 'AbortError') error.value = e?.message ?? String(e)
     } finally {
       if (currentRender === controller) currentRender = null
-      if (seq === renderSeq) pending.value = false
+      if (seq === renderSeq) {
+        if (completed && shouldRefine) scheduleRefine(seq)
+        else pending.value = false
+      }
     }
     return
   }
@@ -458,29 +559,41 @@ async function renderFrame() {
     }
     hasFrame.value = true
     activeCanvas.value = next
-    maybeWarnSlowRender(resp.generatedMs)
+    updateAdaptiveQuality(resp.generatedMs, renderSize.quality, phase)
+    if (phase === 'refine') maybeWarnSlowRender(resp.generatedMs)
     emit('rendered', {
       generatedMs: resp.generatedMs,
       artifactId:  '',
       engineUsed:  resp.engineUsed,
       scalarUsed:  resp.scalarUsed,
     })
+    completed = true
+    shouldRefine = phase === 'preview' && renderSize.quality < 0.99
   } catch (e: any) {
     if (seq === renderSeq && e?.name !== 'AbortError') error.value = e?.message ?? String(e)
   } finally {
     if (currentRender === controller) currentRender = null
-    if (seq === renderSeq) pending.value = false
+    if (seq === renderSeq) {
+      if (completed && shouldRefine) scheduleRefine(seq)
+      else pending.value = false
+    }
   }
 }
 
-function scheduleRender(delay = 200) {
+function scheduleRender(delay = FULL_RENDER_DELAY_MS) {
   invalidateCurrentRender()
   if (renderableSize()) {
     pending.value = true
     error.value = ''
   }
   if (renderTimer) clearTimeout(renderTimer)
-  renderTimer = setTimeout(renderFrame, delay)
+  const previewQuality = preferredPreviewQuality()
+  const usePreview = previewQuality < 0.98
+  const waitMs = usePreview ? Math.min(delay, PREVIEW_RENDER_DELAY_MS) : delay
+  renderTimer = setTimeout(() => {
+    renderTimer = null
+    void renderFrame(usePreview ? 'preview' : 'refine', usePreview ? previewQuality : 1)
+  }, waitMs)
 }
 
 // ── Watchers ──────────────────────────────────────────────────────────────────

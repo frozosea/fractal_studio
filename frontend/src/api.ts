@@ -363,6 +363,9 @@ export interface SpecialPointEnumResponse {
 }
 
 export interface MapFieldRequest {
+  requestId?: string
+  preemptKey?: string
+  preemptSeq?: number
   centerRe: number
   centerIm: number
   centerReStr?: string
@@ -389,6 +392,7 @@ export interface MapFieldRequest {
 // Non-escape metric: fieldB64 (float64[W*H]) + fieldMin + fieldMax
 export interface MapFieldResponse {
   status: string
+  requestId?: string
   width: number
   height: number
   metric: string

@@ -728,6 +728,9 @@ std::string mapPreemptRoute(const std::string& body) {
 std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::string& body) {
     const Json j = parseJsonBody(body);
 
+    const std::string requestId = j.value("requestId", std::string(""));
+    const std::string preemptKey = j.value("preemptKey", std::string(""));
+    const long long preemptSeq = j.value("preemptSeq", 0LL);
     const std::string cReStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                                ? j["centerReStr"].get<std::string>() : std::string();
     const std::string cImStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
@@ -751,6 +754,17 @@ std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::stri
     if (height < 1 || height > MAX_MAP_DIM)               throw std::runtime_error("invalid height");
     if (iters  < 1 || iters  > 1000000)            throw std::runtime_error("invalid iterations");
     if (!std::isfinite(cRe) || !std::isfinite(cIm)) throw std::runtime_error("invalid center");
+
+    const bool interactivePreempt = !preemptKey.empty() && !requestId.empty();
+    auto preemptFlag = interactivePreempt
+        ? registerInteractiveMapRequest(preemptKey, preemptSeq)
+        : std::shared_ptr<std::atomic<bool>>{};
+    std::function<bool()> shouldCancel = [preemptFlag]() {
+        return preemptFlag && preemptFlag->load(std::memory_order_relaxed);
+    };
+    if (shouldCancel()) {
+        return Json{{"status", "cancelled"}, {"requestId", requestId}}.dump();
+    }
 
     const auto vr2 = resolveVariant(variantStr, repoRoot);
     double bailout = j.contains("bailout") && !j["bailout"].is_null()
@@ -786,12 +800,23 @@ std::string mapFieldRoute(const std::filesystem::path& repoRoot, const std::stri
     p.engine      = engine;
     p.rotation_deg = j.value("rotationDeg", 0.0);
     if (!std::isfinite(p.rotation_deg)) p.rotation_deg = 0.0;
+    p.should_cancel = shouldCancel;
 
     compute::FieldOutput fo;
-    const auto stats = compute::render_map_field(p, fo);
+    compute::MapStats stats;
+    try {
+        stats = compute::render_map_field(p, fo);
+        throwIfMapRenderCancelled(shouldCancel);
+    } catch (const std::exception& ex) {
+        if (isCancelledException(ex)) {
+            return Json{{"status", "cancelled"}, {"requestId", requestId}}.dump();
+        }
+        throw;
+    }
 
     Json resp = {
         {"status",      "completed"},
+        {"requestId",   requestId},
         {"width",       width},
         {"height",      height},
         {"metric",      metricStr},
