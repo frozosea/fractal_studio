@@ -148,7 +148,7 @@ std::string HttpServer::handleRequest(const std::string& request) const {
 
     // Runs
     if (method == "GET"  && path == "/api/runs/status") return makeHttpResponse(200, runStatusRoute(repoRoot_, runner_, query));
-    if (method == "GET"  && path == "/api/runs") return makeHttpResponse(200, runsListRoute(repoRoot_, query));
+    if (method == "GET"  && path == "/api/runs") return makeHttpResponse(200, runsListRoute(repoRoot_, runner_, query));
     if (method == "GET"  && path == "/api/tasks/active") return makeHttpResponse(200, activeTasksRoute(runner_));
     if (method == "POST" && path == "/api/runs/cancel") return makeHttpResponse(200, cancelRunRoute(runner_, body));
     if (method == "POST" && path.rfind("/api/runs/", 0) == 0 && path.size() > 17 && path.substr(path.size() - 7) == "/cancel") {

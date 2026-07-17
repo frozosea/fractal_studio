@@ -5,10 +5,11 @@
 #include "resource_manager.hpp"
 
 #include <filesystem>
+#include <unordered_map>
 
 namespace fsd {
 
-std::string runsListRoute(const std::filesystem::path& repoRoot, const std::string& query) {
+std::string runsListRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& query) {
     int limit = 50;
     int offset = 0;
     const std::string limRaw = getQueryParam(query, "limit");
@@ -24,9 +25,17 @@ std::string runsListRoute(const std::filesystem::path& repoRoot, const std::stri
     const auto rows = db.listRuns(limit, offset, moduleFilter, statusFilter);
     const int totalCount = db.countRuns(moduleFilter, statusFilter);
     const auto modules = db.distinctModules();
+    const auto activeTasks = runner.activeTasks();
+    std::unordered_map<std::string, ActiveTaskSnapshot> activeByRunId;
+    activeByRunId.reserve(activeTasks.size());
+    for (const auto& t : activeTasks) {
+        activeByRunId.emplace(t.runId, t);
+    }
 
     Json items = Json::array();
     for (const auto& r : rows) {
+        const auto activeIt = activeByRunId.find(r.id);
+        const bool active = activeIt != activeByRunId.end();
         items.push_back({
             {"id",         r.id},
             {"module",     r.module},
@@ -34,6 +43,8 @@ std::string runsListRoute(const std::filesystem::path& repoRoot, const std::stri
             {"startedAt",  r.startedAt},
             {"finishedAt", r.finishedAt},
             {"outputDir",  r.outputDir},
+            {"cancelable", active && activeIt->second.cancelable},
+            {"cancelRequested", active && activeIt->second.cancelRequested},
         });
     }
     Json resp = {{"items", items}, {"totalCount", totalCount}, {"modules", modules}};

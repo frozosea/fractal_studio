@@ -89,7 +89,7 @@ double lookupCustomBailout(const std::filesystem::path& repoRoot, const std::str
 double lookupCustomBailoutSq(const std::filesystem::path& repoRoot, const std::string& hash);
 
 // Runs
-std::string runsListRoute(const std::filesystem::path& repoRoot, const std::string& query);
+std::string runsListRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& query);
 std::string runStatusRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& query);
 std::string activeTasksRoute(JobRunner& runner);
 std::string cancelRunRoute(JobRunner& runner, const std::string& body);

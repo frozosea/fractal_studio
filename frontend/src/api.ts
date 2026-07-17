@@ -957,6 +957,8 @@ export interface RunRow {
   startedAt: number
   finishedAt: number
   outputDir: string
+  cancelable?: boolean
+  cancelRequested?: boolean
 }
 
 export interface ArtifactRow {

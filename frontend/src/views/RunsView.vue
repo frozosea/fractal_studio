@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, type RunRow, type ArtifactRow } from '../api'
 import { t, lang } from '../i18n'
 
@@ -43,6 +43,9 @@ const offset = ref(0)
 const loading = ref(false)
 const expandedRun = ref('')
 const runArtifactsMap = ref<Record<string, ArtifactRow[]>>({})
+const cancellingRunIds = ref<Set<string>>(new Set())
+const cancelErrors = ref<Record<string, string>>({})
+let activeRefreshInterval: ReturnType<typeof setInterval> | undefined
 
 // Module-filter string sent to the API for the active category. A category spans several
 // modules → comma-joined IN list. "Other" = available modules not in any category (includes
@@ -69,16 +72,49 @@ async function fetchRuns(off: number) {
   })
 }
 
-async function refresh() {
-  loading.value = true
+async function fetchRunsRange(limit: number, off: number) {
+  return api.runs({
+    limit,
+    offset: off,
+    module: categoryModuleParam(),
+    status: statusFilter.value || undefined,
+  })
+}
+
+function reconcileCancelState(items: RunRow[]) {
+  const activeRunIds = new Set(items.filter(isActiveRun).map(r => r.id))
+  const visibleRunIds = new Set(items.map(r => r.id))
+  cancellingRunIds.value = new Set([...cancellingRunIds.value].filter(id => activeRunIds.has(id)))
+  cancelErrors.value = Object.fromEntries(
+    Object.entries(cancelErrors.value).filter(([runId]) => visibleRunIds.has(runId)),
+  )
+}
+
+async function refresh(showLoading = true) {
+  if (showLoading) loading.value = true
   offset.value = 0
   try {
     const r = await fetchRuns(0)
     runs.value = r.items
     totalCount.value = r.totalCount
     modules.value = r.modules
+    reconcileCancelState(r.items)
   } finally {
-    loading.value = false
+    if (showLoading) loading.value = false
+  }
+}
+
+async function refreshLoadedRuns() {
+  if (loading.value || (runs.value.every(r => !isActiveRun(r)) && cancellingRunIds.value.size === 0)) return
+  const loadedLimit = Math.max(pageSize, runs.value.length || pageSize)
+  try {
+    const r = await fetchRunsRange(loadedLimit, 0)
+    runs.value = r.items
+    totalCount.value = r.totalCount
+    modules.value = r.modules
+    offset.value = Math.max(0, Math.floor(Math.max(0, r.items.length - 1) / pageSize) * pageSize)
+    reconcileCancelState(r.items)
+  } catch {
   }
 }
 
@@ -90,6 +126,7 @@ async function loadMore() {
     runs.value = [...runs.value, ...r.items]
     offset.value = nextOffset
     totalCount.value = r.totalCount
+    reconcileCancelState(runs.value)
   } finally {
     loading.value = false
   }
@@ -109,6 +146,47 @@ function fmtDuration(row: RunRow) {
   const m = Math.floor(sec / 60)
   const s = sec % 60
   return m + 'm ' + s + 's'
+}
+
+function isActiveRun(row: RunRow): boolean {
+  return row.status === 'queued' || row.status === 'running'
+}
+
+function isRunCancelling(row: RunRow): boolean {
+  return !!row.cancelRequested || cancellingRunIds.value.has(row.id)
+}
+
+function canCancelRun(row: RunRow): boolean {
+  return isActiveRun(row) && !!row.cancelable
+}
+
+async function cancelRun(row: RunRow) {
+  if (!canCancelRun(row) || isRunCancelling(row)) return
+  cancellingRunIds.value = new Set([...cancellingRunIds.value, row.id])
+  const nextErrors = { ...cancelErrors.value }
+  delete nextErrors[row.id]
+  cancelErrors.value = nextErrors
+
+  try {
+    const result = await api.cancelRun(row.id)
+    runs.value = runs.value.map(r => r.id === row.id
+      ? {
+          ...r,
+          status: result.status === 'cancel_requested' ? r.status : result.status,
+          cancelRequested: result.cancelRequested || r.cancelRequested,
+          cancelable: result.cancelRequested ? r.cancelable : false,
+        }
+      : r)
+    if (!result.cancelRequested) {
+      cancellingRunIds.value = new Set([...cancellingRunIds.value].filter(id => id !== row.id))
+    }
+  } catch (e: any) {
+    cancellingRunIds.value = new Set([...cancellingRunIds.value].filter(id => id !== row.id))
+    cancelErrors.value = {
+      ...cancelErrors.value,
+      [row.id]: e?.data?.error || e?.message || String(e),
+    }
+  }
 }
 
 function dateKey(ms: number): string {
@@ -163,7 +241,14 @@ const hasMore = () => runs.value.length < totalCount.value
 
 watch([activeCategory, statusFilter], () => { refresh() })
 
-onMounted(refresh)
+onMounted(() => {
+  refresh()
+  activeRefreshInterval = setInterval(refreshLoadedRuns, 1500)
+})
+
+onBeforeUnmount(() => {
+  if (activeRefreshInterval) clearInterval(activeRefreshInterval)
+})
 </script>
 
 <template>
@@ -204,10 +289,24 @@ onMounted(refresh)
               <span class="cat-dot" :style="{ background: categoryOf(r.module).color }"></span>
               <span class="run-module mono">{{ r.module || '—' }}</span>
             </span>
-            <span class="run-status mono" :class="{ good: r.status === 'completed', bad: r.status === 'failed' }">{{ r.status }}</span>
+            <span class="run-status mono" :class="{ good: r.status === 'completed', bad: r.status === 'failed', warn: r.status === 'cancelled' || isRunCancelling(r) }">
+              {{ isRunCancelling(r) ? (lang === 'en' ? 'stopping' : '中断中') : r.status }}
+            </span>
             <span class="run-time mono dim">{{ fmtTime(r.startedAt) }}</span>
             <span class="run-duration mono">{{ fmtDuration(r) }}</span>
+            <span class="run-actions">
+              <button
+                v-if="canCancelRun(r)"
+                class="btn-cancel-run"
+                :disabled="isRunCancelling(r)"
+                @click.stop="cancelRun(r)">
+                {{ isRunCancelling(r) ? (lang === 'en' ? 'stopping…' : '中断中…') : (lang === 'en' ? 'stop' : '中断') }}
+              </button>
+            </span>
           </div>
+        </div>
+        <div v-if="cancelErrors[r.id]" class="cancel-error mono">
+          {{ lang === 'en' ? 'stop failed: ' : '中断失败：' }}{{ cancelErrors[r.id] }}
         </div>
         <div v-if="expandedRun === r.id" class="run-detail">
           <div v-if="!runArtifactsMap[r.id]" class="loading-artifacts">{{ lang === 'en' ? 'loading…' : '加载中…' }}</div>
@@ -325,7 +424,7 @@ onMounted(refresh)
 
 .run-main {
   display: grid;
-  grid-template-columns: 1fr auto auto 1fr auto;
+  grid-template-columns: minmax(120px, 1fr) auto auto minmax(120px, 1fr) auto 74px;
   gap: 10px;
   align-items: center;
   font-size: var(--fs-mono);
@@ -336,11 +435,37 @@ onMounted(refresh)
 .run-status { min-width: 70px; text-align: center; }
 .run-time { text-align: right; }
 .run-duration { min-width: 60px; text-align: right; }
+.run-actions { min-width: 74px; text-align: right; }
+.btn-cancel-run {
+  padding: 3px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  border-color: var(--rule);
+  color: var(--text-dim);
+}
+.btn-cancel-run:hover {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.btn-cancel-run:disabled {
+  cursor: wait;
+  border-color: var(--warn);
+  color: var(--warn);
+  opacity: .8;
+}
+.cancel-error {
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--bad);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
 
 .mono { font-family: var(--mono); }
 .dim { color: var(--text-dim); }
 .good { color: var(--good); }
 .bad  { color: var(--bad); }
+.warn { color: var(--warn); }
 
 .run-detail {
   padding: 10px 8px 14px;
@@ -426,7 +551,7 @@ onMounted(refresh)
   .head { gap: 6px; }
 
   .run-main {
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto 70px;
     font-size: 11px;
   }
 
