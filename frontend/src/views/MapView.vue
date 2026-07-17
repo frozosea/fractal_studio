@@ -433,6 +433,8 @@ const selectedSpecialPointId = ref('')
 const specialPointVariantHint = ref('')
 const mapViewportW = ref(1200)
 const mapViewportH = ref(800)
+const juliaViewportW = ref(1200)
+const juliaViewportH = ref(800)
 const transitionFrom = ref<string>('mandelbrot')
 const transitionTo   = ref<string>('burning_ship')
 const transitionMode = ref<'pair' | 'multi'>('pair')
@@ -807,6 +809,11 @@ function onMapViewportSize(size: { width: number; height: number }) {
   if (size.height >= 16) mapViewportH.value = size.height
 }
 
+function onJuliaViewportSize(size: { width: number; height: number }) {
+  if (size.width >= 16) juliaViewportW.value = size.width
+  if (size.height >= 16) juliaViewportH.value = size.height
+}
+
 function onRendered(meta: { generatedMs: number; artifactId?: string; engineUsed?: string; scalarUsed?: string }) {
   lastMs.value         = meta.generatedMs
   lastArtifactId.value = meta.artifactId ?? ''
@@ -1048,8 +1055,8 @@ function shellQuote(s: string): string {
 }
 
 function compositionScaleForOutput(outputW: number, outputH: number, baseScale = activeScale()): number {
-  const viewportW = Math.max(1, mapViewportW.value)
-  const viewportH = Math.max(1, mapViewportH.value)
+  const viewportW = Math.max(1, juliaOn.value ? juliaViewportW.value : mapViewportW.value)
+  const viewportH = Math.max(1, juliaOn.value ? juliaViewportH.value : mapViewportH.value)
   const viewportAspect = viewportW / viewportH
   const outputAspect = Math.max(1e-9, outputW / Math.max(1, outputH))
   const frameHeightRatio = outputAspect > viewportAspect
@@ -2169,7 +2176,11 @@ onBeforeUnmount(() => {
                 :julia="true" :juliaRe="juliaRe" :juliaIm="juliaIm"
                 :engine="engineMode" :scalarType="scalarMode"
                 :rotationDeg="rotationDeg"
+                :showExportFrame="showExportFrame"
+                :exportFrameWidth="pngPreset.width"
+                :exportFrameHeight="pngPreset.height"
                 @viewport-change="onJuliaViewport"
+                @viewport-size="onJuliaViewportSize"
               />
             </div>
           </div>
