@@ -4,8 +4,11 @@
 #include "api/routes_common.hpp"
 #include "db.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <csignal>
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <execinfo.h>
 #include <filesystem>
@@ -19,6 +22,143 @@
 #include <unistd.h>
 
 namespace {
+
+enum class StartupBenchmarkMode {
+    Off,
+    Quick,
+    Full,
+};
+
+StartupBenchmarkMode startup_benchmark_mode() {
+    const char* raw = std::getenv("FSD_STARTUP_BENCHMARK");
+    if (raw == nullptr || *raw == '\0') return StartupBenchmarkMode::Quick;
+
+    std::string value(raw);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    if (value == "off" || value == "false" || value == "0") return StartupBenchmarkMode::Off;
+    if (value == "quick") return StartupBenchmarkMode::Quick;
+    if (value == "full") return StartupBenchmarkMode::Full;
+
+    std::cerr << "[startup benchmark] warning: invalid FSD_STARTUP_BENCHMARK='"
+              << raw << "'; using quick" << std::endl;
+    return StartupBenchmarkMode::Quick;
+}
+
+const char* startup_benchmark_mode_name(StartupBenchmarkMode mode) {
+    switch (mode) {
+        case StartupBenchmarkMode::Off: return "off";
+        case StartupBenchmarkMode::Quick: return "quick";
+        case StartupBenchmarkMode::Full: return "full";
+    }
+    return "quick";
+}
+
+struct StartupBenchmarkProfile {
+    const char* workload;
+    int width;
+    int height;
+    int iterations;
+    bool replaceCache;
+};
+
+bool run_startup_benchmark_profile(
+    fsd::JobRunner& runner,
+    const StartupBenchmarkProfile& profile,
+    int warmup,
+    int samples
+) {
+    const auto started = std::chrono::steady_clock::now();
+    try {
+        const fsd::Json request = {
+            {"centerRe", -0.75},
+            {"centerIm", 0.0},
+            {"scale", 1.5},
+            {"width", profile.width},
+            {"height", profile.height},
+            {"iterations", profile.iterations},
+            {"warmup", warmup},
+            {"samples", samples},
+            {"workload", profile.workload},
+            {"replaceCache", profile.replaceCache},
+        };
+        const fsd::Json response = fsd::Json::parse(fsd::benchmarkRoute(runner, request.dump()));
+        int available = 0;
+        const auto results = response.find("results");
+        if (results != response.end() && results->is_array()) {
+            for (const auto& result : *results) {
+                if (result.value("available", false)) ++available;
+            }
+        }
+
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        if (available == 0) {
+            std::cerr << "[startup benchmark] warning: workload=" << profile.workload
+                      << " produced no usable engine result after " << elapsedMs
+                      << " ms" << std::endl;
+            return false;
+        }
+        std::cout << "[startup benchmark] workload=" << profile.workload
+                  << " completed in " << elapsedMs << " ms ("
+                  << available << " engine/scalar results)" << std::endl;
+        return true;
+    } catch (const std::exception& ex) {
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        std::cerr << "[startup benchmark] warning: workload=" << profile.workload
+                  << " failed after " << elapsedMs << " ms: " << ex.what()
+                  << std::endl;
+        return false;
+    } catch (...) {
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        std::cerr << "[startup benchmark] warning: workload=" << profile.workload
+                  << " failed after " << elapsedMs << " ms: unknown error"
+                  << std::endl;
+        return false;
+    }
+}
+
+void run_startup_benchmarks(fsd::JobRunner& runner, StartupBenchmarkMode mode) {
+    if (mode == StartupBenchmarkMode::Off) {
+        std::cout << "[startup benchmark] disabled; scheduler will use capability fallback"
+                  << std::endl;
+        return;
+    }
+
+    const int warmup = 1;
+    const int samples = mode == StartupBenchmarkMode::Full ? 3 : 2;
+    const StartupBenchmarkProfile profiles[] = {
+        {"interactive", 256, 256, 1000, true},
+        {"batch", 512, 512, 2000, false},
+    };
+
+    std::cout << "[startup benchmark] mode=" << startup_benchmark_mode_name(mode)
+              << ", warmup=" << warmup << ", samples=" << samples
+              << "; calibrating before HTTP listen" << std::endl;
+    const auto started = std::chrono::steady_clock::now();
+    int completed = 0;
+    for (const auto& profile : profiles) {
+        if (run_startup_benchmark_profile(runner, profile, warmup, samples)) ++completed;
+    }
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
+
+    if (completed == 2) {
+        std::cout << "[startup benchmark] calibration completed in " << elapsedMs
+                  << " ms; scheduler reference is ready" << std::endl;
+    } else if (completed > 0) {
+        std::cerr << "[startup benchmark] warning: partial calibration completed in "
+                  << elapsedMs << " ms; missing workloads will use capability fallback"
+                  << std::endl;
+    } else {
+        std::cerr << "[startup benchmark] warning: calibration unavailable after "
+                  << elapsedMs << " ms; continuing service with capability fallback"
+                  << std::endl;
+    }
+}
 
 std::filesystem::path find_studio_root(std::filesystem::path start) {
     namespace fs = std::filesystem;
@@ -184,9 +324,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << "fractal_studio backend ready (native compute)" << std::endl;
-    std::cout << "health: " << fsd::systemCheckRoute() << std::endl;
-
     int port = 18080;  // frontend api.ts default
     if (argc > 1) {
         // First positional arg can be either "serve" (legacy) or a port number.
@@ -197,6 +334,13 @@ int main(int argc, char* argv[]) {
             try { port = std::stoi(arg1); } catch (...) {}
         }
     }
+
+    // Service mode is calibrated synchronously so the first HTTP request can
+    // use measured scheduling data. CLI exports return above and skip this.
+    run_startup_benchmarks(runner, startup_benchmark_mode());
+
+    std::cout << "fractal_studio backend ready (native compute)" << std::endl;
+    std::cout << "health: " << fsd::systemCheckRoute() << std::endl;
 
     fsd::HttpServer server(port, runner, repoRoot);
     server.serveForever();

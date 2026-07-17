@@ -1,19 +1,11 @@
-// routes_benchmark.cpp
-//
-// POST /api/benchmark — runs a reference viewport through all engine×scalar
-// combinations and returns a throughput table.
-//
-// Reference viewport: center=(-0.75, 0), scale=1.5, 1024×1024, iter=10000.
-// Each engine runs once (no warmup for simplicity). Results are in Mpix/s.
+// POST /api/benchmark -- calibrate the production map-field engine paths.
 
 #include "routes.hpp"
 #include "routes_common.hpp"
 #include "resource_manager.hpp"
 
-#include "../compute/map_kernel.hpp"
-#include "../compute/map_kernel_avx2.hpp"
-#include "../compute/map_kernel_avx512.hpp"
 #include "../compute/engine_select.hpp"
+#include "../compute/map_kernel.hpp"
 #include "../compute/tile_scheduler.hpp"
 
 #if defined(HAS_CUDA_KERNEL)
@@ -23,16 +15,105 @@
 #  define USE_CUDA 0
 #endif
 
-#include <opencv2/core.hpp>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <filesystem>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace fsd {
 
 namespace {
 
-void setBenchmarkProgress(JobRunner& runner, const std::string& runId, const std::string& stage, int current, int total) {
-    const double percent = total > 0 ? (100.0 * static_cast<double>(current) / static_cast<double>(total)) : 0.0;
+constexpr int kMinBenchmarkDimension = 64;
+constexpr int kMaxBenchmarkDimension = 2048;
+constexpr long long kMaxBenchmarkPixels = 2048LL * 2048LL;
+constexpr double kMaxBenchmarkWorkUnits = 8.0e9;
+constexpr int kMinBenchmarkIterations = 1;
+constexpr int kMaxBenchmarkIterations = 100000;
+constexpr int kMaxBenchmarkSamples = 7;
+constexpr int kMaxBenchmarkWarmups = 3;
+
+[[noreturn]] void invalidBenchmarkParameter(
+    const std::string& field,
+    const std::string& limit
+) {
+    throw HttpError(400, Json{
+        {"error", "invalid benchmark parameter"},
+        {"field", field},
+        {"limit", limit},
+    }.dump());
+}
+
+int integerParameter(
+    const Json& body,
+    const char* key,
+    int fallback,
+    int minimum,
+    int maximum
+) {
+    const auto it = body.find(key);
+    if (it == body.end()) return fallback;
+    if (!it->is_number()) invalidBenchmarkParameter(key, std::to_string(minimum) + ".." + std::to_string(maximum));
+    const double value = it->get<double>();
+    if (!std::isfinite(value) || std::floor(value) != value ||
+        value < static_cast<double>(minimum) || value > static_cast<double>(maximum)) {
+        invalidBenchmarkParameter(key, std::to_string(minimum) + ".." + std::to_string(maximum));
+    }
+    return static_cast<int>(value);
+}
+
+double finiteParameter(const Json& body, const char* key, double fallback) {
+    const auto it = body.find(key);
+    if (it == body.end()) return fallback;
+    if (!it->is_number()) invalidBenchmarkParameter(key, "finite number");
+    const double value = it->get<double>();
+    if (!std::isfinite(value)) invalidBenchmarkParameter(key, "finite number");
+    return value;
+}
+
+bool booleanParameter(const Json& body, const char* key, bool fallback) {
+    const auto it = body.find(key);
+    if (it == body.end()) return fallback;
+    if (!it->is_boolean()) invalidBenchmarkParameter(key, "boolean");
+    return it->get<bool>();
+}
+
+int warmupParameter(const Json& body) {
+    const auto it = body.find("warmup");
+    if (it == body.end()) return 1;
+    if (it->is_boolean()) return it->get<bool>() ? 1 : 0;
+    return integerParameter(body, "warmup", 1, 0, kMaxBenchmarkWarmups);
+}
+
+std::string workloadParameter(const Json& body, long long pixels) {
+    const auto it = body.find("workload");
+    if (it == body.end()) return pixels < 900000LL ? "interactive" : "batch";
+    if (!it->is_string()) invalidBenchmarkParameter("workload", "1..64 characters: [A-Za-z0-9_.-]");
+    const std::string value = it->get<std::string>();
+    if (value.empty() || value.size() > 64 ||
+        !std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+            return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                   (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.';
+        })) {
+        invalidBenchmarkParameter("workload", "1..64 characters: [A-Za-z0-9_.-]");
+    }
+    return value;
+}
+
+void setBenchmarkProgress(
+    JobRunner& runner,
+    const std::string& runId,
+    const std::string& stage,
+    int current,
+    int total,
+    Json details = Json::object()
+) {
+    const double percent = total > 0
+        ? 100.0 * static_cast<double>(current) / static_cast<double>(total)
+        : 0.0;
     runner.setProgress(runId, Json{
         {"taskType", "benchmark"},
         {"stage", stage},
@@ -42,26 +123,132 @@ void setBenchmarkProgress(JobRunner& runner, const std::string& runId, const std
         {"elapsedMs", runner.runElapsedMs(runId)},
         {"cancelable", false},
         {"resourceLocks", Json::array({"benchmark", "cpu_heavy", "cuda_heavy"})},
-        {"details", Json::object()},
+        {"details", std::move(details)},
     }.dump());
+}
+
+double median(std::vector<double> values) {
+    if (values.empty()) return 0.0;
+    std::sort(values.begin(), values.end());
+    const size_t middle = values.size() / 2;
+    if ((values.size() & 1U) != 0U) return values[middle];
+    return 0.5 * (values[middle - 1] + values[middle]);
+}
+
+bool requestedPathWasUsed(
+    const std::string& requestedEngine,
+    const std::string& requestedScalar,
+    const std::string& actualEngine,
+    const std::string& actualScalar
+) {
+    return requestedEngine == actualEngine && requestedScalar == actualScalar;
+}
+
+struct RenderMeasurement {
+    std::string actualEngine;
+    std::string actualScalar;
+    double elapsedMs = 0.0;
+};
+
+struct BenchResult {
+    std::string family = "map_field";
+    std::string workload;
+    std::string engine;
+    std::string scalar;
+    std::string actualEngine;
+    std::string actualScalar;
+    std::string error;
+    double workUnits = 0.0;
+    double elapsedMs = 0.0;
+    double mpixPerSec = 0.0;
+    bool available = false;
+    int warmupCount = 0;
+    int sampleCount = 0;
+    std::vector<double> sampleElapsedMs;
+};
+
+Json resultJson(const BenchResult& result, int requestedSamples, int requestedWarmups) {
+    return Json{
+        {"family", result.family},
+        {"workload", result.workload},
+        {"workUnits", result.workUnits},
+        {"engine", result.engine},
+        {"scalar", result.scalar},
+        {"requestedEngine", result.engine},
+        {"requestedScalar", result.scalar},
+        {"actualEngine", result.actualEngine},
+        {"actualScalar", result.actualScalar},
+        {"available", result.available},
+        {"elapsedMs", result.elapsedMs},
+        {"mpixPerSec", result.mpixPerSec},
+        {"warmupCount", result.warmupCount},
+        {"requestedWarmupCount", requestedWarmups},
+        {"sampleCount", result.sampleCount},
+        {"requestedSampleCount", requestedSamples},
+        {"sampleElapsedMs", result.sampleElapsedMs},
+        {"error", result.error},
+    };
+}
+
+compute::BenchmarkEntry cacheEntry(const BenchResult& result) {
+    compute::BenchmarkEntry entry;
+    entry.engine = result.engine;
+    entry.scalar = result.scalar;
+    entry.mpix_per_sec = result.mpixPerSec;
+    entry.available = result.available;
+    entry.family = result.family;
+    entry.workload = result.workload;
+    entry.work_units = result.workUnits;
+    entry.elapsed_ms = result.elapsedMs;
+    entry.sample_count = result.sampleCount;
+    return entry;
 }
 
 } // namespace
 
 std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
-    const Json jbody = body.empty() ? Json::object() : parseJsonBody(body);
+    Json jbody;
+    try {
+        jbody = body.empty() ? Json::object() : Json::parse(body);
+    } catch (const std::exception&) {
+        invalidBenchmarkParameter("body", "valid JSON object");
+    }
+    if (!jbody.is_object()) invalidBenchmarkParameter("body", "JSON object");
 
-    const double cRe   = jbody.value("centerRe",   -0.75);
-    const double cIm   = jbody.value("centerIm",    0.0);
-    const double scale = jbody.value("scale",       1.5);
-    const int W        = jbody.value("width",       512);
-    const int H        = jbody.value("height",      512);
-    const int iters    = jbody.value("iterations",  2000);
+    const double centerRe = finiteParameter(jbody, "centerRe", -0.75);
+    const double centerIm = finiteParameter(jbody, "centerIm", 0.0);
+    const double scale = finiteParameter(jbody, "scale", 1.5);
+    if (!(scale > 0.0)) invalidBenchmarkParameter("scale", "finite number > 0");
+
+    const int width = integerParameter(
+        jbody, "width", 512, kMinBenchmarkDimension, kMaxBenchmarkDimension);
+    const int height = integerParameter(
+        jbody, "height", 512, kMinBenchmarkDimension, kMaxBenchmarkDimension);
+    const int iterations = integerParameter(
+        jbody, "iterations", 2000, kMinBenchmarkIterations, kMaxBenchmarkIterations);
+    const int requestedSamples = integerParameter(
+        jbody, "samples", 3, 1, kMaxBenchmarkSamples);
+    const int requestedWarmups = warmupParameter(jbody);
+    const bool replaceCache = booleanParameter(jbody, "replaceCache", true);
+
+    const long long pixels = static_cast<long long>(width) * static_cast<long long>(height);
+    if (pixels > kMaxBenchmarkPixels) {
+        invalidBenchmarkParameter("width,height", "at most 4194304 pixels");
+    }
+    const std::string workload = workloadParameter(jbody, pixels);
+    const double workUnits = static_cast<double>(pixels) * static_cast<double>(iterations);
+    if (workUnits > kMaxBenchmarkWorkUnits) {
+        invalidBenchmarkParameter(
+            "width,height,iterations",
+            "width * height * iterations must not exceed 8000000000");
+    }
 
     auto run = runner.createRun("benchmark", body);
     ResourceManager::Lease lease;
     std::string conflictLock, activeRunId;
-    if (!resourceManager().tryAcquire(run.id, "benchmark", {"benchmark", "cpu_heavy", "cuda_heavy"}, lease, conflictLock, activeRunId)) {
+    if (!resourceManager().tryAcquire(
+            run.id, "benchmark", {"benchmark", "cpu_heavy", "cuda_heavy"},
+            lease, conflictLock, activeRunId)) {
         runner.setStatus(run.id, "failed");
         throw HttpError(409, Json{
             {"error", "benchmark already running"},
@@ -74,132 +261,222 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
     runner.setStatus(run.id, "running");
     runner.setCancelable(run.id, false);
 
-    struct BenchResult {
-        std::string engine;
-        std::string scalar;
-        double elapsed_ms;
-        double mpix_per_sec;
-        bool  available;
-    };
+    int completed = 0;
+    int total = 0;
+    try {
+        struct Candidate {
+            std::string engine;
+            std::string scalar;
+        };
+        std::vector<Candidate> candidates = {
+            {"openmp", "fp32"},
+            {"openmp", "fp64"},
+            {"openmp", "fx64"},
+        };
 
-    std::vector<BenchResult> results;
-
-    auto run_bench = [&](const std::string& engine, const std::string& scalar) -> BenchResult {
-        BenchResult r;
-        r.engine   = engine;
-        r.scalar   = scalar;
-        r.available = false;
-        r.elapsed_ms = 0.0;
-        r.mpix_per_sec = 0.0;
-
-        compute::MapParams p;
-        p.center_re   = cRe;
-        p.center_im   = cIm;
-        p.scale       = scale;
-        p.width       = W;
-        p.height      = H;
-        p.iterations  = iters;
-        p.engine      = engine;
-        p.scalar_type = scalar;
-
-        cv::Mat out;
-        try {
-            const auto t0 = std::chrono::steady_clock::now();
-            if (engine == "hybrid") {
-                auto stats = compute::render_map_hybrid(p, out);
-                (void)stats;
-            } else {
-                auto stats = compute::render_map(p, out);
-                (void)stats;
-            }
-            const auto t1 = std::chrono::steady_clock::now();
-            r.elapsed_ms = std::chrono::duration<double,std::milli>(t1 - t0).count();
-            r.mpix_per_sec = (static_cast<double>(W) * H / 1e6) / (r.elapsed_ms / 1000.0);
-            r.available = true;
-        } catch (...) {
-            r.available = false;
-        }
-        return r;
-    };
-
-    const bool avx2_ok = compute::avx2_available() && compute::fma_available();
-    const bool avx512_ok = compute::avx512_available();
+        const auto capabilities = compute::runtime_capabilities();
+        const bool avx2Ok = capabilities.avx2_compiled && capabilities.avx2_runtime && capabilities.fma_runtime;
+        const bool avx512Ok = capabilities.avx512_compiled && capabilities.avx512_runtime;
 #if USE_CUDA
-    const bool cuda_ok = fsd_cuda::cuda_available();
+        const bool cudaOk = capabilities.cuda_compiled && capabilities.cuda_runtime && fsd_cuda::cuda_available();
 #else
-    const bool cuda_ok = false;
+        const bool cudaOk = false;
 #endif
-    const int total = 3
-        + (avx2_ok ? 2 : 0)
-        + (avx512_ok ? 2 : 0)
-        + (cuda_ok ? 5 : 0);
+        if (avx2Ok) {
+            candidates.push_back({"avx2", "fp32"});
+            candidates.push_back({"avx2", "fp64"});
+        }
+        if (avx512Ok) {
+            candidates.push_back({"avx512", "fp32"});
+            candidates.push_back({"avx512", "fp64"});
+        }
+        if (cudaOk) {
+            candidates.push_back({"cuda", "fp32"});
+            candidates.push_back({"cuda", "fp64"});
+            candidates.push_back({"cuda", "fx64"});
+            candidates.push_back({"hybrid", "fp64"});
+        }
+        total = static_cast<int>(candidates.size());
+        setBenchmarkProgress(runner, run.id, "running", 0, total);
 
-    setBenchmarkProgress(runner, run.id, "running", 0, total);
+        std::vector<BenchResult> results;
+        results.reserve(candidates.size());
 
-    // OpenMP fp32 / fp64 / fx64
-    results.push_back(run_bench("openmp", "fp32"));
-    setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-    results.push_back(run_bench("openmp", "fp64"));
-    setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-    results.push_back(run_bench("openmp", "fx64"));
-    setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
+        auto renderOnce = [&](const Candidate& candidate) -> RenderMeasurement {
+            compute::MapParams params;
+            params.center_re = centerRe;
+            params.center_im = centerIm;
+            params.scale = scale;
+            params.width = width;
+            params.height = height;
+            params.iterations = iterations;
+            params.engine = candidate.engine;
+            params.scalar_type = candidate.scalar;
 
-    // AVX2/FMA (mainstream CPU SIMD path)
-    if (avx2_ok) {
-        results.push_back(run_bench("avx2", "fp32"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-        results.push_back(run_bench("avx2", "fp64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-    }
+            compute::FieldOutput field;
+            RenderMeasurement measurement;
+            const auto started = std::chrono::steady_clock::now();
+            if (candidate.engine == "hybrid") {
+                const auto stats = compute::render_map_field_hybrid(params, field);
+                measurement.actualEngine = stats.engine_used;
+                measurement.actualScalar = stats.scalar_used;
+            } else {
+                const auto stats = compute::render_map_field(params, field);
+                measurement.actualEngine = stats.engine_used;
+                measurement.actualScalar = stats.scalar_used;
+            }
+            const auto finished = std::chrono::steady_clock::now();
+            measurement.elapsedMs = std::chrono::duration<double, std::milli>(finished - started).count();
+            return measurement;
+        };
 
-    // AVX-512 (only if available)
-    if (avx512_ok) {
-        results.push_back(run_bench("avx512", "fp32"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-        results.push_back(run_bench("avx512", "fp64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-    }
+        for (const auto& candidate : candidates) {
+            setBenchmarkProgress(runner, run.id, "running", completed, total, Json{
+                {"family", "map_field"},
+                {"workload", workload},
+                {"requestedEngine", candidate.engine},
+                {"requestedScalar", candidate.scalar},
+            });
 
-    // CUDA (only if available)
-    if (cuda_ok) {
-        // CUDA path via render_map — uses CUDA internally when engine="cuda"
-        results.push_back(run_bench("cuda", "fp32"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-        results.push_back(run_bench("cuda", "fp64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-        results.push_back(run_bench("cuda", "fx64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-        results.push_back(run_bench("hybrid", "fp64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-        results.push_back(run_bench("hybrid", "fx64"));
-        setBenchmarkProgress(runner, run.id, "running", static_cast<int>(results.size()), total);
-    }
+            BenchResult result;
+            result.workload = workload;
+            result.workUnits = workUnits;
+            result.engine = candidate.engine;
+            result.scalar = candidate.scalar;
 
-    Json jresults = Json::array();
-    std::vector<compute::BenchmarkEntry> cache_entries;
-    for (const auto& r : results) {
-        jresults.push_back({
-            {"engine",     r.engine},
-            {"scalar",     r.scalar},
-            {"available",  r.available},
-            {"elapsedMs",  r.elapsed_ms},
-            {"mpixPerSec", r.mpix_per_sec},
+            auto acceptMeasurement = [&](const RenderMeasurement& measurement) {
+                result.actualEngine = measurement.actualEngine;
+                result.actualScalar = measurement.actualScalar;
+                if (!requestedPathWasUsed(
+                        result.engine, result.scalar,
+                        measurement.actualEngine, measurement.actualScalar)) {
+                    result.error = "requested path fell back to " +
+                        (measurement.actualEngine.empty() ? std::string("unknown") : measurement.actualEngine) + "/" +
+                        (measurement.actualScalar.empty() ? std::string("unknown") : measurement.actualScalar);
+                    return false;
+                }
+                return true;
+            };
+
+            try {
+                bool pathMatches = true;
+                for (int warmup = 0; warmup < requestedWarmups; ++warmup) {
+                    const RenderMeasurement measurement = renderOnce(candidate);
+                    ++result.warmupCount;
+                    if (!acceptMeasurement(measurement)) {
+                        pathMatches = false;
+                        break;
+                    }
+                }
+
+                for (int sample = 0; pathMatches && sample < requestedSamples; ++sample) {
+                    const RenderMeasurement measurement = renderOnce(candidate);
+                    if (!acceptMeasurement(measurement)) {
+                        pathMatches = false;
+                        break;
+                    }
+                    result.sampleElapsedMs.push_back(measurement.elapsedMs);
+                }
+
+                result.sampleCount = static_cast<int>(result.sampleElapsedMs.size());
+                result.elapsedMs = median(result.sampleElapsedMs);
+                if (result.elapsedMs > 0.0) {
+                    result.mpixPerSec =
+                        (static_cast<double>(pixels) / 1e6) / (result.elapsedMs / 1000.0);
+                }
+                result.available = pathMatches && result.sampleCount == requestedSamples;
+                if (!result.available && result.error.empty()) {
+                    result.error = "benchmark did not collect every requested sample";
+                }
+            } catch (const std::exception& ex) {
+                result.error = ex.what();
+                result.available = false;
+                result.sampleCount = static_cast<int>(result.sampleElapsedMs.size());
+                result.elapsedMs = median(result.sampleElapsedMs);
+            } catch (...) {
+                result.error = "unknown benchmark error";
+                result.available = false;
+                result.sampleCount = static_cast<int>(result.sampleElapsedMs.size());
+                result.elapsedMs = median(result.sampleElapsedMs);
+            }
+
+            results.push_back(std::move(result));
+            ++completed;
+            const BenchResult& saved = results.back();
+            setBenchmarkProgress(runner, run.id, "running", completed, total, Json{
+                {"family", saved.family},
+                {"workload", saved.workload},
+                {"requestedEngine", saved.engine},
+                {"requestedScalar", saved.scalar},
+                {"actualEngine", saved.actualEngine},
+                {"actualScalar", saved.actualScalar},
+                {"available", saved.available},
+            });
+        }
+
+        Json jsonResults = Json::array();
+        std::vector<compute::BenchmarkEntry> cacheEntries;
+        cacheEntries.reserve(results.size());
+        for (const auto& result : results) {
+            jsonResults.push_back(resultJson(result, requestedSamples, requestedWarmups));
+            cacheEntries.push_back(cacheEntry(result));
+        }
+
+        Json response = {
+            {"runId", run.id},
+            {"status", "completed"},
+            {"family", "map_field"},
+            {"workload", workload},
+            {"workUnits", workUnits},
+            {"centerRe", centerRe},
+            {"centerIm", centerIm},
+            {"scale", scale},
+            {"width", width},
+            {"height", height},
+            {"iterations", iterations},
+            {"warmup", requestedWarmups},
+            {"samples", requestedSamples},
+            {"replaceCache", replaceCache},
+            {"results", jsonResults},
+            {"artifact", {
+                {"name", "benchmark.json"},
+                {"kind", "report"},
+            }},
+        };
+
+        const std::filesystem::path reportPath =
+            std::filesystem::path(run.outputDir) / "benchmark.json";
+        atomicWriteText(reportPath, response.dump(2));
+        runner.addArtifact(run.id, Artifact{"benchmark", reportPath.string(), "report"});
+
+        if (replaceCache) {
+            compute::update_benchmark_cache(cacheEntries);
+        } else {
+            compute::merge_benchmark_cache(cacheEntries);
+        }
+
+        setBenchmarkProgress(runner, run.id, "completed", total, total, Json{
+            {"family", "map_field"},
+            {"workload", workload},
+            {"workUnits", workUnits},
+            {"resultCount", results.size()},
+            {"artifact", "benchmark.json"},
         });
-        cache_entries.push_back({r.engine, r.scalar, r.mpix_per_sec, r.available});
+        runner.setStatus(run.id, "completed");
+        return response.dump();
+    } catch (const std::exception& ex) {
+        try {
+            setBenchmarkProgress(runner, run.id, "failed", completed, total, Json{{"error", ex.what()}});
+            runner.setStatus(run.id, "failed");
+        } catch (...) {}
+        throw;
+    } catch (...) {
+        try {
+            setBenchmarkProgress(runner, run.id, "failed", completed, total, Json{{"error", "unknown benchmark error"}});
+            runner.setStatus(run.id, "failed");
+        } catch (...) {}
+        throw;
     }
-    compute::update_benchmark_cache(cache_entries);
-
-    Json resp = {
-        {"runId",      run.id},
-        {"status",     "completed"},
-        {"width",      W},
-        {"height",     H},
-        {"iterations", iters},
-        {"results",    jresults},
-    };
-    setBenchmarkProgress(runner, run.id, "completed", total, total);
-    runner.setStatus(run.id, "completed");
-    return resp.dump();
 }
 
 } // namespace fsd

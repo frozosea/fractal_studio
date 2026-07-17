@@ -2306,6 +2306,93 @@ void require_default_scalar_coverage(Runner& runner, const std::string& scalar) 
     std::cerr << "[FAIL] required default scalar was not exercised: " << scalar << "\n";
 }
 
+void verify_profiled_engine_selector(Runner& runner) {
+    using fsd::compute::BenchmarkEntry;
+
+    auto sample = [](
+        const char* engine,
+        const char* scalar,
+        double work_units,
+        double elapsed_ms) {
+        BenchmarkEntry entry;
+        entry.engine = engine;
+        entry.scalar = scalar;
+        entry.available = true;
+        entry.family = "map_field";
+        entry.workload = work_units < 500.0 ? "small" : "large";
+        entry.work_units = work_units;
+        entry.elapsed_ms = elapsed_ms;
+        entry.sample_count = 3;
+        return entry;
+    };
+
+    // cpu: low launch cost, lower slope; gpu: higher launch cost, higher
+    // throughput. Piecewise interpolation/extrapolation must cross over.
+    std::vector<BenchmarkEntry> profile = {
+        sample("cpu", "fp64", 100.0, 11.0),
+        sample("cpu", "fp64", 1000.0, 101.0),
+        sample("gpu", "fp64", 100.0, 25.0),
+        sample("gpu", "fp64", 1000.0, 70.0),
+        // Deliberately opposite fp32 result: it must not leak into fp64.
+        sample("cpu", "fp32", 100.0, 100.0),
+        sample("gpu", "fp32", 100.0, 1.0),
+    };
+    const std::vector<std::string> candidates = {"cpu", "gpu"};
+
+    auto expect = [&](const char* label, const std::string& actual, const char* expected) {
+        const bool ok = actual == expected;
+        ++runner.compared;
+        std::cout << (ok ? "[PASS] " : "[FAIL] ")
+                  << "profile_selector " << label
+                  << " actual=" << actual << " expected=" << expected << "\n";
+        if (!ok) ++runner.failed;
+    };
+
+    expect("small_crossover",
+        fsd::compute::select_profiled_engine(
+            profile, "map_field", "fp64", 50.0, candidates, "cpu"),
+        "cpu");
+    expect("large_crossover",
+        fsd::compute::select_profiled_engine(
+            profile, "map_field", "fp64", 1000.0, candidates, "cpu"),
+        "gpu");
+    expect("scalar_isolation_fp64",
+        fsd::compute::select_profiled_engine(
+            profile, "map_field", "fp64", 100.0, candidates, "gpu"),
+        "cpu");
+    expect("scalar_isolation_fp32",
+        fsd::compute::select_profiled_engine(
+            profile, "map_field", "fp32", 100.0, candidates, "cpu"),
+        "gpu");
+    expect("missing_family_fallback",
+        fsd::compute::select_profiled_engine(
+            profile, "transition_slice", "fp64", 1000.0, candidates, "cpu"),
+        "cpu");
+    expect("legal_candidate_filter",
+        fsd::compute::select_profiled_engine(
+            profile, "map_field", "fp64", 1000.0, {"cpu"}, "cpu"),
+        "cpu");
+
+    const std::vector<BenchmarkEntry> saved_cache = fsd::compute::benchmark_cache_snapshot();
+    fsd::compute::clear_benchmark_cache();
+    fsd::compute::merge_benchmark_cache({profile[0], profile[1]});
+    BenchmarkEntry replacement = profile[0];
+    replacement.elapsed_ms = 9.0;
+    fsd::compute::merge_benchmark_cache({replacement});
+    const std::vector<BenchmarkEntry> merged_cache = fsd::compute::benchmark_cache_snapshot();
+    const auto replaced = std::find_if(
+        merged_cache.begin(), merged_cache.end(), [](const BenchmarkEntry& entry) {
+            return entry.engine == "cpu" && entry.scalar == "fp64" &&
+                   entry.work_units == 100.0;
+        });
+    expect("cache_merge_replaces_same_slot",
+        merged_cache.size() == 2 && replaced != merged_cache.end() &&
+                std::abs(replaced->elapsed_ms - 9.0) < 1.0e-12
+            ? "ok" : "failed",
+        "ok");
+    fsd::compute::replace_benchmark_cache(saved_cache);
+}
+
 void print_capabilities() {
     const auto c = fsd::compute::runtime_capabilities();
     std::cout << "[caps]"
@@ -2325,6 +2412,7 @@ void print_capabilities() {
 
 int main() {
     Runner runner;
+    verify_profiled_engine_selector(runner);
     print_capabilities();
 
     const DiffLimits same_scalar_limits{255, 2.00, 0.080, 10};

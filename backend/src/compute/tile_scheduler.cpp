@@ -90,24 +90,50 @@ static bool is_cancelled_exception(const std::exception& ex) {
     return std::string(ex.what()) == "cancelled";
 }
 
-// ---- Worker EMA throughput tracker ----
-
-struct WorkerStats {
-    double ema_pps = 0.0;   // EMA of pixels/sec
-    double alpha   = 0.3;   // smoothing factor
-    int    count   = 0;     // tiles processed
-
-    void record(int pixels, double ms) {
-        if (ms <= 0.0) return;
-        const double pps = pixels / (ms / 1000.0);
-        if (count == 0) {
-            ema_pps = pps;
-        } else {
-            ema_pps = alpha * pps + (1.0 - alpha) * ema_pps;
-        }
-        count++;
+// Convert calibrated aggregate CPU/GPU costs into the number of tiles the
+// single GPU worker reserves per atomic queue claim. CPU profile timings are
+// measured with the normal CPU pool, hence multiplying by `cpu_workers`
+// translates the aggregate rate ratio into this queue's one-tile-per-worker
+// claim granularity. A strict clamp limits cancellation latency and prevents a
+// noisy calibration from monopolising an arbitrarily large render.
+static size_t calibrated_gpu_batch(
+    const MapParams& p,
+    int tile_size,
+    const std::string& scalar,
+    const std::string& cpu_engine,
+    int cpu_workers,
+    size_t tile_count,
+    size_t fallback)
+{
+    const size_t max_batch = std::max<size_t>(
+        1u, std::min<size_t>(64u, tile_count > 1 ? tile_count - 1 : 1u));
+    const auto clamp_batch = [&](size_t batch) {
+        return std::clamp<size_t>(batch, 1u, max_batch);
+    };
+    const double tile_work =
+        static_cast<double>(std::max(1, tile_size)) *
+        static_cast<double>(std::max(1, tile_size)) *
+        static_cast<double>(std::max(1, p.iterations));
+    const std::vector<BenchmarkEntry> profile = benchmark_cache_snapshot();
+    const auto cpu_ms = predict_profiled_elapsed_ms(
+        profile, "map_field", scalar, cpu_engine, tile_work);
+    const auto gpu_ms = predict_profiled_elapsed_ms(
+        profile, "map_field", scalar, "cuda", tile_work);
+    if (!cpu_ms.has_value() || !gpu_ms.has_value() ||
+        !std::isfinite(*cpu_ms) || !std::isfinite(*gpu_ms) ||
+        !(*cpu_ms > 0.0) || !(*gpu_ms > 0.0)) {
+        return clamp_batch(fallback);
     }
-};
+
+    const double gpu_to_cpu_rate = *cpu_ms / *gpu_ms;
+    const double desired_per_cpu_wave =
+        static_cast<double>(std::max(1, cpu_workers)) * gpu_to_cpu_rate;
+    const double desired_total_share = static_cast<double>(std::max<size_t>(1u, tile_count)) *
+        gpu_to_cpu_rate / (1.0 + gpu_to_cpu_rate);
+    const double desired = std::min(desired_per_cpu_wave, desired_total_share);
+    if (!std::isfinite(desired)) return clamp_batch(fallback);
+    return clamp_batch(static_cast<size_t>(std::max<long long>(1LL, std::llround(desired))));
+}
 
 // ---- Tile render helpers ----
 
@@ -276,6 +302,12 @@ TileSchedulerStats render_map_hybrid(
                        || map_engine_supported(p, "cuda", fx)
 #endif
                        ;
+    const int n_cpu_threads = default_render_threads();
+    const std::string cpu_engine = use_avx512 ? "avx512" : (use_avx2 ? "avx2" : "openmp");
+    const std::string profile_scalar = fx ? "fx64" : "fp64";
+    const size_t fallback_gpu_batch = runtime_capabilities().cuda_low_end ? 4u : 12u;
+    const size_t gpu_batch_tiles = calibrated_gpu_batch(
+        p, tile_size, profile_scalar, cpu_engine, n_cpu_threads, n, fallback_gpu_batch);
 
     TileSchedulerStats result;
     std::mutex stats_mutex;
@@ -286,11 +318,9 @@ TileSchedulerStats render_map_hybrid(
 
     // GPU worker thread (if available)
     std::thread gpu_thread;
-    WorkerStats gpu_ema;
     if (use_gpu) {
         gpu_thread = std::thread([&]() {
             try {
-                const size_t gpu_batch_tiles = runtime_capabilities().cuda_low_end ? 4u : 12u;
                 while (true) {
                     if (cancel_requested()) break;
                     const size_t first = next_tile.fetch_add(gpu_batch_tiles);
@@ -300,25 +330,29 @@ TileSchedulerStats render_map_hybrid(
                         if (cancel_requested()) break;
                         if (idx >= n) break;
                         const Tile& tile = tiles[idx];
-                        const auto t0 = std::chrono::steady_clock::now();
 #if USE_CUDA
                         double ms = 0.0;
+                        bool rendered_on_gpu = true;
                         try {
                             ms = render_tile_gpu(p, tile, out, fx, fixed_scalar_type);
                         } catch (...) {
+                            rendered_on_gpu = false;
                             ms = render_tile_cpu(p, tile, out, use_avx2, use_avx512, fx, fixed_scalar_type);
                         }
 #else
                         (void)tile;
                         const double ms = 0.0;
+                        const bool rendered_on_gpu = false;
 #endif
-                        const auto t1 = std::chrono::steady_clock::now();
-                        const double elapsed = std::chrono::duration<double,std::milli>(t1-t0).count();
-                        gpu_ema.record(tile.w * tile.h, elapsed);
                         {
                             std::lock_guard<std::mutex> lk(stats_mutex);
-                            total_gpu_ms += ms;
-                            gpu_tiles++;
+                            if (rendered_on_gpu) {
+                                total_gpu_ms += ms;
+                                gpu_tiles++;
+                            } else {
+                                total_cpu_ms += ms;
+                                cpu_tiles++;
+                            }
                         }
                         if (on_tile_done) on_tile_done(tile.x, tile.y, tile.w, tile.h);
                     }
@@ -333,11 +367,8 @@ TileSchedulerStats render_map_hybrid(
     }
 
     // CPU workers — one thread per available CPU core
-    const int n_cpu_threads = default_render_threads();
     std::vector<std::thread> cpu_threads;
     cpu_threads.reserve(static_cast<size_t>(n_cpu_threads));
-    WorkerStats cpu_ema;
-    std::mutex cpu_ema_mutex;
 
     for (int tid = 0; tid < n_cpu_threads; tid++) {
         cpu_threads.emplace_back([&]() {
@@ -347,14 +378,7 @@ TileSchedulerStats render_map_hybrid(
                     const size_t idx = next_tile.fetch_add(1);
                     if (idx >= n) break;
                     const Tile& tile = tiles[idx];
-                    const auto t0 = std::chrono::steady_clock::now();
                     const double ms = render_tile_cpu(p, tile, out, use_avx2, use_avx512, fx, fixed_scalar_type);
-                    const auto t1 = std::chrono::steady_clock::now();
-                    const double elapsed = std::chrono::duration<double,std::milli>(t1-t0).count();
-                    {
-                        std::lock_guard<std::mutex> lk(cpu_ema_mutex);
-                        cpu_ema.record(tile.w * tile.h, elapsed);
-                    }
                     {
                         std::lock_guard<std::mutex> lk(stats_mutex);
                         total_cpu_ms += ms;
@@ -533,6 +557,11 @@ TileSchedulerStats render_map_field_hybrid(
                          || map_engine_supported(p, "cuda", false)
 #endif
                          ;
+    const int n_cpu_threads = default_render_threads();
+    const std::string cpu_engine = use_avx512 ? "avx512" : (use_avx2 ? "avx2" : "openmp");
+    const size_t fallback_gpu_batch = runtime_capabilities().cuda_low_end ? 4u : 12u;
+    const size_t gpu_batch = calibrated_gpu_batch(
+        p, tile_size, "fp64", cpu_engine, n_cpu_threads, n, fallback_gpu_batch);
 
     TileSchedulerStats result;
     std::mutex stats_mutex;
@@ -545,7 +574,6 @@ TileSchedulerStats render_map_field_hybrid(
     if (use_gpu) {
         gpu_thread = std::thread([&]() {
             try {
-                const size_t gpu_batch = runtime_capabilities().cuda_low_end ? 4u : 12u;
                 while (true) {
                     if (cancel_requested()) break;
                     const size_t first = next_tile.fetch_add(gpu_batch);
@@ -557,18 +585,26 @@ TileSchedulerStats render_map_field_hybrid(
                         const Tile& tile = tiles[idx];
                         double ms = 0.0;
 #if USE_CUDA
+                        bool rendered_on_gpu = true;
                         try {
                             ms = render_tile_gpu_field(p, tile, fo);
                         } catch (...) {
+                            rendered_on_gpu = false;
                             ms = render_tile_cpu_field(p, tile, fo, use_avx2, use_avx512);
                         }
 #else
                         (void)tile;
+                        const bool rendered_on_gpu = false;
 #endif
                         {
                             std::lock_guard<std::mutex> lk(stats_mutex);
-                            total_gpu_ms += ms;
-                            gpu_tiles++;
+                            if (rendered_on_gpu) {
+                                total_gpu_ms += ms;
+                                gpu_tiles++;
+                            } else {
+                                total_cpu_ms += ms;
+                                cpu_tiles++;
+                            }
                         }
                     }
                 }
@@ -581,7 +617,6 @@ TileSchedulerStats render_map_field_hybrid(
         });
     }
 
-    const int n_cpu_threads = default_render_threads();
     std::vector<std::thread> cpu_threads;
     cpu_threads.reserve(static_cast<size_t>(n_cpu_threads));
 

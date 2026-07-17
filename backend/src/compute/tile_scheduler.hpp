@@ -2,7 +2,7 @@
 //
 // Hybrid CPU+GPU tile scheduler.
 //
-// A viewport is split into tiles (default 256×256). Tiles are pushed into a
+// A viewport is split into tiles (default 96×96). Tiles are pushed into a
 // shared work queue. Two worker pools draw from the queue:
 //
 //   CPU pool — one worker per visible logical core by default.
@@ -11,10 +11,12 @@
 //   GPU pool — one worker. Runs CUDA tiles through the CUDA renderer.
 //              (Only present when HAS_CUDA_KERNEL is defined.)
 //
-// Assignment policy (EMA throughput):
-//   Each worker tracks an EMA of pixels/sec. The scheduler dispatches the
-//   next available tile to whichever pool currently has the highest EMA
-//   throughput per tile-capacity unit.
+// Assignment policy (calibrated dynamic queue):
+//   Startup benchmark cost curves estimate aggregate CPU/GPU throughput for
+//   this workload. Their ratio sizes the GPU's atomic queue claims while CPU
+//   workers claim one tile at a time. If no matching profile exists, a bounded
+//   hardware-class fallback batch is used. The shared queue still adapts to
+//   spatially uneven escape work without a fixed CPU/GPU partition.
 //
 // The full viewport render completes once all tiles are consumed and all
 // workers have joined. Results are written directly into a pre-allocated

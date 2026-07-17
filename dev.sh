@@ -280,7 +280,10 @@ backend_logged_ready() {
 wait_for_backend() {
     local attempt
     local backend_status
-    for attempt in {1..60}; do
+    # Startup calibration runs before the HTTP socket is opened. Allow up to
+    # 30 seconds so a cold GPU context or the full profile is not mistaken for
+    # a failed backend start.
+    for attempt in {1..300}; do
         if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
             backend_status=0
             if wait "$BACKEND_PID"; then
@@ -298,7 +301,7 @@ wait_for_backend() {
         sleep 0.1
     done
 
-    echo "[dev.sh] Backend did not become ready on port $BACKEND_PORT." >&2
+    echo "[dev.sh] Backend did not become ready on port $BACKEND_PORT after 30 seconds." >&2
     tail -n 20 "$LOG_DIR/backend.log" >&2 || true
     return 1
 }

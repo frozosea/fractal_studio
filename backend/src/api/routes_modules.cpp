@@ -11,6 +11,9 @@
 #include "../compute/engine_select.hpp"
 #include "../compute/parallel.hpp"
 
+#include <algorithm>
+#include <set>
+
 namespace fsd {
 
 std::string systemCheckRoute() {
@@ -24,13 +27,33 @@ std::string systemCheckRoute() {
 std::string systemCapabilitiesRoute() {
     const auto caps = compute::runtime_capabilities();
     Json bench = Json::array();
-    for (const auto& e : compute::benchmark_cache_snapshot()) {
+    Json benchmarkFamilies = Json::array();
+    Json benchmarkWorkloads = Json::array();
+    std::set<std::string> seenFamilies;
+    std::set<std::string> seenWorkloads;
+    int benchmarkSamples = 0;
+    int availableProfiles = 0;
+    const auto benchmarkEntries = compute::benchmark_cache_snapshot();
+    for (const auto& e : benchmarkEntries) {
         bench.push_back({
             {"engine", e.engine},
             {"scalar", e.scalar},
             {"available", e.available},
             {"mpixPerSec", e.mpix_per_sec},
+            {"family", e.family},
+            {"workload", e.workload},
+            {"workUnits", e.work_units},
+            {"elapsedMs", e.elapsed_ms},
+            {"sampleCount", e.sample_count},
         });
+        benchmarkSamples += std::max(0, e.sample_count);
+        if (e.available) ++availableProfiles;
+        if (!e.family.empty() && seenFamilies.insert(e.family).second) {
+            benchmarkFamilies.push_back(e.family);
+        }
+        if (!e.workload.empty() && seenWorkloads.insert(e.workload).second) {
+            benchmarkWorkloads.push_back(e.workload);
+        }
     }
     Json j = {
         {"openmp", {
@@ -73,7 +96,13 @@ std::string systemCapabilitiesRoute() {
             {"thermalFriendly", compute::thermal_friendly_mode()},
         }},
         {"benchmarkCache", {
-            {"available", compute::has_benchmark_cache()},
+            {"available", availableProfiles > 0},
+            {"profileVersion", 1},
+            {"entryCount", benchmarkEntries.size()},
+            {"availableEntryCount", availableProfiles},
+            {"sampleCount", benchmarkSamples},
+            {"families", benchmarkFamilies},
+            {"workloads", benchmarkWorkloads},
             {"results", bench},
         }},
     };

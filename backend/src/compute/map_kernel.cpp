@@ -261,36 +261,14 @@ static MapEnginePlan select_map_engine_plan(const MapParams& p, bool field_outpu
         plan.fixed_precision = FixedPrecision::None;
     }
 
-    std::string selected_engine = select_map_engine(p, plan.fx);
-    if (plan.fp32 && p.engine == "auto") {
-        if (map_engine_supported(p, "cuda", false)) {
-            selected_engine = "cuda";
-        } else if (avx512_available() && map_engine_supported(p, "avx512", false)) {
-            selected_engine = "avx512";
-        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
-            selected_engine = "avx2";
-        } else {
-            selected_engine = "openmp";
-        }
-    }
-    if (plan.fp32 && selected_engine == "hybrid") {
-        if (avx512_available() && map_engine_supported(p, "avx512", false)) {
-            selected_engine = "avx512";
-        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
-            selected_engine = "avx2";
-        } else {
-            selected_engine = "openmp";
-        }
-    }
-    // fp64 auto: prefer AVX-512 > AVX-2; skip CUDA (1:64 fp64:fp32 ratio on consumer GPUs).
-    if (!plan.fp32 && !plan.fp80 && !plan.fp128 && !plan.fx && p.engine == "auto") {
-        if (avx512_available() && map_engine_supported(p, "avx512", false)) {
-            selected_engine = "avx512";
-        } else if (avx2_available() && fma_available() && map_engine_supported(p, "avx2", false)) {
-            selected_engine = "avx2";
-        }
-    }
-    plan.engine = selected_engine;
+    // Engine selection is centralized so benchmark decisions are not silently
+    // overwritten by a second, hard-coded preference ladder in this plan. The
+    // raw field carries norm values, so smooth coloring does not need the old
+    // color-kernel fallback that `map_engine_supported` still enforces for
+    // direct BGR callers.
+    MapParams selection_params = p;
+    if (field_output) selection_params.smooth = false;
+    plan.engine = select_map_engine(selection_params, plan.fx);
 
     // smooth (BGR) needs per-pixel |z|² which the AVX-512/CUDA *colorize* paths don't track;
     // the field kernels always emit norm, so field renders never gate on smooth.

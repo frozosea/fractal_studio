@@ -19,6 +19,35 @@ Default URLs:
 
 Manual backend/frontend commands, dependencies, runtime directories, and troubleshooting are in [docs/development.md](docs/development.md). Test and QA flow is in [docs/testing.md](docs/testing.md).
 
+## Startup Benchmark / 启动校准
+
+In server mode, the backend synchronously calibrates its compute engines before opening the HTTP port. The default `quick` mode measures two scheduler workloads: an interactive `256×256`, 1000-iteration map and a batch `512×512`, 2000-iteration map. Each engine/scalar pair gets one warmup and two measured samples; `full` uses three measured samples. The local `export-map` and `export-video` CLI commands skip startup calibration.
+
+后端在服务模式下会先同步校准计算引擎，再开放 HTTP 端口。默认的 `quick` 模式包含交互地图和批处理地图两档，使自动调度有当前机器上的实测速率作为参考。可通过环境变量选择模式：
+
+```bash
+# Default: one warmup + two samples per engine/scalar pair
+FSD_STARTUP_BENCHMARK=quick ./dev.sh
+
+# One warmup + three samples for a steadier reference
+FSD_STARTUP_BENCHMARK=full ./dev.sh
+
+# Start immediately and use capability-based fallback scheduling
+FSD_STARTUP_BENCHMARK=off ./dev.sh
+```
+
+`0` and `false` are aliases for `off`. An empty value uses `quick`; an unsupported value prints a warning and also falls back to `quick`. A failed or partially unavailable calibration is reported in the backend log, but it does not prevent the service from starting: missing measurements use the capability-based fallback.
+
+`POST /api/benchmark` can refresh the in-process scheduler reference while the service is running. `replaceCache: true` atomically replaces the current reference with the submitted profile; `replaceCache: false` merges results by compute family, workload, work size, engine, and scalar. For example:
+
+```bash
+curl -X POST http://localhost:18080/api/benchmark \
+  -H 'Content-Type: application/json' \
+  -d '{"workload":"interactive","width":256,"height":256,"iterations":1000,"warmup":1,"samples":3,"replaceCache":true}'
+```
+
+The active reference is observable at `GET /api/system/capabilities` under `benchmarkCache` (`available` plus the measured `results`). The startup log also reports each workload's duration, the total calibration time, and any fallback reason.
+
 ## Documentation / 文档
 
 - [Architecture / 架构](docs/architecture.md): backend/frontend layers, data flow, compute pipelines, and where to add features.
