@@ -90,6 +90,20 @@ void verify_sequence() {
             "escape analysis JSON must expose the certified radius");
 }
 
+void verify_output_blend_counterexample() {
+    // This is deliberately expressed as DSL rather than enabling the future
+    // output_blend IR node. Averaging complex outputs destroys the individual
+    // formulas' radius-2 implication through cancellation, so no child
+    // certificate may be interpolated or inherited.
+    const auto blend = OrbitProgram::formula(
+        "0.5*((z^2+c)+((abs(real(z))+i*abs(imag(z)))^2+c))");
+    require(blend->escape_analysis().status == EscapeCertification::Unverified,
+            "50% Mandelbrot/Burning Ship output blend must be unverified");
+    const auto analysis = escape_analysis_json(blend->escape_analysis());
+    require(analysis["certifiedRadius"].is_null(),
+            "50% Mandelbrot/Burning Ship output blend must have infinite/null threshold");
+}
+
 void verify_limits() {
     bool rejected = false;
     try { (void)OrbitProgram::formula(std::string(4097, 'z')); }
@@ -110,6 +124,7 @@ int main() {
     try {
         verify_dsl();
         verify_sequence();
+        verify_output_blend_counterexample();
         verify_limits();
         std::cout << "orbit_program_smoke: ok\n";
         return 0;

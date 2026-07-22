@@ -2503,7 +2503,8 @@ void verify_strict_orbit_escape_semantics(Runner& runner) {
         unverified_stats.engine_used == "openmp" && unverified_stats.scalar_used == "fp64";
 
     const auto [diverged, diverged_stats] = render_one(
-        fsd::compute::OrbitProgram::formula("z*z"), 1.0e200);
+        fsd::compute::OrbitProgram::formula(
+            "0.5*((z^2+c)+((abs(real(z))+i*abs(imag(z)))^2+c))"), 1.0e200);
     const bool numerical_is_separate = diverged.iter_u32.size() == 1 &&
         diverged.iter_u32[0] == 5 && diverged.orbit_class_u8[0] == 2 &&
         diverged_stats.engine_used == "openmp";
