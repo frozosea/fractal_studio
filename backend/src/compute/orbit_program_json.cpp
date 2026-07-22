@@ -11,11 +11,13 @@ namespace {
 constexpr std::size_t MAX_JSON_NODES = 256;
 constexpr std::size_t MAX_JSON_DEPTH = 32;
 
-Cx<double> parseParameterValue(const nlohmann::json& value, const std::string& name) {
+OrbitParameter parseParameterValue(const nlohmann::json& value, const std::string& name) {
     double re = 0.0;
     double im = 0.0;
+    OrbitParameter::Type type = OrbitParameter::Type::Complex;
     if (value.is_number()) {
         re = value.get<double>();
+        type = OrbitParameter::Type::Real;
     } else if (value.is_array() && value.size() == 2 &&
                value[0].is_number() && value[1].is_number()) {
         re = value[0].get<double>();
@@ -31,7 +33,7 @@ Cx<double> parseParameterValue(const nlohmann::json& value, const std::string& n
     if (!std::isfinite(re) || !std::isfinite(im)) {
         throw std::runtime_error("Orbit parameter '" + name + "' must be finite");
     }
-    return {re, im};
+    return {name, {re, im}, type};
 }
 
 std::shared_ptr<const OrbitProgram> parseNode(
@@ -63,7 +65,7 @@ std::shared_ptr<const OrbitProgram> parseNode(
                     throw std::runtime_error("DSL parameters must be an object");
                 }
                 for (const auto& [name, parameter] : formula["parameters"].items()) {
-                    parameters.push_back({name, parseParameterValue(parameter, name)});
+                    parameters.push_back(parseParameterValue(parameter, name));
                 }
             }
             return OrbitProgram::formula(source, parameters);

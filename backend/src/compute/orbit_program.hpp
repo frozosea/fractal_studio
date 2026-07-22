@@ -30,6 +30,7 @@ struct EscapeAnalysis {
 struct OrbitParameter {
     std::string name;
     Cx<double> value;
+    enum class Type { Real, Complex } type = Type::Complex;
 };
 
 class FormulaCompileError : public std::runtime_error {

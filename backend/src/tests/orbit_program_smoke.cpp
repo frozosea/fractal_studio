@@ -41,6 +41,20 @@ void verify_dsl() {
         "a*z+b", {{"a", {1.0, 0.0}}, {"b", {2.0, 0.0}}})->hash();
     require(hashA == hashB, "parameter ordering must not change the formula hash");
 
+    const auto realParameter = parse_orbit_program_json(nlohmann::json::parse(R"({
+      "type":"formula","formula":{"type":"dsl","source":"gain*z","parameters":{"gain":2}}
+    })"));
+    const auto complexParameter = parse_orbit_program_json(nlohmann::json::parse(R"({
+      "type":"formula","formula":{"type":"dsl","source":"gain*z","parameters":{"gain":[2,0]}}
+    })"));
+    require(realParameter->hash() != complexParameter->hash(),
+            "declared real/complex parameter type must participate in canonical hash");
+    require(realParameter->canonical().find("binary:complex") != std::string::npos,
+            "typed AST must promote real times complex to complex");
+    const auto realResult = OrbitProgram::formula("abs(z)+real(c)");
+    require(realResult->canonical().find("binary:real") != std::string::npos,
+            "typed AST must preserve real-valued function output");
+
     bool rejected = false;
     try { (void)OrbitProgram::formula("system(z)"); }
     catch (const FormulaCompileError& error) {

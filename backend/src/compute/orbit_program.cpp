@@ -90,6 +90,7 @@ struct Node {
     double number = 0.0;
     std::size_t position = 0;
     std::vector<std::unique_ptr<Node>> children;
+    OrbitParameter::Type value_type = OrbitParameter::Type::Complex;
 };
 
 class Parser {
@@ -216,16 +217,52 @@ struct Instruction {
 };
 
 using ParameterIndex = std::map<std::string, std::size_t>;
+using ParameterTypes = std::map<std::string, OrbitParameter::Type>;
+
+const char* typeName(OrbitParameter::Type type) {
+    return type == OrbitParameter::Type::Real ? "real" : "complex";
+}
+
+OrbitParameter::Type inferTypes(Node& node, const ParameterTypes& parameters) {
+    using Type = OrbitParameter::Type;
+    if (node.kind == NodeKind::Number) return node.value_type = Type::Real;
+    if (node.kind == NodeKind::Variable) {
+        if (node.text == "z" || node.text == "c" || node.text == "i") {
+            return node.value_type = Type::Complex;
+        }
+        if (node.text == "n" || node.text == "pi" || node.text == "e") {
+            return node.value_type = Type::Real;
+        }
+        return node.value_type = parameters.at(node.text);
+    }
+    std::vector<Type> childTypes;
+    childTypes.reserve(node.children.size());
+    for (auto& child : node.children) childTypes.push_back(inferTypes(*child, parameters));
+    if (node.kind == NodeKind::Unary) return node.value_type = childTypes.front();
+    if (node.kind == NodeKind::Binary) {
+        if (node.text == "^") return node.value_type = Type::Complex;
+        return node.value_type = std::any_of(
+            childTypes.begin(), childTypes.end(), [](Type type) { return type == Type::Complex; })
+            ? Type::Complex : Type::Real;
+    }
+    if (node.text == "abs" || node.text == "real" || node.text == "imag") {
+        return node.value_type = Type::Real;
+    }
+    if (node.text == "pow" || node.text == "log" || node.text == "sqrt") {
+        return node.value_type = Type::Complex;
+    }
+    return node.value_type = childTypes.front();
+}
 
 void compileNode(const Node& node, const ParameterIndex& parameters,
                  std::vector<Instruction>& code, std::ostringstream& canonical) {
     if (node.kind == NodeKind::Number) {
         code.push_back({Op::Number, {node.number, 0.0}, 0});
-        canonical << "num(" << std::setprecision(17) << node.number << ')';
+        canonical << "num:real(" << std::setprecision(17) << node.number << ')';
         return;
     }
     if (node.kind == NodeKind::Variable) {
-        canonical << "var(" << node.text << ')';
+        canonical << "var:" << typeName(node.value_type) << '(' << node.text << ')';
         if (node.text == "z") code.push_back({Op::Z});
         else if (node.text == "c") code.push_back({Op::C});
         else if (node.text == "n") code.push_back({Op::N});
@@ -235,8 +272,8 @@ void compileNode(const Node& node, const ParameterIndex& parameters,
         else code.push_back({Op::Parameter, {}, parameters.at(node.text)});
         return;
     }
-    canonical << (node.kind == NodeKind::Call ? "call(" : node.kind == NodeKind::Unary ? "unary(" : "binary(")
-              << node.text;
+    canonical << (node.kind == NodeKind::Call ? "call:" : node.kind == NodeKind::Unary ? "unary:" : "binary:")
+              << typeName(node.value_type) << '(' << node.text;
     for (const auto& child : node.children) {
         canonical << ',';
         compileNode(*child, parameters, code, canonical);
@@ -400,6 +437,7 @@ std::shared_ptr<const OrbitProgram> OrbitProgram::formula(
               [](const OrbitParameter& a, const OrbitParameter& b) { return a.name < b.name; });
     std::set<std::string> names;
     ParameterIndex indexes;
+    ParameterTypes types;
     std::vector<std::complex<double>> values;
     std::ostringstream parameterCanonical;
     for (const OrbitParameter& parameter : sortedParameters) {
@@ -421,13 +459,19 @@ std::shared_ptr<const OrbitProgram> OrbitProgram::formula(
             throw FormulaCompileError("INVALID_PARAMETER_VALUE", 0,
                                       "parameter value must be finite: " + parameter.name);
         }
+        if (parameter.type == OrbitParameter::Type::Real && parameter.value.im != 0.0) {
+            throw FormulaCompileError("INVALID_PARAMETER_VALUE", 0,
+                                      "real parameter has a non-zero imaginary part: " + parameter.name);
+        }
         indexes[parameter.name] = values.size();
+        types[parameter.name] = parameter.type;
         values.emplace_back(parameter.value.re, parameter.value.im);
-        parameterCanonical << parameter.name << '=' << std::setprecision(17)
+        parameterCanonical << parameter.name << ':' << typeName(parameter.type) << '=' << std::setprecision(17)
                            << parameter.value.re << ',' << parameter.value.im << ';';
     }
     Parser parser(source, names);
     auto ast = parser.parse();
+    (void)inferTypes(*ast, types);
     auto impl = std::make_shared<Impl>();
     impl->kind = Impl::Kind::Formula;
     impl->parameters = std::move(values);
