@@ -38,6 +38,8 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 find_package(OpenMP QUIET)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc videoio)
 
 add_executable(fractal_studio_backend
@@ -62,6 +64,7 @@ add_executable(fractal_studio_backend
     src/api/routes_artifacts.cpp
     src/api/routes_benchmark.cpp
     src/api/routes_variants.cpp
+    src/api/routes_compute_v1.cpp
 
     # Native compute
     src/compute/colorize.cpp
@@ -137,6 +140,7 @@ target_link_libraries(fractal_studio_backend PRIVATE
     sqlite3
     ${OpenCV_LIBS}
     dl          # dlopen/dlsym for custom variant shared libraries
+    OpenSSL::Crypto
 )
 
 target_compile_options(fractal_studio_backend PRIVATE
@@ -251,6 +255,15 @@ if(HAS_CUDA)
     target_compile_definitions(compute_path_diff PRIVATE HAS_CUDA_KERNEL=1)
 endif()
 add_test(NAME compute_path_diff COMMAND compute_path_diff)
+
+add_test(
+    NAME compute_v1_http_smoke
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/compute_v1_http_smoke.py
+            $<TARGET_FILE:fractal_studio_backend>
+            ${CMAKE_CURRENT_SOURCE_DIR}/..
+)
+set_tests_properties(compute_v1_http_smoke PROPERTIES TIMEOUT 30)
 
 include(CheckCXXSourceCompiles)
 set(CMAKE_REQUIRED_LIBRARIES quadmath)

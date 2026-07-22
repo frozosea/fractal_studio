@@ -128,4 +128,23 @@ struct ArtifactFile {
 std::string artifactsListRoute(const std::filesystem::path& repoRoot, const std::string& query);
 ArtifactFile artifactFileRoute(const std::filesystem::path& repoRoot, const std::string& query);
 
+// Private, versioned Compute API used by the Platform backend.
+std::string computeV1HealthRoute();
+std::string computeV1CapabilitiesRoute();
+std::string computeV1PreviewJsonRoute(const std::filesystem::path& repoRoot,
+                                      JobRunner& runner,
+                                      const std::string& body);
+std::string computeV1CreateRunRoute(const std::filesystem::path& repoRoot,
+                                    JobRunner& runner,
+                                    const std::string& body);
+std::string computeV1RunStatusRoute(const std::filesystem::path& repoRoot,
+                                    JobRunner& runner,
+                                    const std::string& runId);
+std::string computeV1CancelRunRoute(JobRunner& runner,
+                                   const std::string& runId,
+                                   const std::string& body);
+std::string computeV1ManifestRoute(const std::filesystem::path& repoRoot,
+                                   JobRunner& runner,
+                                   const std::string& runId);
+
 } // namespace fsd

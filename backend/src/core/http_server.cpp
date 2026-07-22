@@ -3,6 +3,7 @@
 #include "hardware_probe.hpp"
 #include "http_range.hpp"
 #include "routes.hpp"
+#include "../api/routes_common.hpp"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -28,6 +29,38 @@
 namespace fsd {
 
 namespace {
+std::string requestHeaderValue(const std::string& request, const std::string& wantedName);
+
+bool envEnabled(const char* name, bool defaultValue) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') return defaultValue;
+    std::string value(raw);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value != "0" && value != "false" && value != "off" && value != "no";
+}
+
+bool constantTimeEqual(const std::string& left, const std::string& right) {
+    const std::size_t count = std::max(left.size(), right.size());
+    unsigned char diff = static_cast<unsigned char>(left.size() ^ right.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        const unsigned char a = i < left.size() ? static_cast<unsigned char>(left[i]) : 0;
+        const unsigned char b = i < right.size() ? static_cast<unsigned char>(right[i]) : 0;
+        diff = static_cast<unsigned char>(diff | (a ^ b));
+    }
+    return diff == 0;
+}
+
+bool computeAuthorized(const std::string& request) {
+    const char* configured = std::getenv("FSD_COMPUTE_SERVICE_KEY");
+    if (configured == nullptr || *configured == '\0') return false;
+    const std::string authorization = requestHeaderValue(request, "Authorization");
+    constexpr const char* prefix = "Bearer ";
+    if (authorization.rfind(prefix, 0) != 0) return false;
+    return constantTimeEqual(authorization.substr(std::strlen(prefix)), configured);
+}
+
 std::string jsonEscapeString(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 2);
@@ -61,10 +94,12 @@ std::string HttpServer::makeHttpResponse(int status, const std::string& body, co
     if (status == 201) statusText = "Created";
     if (status == 204) statusText = "No Content";
     if (status == 400) statusText = "Bad Request";
+    if (status == 401) statusText = "Unauthorized";
     if (status == 404) statusText = "Not Found";
     if (status == 405) statusText = "Method Not Allowed";
     if (status == 409) statusText = "Conflict";
     if (status == 410) statusText = "Gone";
+    if (status == 422) statusText = "Unprocessable Entity";
     if (status == 429) statusText = "Too Many Requests";
     if (status == 500) statusText = "Internal Server Error";
     if (status == 503) statusText = "Service Unavailable";
@@ -74,7 +109,7 @@ std::string HttpServer::makeHttpResponse(int status, const std::string& body, co
        << "Content-Type: " << contentType << "\r\n"
        << "Access-Control-Allow-Origin: *\r\n"
        << "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-       << "Access-Control-Allow-Headers: Content-Type, Range, If-Range\r\n"
+       << "Access-Control-Allow-Headers: Content-Type, Authorization, Range, If-Range\r\n"
        << "Access-Control-Expose-Headers: "
        << "X-FSD-Status, X-FSD-Request-Id, X-FSD-Generated-Ms, X-FSD-Engine, "
        << "X-FSD-Scalar, X-FSD-Width, X-FSD-Height, X-FSD-Pixel-Format\r\n"
@@ -104,6 +139,59 @@ std::string HttpServer::handleRequest(const std::string& request) const {
     const auto [path, query] = splitPathAndQuery(rawPath);
 
     if (method == "OPTIONS") return makeHttpResponse(200, "{}");
+
+    // Private Compute v1. Liveness is deliberately unauthenticated so a
+    // private-network load balancer can probe the process. Every other route
+    // requires the service credential even when legacy routes remain enabled.
+    if (method == "GET" && path == "/compute/v1/health") {
+        return makeHttpResponse(200, computeV1HealthRoute());
+    }
+    if (path.rfind("/compute/v1/", 0) == 0 && !computeAuthorized(request)) {
+        return makeHttpResponse(401,
+            "{\"error\":{\"code\":\"COMPUTE_UNAUTHORIZED\",\"message\":\"valid Compute service credential required\",\"details\":{}}}");
+    }
+    if (method == "GET" && path == "/compute/v1/capabilities") {
+        return makeHttpResponse(200, computeV1CapabilitiesRoute());
+    }
+    if (method == "POST" && path == "/compute/v1/previews") {
+        const Json envelope = Json::parse(body);
+        if (envelope.value("schemaVersion", 0) == 1 &&
+            envelope.value("kind", std::string()) == "map_image" &&
+            envelope.contains("payload") && envelope["payload"].is_object()) {
+            int status = 200;
+            std::string contentType;
+            std::string extraHeaders;
+            const std::string frame = mapRenderInlineRoute(
+                repoRoot_, envelope["payload"].dump(), status, contentType, extraHeaders);
+            return makeHttpResponse(status, frame, contentType, extraHeaders);
+        }
+        return makeHttpResponse(200, computeV1PreviewJsonRoute(repoRoot_, runner_, body));
+    }
+    if (method == "POST" && path == "/compute/v1/runs") {
+        return makeHttpResponse(202, computeV1CreateRunRoute(repoRoot_, runner_, body));
+    }
+    if (path.rfind("/compute/v1/runs/", 0) == 0) {
+        const std::string tail = path.substr(std::strlen("/compute/v1/runs/"));
+        const std::string manifestSuffix = "/manifest";
+        const std::string cancelSuffix = "/cancel";
+        if (method == "GET" && tail.size() > manifestSuffix.size() &&
+            tail.substr(tail.size() - manifestSuffix.size()) == manifestSuffix) {
+            const std::string runId = tail.substr(0, tail.size() - manifestSuffix.size());
+            return makeHttpResponse(200, computeV1ManifestRoute(repoRoot_, runner_, runId));
+        }
+        if (method == "POST" && tail.size() > cancelSuffix.size() &&
+            tail.substr(tail.size() - cancelSuffix.size()) == cancelSuffix) {
+            const std::string runId = tail.substr(0, tail.size() - cancelSuffix.size());
+            return makeHttpResponse(202, computeV1CancelRunRoute(runner_, runId, body));
+        }
+        if (method == "GET" && tail.find('/') == std::string::npos && !tail.empty()) {
+            return makeHttpResponse(200, computeV1RunStatusRoute(repoRoot_, runner_, tail));
+        }
+    }
+
+    if (path.rfind("/api/", 0) == 0 && !envEnabled("FSD_ENABLE_LEGACY_API", true)) {
+        return makeHttpResponse(404, "{\"error\":\"legacy API disabled\"}");
+    }
 
     // System
     if (method == "GET"  && path == "/api/system/check")    return makeHttpResponse(200, systemCheckRoute());
@@ -344,8 +432,21 @@ bool HttpServer::streamArtifactResponse(int clientFd, const std::string& request
     const std::string path = rawPath.substr(0, q);
     const std::string query = q == std::string::npos ? std::string() : rawPath.substr(q + 1);
     const bool isDownload = path == "/api/artifacts/download";
-    const bool isContent = path == "/api/artifacts/content";
+    const bool isLegacyContent = path == "/api/artifacts/content";
+    const bool isComputeContent = path == "/compute/v1/artifacts";
+    const bool isContent = isLegacyContent || isComputeContent;
     if (method != "GET" || (!isDownload && !isContent)) return false;
+
+    if (isComputeContent && !computeAuthorized(request)) {
+        sendAll(clientFd,
+            makeHttpResponse(401,
+                "{\"error\":{\"code\":\"COMPUTE_UNAUTHORIZED\",\"message\":\"valid Compute service credential required\",\"details\":{}}}"));
+        return true;
+    }
+    if (!isComputeContent && !envEnabled("FSD_ENABLE_LEGACY_API", true)) {
+        sendAll(clientFd, makeHttpResponse(404, "{\"error\":\"legacy API disabled\"}"));
+        return true;
+    }
 
     try {
         const ArtifactFile file = artifactFileRoute(repoRoot_, query);
