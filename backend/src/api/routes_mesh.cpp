@@ -15,6 +15,7 @@
 #include "../compute/mesh_io.hpp"
 #include "../compute/variants.hpp"
 #include "../compute/escape_time.hpp"
+#include "../compute/orbit_program_json.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -195,6 +196,9 @@ std::string hsMeshRoute(const std::filesystem::path&, JobRunner& runner, const s
         p.bailout = std::sqrt(p.bailout_sq);
     }
     p.metric  = parseMetric (j.value("metric",  std::string("min_abs")));
+    if (j.contains("orbitProgram") && !j["orbitProgram"].is_null()) {
+        p.orbit_program = compute::parse_orbit_program_json(j["orbitProgram"]);
+    }
 
     if (p.resolution < 8 || p.resolution > 4096) throw std::runtime_error("invalid resolution");
     if (p.iterations < 1 || p.iterations > 1000000) throw std::runtime_error("invalid iterations");
@@ -273,6 +277,9 @@ std::string hsFieldRoute(const std::filesystem::path&, JobRunner& runner, const 
         p.bailout = std::sqrt(p.bailout_sq);
     }
     p.metric  = parseMetric (j.value("metric",  std::string("min_abs")));
+    if (j.contains("orbitProgram") && !j["orbitProgram"].is_null()) {
+        p.orbit_program = compute::parse_orbit_program_json(j["orbitProgram"]);
+    }
 
     if (p.resolution < 8 || p.resolution > 4096) throw std::runtime_error("invalid resolution");
     if (p.iterations < 1 || p.iterations > 1000000) throw std::runtime_error("invalid iterations");

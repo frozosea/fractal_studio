@@ -261,6 +261,19 @@ target_include_directories(orbit_program_smoke PRIVATE src src/include)
 target_compile_options(orbit_program_smoke PRIVATE -Wall -Wextra -Wno-unused-parameter -O3)
 target_link_libraries(orbit_program_smoke PRIVATE OpenSSL::Crypto)
 add_test(NAME orbit_program_smoke COMMAND orbit_program_smoke)
+
+add_executable(hs_orbit_smoke
+    src/tests/hs_orbit_smoke.cpp
+    src/compute/hs/heightfield_mesh.cpp
+    src/compute/orbit_program.cpp
+)
+target_include_directories(hs_orbit_smoke PRIVATE src src/include)
+target_compile_options(hs_orbit_smoke PRIVATE -Wall -Wextra -Wno-unused-parameter -O3)
+target_link_libraries(hs_orbit_smoke PRIVATE OpenSSL::Crypto)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(hs_orbit_smoke PRIVATE OpenMP::OpenMP_CXX)
+endif()
+add_test(NAME hs_orbit_smoke COMMAND hs_orbit_smoke)
 if(OpenMP_CXX_FOUND)
     target_link_libraries(compute_path_diff PRIVATE OpenMP::OpenMP_CXX)
 endif()

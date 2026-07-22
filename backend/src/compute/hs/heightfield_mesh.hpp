@@ -15,6 +15,9 @@
 #include "../variants.hpp"
 
 #include <string>
+#include <memory>
+
+namespace fsd::compute { class OrbitProgram; }
 
 namespace fsd::compute::hs {
 
@@ -42,6 +45,10 @@ struct HsMeshParams {
 
     // CPU render threads. 0 means auto-select from visible logical cores.
     int render_threads = 0;
+
+    // Safe Orbit Program override. Generic HS execution currently uses the
+    // deterministic fp64/OpenMP path and preserves strict escape semantics.
+    std::shared_ptr<const OrbitProgram> orbit_program;
 };
 
 // Compute the raw metric field values (float64[resolution²], row-major).

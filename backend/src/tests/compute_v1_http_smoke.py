@@ -190,6 +190,28 @@ def main() -> int:
         artifact = next(item for item in manifest["artifacts"] if item["mediaType"] == "image/png")
         assert len(artifact["sha256"]) == 64
 
+        hs_payload = {
+            "centerRe": -0.75, "centerIm": 0.0, "scale": 3.0,
+            "resolution": 8, "iterations": 16, "metric": "min_abs",
+            "heightScale": 0.5, "heightClamp": 2.0,
+            "orbitProgram": sequence_program,
+        }
+        status, payload, _ = request(
+            f"{base}/compute/v1/runs",
+            body={"schemaVersion": 1, "kind": "hs_mesh",
+                  "idempotencyKey": f"compute-v1-hs-smoke:{port}", "payload": hs_payload},
+        )
+        assert status == 202
+        hs_run_id = json.loads(payload)["data"]["computeRunId"]
+        status, payload, _ = request(f"{base}/compute/v1/runs/{hs_run_id}/manifest")
+        assert status == 200
+        hs_manifest = json.loads(payload)
+        assert hs_manifest["status"] == "completed"
+        assert hs_manifest["escapeAnalysis"]["certifiedRadius"] == 2.0
+        assert {item["mediaType"] for item in hs_manifest["artifacts"]} >= {
+            "model/gltf-binary", "application/sla",
+        }
+
         query = urllib.parse.urlencode({"artifactId": artifact["artifactId"]})
         status, content, headers = request(f"{base}/compute/v1/artifacts?{query}")
         assert status == 200

@@ -3,6 +3,7 @@
 #include "heightfield_mesh.hpp"
 #include "../complex.hpp"
 #include "../parallel.hpp"
+#include "../orbit_program.hpp"
 
 #ifdef _OPENMP
 #  include <omp.h>
@@ -110,10 +111,111 @@ void computeFieldImpl(const HsMeshParams& p, std::vector<double>& field) {
     }
 }
 
+void computeOrbitField(const HsMeshParams& p, std::vector<double>& field) {
+    if (p.metric == Metric::MandelShipAgree) {
+        throw std::runtime_error("Orbit Program does not support mandel_ship_agree HS metric");
+    }
+    const int N = p.resolution;
+    field.assign(static_cast<size_t>(N) * N, 0.0);
+    const double span = p.scale;
+    const double re_min = p.center_re - span * 0.5;
+    const double im_max = p.center_im + span * 0.5;
+    const bool certified = p.orbit_program->escape_analysis().has_finite_radius();
+    const double radius = certified ? p.orbit_program->escape_analysis().certified_radius : 0.0;
+    const double radius_sq = radius * radius;
+    const int pairwise_cap = std::max(1, std::min(p.iterations, p.pairwise_cap));
+    const int thread_count = resolve_render_threads(p.render_threads);
+    constexpr int tile_size = 32;
+    const int tiles = (N + tile_size - 1) / tile_size;
+
+    #pragma omp parallel num_threads(thread_count)
+    {
+        std::vector<Cx<double>> orbit;
+        orbit.reserve(static_cast<size_t>(pairwise_cap));
+        #pragma omp for schedule(dynamic, 1)
+        for (int tile = 0; tile < tiles * tiles; ++tile) {
+            const int row0 = (tile / tiles) * tile_size;
+            const int col0 = (tile % tiles) * tile_size;
+            const int row1 = std::min(N, row0 + tile_size);
+            const int col1 = std::min(N, col0 + tile_size);
+            for (int row = row0; row < row1; ++row) {
+                const double im = im_max - (static_cast<double>(row) + 0.5) / N * span;
+                for (int col = col0; col < col1; ++col) {
+                    const Cx<double> c{
+                        re_min + (static_cast<double>(col) + 0.5) / N * span, im};
+                    Cx<double> z{0.0, 0.0};
+                    int escape_iteration = p.iterations;
+                    bool escaped = false;
+                    double min_norm_sq = std::numeric_limits<double>::infinity();
+                    double max_norm_sq = 0.0;
+                    double min_pair_sq = std::numeric_limits<double>::infinity();
+                    orbit.clear();
+
+                    for (int iteration = 0; iteration < p.iterations; ++iteration) {
+                        z = p.orbit_program->step(z, c, iteration);
+                        if (!std::isfinite(z.re) || !std::isfinite(z.im)) break;
+                        const double norm_sq = z.re * z.re + z.im * z.im;
+                        if (!std::isfinite(norm_sq)) break;
+                        min_norm_sq = std::min(min_norm_sq, norm_sq);
+                        max_norm_sq = std::max(max_norm_sq, norm_sq);
+                        if (p.metric == Metric::MinPairwiseDist &&
+                            static_cast<int>(orbit.size()) < pairwise_cap) {
+                            for (const Cx<double>& prior : orbit) {
+                                const double dr = z.re - prior.re;
+                                const double di = z.im - prior.im;
+                                min_pair_sq = std::min(min_pair_sq, dr * dr + di * di);
+                            }
+                            orbit.push_back(z);
+                        }
+                        if (certified && norm_sq > radius_sq) {
+                            escaped = true;
+                            escape_iteration = iteration;
+                            break;
+                        }
+                        if (p.metric == Metric::MinPairwiseDist && iteration + 1 >= pairwise_cap) break;
+                    }
+
+                    double value = p.heightClamp;
+                    switch (p.metric) {
+                        case Metric::Escape:
+                            value = escaped
+                                ? static_cast<double>(escape_iteration) / p.iterations
+                                : 1.0;
+                            break;
+                        case Metric::MinAbs:
+                            if (std::isfinite(min_norm_sq)) value = std::sqrt(min_norm_sq);
+                            break;
+                        case Metric::MaxAbs:
+                            if (std::isfinite(max_norm_sq)) value = std::sqrt(max_norm_sq);
+                            break;
+                        case Metric::Envelope:
+                            if (std::isfinite(min_norm_sq) && std::isfinite(max_norm_sq)) {
+                                value = 0.5 * (std::sqrt(min_norm_sq) + std::sqrt(max_norm_sq));
+                            }
+                            break;
+                        case Metric::MinPairwiseDist:
+                            if (std::isfinite(min_pair_sq)) value = std::sqrt(min_pair_sq);
+                            break;
+                        case Metric::MandelShipAgree:
+                            break;
+                    }
+                    if (!std::isfinite(value) || value > p.heightClamp) value = p.heightClamp;
+                    if (value < 0.0) value = 0.0;
+                    field[static_cast<size_t>(row) * N + col] = value;
+                }
+            }
+        }
+    }
+}
+
 } // namespace
 
 // Public: compute raw metric field. Used by both buildHsMesh and hsFieldRoute.
 void computeHsField(const HsMeshParams& p, std::vector<double>& field) {
+    if (p.orbit_program) {
+        computeOrbitField(p, field);
+        return;
+    }
     using V = Variant;
     switch (p.variant) {
         case V::Mandelbrot: computeFieldImpl<V::Mandelbrot>(p, field); break;

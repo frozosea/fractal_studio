@@ -94,12 +94,16 @@ Json parseLegacyResponse(const std::string& text, const std::string& kind) {
 std::shared_ptr<const compute::OrbitProgram> validateOrbitPayload(
     const std::string& kind, const Json& payload, bool persistent) {
     if (!payload.contains("orbitProgram") || payload["orbitProgram"].is_null()) return {};
-    const bool supportedKind = kind == "map_image" || (!persistent && kind == "raw_field");
+    const bool supportedKind = kind == "map_image" || kind == "hs_mesh" || kind == "hs_field" ||
+        (!persistent && kind == "raw_field");
     if (!supportedKind) {
-        unsupported(kind, "this Compute build supports Orbit Program only for 2D/Julia map_image and raw_field");
+        unsupported(kind, "this Compute build supports Orbit Program only for 2D/Julia map and HS outputs");
     }
     if (payload.value("metric", std::string("escape")) != "escape") {
-        unsupported(kind, "Orbit Program v1 supports only metric=escape");
+        const std::string metric = payload.value("metric", std::string("escape"));
+        if ((kind == "map_image" || kind == "raw_field") || metric == "mandel_ship_agree") {
+            unsupported(kind, "requested metric is not compatible with Orbit Program");
+        }
     }
     if (payload.contains("transitionTheta") || payload.contains("transitionThetaMilliDeg") ||
         payload.contains("transitionVariants")) {
