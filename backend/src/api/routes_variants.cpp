@@ -56,6 +56,16 @@ std::map<std::string, compute::CustomStepFn> g_fns;
 // Flag: have we loaded existing variants from the DB this session?
 bool g_dbLoaded = false;
 
+bool enabledEnvironmentFlag(const char* name, bool defaultValue) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') return defaultValue;
+    std::string value(raw);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
 // ─── Formula hash (FNV-1a 64-bit over formula + bailout bytes) ───────────────
 
 std::string formulaHash(const std::string& formula, double bailout) {
@@ -382,6 +392,7 @@ bool loadLibLocked(const std::string& hash, const std::filesystem::path& so,
 void ensureDbLoadedLocked(const std::filesystem::path& repoRoot) {
     if (g_dbLoaded) return;
     g_dbLoaded = true;
+    if (!legacyFormulaCompilerEnabled()) return;
 
     Db db(repoRoot / "fractal_studio.db");
     db.ensureSchema();
@@ -406,12 +417,21 @@ void ensureDbLoadedLocked(const std::filesystem::path& repoRoot) {
 
 } // namespace
 
+bool legacyFormulaCompilerEnabled() {
+    // Native compilation/loading is a local legacy feature. Requiring both
+    // flags prevents a commercial process with legacy HTTP disabled from
+    // executing a persisted shared object through a private Compute request.
+    return enabledEnvironmentFlag("FSD_ENABLE_LEGACY_API", true) &&
+           enabledEnvironmentFlag("FSD_ENABLE_LEGACY_FORMULA_COMPILER", false);
+}
+
 // ─── Public lookup (called from routes_map.cpp) ───────────────────────────────
 
 CustomVariantLease acquireCustomVariantLease(
     const std::filesystem::path& repoRoot,
     const std::string& hash
 ) {
+    if (!legacyFormulaCompilerEnabled()) return {};
     std::lock_guard<std::mutex> lock(g_mu);
     ensureDbLoadedLocked(repoRoot);
 
@@ -503,6 +523,12 @@ double lookupCustomBailoutSq(const std::filesystem::path& repoRoot, const std::s
 // ─── Route: POST /api/variants/compile ───────────────────────────────────────
 
 std::string variantCompileRoute(const std::filesystem::path& repoRoot, const std::string& body) {
+    if (!legacyFormulaCompilerEnabled()) {
+        throw HttpError(403, Json{{"error", {
+            {"code", "LEGACY_FORMULA_COMPILER_DISABLED"},
+            {"message", "native formula compilation is disabled; use Orbit Program DSL"},
+        }}}.dump());
+    }
     const Json j = parseJsonBody(body);
 
     const std::string formula = j.value("formula", std::string(""));

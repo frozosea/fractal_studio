@@ -88,6 +88,7 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body);
 
 // Custom variants (dynamic formula compile via g++ + dlopen)
 std::string variantCompileRoute(const std::filesystem::path& repoRoot, const std::string& body);
+bool legacyFormulaCompilerEnabled();
 std::string variantListRoute(const std::filesystem::path& repoRoot);
 std::string variantDeleteRoute(const std::filesystem::path& repoRoot, const std::string& body);
 

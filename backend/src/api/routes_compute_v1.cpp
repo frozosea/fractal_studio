@@ -242,7 +242,7 @@ std::string computeV1CapabilitiesRoute() {
             {"outputBlend", false}, {"axisTransition", true}, {"axisMulti", true},
         }},
         {"customFormula", {
-            {"legacyNativeCompile", std::getenv("FSD_ENABLE_LEGACY_FORMULA_COMPILER") != nullptr},
+            {"legacyNativeCompile", legacyFormulaCompilerEnabled()},
             {"safeDsl", true},
         }},
         {"escapeSemantics", {{"certifiedRadius", true}, {"strictUnverified", true}}},

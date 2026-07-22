@@ -85,7 +85,16 @@ def main() -> int:
         assert "map_image" in capabilities["persistentKinds"]
         assert capabilities["orbitPrograms"]["sequence"] is True
         assert capabilities["customFormula"]["safeDsl"] is True
+        assert capabilities["customFormula"]["legacyNativeCompile"] is False
         assert capabilities["escapeSemantics"]["strictUnverified"] is True
+
+        status, payload, _ = request(
+            f"{base}/api/variants/compile",
+            body={"name": "forbidden", "formula": "z*z+c"},
+            authorized=False,
+        )
+        assert status == 403
+        assert json.loads(payload)["error"]["code"] == "LEGACY_FORMULA_COMPILER_DISABLED"
 
         map_payload = {
             "centerRe": -0.75, "centerIm": 0, "scale": 3,
