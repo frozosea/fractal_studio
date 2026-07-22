@@ -31,6 +31,12 @@
 /frontend/node_modules/
 /frontend/dist/
 
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
 # Local docs
 HS_legacy_guide_zh.md
 

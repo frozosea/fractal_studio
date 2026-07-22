@@ -1,0 +1,109 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fractal_platform
+      POSTGRES_USER: fractal
+      POSTGRES_PASSWORD: fractal
+    ports:
+      - "5432:5432"
+    volumes:
+      - platform-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fractal -d fractal_platform"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: fractal
+      MINIO_ROOT_PASSWORD: fractal-development-only
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - platform-minio:/data
+
+  compute:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      FSD_STARTUP_BENCHMARK: "off"
+      FSD_COMPUTE_SERVICE_KEY: development-compute-key
+      FSD_RENDERER_VERSION: compose-dev
+      FSD_ENABLE_LEGACY_API: "1"
+      FSD_ENABLE_LEGACY_FORMULA_COMPILER: "0"
+    ports:
+      - "18080:18080"
+    volumes:
+      - compute-runtime:/workspace/fractal_studio/runtime
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18080/compute/v1/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  migrate:
+    build:
+      context: .
+      dockerfile: platform-backend/Dockerfile
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    working_dir: /app
+    environment: &platform-environment
+      APP_ENV: development
+      DATABASE_URL: postgresql+asyncpg://fractal:fractal@postgres:5432/fractal_platform
+      REDIS_URL: redis://redis:6379/0
+      COMPUTE_BASE_URL: http://compute:18080
+      COMPUTE_SERVICE_KEY: development-compute-key
+      COMPUTE_NODE_ID: compose-compute-1
+      FOUNDATION_ROUTES_ENABLED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: platform-backend/Dockerfile
+    environment: *platform-environment
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      compute:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: platform-backend/Dockerfile
+    command: ["python", "-m", "app.outbox.worker"]
+    environment: *platform-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      compute:
+        condition: service_healthy
+
+volumes:
+  platform-postgres:
+  platform-minio:
+  compute-runtime:
+

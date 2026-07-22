@@ -42,8 +42,8 @@ Vue 3 frontend
 | C0 | 基线与能力清单 | completed | 当前构建/测试通过；所有旧端点和能力形成单一映射。 |
 | C1 | C++ Compute v1 | in_progress | 鉴权、capabilities、preview、run/status/cancel、manifest、artifact 闭环完成。 |
 | C2 | 安全 DSL 与 Orbit Program | pending | DSL 无原生代码执行；单公式和周期序列接入通用 CPU 渲染；严格逃逸元数据完成。 |
-| P0 | FastAPI 架构底座 | pending | Python 工程、迁移、ComputeClient、Outbox Worker 和真实渲染闭环完成。 |
-| D0 | 本地部署底座 | pending | Compose 启动 API、Worker、PostgreSQL、Redis、MinIO、Compute 并通过健康检查。 |
+| P0 | FastAPI 架构底座 | in_progress | Python 工程、迁移、ComputeClient、Outbox Worker 和真实渲染闭环完成。 |
+| D0 | 本地部署底座 | in_progress | Compose 启动 API、Worker、PostgreSQL、Redis、MinIO、Compute 并通过健康检查。 |
 | F0 | 前端双轨接入 | pending | 保持现有设计；Platform/legacy API 可按环境切换；现有页面无回归。 |
 | M1 | 身份与工作室 | pending | 不透明会话、RBAC、不可变配方、配额、预览和渲染任务完成。 |
 | M3 | 资产与媒体库 | pending | Compute manifest 校验、对象存储、衍生文件和受保护下载完成。 |
@@ -72,6 +72,7 @@ Vue 3 frontend
 - [x] 私有 artifact 流式读取与 Range。
 - [x] 旧 `/api/*` 双轨兼容和 `FSD_ENABLE_LEGACY_API` 商业关闭开关。
 - [x] Compute v1 HTTP/鉴权/manifest 自动测试。
+- [x] `idempotencyKey` 持久响应缓存；重复 Outbox 提交返回同一 Compute run。
 - [ ] 将仍同步执行的 mesh/ln-map legacy job 改为统一后台 run。
 
 ### C2 — 安全 DSL 与 Orbit Program
@@ -86,17 +87,21 @@ Vue 3 frontend
 
 ### P0 — FastAPI 架构底座
 
-- [ ] Python 3.12 项目、配置、日志、request ID 和健康检查。
-- [ ] SQLAlchemy async 模型与 Alembic 初始迁移。
-- [ ] `render_jobs`、`quota_reservations`、`outbox_events`。
-- [ ] 强类型 ComputeClient 和错误映射。
-- [ ] `SKIP LOCKED` 租约、至少一次投递和指数退避。
-- [ ] submit/poll/cancel/manifest 校验闭环。
-- [ ] development/test 固定主体；生产禁用未认证 Studio 路由。
+- [x] Python 3.12 项目、配置、日志、request ID 和健康检查。
+- [x] SQLAlchemy async 模型与 Alembic 初始迁移。
+- [x] `render_jobs`、`quota_reservations`、`outbox_events`。
+- [x] 强类型 ComputeClient 和结构化错误映射。
+- [x] `SKIP LOCKED` 租约、至少一次投递和指数退避。
+- [x] submit/poll/cancel/manifest 校验代码闭环。
+- [x] development/test 固定主体；生产配置拒绝启用未认证 Studio 路由。
+- [x] FastAPI 到真实 C++ Compute 的 64×64 RGBA preview 冒烟。
+- [ ] 在真实 PostgreSQL 上执行迁移并验证 Outbox render/cancel E2E。
+- [ ] 接入 Redis 原子配额；当前底座只有 PostgreSQL reservation。
 
 ### D0/F0 — 部署与前端迁移
 
-- [ ] 本地 Compose 和服务健康依赖。
+- [x] 本地 Compose、迁移 one-shot 服务和健康依赖配置。
+- [ ] 实际启动完整 Compose；当前执行用户无 Docker daemon 权限。
 - [ ] MinIO/S3 与生产 OSS 适配器边界。
 - [ ] 拆分 Platform API、legacy API 和领域 DTO。
 - [ ] 环境开关与 Cookie 请求策略。
@@ -110,6 +115,18 @@ Vue 3 frontend
 | 2026-07-23 | Existing C++ suite | `ctest --test-dir runtime/build --output-on-failure` | 6/6 passed before Compute v1 changes |
 | 2026-07-23 | Compute v1 compile | Release build with OpenSSL-backed SHA-256 and new private routes | passed |
 | 2026-07-23 | Compute v1 HTTP contract | `compute_v1_http_smoke` covers auth, capabilities, RGBA preview, background run, manifest and artifact streaming | passed; full CTest 7/7 |
+| 2026-07-23 | Compute idempotency | `compute_v1_http_smoke` repeats the same key and asserts the same run ID | passed; full CTest 7/7 |
+| 2026-07-23 | Platform unit tests | isolated Python 3.12 venv; `pytest -q platform-backend/tests` | 5 passed |
+| 2026-07-23 | Platform migration | `alembic upgrade head --sql` using PostgreSQL dialect | passed; 73 lines generated |
+| 2026-07-23 | Platform preview integration | Uvicorn -> Compute v1 -> OpenMP 64×64 RGBA; propagated engine/scalar/request headers | passed |
+| 2026-07-23 | Compose validation | `docker compose -f docker-compose.dev.yml config -q` | passed; daemon start unavailable to current user |
+
+## Commit Log / 提交记录
+
+| Commit | Scope |
+|---|---|
+| `b5ea58c` | 计划文档、Compute v1 鉴权/能力/run/manifest/artifact 契约及 HTTP CTest。 |
+| `52b5594` | Compute v1 持久幂等响应缓存；重复 Platform 提交复用同一个 native run。 |
 
 ## Delivery Rules / 交付规则
 

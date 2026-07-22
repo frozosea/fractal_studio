@@ -1,0 +1,2 @@
+"""Cross-module platform infrastructure."""
+
