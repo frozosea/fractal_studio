@@ -146,6 +146,7 @@ Vue 3 frontend
 | 2026-07-23 | HS Orbit parity/strictness | `hs_orbit_smoke` covers builtin parity, M/B sequence determinism and unverified run-to-limit | passed |
 | 2026-07-23 | HS Compute run | `compute_v1_http_smoke` creates an HS mesh with Orbit sequence and verifies GLB/STL manifest entries and radius certificate | passed; full CTest 9/9 |
 | 2026-07-23 | Typed Orbit AST | `orbit_program_smoke` distinguishes real/complex parameters in canonical hashes and verifies function result/promotion types | passed; full CTest 9/9 |
+| 2026-07-23 | Output-blend escape counterexample | 50% Mandelbrot/Burning Ship complex-output DSL blend must report `certifiedRadius=null`; overflow remains numerical divergence, never escape | passed in `orbit_program_smoke` and `compute_path_diff` |
 
 ## Commit Log / 提交记录
 
@@ -158,6 +159,7 @@ Vue 3 frontend
 | `7cd4def` | legacy 原生公式编译与 `.so` 加载默认关闭，并加入商业模式双开关保护。 |
 | `d53a17d` | Orbit Formula/Sequence 扩展到 HS field/mesh，并增加严格逃逸和 Compute manifest 回归。 |
 | `7c7c185` | DSL AST 增加 real/complex 类型推导、参数声明类型和规范化 hash 类型信息。 |
+| `24434e9` | 固化 Mandelbrot/Burning Ship 各半输出组合无有限证书、不得误判逃逸的回归测试。 |
 
 ## Delivery Rules / 交付规则
 
