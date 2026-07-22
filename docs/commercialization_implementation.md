@@ -57,7 +57,7 @@ Vue 3 frontend
 
 | Scope | Progress | Current boundary |
 |---|---:|---|
-| Compute 底座（C0–C2） | 约 86% | 2D/Julia/HS 安全 DSL 与周期序列已可用；视频传播及 typed AST 未完成。 |
+| Compute 底座（C0–C2） | 约 89% | 2D/Julia/HS 安全 DSL、typed AST 与周期序列已可用；视频传播未完成。 |
 | Platform/部署底座（P0–D0） | 约 68% | API/Worker/Outbox 代码完成；真实 PostgreSQL/完整 Compose E2E 受 Docker 权限限制。 |
 | 前端双轨（F0） | 0% | 尚未开始拆分前端 API 与页面。 |
 | 商业模块（M1–M6） | 0% | 身份、资产、市场、支付和账本尚未开始。 |
@@ -90,7 +90,7 @@ Vue 3 frontend
 ### C2 — 安全 DSL 与 Orbit Program
 
 - [x] Pratt parser、AST、规范化序列化和稳定 SHA-256 hash。
-- [ ] AST 实数/复数静态类型检查；当前 v1 统一按复数求值，`abs/real/imag` 返回虚部为零的复数。
+- [x] AST 实数/复数静态类型推导与算术提升；参数声明类型参与规范化 hash，解释器仍使用统一复数寄存器保存数值。
 - [x] 4 KiB 源码、256 节点、32 层、16 参数和序列预算限制。
 - [x] 编译错误码、字符位置和无堆分配的定长栈字节码解释器。
 - [x] `z`、`c`、只读 `n`、参数、`i/pi/e` 和既有安全函数。
@@ -145,6 +145,7 @@ Vue 3 frontend
 | 2026-07-23 | Orbit HTTP/run contract | `compute_v1_http_smoke` covers capabilities, sequence preview, raw strict field, compile errors, async manifest certificate and native compiler denial | passed; full CTest 8/8 |
 | 2026-07-23 | HS Orbit parity/strictness | `hs_orbit_smoke` covers builtin parity, M/B sequence determinism and unverified run-to-limit | passed |
 | 2026-07-23 | HS Compute run | `compute_v1_http_smoke` creates an HS mesh with Orbit sequence and verifies GLB/STL manifest entries and radius certificate | passed; full CTest 9/9 |
+| 2026-07-23 | Typed Orbit AST | `orbit_program_smoke` distinguishes real/complex parameters in canonical hashes and verifies function result/promotion types | passed; full CTest 9/9 |
 
 ## Commit Log / 提交记录
 
@@ -156,6 +157,7 @@ Vue 3 frontend
 | `20db668` | 安全 DSL 字节码、Orbit Formula/Sequence、严格逃逸分类及 2D/Julia Compute 接入。 |
 | `7cd4def` | legacy 原生公式编译与 `.so` 加载默认关闭，并加入商业模式双开关保护。 |
 | `d53a17d` | Orbit Formula/Sequence 扩展到 HS field/mesh，并增加严格逃逸和 Compute manifest 回归。 |
+| `7c7c185` | DSL AST 增加 real/complex 类型推导、参数声明类型和规范化 hash 类型信息。 |
 
 ## Delivery Rules / 交付规则
 
