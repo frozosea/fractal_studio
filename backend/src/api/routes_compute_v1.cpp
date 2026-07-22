@@ -2,6 +2,7 @@
 #include "routes_common.hpp"
 
 #include "../include/db.hpp"
+#include "../compute/orbit_program_json.hpp"
 
 #include <openssl/evp.h>
 
@@ -87,6 +88,29 @@ Json parseLegacyResponse(const std::string& text, const std::string& kind) {
         throw HttpError(500, computeError(
             "COMPUTE_ADAPTER_ERROR", "legacy route returned invalid JSON",
             Json{{"kind", kind}}).dump());
+    }
+}
+
+std::shared_ptr<const compute::OrbitProgram> validateOrbitPayload(
+    const std::string& kind, const Json& payload, bool persistent) {
+    if (!payload.contains("orbitProgram") || payload["orbitProgram"].is_null()) return {};
+    const bool supportedKind = kind == "map_image" || (!persistent && kind == "raw_field");
+    if (!supportedKind) {
+        unsupported(kind, "this Compute build supports Orbit Program only for 2D/Julia map_image and raw_field");
+    }
+    if (payload.value("metric", std::string("escape")) != "escape") {
+        unsupported(kind, "Orbit Program v1 supports only metric=escape");
+    }
+    if (payload.contains("transitionTheta") || payload.contains("transitionThetaMilliDeg") ||
+        payload.contains("transitionVariants")) {
+        unsupported(kind, "Orbit Program cannot be combined with axis transition");
+    }
+    try {
+        return compute::parse_orbit_program_json(payload["orbitProgram"]);
+    } catch (const compute::FormulaCompileError& error) {
+        badRequest(error.code(), error.what(), Json{{"position", error.position()}});
+    } catch (const std::exception& error) {
+        badRequest("INVALID_ORBIT_PROGRAM", error.what());
     }
 }
 
@@ -214,15 +238,21 @@ std::string computeV1CapabilitiesRoute() {
             "special_points_auto", "special_points_seed", "special_points_snap",
         })},
         {"orbitPrograms", {
-            {"formula", true}, {"sequence", false}, {"weightedSchedule", false},
+            {"formula", true}, {"sequence", true}, {"weightedSchedule", false},
             {"outputBlend", false}, {"axisTransition", true}, {"axisMulti", true},
         }},
         {"customFormula", {
             {"legacyNativeCompile", std::getenv("FSD_ENABLE_LEGACY_FORMULA_COMPILER") != nullptr},
-            {"safeDsl", false},
+            {"safeDsl", true},
         }},
-        {"escapeSemantics", {{"certifiedRadius", false}, {"strictUnverified", false}}},
+        {"escapeSemantics", {{"certifiedRadius", true}, {"strictUnverified", true}}},
     }.dump();
+}
+
+void computeV1ValidateOrbitRequest(const std::string& body, bool persistent) {
+    std::string kind;
+    const Json payload = parseEnvelope(body, kind);
+    (void)validateOrbitPayload(kind, payload, persistent);
 }
 
 std::string computeV1PreviewJsonRoute(const std::filesystem::path& repoRoot,
@@ -230,6 +260,7 @@ std::string computeV1PreviewJsonRoute(const std::filesystem::path& repoRoot,
                                       const std::string& body) {
     std::string kind;
     const Json payload = parseEnvelope(body, kind);
+    (void)validateOrbitPayload(kind, payload, false);
     Json legacy;
     if (kind == "raw_field") legacy = parseLegacyResponse(mapFieldRoute(repoRoot, payload.dump()), kind);
     else if (kind == "video_preview") legacy = parseLegacyResponse(videoPreviewRoute(repoRoot, runner, payload.dump()), kind);
@@ -248,6 +279,7 @@ std::string computeV1CreateRunRoute(const std::filesystem::path& repoRoot,
     std::string kind;
     std::string idempotencyKey;
     Json payload = parseEnvelope(body, kind, &idempotencyKey);
+    (void)validateOrbitPayload(kind, payload, true);
     const auto requestLock = idempotencyLock(idempotencyKey);
     std::lock_guard<std::mutex> lock(*requestLock);
     Db db = openDb(repoRoot);
@@ -316,15 +348,35 @@ std::string computeV1ManifestRoute(const std::filesystem::path& repoRoot,
     const Json progress = status.value("progress", Json::object());
     const std::string engine = progress.value("engine", progress.value("finalFrameEngine", std::string()));
     const std::string scalar = progress.value("scalar", progress.value("finalFrameScalar", std::string()));
+    Json escapeAnalysis = {
+        {"status", "unverified"}, {"certifiedRadius", nullptr},
+        {"reason", "request has no analyzed Orbit Program"},
+    };
+    try {
+        const Json params = Json::parse(row.paramsJson);
+        if (params.contains("orbitProgram") && !params["orbitProgram"].is_null()) {
+            const auto program = compute::parse_orbit_program_json(params["orbitProgram"]);
+            escapeAnalysis = compute::escape_analysis_json(program->escape_analysis());
+        } else {
+            compute::Variant variant;
+            const std::string name = params.value("variant", std::string("mandelbrot"));
+            if (compute::variant_from_name(name.c_str(), variant)) {
+                escapeAnalysis = compute::escape_analysis_json(
+                    compute::OrbitProgram::builtin(variant)->escape_analysis());
+            }
+        }
+    } catch (const std::exception& error) {
+        escapeAnalysis = {
+            {"status", "unverified"}, {"certifiedRadius", nullptr},
+            {"reason", std::string("escape analysis could not be reconstructed: ") + error.what()},
+        };
+    }
     return Json{
         {"schemaVersion", COMPUTE_SCHEMA_VERSION}, {"computeRunId", runId},
         {"rendererVersion", rendererVersion()}, {"recipeHash", sha256Text(row.paramsJson)},
         {"status", status.value("status", std::string())},
         {"effective", {{"engine", engine}, {"scalar", scalar}}},
-        {"escapeAnalysis", {
-            {"status", "unverified"}, {"certifiedRadius", nullptr},
-            {"reason", "legacy request has not been analyzed by the strict escape prover"},
-        }},
+        {"escapeAnalysis", std::move(escapeAnalysis)},
         {"artifacts", artifacts},
     }.dump();
 }

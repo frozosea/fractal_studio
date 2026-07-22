@@ -73,6 +73,8 @@ add_executable(fractal_studio_backend
     src/compute/ln_map_avx2.cpp
     src/compute/ln_map_avx512.cpp
     src/compute/map_kernel.cpp
+    src/compute/orbit_program.cpp
+    src/compute/orbit_program_json.cpp
     src/compute/engine_select.cpp
     src/compute/map_kernel_avx2.cpp
     src/compute/map_kernel_avx512.cpp
@@ -224,6 +226,7 @@ add_executable(compute_path_diff
     src/compute/ln_map_avx2.cpp
     src/compute/ln_map_avx512.cpp
     src/compute/map_kernel.cpp
+    src/compute/orbit_program.cpp
     src/compute/engine_select.cpp
     src/compute/map_kernel_avx2.cpp
     src/compute/map_kernel_avx512.cpp
@@ -246,7 +249,18 @@ target_compile_options(compute_path_diff PRIVATE
 )
 target_link_libraries(compute_path_diff PRIVATE
     ${OpenCV_LIBS}
+    OpenSSL::Crypto
 )
+
+add_executable(orbit_program_smoke
+    src/tests/orbit_program_smoke.cpp
+    src/compute/orbit_program.cpp
+    src/compute/orbit_program_json.cpp
+)
+target_include_directories(orbit_program_smoke PRIVATE src src/include)
+target_compile_options(orbit_program_smoke PRIVATE -Wall -Wextra -Wno-unused-parameter -O3)
+target_link_libraries(orbit_program_smoke PRIVATE OpenSSL::Crypto)
+add_test(NAME orbit_program_smoke COMMAND orbit_program_smoke)
 if(OpenMP_CXX_FOUND)
     target_link_libraries(compute_path_diff PRIVATE OpenMP::OpenMP_CXX)
 endif()

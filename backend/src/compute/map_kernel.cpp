@@ -13,6 +13,7 @@
 // The variant is dispatched at compile time via `variant_step<V,S>`.
 
 #include "map_kernel.hpp"
+#include "orbit_program.hpp"
 #include "colorize.hpp"
 #include "map_kernel_avx2.hpp"
 #include "map_kernel_avx512.hpp"
@@ -804,6 +805,162 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
     return s;
 }
 
+// Safe Orbit Program field renderer. A finite bailout is consulted only when
+// the program carries a proof certificate. Unverified programs deliberately
+// run to max iterations unless arithmetic becomes non-finite; numerical
+// divergence is recorded separately and is never encoded as escape.
+static MapStats render_orbit_field_openmp(const MapParams& p, FieldOutput& fo) {
+    if (!p.orbit_program) throw std::runtime_error("missing Orbit Program");
+    if (p.metric != Metric::Escape) {
+        throw std::runtime_error("Orbit Program v1 supports only the escape metric");
+    }
+    fo.width = p.width;
+    fo.height = p.height;
+    fo.metric = Metric::Escape;
+
+    const int W = p.width;
+    const int H = p.height;
+    const double aspect = map_viewport_aspect(p);
+    const double span_im = p.scale;
+    const double span_re = p.scale * aspect;
+    const double re_min = p.center_re - span_re * 0.5;
+    const double im_max = p.center_im + span_im * 0.5;
+    const double jre = p.julia_re;
+    const double jim = p.julia_im;
+    const bool has_rot = p.rotation_deg != 0.0;
+    const double rot_rad = has_rot ? p.rotation_deg * M_PI / 180.0 : 0.0;
+    const double cos_t = has_rot ? std::cos(rot_rad) : 1.0;
+    const double sin_t = has_rot ? std::sin(rot_rad) : 0.0;
+    const double pixel_step_x = span_re / static_cast<double>(W);
+    const double pixel_step_y = span_im / static_cast<double>(H);
+    const double half_w = static_cast<double>(W) * 0.5;
+    const double half_h = static_cast<double>(H) * 0.5;
+    const EscapeAnalysis& analysis = p.orbit_program->escape_analysis();
+    const bool certified = analysis.has_finite_radius();
+    const int thread_count = resolve_render_threads(p.render_threads);
+    const int tile_size = p.on_field_tile_done ? 8 : 32;
+    const int tiles_x = ceil_div(W, tile_size);
+    const int tiles_y = ceil_div(H, tile_size);
+    const int tile_count = tiles_x * tiles_y;
+    const std::vector<int> progressive_tile_order = p.on_field_tile_done
+        ? map_field_progressive_order(tiles_x, tiles_y, true)
+        : std::vector<int>{};
+    std::atomic<bool> cancelled{false};
+
+    const size_t pixel_count = static_cast<size_t>(W) * H;
+    fo.iter_u32.assign(pixel_count, static_cast<uint32_t>(p.iterations));
+    fo.norm_f32.assign(pixel_count, 0.0f);
+    fo.orbit_class_u8.assign(pixel_count, 0u);
+    const auto t0 = std::chrono::steady_clock::now();
+
+    #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 1)
+    for (int work_index = 0; work_index < tile_count; ++work_index) {
+        const int tile = progressive_tile_order.empty() ? work_index : progressive_tile_order[work_index];
+        if (cancelled.load(std::memory_order_relaxed)) continue;
+        if (map_render_cancel_requested(p)) {
+            cancelled.store(true, std::memory_order_relaxed);
+            continue;
+        }
+        const int tile_x = tile % tiles_x;
+        const int tile_y = tile / tiles_x;
+        const int x0 = tile_x * tile_size;
+        const int y0 = tile_y * tile_size;
+        const int x1 = std::min(W, x0 + tile_size);
+        const int y1 = std::min(H, y0 + tile_size);
+        bool tile_cancelled = false;
+
+        for (int y = y0; y < y1 && !tile_cancelled; ++y) {
+            const double dy_base = -(static_cast<double>(y) + 0.5 - half_h) * pixel_step_y;
+            const double im_norot = im_max - (static_cast<double>(y) + 0.5) / H * span_im;
+            for (int x = x0; x < x1; ++x) {
+                if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+                    cancelled.store(true, std::memory_order_relaxed);
+                    tile_cancelled = true;
+                    break;
+                }
+                double pixel_re;
+                double pixel_im;
+                if (has_rot) {
+                    const double dx = (static_cast<double>(x) + 0.5 - half_w) * pixel_step_x;
+                    pixel_re = p.center_re + dx * cos_t - dy_base * sin_t;
+                    pixel_im = p.center_im + dx * sin_t + dy_base * cos_t;
+                } else {
+                    pixel_re = re_min + (static_cast<double>(x) + 0.5) / W * span_re;
+                    pixel_im = im_norot;
+                }
+
+                Cx<double> z = p.julia ? Cx<double>{pixel_re, pixel_im} : Cx<double>{0.0, 0.0};
+                const Cx<double> c = p.julia ? Cx<double>{jre, jim} : Cx<double>{pixel_re, pixel_im};
+                // For Julia, c is independent of the seed, so use the
+                // sufficient quadratic bound R^2-|c|>R. For Mandelbrot-family
+                // parameter maps starting at zero, the certified template's
+                // radius-2 first-crossing proof applies directly.
+                double certified_bailout_sq = std::numeric_limits<double>::infinity();
+                if (certified) {
+                    double radius = analysis.certified_radius;
+                    if (p.julia) {
+                        const double c_abs = std::hypot(c.re, c.im);
+                        const double julia_radius = 0.5 * (1.0 + std::sqrt(1.0 + 4.0 * c_abs));
+                        radius = std::max(radius, julia_radius);
+                    }
+                    certified_bailout_sq = radius * radius;
+                }
+                bool escaped = false;
+                bool numerical_divergence = false;
+                double norm2 = 0.0;
+                int iteration = 0;
+                for (; iteration < p.iterations; ++iteration) {
+                    if ((iteration & 511) == 0 && map_render_cancel_requested(p)) {
+                        cancelled.store(true, std::memory_order_relaxed);
+                        tile_cancelled = true;
+                        break;
+                    }
+                    z = p.orbit_program->step(z, c, iteration);
+                    if (!std::isfinite(z.re) || !std::isfinite(z.im)) {
+                        numerical_divergence = true;
+                        break;
+                    }
+                    norm2 = z.re * z.re + z.im * z.im;
+                    if (!std::isfinite(norm2)) {
+                        numerical_divergence = true;
+                        break;
+                    }
+                    if (certified && norm2 > certified_bailout_sq) {
+                        escaped = true;
+                        break;
+                    }
+                }
+                if (tile_cancelled) break;
+                const size_t index = static_cast<size_t>(y) * W + x;
+                if (escaped) {
+                    fo.iter_u32[index] = static_cast<uint32_t>(iteration);
+                    fo.norm_f32[index] = static_cast<float>(norm2);
+                    fo.orbit_class_u8[index] = 1u;
+                } else if (numerical_divergence) {
+                    fo.orbit_class_u8[index] = 2u;
+                }
+            }
+        }
+        if (!tile_cancelled && p.on_field_tile_done) {
+            p.on_field_tile_done(x0, y0, x1 - x0, y1 - y0);
+        }
+    }
+    if (cancelled.load(std::memory_order_relaxed) || map_render_cancel_requested(p)) {
+        throw_render_cancelled();
+    }
+
+    const auto t1 = std::chrono::steady_clock::now();
+    MapStats stats;
+    stats.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    stats.pixel_count = W * H;
+    stats.scalar_used = "fp64";
+    stats.engine_used = "openmp";
+    fo.elapsed_ms = stats.elapsed_ms;
+    fo.scalar_used = stats.scalar_used;
+    fo.engine_used = stats.engine_used;
+    return stats;
+}
+
 // ─── Raw field renderer (always OpenMP, no colorization) ─────────────────────
 
 namespace {
@@ -1418,6 +1575,9 @@ static MapStats render_explore_field(const MapParams& p, FieldOutput& fo) {
 }
 
 MapStats render_map_field(const MapParams& p, FieldOutput& fo) {
+    if (p.orbit_program) {
+        return render_orbit_field_openmp(p, fo);
+    }
     // Custom variant: use function-pointer path (always OpenMP).
     if (p.variant == Variant::Custom && p.custom_step_fn) {
         return render_custom_field_openmp(p, fo);

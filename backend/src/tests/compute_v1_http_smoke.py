@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import base64
 import os
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -81,6 +83,9 @@ def main() -> int:
         assert status == 200
         capabilities = json.loads(payload)
         assert "map_image" in capabilities["persistentKinds"]
+        assert capabilities["orbitPrograms"]["sequence"] is True
+        assert capabilities["customFormula"]["safeDsl"] is True
+        assert capabilities["escapeSemantics"]["strictUnverified"] is True
 
         map_payload = {
             "centerRe": -0.75, "centerIm": 0, "scale": 3,
@@ -95,9 +100,56 @@ def main() -> int:
         assert headers.get("Content-Type") == "application/octet-stream"
         assert len(frame) == 64 * 64 * 4
 
+        sequence_program = {
+            "type": "sequence", "repeat": True, "steps": [
+                {"span": 1, "program": {"type": "formula", "formula": {
+                    "type": "builtin", "id": "mandelbrot"}}},
+                {"span": 1, "program": {"type": "formula", "formula": {
+                    "type": "builtin", "id": "burning_ship"}}},
+            ],
+        }
+        sequence_payload = {**map_payload, "orbitProgram": sequence_program}
+        status, frame, headers = request(
+            f"{base}/compute/v1/previews",
+            body={"schemaVersion": 1, "kind": "map_image", "payload": sequence_payload},
+        )
+        assert status == 200
+        assert headers.get("X-FSD-Engine") == "openmp"
+        assert headers.get("X-FSD-Scalar") == "fp64"
+        assert len(frame) == 64 * 64 * 4
+
+        strict_payload = {
+            "centerRe": 100.0, "centerIm": 0.0, "scale": 1e-6,
+            "viewportAspect": 1.0, "width": 1, "height": 1, "iterations": 5,
+            "julia": True, "juliaRe": 0.0, "juliaIm": 0.0,
+            "metric": "escape", "orbitProgram": {
+                "type": "formula", "formula": {"type": "dsl", "source": "z"},
+            },
+        }
+        status, payload, _ = request(
+            f"{base}/compute/v1/previews",
+            body={"schemaVersion": 1, "kind": "raw_field", "payload": strict_payload},
+        )
+        assert status == 200
+        strict = json.loads(payload)["data"]
+        assert struct.unpack("<I", base64.b64decode(strict["iterB64"])) == (5,)
+        assert base64.b64decode(strict["orbitClassB64"]) == b"\x00"
+        assert strict["escapeAnalysis"]["status"] == "unverified"
+        assert strict["escapeAnalysis"]["certifiedRadius"] is None
+
+        invalid_payload = {**map_payload, "orbitProgram": {
+            "type": "formula", "formula": {"type": "dsl", "source": "system(z)"},
+        }}
+        status, payload, _ = request(
+            f"{base}/compute/v1/previews",
+            body={"schemaVersion": 1, "kind": "map_image", "payload": invalid_payload},
+        )
+        assert status == 400
+        assert json.loads(payload)["error"]["code"] == "UNKNOWN_FUNCTION"
+
         run_request = {
             "schemaVersion": 1, "kind": "map_image",
-            "idempotencyKey": f"compute-v1-smoke:{port}", "payload": map_payload,
+            "idempotencyKey": f"compute-v1-smoke:{port}", "payload": sequence_payload,
         }
         status, payload, _ = request(
             f"{base}/compute/v1/runs",
@@ -123,7 +175,8 @@ def main() -> int:
         assert status == 200
         manifest = json.loads(payload)
         assert manifest["rendererVersion"] == "contract-smoke"
-        assert manifest["escapeAnalysis"]["certifiedRadius"] is None
+        assert manifest["escapeAnalysis"]["status"] == "certified_finite"
+        assert manifest["escapeAnalysis"]["certifiedRadius"] == 2.0
         assert manifest["artifacts"]
         artifact = next(item for item in manifest["artifacts"] if item["mediaType"] == "image/png")
         assert len(artifact["sha256"]) == 64

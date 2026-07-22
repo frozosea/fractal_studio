@@ -296,7 +296,7 @@ std::string select_profiled_engine(
 }
 
 bool map_engine_supported(const MapParams& p, const std::string& engine, bool fx) {
-    if (p.variant == Variant::Custom || p.custom_step_fn) return engine == "openmp";
+    if (p.orbit_program || p.variant == Variant::Custom || p.custom_step_fn) return engine == "openmp";
     if (p.smooth) return engine == "openmp";
     if (variant_needs_scalar_fallback(p.variant)) return engine == "openmp";
     const std::string scalar = map_effective_scalar_type(p);
@@ -347,7 +347,7 @@ std::string select_map_engine(const MapParams& p, bool fx, const std::string& pu
         return map_engine_supported(p, p.engine, fx) ? p.engine : "openmp";
     }
 
-    if (p.variant == Variant::Custom || p.custom_step_fn || p.smooth || variant_needs_scalar_fallback(p.variant)) {
+    if (p.orbit_program || p.variant == Variant::Custom || p.custom_step_fn || p.smooth || variant_needs_scalar_fallback(p.variant)) {
         return "openmp";
     }
 

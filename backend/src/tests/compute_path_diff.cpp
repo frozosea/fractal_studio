@@ -1,6 +1,7 @@
 #include "compute/engine_select.hpp"
 #include "compute/ln_map.hpp"
 #include "compute/map_kernel.hpp"
+#include "compute/orbit_program.hpp"
 #include "compute/colorize.hpp"
 #include "compute/perturbation.hpp"
 #include "compute/transition_kernel.hpp"
@@ -2472,6 +2473,56 @@ void verify_logical_viewport_resolution_invariance(Runner& runner) {
     verify("fx64", 0.0);
 }
 
+void verify_strict_orbit_escape_semantics(Runner& runner) {
+    auto render_one = [](const std::shared_ptr<const fsd::compute::OrbitProgram>& program,
+                         double center_re) {
+        MapParams params;
+        params.center_re = center_re;
+        params.center_im = 0.0;
+        params.scale = 1.0e-6;
+        params.viewport_aspect = 1.0;
+        params.width = 1;
+        params.height = 1;
+        params.iterations = 5;
+        params.julia = true;
+        params.julia_re = 0.0;
+        params.julia_im = 0.0;
+        params.metric = Metric::Escape;
+        params.engine = "cuda"; // Orbit Programs must preserve math via OpenMP fallback.
+        params.scalar_type = "fp32";
+        params.orbit_program = program;
+        FieldOutput field;
+        const MapStats stats = fsd::compute::render_map_field(params, field);
+        return std::pair<FieldOutput, MapStats>{std::move(field), stats};
+    };
+
+    const auto [unverified, unverified_stats] = render_one(
+        fsd::compute::OrbitProgram::formula("z"), 100.0);
+    const bool no_false_escape = unverified.iter_u32.size() == 1 &&
+        unverified.iter_u32[0] == 5 && unverified.orbit_class_u8[0] == 0 &&
+        unverified_stats.engine_used == "openmp" && unverified_stats.scalar_used == "fp64";
+
+    const auto [diverged, diverged_stats] = render_one(
+        fsd::compute::OrbitProgram::formula("z*z"), 1.0e200);
+    const bool numerical_is_separate = diverged.iter_u32.size() == 1 &&
+        diverged.iter_u32[0] == 5 && diverged.orbit_class_u8[0] == 2 &&
+        diverged_stats.engine_used == "openmp";
+
+    const auto [certified, certified_stats] = render_one(
+        fsd::compute::OrbitProgram::builtin(Variant::Mandelbrot), 3.0);
+    const bool certified_escapes = certified.iter_u32.size() == 1 &&
+        certified.iter_u32[0] == 0 && certified.orbit_class_u8[0] == 1 &&
+        certified_stats.engine_used == "openmp";
+
+    ++runner.compared;
+    if (!no_false_escape || !numerical_is_separate || !certified_escapes) {
+        ++runner.failed;
+        std::cerr << "[FAIL] strict Orbit Program escape classification\n";
+    } else {
+        std::cout << "[PASS] strict Orbit Program escape classification\n";
+    }
+}
+
 } // namespace
 
 int main() {
@@ -2485,6 +2536,7 @@ int main() {
 
     check_escape_field_diff_guard(runner, same_scalar_field_limits);
     verify_logical_viewport_resolution_invariance(runner);
+    verify_strict_orbit_escape_semantics(runner);
 
     std::vector<RenderScene> render_scenes = quick_scenes();
     {

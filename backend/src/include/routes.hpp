@@ -131,6 +131,7 @@ ArtifactFile artifactFileRoute(const std::filesystem::path& repoRoot, const std:
 // Private, versioned Compute API used by the Platform backend.
 std::string computeV1HealthRoute();
 std::string computeV1CapabilitiesRoute();
+void computeV1ValidateOrbitRequest(const std::string& body, bool persistent);
 std::string computeV1PreviewJsonRoute(const std::filesystem::path& repoRoot,
                                       JobRunner& runner,
                                       const std::string& body);

@@ -16,11 +16,14 @@
 #include <cstdint>
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <numeric>
 #include <string>
 #include <vector>
 
 namespace fsd::compute {
+
+class OrbitProgram;
 
 // Function pointer type for user-compiled custom iteration step.
 // Signature: step_fn(zr, zi, cr, ci, &zr_out, &zi_out)
@@ -88,6 +91,11 @@ struct MapParams {
     // Points to the step_fn symbol from a dlopen'd shared library.
     // Always uses OpenMP (no CUDA/AVX512 for custom formulas).
     CustomStepFn custom_step_fn = nullptr;
+
+    // Safe, declarative Orbit Program. When present it takes precedence over
+    // the legacy native custom function and is interpreted on the fp64 OpenMP
+    // path with its own escape certificate.
+    std::shared_ptr<const OrbitProgram> orbit_program;
 
     // Optional cooperative cancellation hook for interactive renders. Kernels
     // check it at row/tile boundaries so stale viewport requests can exit
@@ -311,6 +319,9 @@ struct FieldOutput {
     // Escape metric arrays (only populated when metric == Escape):
     std::vector<uint32_t> iter_u32;   // [W*H]
     std::vector<float>    norm_f32;   // [W*H], |z|² at escape; 0.0 if bounded
+    // Optional strict Orbit Program classification: 0=max iterations,
+    // 1=certified mathematical escape, 2=numerically diverged/indeterminate.
+    std::vector<uint8_t>  orbit_class_u8;
     // Non-escape metric array (only populated when metric != Escape):
     std::vector<double>   field_f64;  // [W*H]
     double field_min = 0.0;
