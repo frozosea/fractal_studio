@@ -72,6 +72,14 @@ public:
     std::vector<ArtifactRow> listArtifactsByKind(const std::string& kind, int limit) const;
     ArtifactRow getArtifactById(long long rowId) const;
 
+    // Compute v1 request deduplication. Product idempotency remains owned by
+    // Platform; this cache prevents an at-least-once outbox delivery from
+    // creating a second native run after a successful Compute response.
+    bool getComputeRequestResponse(const std::string& idempotencyKey, std::string& responseJson) const;
+    void upsertComputeRequestResponse(const std::string& idempotencyKey,
+                                      const std::string& responseJson,
+                                      long long completedAt) const;
+
     // Custom variants
     void insertCustomVariant(const CustomVariantRecord& r) const;
     std::vector<CustomVariantRecord> listCustomVariants() const;

@@ -95,12 +95,19 @@ def main() -> int:
         assert headers.get("Content-Type") == "application/octet-stream"
         assert len(frame) == 64 * 64 * 4
 
+        run_request = {
+            "schemaVersion": 1, "kind": "map_image",
+            "idempotencyKey": f"compute-v1-smoke:{port}", "payload": map_payload,
+        }
         status, payload, _ = request(
             f"{base}/compute/v1/runs",
-            body={"schemaVersion": 1, "kind": "map_image", "payload": map_payload},
+            body=run_request,
         )
         assert status == 202
         run_id = json.loads(payload)["data"]["computeRunId"]
+        status, duplicate_payload, _ = request(f"{base}/compute/v1/runs", body=run_request)
+        assert status == 202
+        assert json.loads(duplicate_payload)["data"]["computeRunId"] == run_id
 
         run_status = ""
         for _ in range(100):

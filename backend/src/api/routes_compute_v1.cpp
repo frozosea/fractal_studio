@@ -11,6 +11,8 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <map>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -19,6 +21,19 @@ namespace fsd {
 namespace {
 
 constexpr int COMPUTE_SCHEMA_VERSION = 1;
+std::mutex g_idempotencyMutex;
+std::map<std::string, std::weak_ptr<std::mutex>> g_idempotencyLocks;
+
+std::shared_ptr<std::mutex> idempotencyLock(const std::string& key) {
+    std::lock_guard<std::mutex> lock(g_idempotencyMutex);
+    auto& weak = g_idempotencyLocks[key];
+    auto shared = weak.lock();
+    if (!shared) {
+        shared = std::make_shared<std::mutex>();
+        weak = shared;
+    }
+    return shared;
+}
 
 std::string rendererVersion() {
     const char* value = std::getenv("FSD_RENDERER_VERSION");
@@ -40,7 +55,8 @@ Json computeError(const std::string& code, const std::string& message,
         "UNSUPPORTED_CAPABILITY", message, Json{{"kind", kind}}).dump());
 }
 
-Json parseEnvelope(const std::string& body, std::string& kind) {
+Json parseEnvelope(const std::string& body, std::string& kind,
+                   std::string* idempotencyKey = nullptr) {
     const Json envelope = parseJsonBody(body);
     const int schemaVersion = envelope.value("schemaVersion", 0);
     if (schemaVersion != COMPUTE_SCHEMA_VERSION) {
@@ -54,6 +70,12 @@ Json parseEnvelope(const std::string& body, std::string& kind) {
     }
     if (envelope.contains("orbitProgram")) {
         unsupported(kind, "orbitProgram is not enabled in this Compute build");
+    }
+    if (idempotencyKey != nullptr) {
+        *idempotencyKey = envelope.value("idempotencyKey", std::string());
+        if (idempotencyKey->empty() || idempotencyKey->size() > 200) {
+            badRequest("INVALID_IDEMPOTENCY_KEY", "idempotencyKey must contain 1..200 characters");
+        }
     }
     return envelope["payload"];
 }
@@ -224,8 +246,17 @@ std::string computeV1CreateRunRoute(const std::filesystem::path& repoRoot,
                                     JobRunner& runner,
                                     const std::string& body) {
     std::string kind;
-    Json payload = parseEnvelope(body, kind);
-    return normalizedRunResponse(kind, runPayload(std::move(payload), kind, repoRoot, runner)).dump();
+    std::string idempotencyKey;
+    Json payload = parseEnvelope(body, kind, &idempotencyKey);
+    const auto requestLock = idempotencyLock(idempotencyKey);
+    std::lock_guard<std::mutex> lock(*requestLock);
+    Db db = openDb(repoRoot);
+    std::string cached;
+    if (db.getComputeRequestResponse(idempotencyKey, cached)) return cached;
+    const std::string response = normalizedRunResponse(
+        kind, runPayload(std::move(payload), kind, repoRoot, runner)).dump();
+    db.upsertComputeRequestResponse(idempotencyKey, response, nowUnixMs());
+    return response;
 }
 
 std::string computeV1RunStatusRoute(const std::filesystem::path& repoRoot,
