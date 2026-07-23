@@ -12,6 +12,7 @@
 #include "../compute/map_kernel.hpp"
 #include "../compute/orbit_program_json.hpp"
 #include "../compute/colorize.hpp"
+#include "../compute/color_program_json.hpp"
 #include "../compute/ln_map.hpp"
 #include "../compute/tile_scheduler.hpp"
 #include "../compute/transition_kernel.hpp"
@@ -179,7 +180,9 @@ compute::Metric parseMetric(const std::string& s) {
 compute::Colormap parseColormap(const std::string& s) {
     compute::Colormap c;
     if (compute::colormap_from_name(s.c_str(), c)) return c;
-    return compute::Colormap::ClassicCos;
+    throw HttpError(400, Json{
+        {"error", "unknown colorMap"}, {"colorMap", s},
+    }.dump());
 }
 
 compute::Variant parseBuiltinVariant(const std::string& s, compute::Variant fallback) {
@@ -277,6 +280,7 @@ struct MapRenderInput {
     std::string scalarType = "auto";
     std::string engine = "openmp";
     bool smooth = false;
+    std::shared_ptr<const compute::ColorProgram> colorProgram;
     bool stillExport = false;
     bool localExport = false;
     std::string colorMode = "direct";   // direct | eq_full | eq_center (equalized preview)
@@ -352,6 +356,24 @@ MapRenderInput parseMapRenderInput(const std::string& body) {
     if (!(in.cyclesPerOctave > 0.0) || in.cyclesPerOctave > 64.0 || !std::isfinite(in.cyclesPerOctave))
         throw std::runtime_error("invalid cyclesPerOctave (0..64)");
 
+    if (j.contains("colorProgram") && !j["colorProgram"].is_null()) {
+        if (j.contains("colorMap") && !j["colorMap"].is_null()) {
+            throw HttpError(400, Json{{"error", "colorMap and colorProgram are mutually exclusive"}}.dump());
+        }
+        if (in.colorMode != "direct") {
+            throw HttpError(400, Json{{"error", "colorProgram v1 requires colorMode=direct"}}.dump());
+        }
+        try {
+            in.colorProgram = compute::parse_color_program_json(j["colorProgram"]);
+        } catch (const std::exception& error) {
+            throw HttpError(400, Json{
+                {"error", "invalid colorProgram"}, {"message", error.what()},
+            }.dump());
+        }
+    } else {
+        (void)parseColormap(in.colormapStr);
+    }
+
     return in;
 }
 
@@ -395,6 +417,10 @@ Json mapRenderEffectiveJson(const MapRenderInput& in, const MapRenderImage& rend
         {"transitionTo", in.hasTheta ? in.j.value("transitionTo", std::string("burning_ship")) : std::string("")},
         {"rotationDeg", in.rotationDeg},
     };
+    if (in.colorProgram) {
+        resp.erase("colorMap");
+        resp["colorProgram"] = in.j["colorProgram"];
+    }
     if (in.hasTheta && in.j.contains("transitionVariants")) {
         resp["transitionVariants"] = in.j["transitionVariants"];
     }
@@ -431,6 +457,7 @@ compute::MapParams buildMapParams(const MapRenderInput& in, const Json& j,
     p.metric = parseMetric(in.metricStr);
     p.colormap = parseColormap(in.colormapStr);
     p.smooth = in.smooth;
+    p.color_program = in.colorProgram;
     p.pairwise_cap = j.value("pairwiseCap", 64);
     if (p.pairwise_cap < 1 || p.pairwise_cap > 1000000)
         throw std::runtime_error("invalid pairwiseCap");

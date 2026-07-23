@@ -69,6 +69,8 @@ add_executable(fractal_studio_backend
 
     # Native compute
     src/compute/colorize.cpp
+    src/compute/color_program.cpp
+    src/compute/color_program_json.cpp
     src/compute/cpu_features.cpp
     src/compute/ln_map.cpp
     src/compute/ln_map_avx2.cpp
@@ -222,6 +224,7 @@ add_test(NAME http_range_smoke COMMAND http_range_smoke)
 add_executable(compute_path_diff
     src/tests/compute_path_diff.cpp
     src/compute/colorize.cpp
+    src/compute/color_program.cpp
     src/compute/cpu_features.cpp
     src/compute/ln_map.cpp
     src/compute/ln_map_avx2.cpp
@@ -275,6 +278,16 @@ if(OpenMP_CXX_FOUND)
     target_link_libraries(hs_orbit_smoke PRIVATE OpenMP::OpenMP_CXX)
 endif()
 add_test(NAME hs_orbit_smoke COMMAND hs_orbit_smoke)
+
+add_executable(color_program_smoke
+    src/tests/color_program_smoke.cpp
+    src/compute/color_program.cpp
+    src/compute/color_program_json.cpp
+)
+target_include_directories(color_program_smoke PRIVATE src src/include)
+target_compile_options(color_program_smoke PRIVATE -Wall -Wextra -Wno-unused-parameter -O3)
+add_test(NAME color_program_smoke COMMAND color_program_smoke)
+
 if(OpenMP_CXX_FOUND)
     target_link_libraries(compute_path_diff PRIVATE OpenMP::OpenMP_CXX)
 endif()

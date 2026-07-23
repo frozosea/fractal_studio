@@ -33,6 +33,24 @@ def platform_preview() -> dict[str, Any]:
     return payload
 
 
+def custom_color_program() -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "type": "gradient",
+        "interpolation": "rgb",
+        "wrap": "repeat",
+        "cycles": 2.0,
+        "phase": 0.125,
+        "interiorColor": "#010203",
+        "invalidColor": "#ff00ff",
+        "stops": [
+            {"at": 0.0, "color": "#000000"},
+            {"at": 0.5, "color": "#ff0000"},
+            {"at": 1.0, "color": "#ffffff"},
+        ],
+    }
+
+
 def platform_video() -> dict[str, Any]:
     payload = platform_map()
     payload.pop("stillExport")

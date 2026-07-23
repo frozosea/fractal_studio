@@ -156,6 +156,23 @@ export const COLORMAPS: ColorMap[] = [
   'spectral1530',
 ]
 
+export interface ColorProgramStop {
+  at: number
+  color: `#${string}`
+}
+
+export interface GradientColorProgram {
+  schemaVersion: 1
+  type: 'gradient'
+  interpolation?: 'rgb'
+  wrap?: 'clamp' | 'repeat' | 'mirror'
+  cycles?: number
+  phase?: number
+  interiorColor?: `#${string}`
+  invalidColor?: `#${string}`
+  stops: ColorProgramStop[]
+}
+
 export type LnMapColorMode = 'escape' | 'hist_eq' | 'row_eq' | 'log_lift' | 'bands' | 'frontier'
 export type TransitionVideoMode = 'rotation' | 'zoom'
 
@@ -178,6 +195,7 @@ export interface MapRenderRequest {
   variant?: Variant | string   // Variant literal or "custom:HASH"
   metric?: Metric
   colorMap?: ColorMap
+  colorProgram?: GradientColorProgram
   smooth?: boolean           // ln-smooth continuous coloring (μ = iter + 1 − log₂(log₂(|z|²)))
   colorMode?: 'direct' | 'eq_full' | 'eq_center'  // equalized preview (escape metric only)
   cyclesPerOctave?: number   // band density for equalized color modes

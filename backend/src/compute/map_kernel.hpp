@@ -24,6 +24,7 @@
 namespace fsd::compute {
 
 class OrbitProgram;
+class ColorProgram;
 
 // Function pointer type for user-compiled custom iteration step.
 // Signature: step_fn(zr, zi, cr, ci, &zr_out, &zi_out)
@@ -61,6 +62,7 @@ struct MapParams {
     Metric   metric   = Metric::Escape;
     Colormap colormap = Colormap::ClassicCos;
     bool     smooth   = false;   // ln-smooth continuous coloring (requires norm)
+    std::shared_ptr<const ColorProgram> color_program;
 
     // Julia mode: if true, seed z = pixel point, c = (julia_re, julia_im).
     bool julia        = false;

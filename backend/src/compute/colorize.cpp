@@ -3,6 +3,7 @@
 // Unified colorization: FieldOutput → BGR cv::Mat.
 
 #include "colorize.hpp"
+#include "color_program.hpp"
 #include "colormap.hpp"
 #include "ln_map.hpp"
 #include "parallel.hpp"
@@ -48,8 +49,20 @@ cv::Mat colorize_direct(const MapParams& p, const FieldOutput& field) {
                 const int iter = static_cast<int>(field.iter_u32[idx]);
                 const double norm = smooth ? static_cast<double>(field.norm_f32[idx]) : 0.0;
                 uint8_t* px = row + 3 * x;
-                colorize_escape_bgr(iter, p.iterations, p.colormap, norm, smooth,
-                                    px[0], px[1], px[2]);
+                if (p.color_program) {
+                    if (iter >= p.iterations) {
+                        p.color_program->colorizeInterior(px[0], px[1], px[2]);
+                    } else {
+                        const double input = smooth
+                            ? smooth_mu(iter, norm) / 32.0
+                            : (static_cast<double>(iter) + 1.0) /
+                                (static_cast<double>(p.iterations) + 2.0);
+                        p.color_program->colorize(input, px[0], px[1], px[2]);
+                    }
+                } else {
+                    colorize_escape_bgr(iter, p.iterations, p.colormap, norm, smooth,
+                                        px[0], px[1], px[2]);
+                }
             }
         }
     } else {
@@ -61,7 +74,11 @@ cv::Mat colorize_direct(const MapParams& p, const FieldOutput& field) {
                 const size_t idx = row_off + static_cast<size_t>(x);
                 const double fv = field.field_f64[idx];
                 uint8_t* px = row + 3 * x;
-                if (p.colormap == Colormap::HsRainbow) {
+                if (p.color_program) {
+                    if (!std::isfinite(fv)) p.color_program->colorizeInvalid(px[0], px[1], px[2]);
+                    else p.color_program->colorize(
+                        normalize_raw_field(fv, p.bailout), px[0], px[1], px[2]);
+                } else if (p.colormap == Colormap::HsRainbow) {
                     colorize_field_hs_bgr(fv, px[0], px[1], px[2]);
                 } else if (p.smooth) {
                     colorize_field_smooth_bgr(fv, p.colormap, px[0], px[1], px[2]);

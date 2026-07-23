@@ -1,5 +1,7 @@
 #include "routes.hpp"
 #include "routes_common.hpp"
+#include "../compute/color_program_json.hpp"
+#include "../compute/colormap.hpp"
 
 #include <algorithm>
 #include <array>
@@ -174,7 +176,23 @@ Json validateMap(Json value, int maximumDimension) {
     if (!(requireFiniteNumber(value, "scale") > 0.0)) {
         reject(400, "invalid_request", "scale must be greater than zero");
     }
-    (void)optionalString(value, "colorMap", 64);
+    const std::string colorMap = optionalString(value, "colorMap", 64);
+    if (!colorMap.empty()) {
+        compute::Colormap parsedColorMap;
+        if (!compute::colormap_from_name(colorMap.c_str(), parsedColorMap))
+            reject(400, "invalid_request", "colorMap is not a supported built-in ID");
+    }
+    if (value.contains("colorProgram") && !value["colorProgram"].is_null()) {
+        if (!colorMap.empty())
+            reject(400, "invalid_request", "colorMap and colorProgram are mutually exclusive");
+        if (value.value("colorMode", std::string("direct")) != "direct")
+            reject(400, "invalid_request", "colorProgram v1 requires colorMode=direct");
+        try {
+            (void)compute::parse_color_program_json(value["colorProgram"]);
+        } catch (const std::exception& error) {
+            reject(400, "invalid_request", error.what());
+        }
+    }
     optionalBoolean(value, "julia");
     if (value.contains("juliaRe") && !value["juliaRe"].is_null())
         (void)optionalFiniteNumber(value, "juliaRe", 0.0);
