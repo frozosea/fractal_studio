@@ -265,6 +265,7 @@ Vue 3 frontend
 | `b8d85aa` | 能力字段统一拒绝静默降级；幂等键绑定请求 hash，并修正文档 JSON 示例。 |
 | `aa54144` | status/manifest/cancel 对不存在 run 返回结构化 Compute 404，并增加独立 HTTP 回归。 |
 | `3bc8ed4` | Platform Worker 流式读取 Compute artifact，严格验证大小/SHA-256；增强客户端错误映射。 |
+| `cd16639` | 定义 repeat block 编译语义、配方/视角存档边界，并发布服务后端与前端任务清单。 |
 
 ## Delivery Rules / 交付规则
 
