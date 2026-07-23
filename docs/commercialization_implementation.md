@@ -89,6 +89,7 @@ Vue 3 frontend
 - [x] `idempotencyKey` 持久响应缓存；重复 Outbox 提交返回同一 Compute run。
 - [x] Compute v1 的 ln-map 与 HS mesh 改为真正后台 run；创建立即返回 queued，支持轮询/协作取消，并记录 kernel 硬件执行证据；旧 `/api` 默认同步行为保持不变。
 - [ ] 将 HS field、transition mesh/voxels、special points 和 benchmark 等剩余同步持久任务统一改为后台 run，并补齐同等级硬件执行证据。
+- [ ] zoom/transition video 已有后台 run 和实际 engine/scalar 字段，但仍需在各 kernel 完成点补 `kernelReported` 证据标志及对应硬件合同测试。
 
 ### C2 — 安全 DSL 与 Orbit Program
 
