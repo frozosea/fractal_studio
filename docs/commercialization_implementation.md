@@ -58,7 +58,7 @@ Vue 3 frontend
 | Scope | Progress | Current boundary |
 |---|---:|---|
 | Compute 底座（C0–C2） | 100% | 首个商业底座范围完成；weighted schedule、output blend 和参数曲线属于后续产品玩法批次。 |
-| Platform/部署底座（P0–D0） | 约 68% | API/Worker/Outbox 代码及 Compute 对接文档完成；真实 PostgreSQL/完整 Compose E2E 受 Docker 权限限制。 |
+| Platform/部署底座（P0–D0） | 约 70% | API/Worker/Outbox、Compute 产物流式完整性校验及对接文档完成；真实 PostgreSQL/完整 Compose E2E 受 Docker 权限限制。 |
 | 前端双轨（F0） | 0% | 尚未开始拆分前端 API 与页面。 |
 | 商业模块（M1–M6） | 0% | 身份、资产、市场、支付和账本尚未开始。 |
 | 完整商业化路线 | 约 30% | 已完成可运行的 Compute/Platform 技术底座，产品商业闭环尚未进入。 |
@@ -87,6 +87,9 @@ Vue 3 frontend
 - [x] Compute v1 HTTP 合同迁移为按领域拆分的 pytest 套件；每个测试独立启动后端、独立创建 run/产物，原 smoke 仅保留最小核心链路语义。
 - [x] capabilities 暴露 CPU/OpenMP/AVX/CUDA 编译与运行时快照；map run status/manifest 保存 kernel 完成点报告的实际 engine/scalar、硬件类别和回退状态。
 - [x] `idempotencyKey` 持久响应缓存；重复 Outbox 提交返回同一 Compute run。
+- [x] 幂等键绑定 kind/payload hash；同一 key 被不同请求复用时返回 `409 IDEMPOTENCY_CONFLICT`，不再误返回旧任务。
+- [x] 注册表字段在进入旧执行路径前统一校验；未知 variant/metric/engine/scalar 和非法 axis 组合返回 `422`，不再静默采用默认 Mandelbrot/OpenMP/fp64。
+- [x] 不存在的 status/manifest/cancel run 统一返回结构化 `404 COMPUTE_RUN_NOT_FOUND`。
 - [x] Compute v1 的 ln-map 与 HS mesh 改为真正后台 run；创建立即返回 queued，支持轮询/协作取消，并记录 kernel 硬件执行证据；旧 `/api` 默认同步行为保持不变。
 - [x] Compute v1 HS field 改为后台 run，输出 float64 二进制 field 与 JSON sidecar manifest artifact，支持取消和硬件证据；旧 `/api/hs/field` 继续返回内联 base64。
 - [x] Compute v1 transition mesh 改为后台 run；后台任务持有 transition/CPU/CUDA 资源租约，支持 volume 协作取消并报告实际 volume engine/scalar。
@@ -137,7 +140,7 @@ Vue 3 frontend
 - [x] `render_jobs`、`quota_reservations`、`outbox_events`。
 - [x] 强类型 ComputeClient 和结构化错误映射。
 - [x] `SKIP LOCKED` 租约、至少一次投递和指数退避。
-- [x] submit/poll/cancel/manifest 校验代码闭环。
+- [x] submit/poll/cancel/manifest 校验代码闭环；Worker 对每个 artifact 做鉴权流式读取并严格核对字节数/SHA-256，校验失败不进入 completed。
 - [x] development/test 固定主体；生产配置拒绝启用未认证 Studio 路由。
 - [x] FastAPI 到真实 C++ Compute 的 64×64 RGBA preview 冒烟。
 - [ ] 在真实 PostgreSQL 上执行迁移并验证 Outbox render/cancel E2E。
@@ -163,6 +166,10 @@ Vue 3 frontend
 | 2026-07-23 | Compute v1 HTTP contract | `compute_v1_http_contract` covers auth, capabilities, RGBA preview, background run, manifest and artifact streaming | passed; full CTest 7/7 at initial implementation |
 | 2026-07-23 | Compute idempotency | pytest contract repeats the same key and asserts the same run ID | passed; full CTest 7/7 at initial implementation |
 | 2026-07-23 | Platform unit tests | isolated Python 3.12 venv; `pytest -q platform-backend/tests` | 5 passed |
+| 2026-07-23 | Final Compute/backend audit | Release rebuild; full CTest; real-process Compute HTTP pytest; Platform unit suite; JSON fence and local-link audit | 9/9 CTest; 74/74 HTTP; 8/8 Platform; docs checks passed |
+| 2026-07-23 | Silent fallback/idempotency regression | unknown advertised fields and axis variants must return structured 422; reused key with changed payload must return 409 | passed over real HTTP |
+| 2026-07-23 | Resource/error regression | missing status, manifest and cancel targets return `404 COMPUTE_RUN_NOT_FOUND`; Platform accepts structured and legacy string errors | passed |
+| 2026-07-23 | Artifact integrity ingestion | Platform ComputeClient streams artifact bytes and rejects size/SHA-256 mismatch before Worker completion | 5/5 focused client tests passed |
 | 2026-07-23 | Platform migration | `alembic upgrade head --sql` using PostgreSQL dialect | passed; 73 lines generated |
 | 2026-07-23 | Platform preview integration | Uvicorn -> Compute v1 -> OpenMP 64×64 RGBA; propagated engine/scalar/request headers | passed |
 | 2026-07-23 | Compose validation | `docker compose -f docker-compose.dev.yml config -q` | passed; daemon start unavailable to current user |
@@ -245,6 +252,9 @@ Vue 3 frontend
 | `7d4da38` | 自动检查调用手册关键内容，并通过真实 HTTP 验证参数化 DSL 请求。 |
 | `1a4e485` | 明确各类任务 progress stage、二维 rotationDeg 坐标语义和异步 PNG 导出/下载流程。 |
 | `334adca` | 真实 HTTP 验证旋转 map.png 导出、PNG 下载和 terminal progress 字段。 |
+| `b8d85aa` | 能力字段统一拒绝静默降级；幂等键绑定请求 hash，并修正文档 JSON 示例。 |
+| `aa54144` | status/manifest/cancel 对不存在 run 返回结构化 Compute 404，并增加独立 HTTP 回归。 |
+| `3bc8ed4` | Platform Worker 流式读取 Compute artifact，严格验证大小/SHA-256；增强客户端错误映射。 |
 
 ## Delivery Rules / 交付规则
 

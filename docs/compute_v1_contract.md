@@ -186,7 +186,7 @@ Platform 仍必须在自己的数据库中将 key 与不可变 recipe hash/kind 
     "cancelRequested": false,
     "progress": {
       "taskType": "video_export",
-      "stage": "frames",
+      "stage": "video_warp_encode",
       "current": 12,
       "total": 120,
       "percent": 10.0,
