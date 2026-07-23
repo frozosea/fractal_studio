@@ -2097,20 +2097,19 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
         }.dump());
     }
     auto videoLease = std::make_shared<ResourceManager::Lease>(std::move(videoLeaseRaw));
-    (void)videoLease;
-    runner.setStatus(run.id, "running");
     runner.setCancelable(run.id, true);
 
-    // ── Video writer ──────────────────────────────────────────────────────────
-    cv::Mat finalImg(H, W, CV_8UC3);
-    std::string mp4Path;
-    std::string ffmpegStderr;
-    std::string encoderUsed;
-    std::string warpMethod;
-    VideoWarpStats warpStats;
-    double elapsed = 0.0;
-
+    auto execute = [=, &runner]() mutable -> Json {
+    (void)videoLease;
+    runner.setStatus(run.id, "running");
     try {
+        // ── Video writer ──────────────────────────────────────────────────────
+        cv::Mat finalImg(H, W, CV_8UC3);
+        std::string mp4Path;
+        std::string ffmpegStderr;
+        std::string encoderUsed;
+        std::string warpMethod;
+        VideoWarpStats warpStats;
         const auto t0 = std::chrono::steady_clock::now();
         throwIfCancelled(runner, run.id);
         const compute::MapStats finalStats = compute::render_map(mp, finalImg);
@@ -2135,7 +2134,7 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
         );
         if (cancelToken->load(std::memory_order_relaxed)) throw std::runtime_error("cancelled");
         const auto t1 = std::chrono::steady_clock::now();
-        elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        const double elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
         Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount},
                             {"engine", finalStats.engine_used}, {"scalar", finalStats.scalar_used},
                             {"kernelReported", true}, {"warpMethod", warpMethod},
@@ -2146,6 +2145,34 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
 
         runner.addArtifact(run.id, Artifact{"zoom-video", mp4Path, "video"});
         runner.setStatus(run.id, "completed");
+
+        const std::string fname = std::filesystem::path(mp4Path).filename().string();
+        const std::string artifactId = run.id + ":" + fname;
+        Json resp = {
+            {"runId",       run.id},
+            {"status",      "completed"},
+            {"artifactId",  artifactId},
+            {"videoUrl",    "/api/artifacts/content?artifactId=" + artifactId},
+            {"downloadUrl", "/api/artifacts/download?artifactId=" + artifactId},
+            {"localPath",   mp4Path},
+            {"localExport", localExport},
+            {"frameCount",  frameCount},
+            {"fps",         fps},
+            {"durationSec", durationSec},
+            {"secondsPerOctave", secondsPerOctave},
+            {"width",       W},
+            {"height",      H},
+            {"kTopStart",   kTop_start},
+            {"kTopEnd",     kTop_end},
+            {"depthOctaves",depthOctaves},
+            {"rotationDeg", mp.rotation_deg},
+            {"warpMethod",  warpMethod},
+            {"encoder",     encoderUsed},
+            {"ffmpegStderr",ffmpegStderr},
+            {"generatedMs", elapsed},
+        };
+        mergeVideoWarpStats(resp, warpStats);
+        return resp;
     } catch (const std::exception& e) {
         if (runner.isCancelRequested(run.id) || std::string(e.what()) == "cancelled") {
             setVideoProgress(runner, run.id, "cancelled", 0, frameCount, 0.0, depthOctaves, "video_export", "cancelled");
@@ -2155,34 +2182,28 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
         }
         throw;
     }
-
-    const std::string fname = std::filesystem::path(mp4Path).filename().string();
-    const std::string artifactId = run.id + ":" + fname;
-    Json resp = {
-        {"runId",       run.id},
-        {"status",      "completed"},
-        {"artifactId",  artifactId},
-        {"videoUrl",    "/api/artifacts/content?artifactId=" + artifactId},
-        {"downloadUrl", "/api/artifacts/download?artifactId=" + artifactId},
-        {"localPath",   mp4Path},
-        {"localExport", localExport},
-        {"frameCount",  frameCount},
-        {"fps",         fps},
-        {"durationSec", durationSec},
-        {"secondsPerOctave", secondsPerOctave},
-        {"width",       W},
-        {"height",      H},
-        {"kTopStart",   kTop_start},
-        {"kTopEnd",     kTop_end},
-        {"depthOctaves",depthOctaves},
-        {"rotationDeg", mp.rotation_deg},
-        {"warpMethod",  warpMethod},
-        {"encoder",     encoderUsed},
-        {"ffmpegStderr",ffmpegStderr},
-        {"generatedMs", elapsed},
     };
-    mergeVideoWarpStats(resp, warpStats);
-    return resp.dump();
+
+    const bool background = j.value("background", false);
+    if (background) {
+        setVideoProgress(runner, run.id, "queued", 0, frameCount, 0.0, depthOctaves);
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+        return Json{
+            {"runId", run.id}, {"status", "queued"},
+            {"localExport", localExport}, {"frameCount", frameCount},
+            {"fps", fps}, {"durationSec", durationSec},
+            {"secondsPerOctave", secondsPerOctave},
+            {"depthOctaves", depthOctaves}, {"width", W}, {"height", H},
+        }.dump();
+    }
+
+    return execute().dump();
 }
 
 // ─── Fast preview: direct-render start/end frames before video export ─────────

@@ -3,7 +3,8 @@ from __future__ import annotations
 from .client import ComputeClient
 from .payloads import (
     benchmark_payload,
-    hs_field_payload, hs_mesh_payload, ln_map_payload, map_payload, sequence_program,
+    hs_field_payload, hs_mesh_payload, legacy_zoom_payload, ln_map_payload,
+    map_payload, reusable_zoom_payload, sequence_program,
     transition_mesh_payload,
     transition_voxels_payload,
     special_points_enumerate_payload,
@@ -100,6 +101,18 @@ def test_benchmark_can_be_cancelled(client: ComputeClient) -> None:
 
     cancellation = client.cancel(run_id)
     terminal = client.wait_for_run(run_id)
+
+    assert cancellation["accepted"] is True
+    assert terminal["status"] == "cancelled"
+
+
+def test_legacy_zoom_video_can_be_cancelled(client: ComputeClient) -> None:
+    source_id, _ = client.completed_run("ln_map", reusable_zoom_payload(), timeout=20.0)
+    payload = {**legacy_zoom_payload(source_id), "width": 2048, "height": 2048}
+    run_id, _ = client.create_run("legacy_zoom_video", payload)
+
+    cancellation = client.cancel(run_id)
+    terminal = client.wait_for_run(run_id, timeout=20.0)
 
     assert cancellation["accepted"] is True
     assert terminal["status"] == "cancelled"

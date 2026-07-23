@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from .client import ComputeClient
-from .payloads import builtin_formula, zoom_payload
-
-
-def reusable_zoom_payload() -> dict:
-    return {**zoom_payload(), "depthOctaves": 1.0}
+from .payloads import (
+    builtin_formula, legacy_zoom_payload, reusable_zoom_payload, zoom_payload,
+)
 
 
 def test_zoom_video_preview_reports_final_frame_engine(client: ComputeClient) -> None:
@@ -51,15 +49,22 @@ def test_zoom_video_rejects_mismatched_orbit_ln_map(client: ComputeClient) -> No
 
 def test_legacy_zoom_uses_orbit_from_ln_map_sidecar(client: ComputeClient) -> None:
     source_id, _ = client.completed_run("ln_map", reusable_zoom_payload(), timeout=20.0)
-    payload = {
-        "lnMapArtifactId": f"{source_id}:ln_map.png",
-        "width": 128, "height": 128, "fps": 1,
-        "depthOctaves": 1.0, "secondsPerOctave": 1.0,
-        "cudaWarp": False,
-    }
 
-    manifest = client.completed_manifest("legacy_zoom_video", payload, timeout=20.0)
+    manifest = client.completed_manifest(
+        "legacy_zoom_video", legacy_zoom_payload(source_id), timeout=20.0,
+    )
 
     assert manifest["escapeAnalysis"]["certifiedRadius"] == 2.0
     assert manifest["hardwareExecution"]["actualEngine"] == "openmp"
     assert manifest["hardwareExecution"]["kernelReported"] is True
+
+
+def test_legacy_zoom_run_is_asynchronous(client: ComputeClient) -> None:
+    source_id, _ = client.completed_run("ln_map", reusable_zoom_payload(), timeout=20.0)
+
+    run_id, response = client.create_run(
+        "legacy_zoom_video", legacy_zoom_payload(source_id),
+    )
+
+    assert response.json()["data"]["status"] == "queued"
+    assert client.wait_for_run(run_id, timeout=20.0)["status"] == "completed"

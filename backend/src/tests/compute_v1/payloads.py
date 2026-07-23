@@ -81,6 +81,19 @@ def zoom_payload() -> dict[str, Any]:
     }
 
 
+def reusable_zoom_payload() -> dict[str, Any]:
+    return {**zoom_payload(), "depthOctaves": 1.0}
+
+
+def legacy_zoom_payload(source_id: str) -> dict[str, Any]:
+    return {
+        "lnMapArtifactId": f"{source_id}:ln_map.png",
+        "width": 128, "height": 128, "fps": 1,
+        "depthOctaves": 1.0, "secondsPerOctave": 1.0,
+        "cudaWarp": False,
+    }
+
+
 def transition_mesh_payload() -> dict[str, Any]:
     return {
         "centerX": 0.0, "centerY": 0.0, "centerZ": 0.0,
