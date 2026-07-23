@@ -116,6 +116,11 @@ c = juliaRe + juliaIm * i
 - `ember_blue` 是蓝色暗部、青色边缘、暖色高光的风格化边界色表。
 - `spectral1530` 是全饱和 1530 步循环色环（绿→青→蓝→品→红→黄→绿，每段 255 步），周期是 `tri765` 的两倍且循环无缝，是周期性 `hist_eq` ln-map 模式的推荐色表。
 
+二维 preview/PNG 还支持安全声明式 `colorProgram` gradient：自定义 2..16 个 `#RRGGBB` stop、
+clamp/repeat/mirror、cycles/phase、内部色和非法值颜色。它与 `colorMap` 互斥，v1 只允许
+`colorMode=direct`；协议、示例和输出能力矩阵见 [coloring_contract.md](coloring_contract.md)。
+未知内置色表或不支持的自定义染色组合必须显式失败，不能回退 `classic_cos`。
+
 ## Engine And Scalar / 引擎与标量
 
 | Engine | Scope | Notes |

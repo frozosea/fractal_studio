@@ -59,6 +59,7 @@ The active reference is observable at `GET /api/system/capabilities` under `benc
 - [Compute Backend / 计算后端](backend/README.md): 私有服务构建、配置、测试、运行目录和生产安全边界。
 - [Compute v1 Contract / 私有计算合同](docs/compute_v1_contract.md): 服务后端实现所需的鉴权、transport DTO、状态机、manifest、下载、硬件证据和错误合同。
 - [Compute v1 Cookbook / 从零调用手册](docs/compute_v1_cookbook.md): Key 生成、workload 选择、curl、DSL/Orbit sequence 和 transition 请求示例。
+- [Coloring Contract / 染色合同](docs/coloring_contract.md): 内置染色字段、自定义 gradient schema、支持矩阵及 Platform/前端接入任务。
 - [Compute v1 Jobs / 任务参数与产物](docs/compute_v1_jobs.md): 18 个 kind 的 payload 默认值、限制、preview 结构和必需 artifact。
 - [Platform–Compute Integration / 服务后端对接指南](docs/platform_compute_integration.md): FastAPI ComputeClient、PostgreSQL Outbox、轮询/取消、产物摄取和硬件策略。
 - [Special Points / 特殊点链路](docs/special_points.md): center/Misiurewicz solving, search, classification, progress, and artifacts.

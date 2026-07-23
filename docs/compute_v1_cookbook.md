@@ -372,6 +372,33 @@ a = rotationDeg * pi / 180
 
 `rotationDeg` 可用于 map/raw field、zoom 视频画面、transition 视频的当前 slice 和 special-point viewport。非零二维旋转会禁用 map 的 fixed-point 整数快路径；深 zoom 时实际 scalar/engine 可能回退，所以必须读取 `hardwareExecution`，不能假定请求的 `fx64` 一定执行。
 
+### 3.7 自定义染色 gradient
+
+`colorProgram` 是安全的声明式颜色 stop，不是 GLSL/C++。它与 `colorMap` 互斥，当前只支持二维
+`map_image` 的 preview/PNG，且 `colorMode` 必须为 `direct`：
+
+```json
+"colorProgram": {
+  "schemaVersion": 1,
+  "type": "gradient",
+  "interpolation": "rgb",
+  "wrap": "repeat",
+  "cycles": 2,
+  "phase": 0.125,
+  "interiorColor": "#050816",
+  "invalidColor": "#ff00ff",
+  "stops": [
+    {"at": 0.0, "color": "#050816"},
+    {"at": 0.5, "color": "#00b8a9"},
+    {"at": 1.0, "color": "#fff4d6"}
+  ]
+}
+```
+
+完整限制、wrap/cycles/phase 语义、生产 `/api` 状态和 Platform/前端任务见
+[染色接口与自定义调色板合同](coloring_contract.md)。未知内置 `colorMap`、畸形 stop 或视频携带
+`colorProgram` 都会显式失败，不会回退 `classic_cos`。
+
 ## 4. 自定义公式到底是什么
 
 DSL 的 `source` 定义**一次迭代输出**：

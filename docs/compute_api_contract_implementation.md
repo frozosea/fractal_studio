@@ -109,7 +109,9 @@ Platform /api request
 | status/cancel | completed | flat RunStatus、artifact allowlist、404、legacy run 分流和 cancel response 已覆盖。 |
 | 本地前端 service key | completed | `dev.sh` 同值注入 C++/Vite；统一 fetch helper 带 Bearer；随机值不落盘、不打印。 |
 | Platform HTTP integration | completed | 测试直接导入协作者真实 `ComputeClient`，对 C++ 完成 preview、create、poll 和 PNG 解析。 |
-| 回归与文档 | completed | Compute HTTP `86 passed`（含真实 Platform client），CTest `9/9`，前端生产构建与 `dev.sh` 启停通过；路径文档已完成一致性审计。 |
+| Compute 自定义染色 | completed | 私有 `/api/map/render-inline`、`/api/map/render` 和 Compute v1 `map_image` 支持有界声明式 gradient；非法/不支持组合显式失败。 |
+| Platform 配方/前端编辑器接入 | pending | 协作者需扩展 Recipe/OpenAPI/mapper；前端需实现 stop 编辑器。本分支只提供 Compute 合同和 TypeScript DTO，不修改 Platform 领域代码。 |
+| 回归与文档 | completed | Compute HTTP `93 passed`（含真实 Platform client 和 7 项染色合同），CTest `10/10`，前端生产构建通过；路径和染色文档已完成一致性审计。 |
 
 ## 6. 测试策略
 
@@ -123,6 +125,7 @@ Platform /api request
 - completed artifact 类型、大小、ID 符合 allowlist；不出现本地路径。
 - 取消后继续轮询到 terminal；不存在 run 返回 404 Problem。
 - malformed JSON、缺字段、错误 enum、边界值和超限分别返回 400/413。
+- 自定义 gradient 验证能力声明、精确 interior 像素、持久 PNG、互斥字段、非法 stop、未知色表和视频显式拒绝。
 - 旧无认证本地路由在 legacy 开关打开时保持回归；商业关闭时不可访问。
 
 最终增加至少一条跨端测试：使用 `platform-backend/app/infrastructure/compute/compute_client.py` 对真实 C++ 进程执行 preview 和一个 durable run，证明双方不是各自只测 mock。

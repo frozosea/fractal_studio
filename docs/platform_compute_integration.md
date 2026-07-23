@@ -61,6 +61,10 @@ Platform 必须用 `map_preview_v1()` 生成 body。`requestId` 为 UUID；`engi
 `auto/cpu/cuda`，`scalarType` 取 `auto/float/double/long_double`。C++ 会映射到实际
 `openmp/cuda` 与 `fp32/fp64/fp80`。
 
+当前 mapper 只转发内置 `colorMap`。C++ 已支持二维 `colorProgram` v1，但在协作者扩展 Recipe schema、
+生产 OpenAPI 和 mapper 前，Platform 公共 API 不得声称已经支持自定义染色；任务与 schema 见
+[染色合同](coloring_contract.md)。
+
 成功时必须同时校验：
 
 - `Content-Type: application/octet-stream`

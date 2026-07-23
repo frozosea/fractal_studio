@@ -30,6 +30,7 @@
 | `metric` | enum | kind-specific | `escape`, `min_abs`, `max_abs`, `envelope`, `min_pairwise_dist`；map 另支持 `mandel_ship_agree`。 |
 | `pairwiseCap` | integer | `64`, 1..1,000,000 | `min_pairwise_dist` 的 orbit 缓冲上限。 |
 | `colorMap` | enum | `classic_cos` | `classic_cos`, `mod17`, `hsv_wheel`, `tri765`, `grayscale`, `hs_rainbow`, `inferno`, `viridis`, `twilight`, `ember_blue`, `spectral1530`。 |
+| `colorProgram` | object | omitted | 安全声明式 gradient v1；与 `colorMap` 互斥，完整 schema 见 [染色合同](coloring_contract.md)。当前仅 `map_image`。 |
 | `engine` | string | kind-specific | 只可从运行时 `jobs[].engines` 选择。 |
 | `scalarType` | string | kind-specific | 只可从运行时 `jobs[].scalars` 选择。 |
 
@@ -57,6 +58,9 @@ payload：
 | `smooth` | boolean | `false` |
 | `colorMode` | enum | `direct`; `direct`, `eq_full`, `eq_center` |
 | `cyclesPerOctave` | number | `1.0`; `>0` 且 `<=64` |
+
+`colorProgram` 存在时 `colorMode` 必须为 `direct`。自定义 gradient 支持 preview 和 persistent PNG；
+ln-map、zoom/transition video 当前返回 `UNSUPPORTED_CAPABILITY`，不会删除字段后退回内置调色板。
 
 Orbit Program 与非 `escape` metric 的组合当前返回 `422`。Orbit 也不能和 legacy `transitionTheta*`/`transitionVariants` 字段组合。二维 transition 不是该商业 kind 的一部分，应使用 transition kind。
 
