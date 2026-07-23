@@ -201,6 +201,7 @@ Vue 3 frontend
 | 2026-07-23 | Frontend dependency install | remove unused model-viewer peer conflict; `npm ci`, `npm ls --all`, `npm audit --omit=dev`, production Vite build | passed; production dependencies have 0 vulnerabilities; Vite 5 dev-only major-upgrade advisories remain documented |
 | 2026-07-23 | Service-backend documentation handoff | normative transport contract + 18-kind job reference + FastAPI/Outbox integration guide; registry-driven documentation audit | 3/3 documentation checks passed |
 | 2026-07-23 | Post-documentation real HTTP regression | `pytest -q backend/src/tests/compute_v1 --backend-binary=backend/build/fractal_studio_backend --studio-root=.` | 63/63 passed in 21.75s |
+| 2026-07-23 | Documentation handoff final regression | `ctest --test-dir backend/build --output-on-failure`; from `platform-backend/`, `python -m pytest -q tests` | 9/9 CTest (including real HTTP); 5/5 Platform passed |
 
 ## Commit Log / 提交记录
 
