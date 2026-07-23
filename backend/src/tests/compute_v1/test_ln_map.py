@@ -28,3 +28,22 @@ def test_builtin_orbit_ln_map_matches_legacy_png(client: ComputeClient) -> None:
     legacy_png = artifact_with_media_type(legacy, "image/png")
     orbit_png = artifact_with_media_type(orbit, "image/png")
     assert legacy_png["sha256"] == orbit_png["sha256"]
+
+
+def test_ln_map_run_is_created_asynchronously(client: ComputeClient) -> None:
+    run_id, response = client.create_run("ln_map", ln_map_payload())
+
+    assert response.json()["data"]["status"] == "queued"
+    assert client.wait_for_run(run_id)["status"] == "completed"
+
+
+def test_ln_map_manifest_contains_kernel_execution_evidence(client: ComputeClient) -> None:
+    manifest = client.completed_manifest(
+        "ln_map", ln_map_payload(orbit=sequence_program()),
+    )
+
+    execution = manifest["hardwareExecution"]
+    assert execution["kernelReported"] is True
+    assert execution["hardwareClass"] == "cpu"
+    assert execution["actualEngine"] == "openmp_orbit"
+    assert execution["actualScalar"] == "fp64"

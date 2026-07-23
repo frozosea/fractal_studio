@@ -16,6 +16,7 @@
 
 #include <string>
 #include <memory>
+#include <functional>
 
 namespace fsd::compute { class OrbitProgram; }
 
@@ -49,6 +50,7 @@ struct HsMeshParams {
     // Safe Orbit Program override. Generic HS execution currently uses the
     // deterministic fp64/OpenMP path and preserves strict escape semantics.
     std::shared_ptr<const OrbitProgram> orbit_program;
+    std::function<bool()> should_cancel;
 };
 
 // Compute the raw metric field values (float64[resolution²], row-major).

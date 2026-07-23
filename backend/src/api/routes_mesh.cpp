@@ -24,6 +24,7 @@
 #include <limits>
 #include <stdexcept>
 #include <system_error>
+#include <thread>
 #include <cstring>
 #include <vector>
 
@@ -207,18 +208,44 @@ std::string hsMeshRoute(const std::filesystem::path&, JobRunner& runner, const s
     if (!(p.bailout_sq > 0.0) || !std::isfinite(p.bailout_sq)) throw std::runtime_error("invalid bailoutSq");
 
     auto run = runner.createRun("hs-mesh", body);
-    runner.setStatus(run.id, "running");
+    const bool background = j.value("background", false);
+    const auto cancelToken = runner.cancelToken(run.id);
+    p.should_cancel = [cancelToken]() {
+        return cancelToken->load(std::memory_order_relaxed);
+    };
+    runner.setCancelable(run.id, true);
+    const std::string actualEngine = p.orbit_program ? "openmp_orbit" : "openmp";
+    auto setProgress = [&runner, run, actualEngine](const char* stage, int current,
+                                                    bool kernelReported) {
+        runner.setProgress(run.id, Json{
+            {"taskType", "hs_mesh"}, {"stage", stage},
+            {"current", current}, {"total", 1}, {"percent", 100.0 * current},
+            {"engine", actualEngine}, {"scalar", "fp64"},
+            {"kernelReported", kernelReported},
+            {"elapsedMs", runner.runElapsedMs(run.id)},
+            {"cancelable", !kernelReported},
+            {"resourceLocks", Json::array({"cpu_heavy"})},
+            {"details", Json::object()},
+        }.dump());
+    };
+    setProgress("queued", 0, false);
 
-    double elapsed = 0.0;
-    size_t vc = 0, tc = 0;
-
-    try {
+    struct HsMeshResult {
+        double elapsed = 0.0;
+        size_t vertexCount = 0;
+        size_t triangleCount = 0;
+    };
+    auto execute = [=, &runner]() mutable -> HsMeshResult {
+        runner.setStatus(run.id, "running");
+        setProgress("field_and_mesh", 0, false);
+        HsMeshResult result;
+        try {
         const auto t0 = std::chrono::steady_clock::now();
         compute::Mesh mesh = compute::hs::buildHsMesh(p);
         const auto t1 = std::chrono::steady_clock::now();
-        elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        vc = mesh.vertices.size();
-        tc = mesh.triangleCount();
+        result.elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        result.vertexCount = mesh.vertices.size();
+        result.triangleCount = mesh.triangleCount();
 
         const std::filesystem::path glbPath =
             std::filesystem::path(run.outputDir) / "hs_mesh.glb";
@@ -229,11 +256,35 @@ std::string hsMeshRoute(const std::filesystem::path&, JobRunner& runner, const s
 
         runner.addArtifact(run.id, Artifact{"hs-mesh", glbPath.string(), "mesh"});
         runner.addArtifact(run.id, Artifact{"hs-mesh", stlPath.string(), "stl"});
+        setProgress("completed", 1, true);
+        runner.setCancelable(run.id, false);
         runner.setStatus(run.id, "completed");
-    } catch (const std::exception&) {
-        runner.setStatus(run.id, "failed");
-        throw;
+        return result;
+        } catch (const std::exception& error) {
+            runner.setCancelable(run.id, false);
+            if (std::string(error.what()) == "cancelled") {
+                setProgress("cancelled", 0, false);
+                runner.setStatus(run.id, "cancelled");
+            } else {
+                setProgress("failed", 0, false);
+                runner.setStatus(run.id, "failed");
+            }
+            throw;
+        }
+    };
+
+    if (background) {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+        return Json{{"runId", run.id}, {"status", "queued"}}.dump();
     }
+
+    const HsMeshResult result = execute();
 
     const std::string glbId = run.id + ":hs_mesh.glb";
     const std::string stlId = run.id + ":hs_mesh.stl";
@@ -244,9 +295,9 @@ std::string hsMeshRoute(const std::filesystem::path&, JobRunner& runner, const s
         {"stlArtifactId", stlId},
         {"glbUrl",     "/api/artifacts/content?artifactId=" + glbId},
         {"stlUrl",     "/api/artifacts/download?artifactId=" + stlId},
-        {"vertexCount", vc},
-        {"triangleCount", tc},
-        {"generatedMs", elapsed},
+        {"vertexCount", result.vertexCount},
+        {"triangleCount", result.triangleCount},
+        {"generatedMs", result.elapsed},
     };
     return resp.dump();
 }

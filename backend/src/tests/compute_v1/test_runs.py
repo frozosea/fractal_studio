@@ -74,3 +74,14 @@ def test_hs_mesh_run_manifest_contains_both_mesh_formats(client: ComputeClient) 
     assert manifest["status"] == "completed"
     assert manifest["escapeAnalysis"]["certifiedRadius"] == 2.0
     assert media_types >= {"model/gltf-binary", "application/sla"}
+
+
+def test_hs_mesh_run_is_async_and_reports_hardware(client: ComputeClient) -> None:
+    run_id, response = client.create_run("hs_mesh", hs_mesh_payload())
+
+    assert response.json()["data"]["status"] == "queued"
+    assert client.wait_for_run(run_id)["status"] == "completed"
+    execution = client.manifest(run_id)["hardwareExecution"]
+    assert execution["kernelReported"] is True
+    assert execution["actualEngine"] == "openmp_orbit"
+    assert execution["hardwareClass"] == "cpu"

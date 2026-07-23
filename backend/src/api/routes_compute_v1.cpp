@@ -271,7 +271,10 @@ Json runPayload(Json payload, const std::string& kind,
         payload["background"] = true;
         return parseLegacyResponse(mapRenderRoute(repoRoot, runner, payload.dump()), kind);
     }
-    if (kind == "ln_map") return parseLegacyResponse(lnMapRenderRoute(repoRoot, runner, payload.dump()), kind);
+    if (kind == "ln_map") {
+        payload["background"] = true;
+        return parseLegacyResponse(lnMapRenderRoute(repoRoot, runner, payload.dump()), kind);
+    }
     if (kind == "zoom_video") {
         payload["background"] = true;
         return parseLegacyResponse(videoExportRoute(repoRoot, runner, payload.dump()), kind);
@@ -284,7 +287,10 @@ Json runPayload(Json payload, const std::string& kind,
         payload["background"] = true;
         return parseLegacyResponse(transitionVideoExportRoute(repoRoot, runner, payload.dump()), kind);
     }
-    if (kind == "hs_mesh") return parseLegacyResponse(hsMeshRoute(repoRoot, runner, payload.dump()), kind);
+    if (kind == "hs_mesh") {
+        payload["background"] = true;
+        return parseLegacyResponse(hsMeshRoute(repoRoot, runner, payload.dump()), kind);
+    }
     if (kind == "hs_field") return parseLegacyResponse(hsFieldRoute(repoRoot, runner, payload.dump()), kind);
     if (kind == "transition_mesh") return parseLegacyResponse(transitionMeshRoute(repoRoot, runner, payload.dump()), kind);
     if (kind == "transition_voxels") return parseLegacyResponse(transitionVoxelsRoute(repoRoot, runner, payload.dump()), kind);

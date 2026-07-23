@@ -31,6 +31,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace fsd {
 
@@ -200,52 +201,76 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     if (!compute::colormap_from_name(colormapStr.c_str(), cm)) cm = compute::Colormap::ClassicCos;
 
     auto run = runner.createRun("ln-map", body);
-    runner.setStatus(run.id, "running");
+    const bool background = j.value("background", false);
+    const auto cancelToken = runner.cancelToken(run.id);
+    runner.setCancelable(run.id, true);
 
-    std::string pngPath;
-    compute::LnMapStats stats;
+    compute::LnMapParams lp;
+    lp.julia = julia;
+    lp.center_re = cr;
+    lp.center_im = ci;
+    lp.center_re_str = crStr;
+    lp.center_im_str = ciStr;
+    lp.julia_re = jre;
+    lp.julia_im = jim;
+    lp.width_s = s;
+    lp.height_t = t;
+    lp.iterations = iters;
+    lp.bailout = bailout;
+    lp.bailout_sq = bailoutSq;
+    lp.variant = v;
+    if (j.contains("orbitProgram") && !j["orbitProgram"].is_null()) {
+        lp.orbit_program = compute::parse_orbit_program_json(j["orbitProgram"]);
+    }
+    lp.colormap = cm;
+    lp.color_mode = colorMode;
+    lp.color_cycles_per_octave = cyclesPerOctave;
+    lp.engine = engine;
+    lp.precision_mode = precisionMode;
+    lp.scalar_type = scalarType;
+    lp.fast_fp32_depth_octaves = fastFp32Depth;
+    lp.fast_fp64_depth_octaves = fastFp64Depth;
+    lp.fast_validate = fastValidate;
+    lp.fast_validation_band_octaves = fastValidationBandOctaves;
+    lp.fast_validation_sample_rows = fastValidationSampleRows;
+    lp.fast_validation_sample_cols = fastValidationSampleCols;
+    lp.fast_validation_max_mismatch_ratio = fastValidationMaxMismatchRatio;
+    lp.fast_validation_max_p99_iter_delta = fastValidationMaxP99IterDelta;
+    lp.fast_validation_max_mean_color_delta = fastValidationMaxMeanColorDelta;
+    lp.should_cancel = [cancelToken]() {
+        return cancelToken->load(std::memory_order_relaxed);
+    };
 
-    try {
+    auto setProgress = [&runner, run](const char* stage, int current, int total,
+                                     const std::string& actualEngine,
+                                     const std::string& actualScalar,
+                                     bool kernelReported) {
+        runner.setProgress(run.id, Json{
+            {"taskType", "ln_map"}, {"stage", stage},
+            {"current", current}, {"total", total},
+            {"percent", total > 0 ? 100.0 * current / total : 0.0},
+            {"engine", actualEngine}, {"scalar", actualScalar},
+            {"kernelReported", kernelReported},
+            {"elapsedMs", runner.runElapsedMs(run.id)},
+            {"cancelable", !kernelReported},
+            {"resourceLocks", Json::array({"cpu_heavy", "cuda_heavy"})},
+            {"details", Json::object()},
+        }.dump());
+    };
+    setProgress("queued", 0, 1, engine, scalarType, false);
+
+    auto execute = [=, &runner]() mutable -> compute::LnMapStats {
+        runner.setStatus(run.id, "running");
+        setProgress("render", 0, 1, engine, scalarType, false);
+        compute::LnMapStats stats;
+        try {
         cv::Mat strip(t, s, CV_8UC3);
-        compute::LnMapParams lp;
-        lp.julia = julia;
-        lp.center_re = cr;
-        lp.center_im = ci;
-        lp.center_re_str = crStr;
-        lp.center_im_str = ciStr;
-        lp.julia_re = jre;
-        lp.julia_im = jim;
-        lp.width_s = s;
-        lp.height_t = t;
-        lp.iterations = iters;
-        lp.bailout = bailout;
-        lp.bailout_sq = bailoutSq;
-        lp.variant = v;
-        if (j.contains("orbitProgram") && !j["orbitProgram"].is_null()) {
-            lp.orbit_program = compute::parse_orbit_program_json(j["orbitProgram"]);
-        }
-        lp.colormap = cm;
-        lp.color_mode = colorMode;
-        lp.color_cycles_per_octave = cyclesPerOctave;
-        lp.engine = engine;
-        lp.precision_mode = precisionMode;
-        lp.scalar_type = scalarType;
-        lp.fast_fp32_depth_octaves = fastFp32Depth;
-        lp.fast_fp64_depth_octaves = fastFp64Depth;
-        lp.fast_validate = fastValidate;
-        lp.fast_validation_band_octaves = fastValidationBandOctaves;
-        lp.fast_validation_sample_rows = fastValidationSampleRows;
-        lp.fast_validation_sample_cols = fastValidationSampleCols;
-        lp.fast_validation_max_mismatch_ratio = fastValidationMaxMismatchRatio;
-        lp.fast_validation_max_p99_iter_delta = fastValidationMaxP99IterDelta;
-        lp.fast_validation_max_mean_color_delta = fastValidationMaxMeanColorDelta;
         stats = compute::render_ln_map(lp, strip);
 
         const std::filesystem::path stripPath =
             std::filesystem::path(run.outputDir) / "ln_map.png";
         compute::write_png(stripPath.string(), strip);
-        pngPath = stripPath.string();
-        runner.addArtifact(run.id, Artifact{"ln-map", pngPath, "image"});
+        runner.addArtifact(run.id, Artifact{"ln-map", stripPath.string(), "image"});
 
         // Sidecar JSON so Phase 2 video export can read the parameters.
         Json sidecar = {
@@ -299,11 +324,38 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
             os << sidecar.dump(2);
         }
         runner.addArtifact(run.id, Artifact{"ln-map", sidecarPath.string(), "report"});
+        setProgress("completed", 1, 1, stats.engine_used, stats.scalar_used, true);
+        runner.setCancelable(run.id, false);
         runner.setStatus(run.id, "completed");
-    } catch (const std::exception&) {
-        runner.setStatus(run.id, "failed");
-        throw;
+        return stats;
+        } catch (const std::exception& error) {
+            runner.setCancelable(run.id, false);
+            if (std::string(error.what()) == "cancelled") {
+                setProgress("cancelled", 0, 1, engine, scalarType, false);
+                runner.setStatus(run.id, "cancelled");
+            } else {
+                setProgress("failed", 0, 1, engine, scalarType, false);
+                runner.setStatus(run.id, "failed");
+            }
+            throw;
+        }
+    };
+
+    if (background) {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+        return Json{
+            {"runId", run.id}, {"status", "queued"},
+            {"widthS", s}, {"heightT", t},
+        }.dump();
     }
+
+    const compute::LnMapStats stats = execute();
 
     const std::string artifactId = run.id + ":ln_map.png";
     Json resp = {

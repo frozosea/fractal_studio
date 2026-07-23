@@ -60,6 +60,7 @@ void computeFieldMetricImpl(const HsMeshParams& p, std::vector<double>& field) {
 
         #pragma omp for schedule(dynamic, 1)
         for (int tile = 0; tile < tile_count; tile++) {
+            if (p.should_cancel && p.should_cancel()) continue;
             const int tile_col = tile % tiles;
             const int tile_row = tile / tiles;
             const int row0 = tile_row * tile_size;
@@ -134,6 +135,7 @@ void computeOrbitField(const HsMeshParams& p, std::vector<double>& field) {
         orbit.reserve(static_cast<size_t>(pairwise_cap));
         #pragma omp for schedule(dynamic, 1)
         for (int tile = 0; tile < tiles * tiles; ++tile) {
+            if (p.should_cancel && p.should_cancel()) continue;
             const int row0 = (tile / tiles) * tile_size;
             const int col0 = (tile % tiles) * tile_size;
             const int row1 = std::min(N, row0 + tile_size);
@@ -152,6 +154,7 @@ void computeOrbitField(const HsMeshParams& p, std::vector<double>& field) {
                     orbit.clear();
 
                     for (int iteration = 0; iteration < p.iterations; ++iteration) {
+                        if ((iteration & 63) == 0 && p.should_cancel && p.should_cancel()) break;
                         z = p.orbit_program->step(z, c, iteration);
                         if (!std::isfinite(z.re) || !std::isfinite(z.im)) break;
                         const double norm_sq = z.re * z.re + z.im * z.im;
@@ -214,6 +217,7 @@ void computeOrbitField(const HsMeshParams& p, std::vector<double>& field) {
 void computeHsField(const HsMeshParams& p, std::vector<double>& field) {
     if (p.orbit_program) {
         computeOrbitField(p, field);
+        if (p.should_cancel && p.should_cancel()) throw std::runtime_error("cancelled");
         return;
     }
     using V = Variant;
@@ -236,6 +240,7 @@ void computeHsField(const HsMeshParams& p, std::vector<double>& field) {
         case V::TanZ:       computeFieldImpl<V::TanZ>      (p, field); break;
         default:            computeFieldImpl<V::Mandelbrot>(p, field); break;
     }
+    if (p.should_cancel && p.should_cancel()) throw std::runtime_error("cancelled");
 }
 
 Mesh buildHsMesh(const HsMeshParams& p) {
@@ -245,6 +250,7 @@ Mesh buildHsMesh(const HsMeshParams& p) {
     HsMeshParams pp = p;
     pp.resolution = N;
     computeHsField(pp, field);
+    if (p.should_cancel && p.should_cancel()) throw std::runtime_error("cancelled");
 
     // Normalize field to [0, 1] for visual consistency.
     double lo = std::numeric_limits<double>::infinity();
