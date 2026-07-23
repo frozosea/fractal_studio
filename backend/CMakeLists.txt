@@ -65,6 +65,7 @@ add_executable(fractal_studio_backend
     src/api/routes_benchmark.cpp
     src/api/routes_variants.cpp
     src/api/routes_compute_v1.cpp
+    src/api/routes_platform_compute.cpp
 
     # Native compute
     src/compute/colorize.cpp

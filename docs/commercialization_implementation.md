@@ -2,9 +2,9 @@
 
 本文是 Fractal Studio 商业化重构的执行依据与进度事实来源。实施过程中每个功能只有在代码、自动测试和文档三者都完成后，才标记为 `completed`。
 
-最后更新：2026-07-23
+最后更新：2026-07-24
 
-2026-07-24 补充：Platform 协作者的实际 ComputeClient 以 C++ 私有 `/api/*` 为准。当前适配工作从 `platform_backend@81bc3fc` 派生，实施状态见 [C++ Compute `/api` 生产合同实施记录](compute_api_contract_implementation.md)；本批次不修改 Platform Backend。
+2026-07-24 补充：Platform 协作者的实际 ComputeClient 以 C++ 私有 `/api/*` 为准。当前适配工作从 `platform_backend@81bc3fc` 派生，已完成 7 条生产路由、真实 HTTP/跨端客户端验证和本地前端临时密钥接入；实施状态见 [C++ Compute `/api` 生产合同实施记录](compute_api_contract_implementation.md)。本批次未修改 Platform Backend。
 
 ## Status Legend / 状态说明
 
@@ -23,7 +23,7 @@ Vue 3 frontend
      -> PostgreSQL product state
      -> Redis quotas and rate limits
      -> PostgreSQL Outbox Worker
-        -> private C++ Compute v1
+        -> private C++ Compute `/api` contract
         -> OSS / MinIO assets
 ```
 
@@ -31,7 +31,7 @@ Vue 3 frontend
 
 1. C++ 只拥有分形数学、硬件执行、Compute run 和临时产物。
 2. FastAPI 是商业浏览器唯一后端，拥有账户、配方、平台任务、资产、市场、交易和账本。
-3. 迁移期间旧 `/api/*` 保持可用；新增 `/compute/v1/*` 供 Platform 私网调用。
+3. Platform Worker 按协作者生产 OpenAPI 调用 C++ 私有 `/api/*`；现有 `/compute/v1/*` 暂时保留给计算工具和回归测试，待实际迁移完成后再决定删除。
 4. 自定义公式使用安全 DSL/AST/字节码；生产环境禁止运行时 `g++ + dlopen`。
 5. Orbit Program 统一承载单公式、周期序列和后续组合玩法；现有 axis transition 保持原数学语义。
 6. 无法证明有限逃逸半径时，`certifiedRadius=null`，不得用有限阈值宣称数学逃逸。

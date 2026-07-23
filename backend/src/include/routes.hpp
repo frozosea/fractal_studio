@@ -129,6 +129,35 @@ struct ArtifactFile {
 std::string artifactsListRoute(const std::filesystem::path& repoRoot, const std::string& query);
 ArtifactFile artifactFileRoute(const std::filesystem::path& repoRoot, const std::string& query);
 
+// Private /api contract consumed by platform-backend. These routes deliberately
+// return the flat DTOs from platform-backend/docs/compute-openapi.yaml while
+// reusing the versioned Compute implementation below.
+struct PlatformComputeResponse {
+    int status = 200;
+    std::string body;
+    std::string contentType = "application/json";
+    std::string extraHeaders;
+};
+
+bool isPlatformComputeApiPath(const std::string& path);
+bool platformComputeRequestUsesProductionContract(
+    const std::filesystem::path& repoRoot,
+    const std::string& path,
+    const std::string& query,
+    const std::string& body);
+std::string platformComputeRequestId(const std::string& candidate = {});
+std::string platformComputeProblemBody(const std::string& code,
+                                       const std::string& message,
+                                       const std::string& requestId);
+PlatformComputeResponse platformComputeApiRoute(
+    const std::filesystem::path& repoRoot,
+    JobRunner& runner,
+    const std::string& method,
+    const std::string& path,
+    const std::string& query,
+    const std::string& body,
+    const std::string& requestId);
+
 // Private, versioned Compute API used by the Platform backend.
 std::string computeV1HealthRoute();
 std::string computeV1CapabilitiesRoute();

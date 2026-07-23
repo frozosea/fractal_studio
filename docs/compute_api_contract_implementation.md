@@ -7,7 +7,7 @@
 - `platform-backend/app/studio/compute_request_mapper.py`
 - `platform-backend/app/studio/render_worker.py`
 
-本分支不修改 Platform 领域、路由或 Worker。所有实现变更限定在 C++ `backend/`、计算合同文档和跨端测试。
+本分支不修改 Platform 领域、路由或 Worker。实现变更限定在 C++ `backend/`、计算合同文档、跨端测试，以及仅用于本地 legacy 双轨的前端开发密钥接入。
 
 最后更新：2026-07-24
 
@@ -43,6 +43,15 @@ Platform 当前实际调用以下 7 条 Compute 路径：
 3. 其他 legacy `/api/*` 路径不属于生产合同，继续受 legacy 开关控制。
 4. `/compute/v1/*` 继续使用同一 service key，但不作为 Platform Backend 的验收目标。
 
+若同名 `/api` 的 legacy 语义与 Platform 合同无法同时满足，优先保证
+`platform-backend/docs/compute-openapi.yaml` 与实际 `ComputeClient` 可用；legacy 调用方通过迁移适配或后续移除处理，不允许扭曲生产合同。
+
+### 2.1 本地前端密钥
+
+- `frontend` 从 `VITE_COMPUTE_SERVICE_KEY` 读取开发密钥，并为直连 C++ 的请求添加 `Authorization: Bearer ...`。
+- 根目录 `dev.sh` 将同一个 `FSD_COMPUTE_SERVICE_KEY` 同时注入 C++ 和 Vite；未显式设置时生成本次进程生命周期内的随机开发值，不写入仓库或日志。
+- 该机制仅用于迁移期本地开发。生产构建不得注入 `VITE_COMPUTE_SERVICE_KEY`；商业浏览器只调用 Platform `/v1/*`，Compute key 只由 Worker 持有。
+
 ## 3. 合同适配设计
 
 生产 adapter 复用现有 Compute v1 的安全能力、异步 run、幂等缓存、manifest 和硬件执行证据，不复制 kernel：
@@ -61,6 +70,7 @@ Platform /api request
 - Platform `engine=cpu` 转为 `openmp`；`cuda` 保持；`auto` 保持。
 - Platform `scalarType=float/double/long_double` 转为 `fp32/fp64/fp80`。
 - `durationSeconds` 转为现有视频 payload 的 `durationSec`。
+- 当前 MP4 编码器要求宽高至少 128；Platform 模型/OpenAPI 暂允许从 1 开始，Compute 会对 1..127 返回 400。该跨端下界差异需由 Platform 合同维护者后续收紧，不能通过静默放大分辨率伪造请求结果。
 - durable map 强制 `stillExport=true`、`background=true`；调用方不能改成同步任务。
 - flat response 使用 `runId/clientJobId/status/progressPercent/artifacts/error`，不暴露 `legacyResult`、本地路径或 Compute v1 包络。
 - artifact 只返回 OpenAPI 允许的 PNG、MP4、GLB、STL；内部 JSON、progress 和临时文件不进入 Platform RunStatus。
@@ -92,13 +102,14 @@ Platform /api request
 |---|---|---|
 | 分支与合同基线 | completed | 基于 `platform_backend@81bc3fc` 创建；确认 Platform 实际使用 7 条 `/api/*`。 |
 | 实施文档 | completed | 路径归属、双轨、字段转换、错误和测试策略已记录。 |
-| 认证与 dispatch | pending | hosted `/api` 强制 Bearer；本地无 header legacy 双轨；错误 key 不降级。 |
-| strict DTO/Problem | pending | OpenAPI required/limit/enum 和 flat Problem 全覆盖。 |
-| preview adapter | pending | RGBA 长度/headers/1–1024 受限预览符合合同。 |
-| durable adapters | pending | image/video/HS/transition 均异步、幂等并返回 flat RunAccepted。 |
-| status/cancel | pending | flat RunStatus、artifact 过滤、404 和 cancel poll 语义符合合同。 |
-| Platform HTTP integration | pending | 不 mock ComputeClient，真实 Platform DTO 请求 C++ 并完成提交/轮询/取消。 |
-| 回归与文档 | pending | Compute pytest、CTest、Platform tests 和合同检查全部通过。 |
+| 认证与 dispatch | completed | hosted `/api` 强制 Bearer；本地按生产/legacy DTO 与 run metadata 双轨；错误 key 不降级。 |
+| strict DTO/Problem | completed | required/type/finite/limit/enum 转换和 flat Problem 已实现；视频最小尺寸差异已显式记录。 |
+| preview adapter | completed | 实际 HTTP 验证 RGBA 长度、headers、CPU/scalar 映射和 1–1024 上限。 |
+| durable adapters | completed | image/video/HS/transition 均复用异步 Compute run，以 `clientJobId` 幂等并返回 flat RunAccepted。 |
+| status/cancel | completed | flat RunStatus、artifact allowlist、404、legacy run 分流和 cancel response 已覆盖。 |
+| 本地前端 service key | completed | `dev.sh` 同值注入 C++/Vite；统一 fetch helper 带 Bearer；随机值不落盘、不打印。 |
+| Platform HTTP integration | completed | 测试直接导入协作者真实 `ComputeClient`，对 C++ 完成 preview、create、poll 和 PNG 解析。 |
+| 回归与文档 | in progress | Compute HTTP `85 passed`，真实 Platform client `1 passed`，前端生产构建通过；尚待 CTest 和最终文档审计。 |
 
 ## 6. 测试策略
 
