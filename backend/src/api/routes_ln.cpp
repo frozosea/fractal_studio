@@ -16,6 +16,7 @@
 
 #include "routes.hpp"
 #include "routes_common.hpp"
+#include "ln_map_reuse.hpp"
 
 #include "../compute/ln_map.hpp"
 #include "../compute/variants.hpp"
@@ -197,6 +198,20 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     }
     if (!(bailout > 0.0) || !std::isfinite(bailout)) throw std::runtime_error("invalid bailout");
     if (!(bailoutSq > 0.0) || !std::isfinite(bailoutSq)) throw std::runtime_error("invalid bailoutSq");
+    detail::LnMapGenerationIdentity generationIdentity;
+    generationIdentity.bailout = bailout;
+    generationIdentity.extraOctaves = extraOctaves;
+    generationIdentity.engineRequest = engine;
+    generationIdentity.scalarRequest = scalarType;
+    generationIdentity.fastFp32DepthOctaves = fastFp32Depth;
+    generationIdentity.fastFp64DepthOctaves = fastFp64Depth;
+    generationIdentity.fastValidate = fastValidate;
+    generationIdentity.fastValidationBandOctaves = fastValidationBandOctaves;
+    generationIdentity.fastValidationSampleRows = fastValidationSampleRows;
+    generationIdentity.fastValidationSampleCols = fastValidationSampleCols;
+    generationIdentity.fastValidationMaxMismatchRatio = fastValidationMaxMismatchRatio;
+    generationIdentity.fastValidationMaxP99IterDelta = fastValidationMaxP99IterDelta;
+    generationIdentity.fastValidationMaxMeanColorDelta = fastValidationMaxMeanColorDelta;
     compute::Colormap cm;
     if (!compute::colormap_from_name(colormapStr.c_str(), cm)) cm = compute::Colormap::ClassicCos;
 
@@ -310,6 +325,7 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
             sidecar["escapeAnalysis"] = compute::escape_analysis_json(
                 lp.orbit_program->escape_analysis());
         }
+        detail::writeLnMapGenerationIdentity(sidecar, generationIdentity);
         if (stats.equalization.valid) {
             sidecar["eqCountMin"]      = stats.equalization.count_min;
             sidecar["eqPeriod"]        = stats.equalization.period;

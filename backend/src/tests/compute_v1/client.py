@@ -85,10 +85,16 @@ class ComputeClient:
     def completed_manifest(
         self, kind: str, payload: dict[str, Any], *, timeout: float = 10.0,
     ) -> dict[str, Any]:
+        _, manifest = self.completed_run(kind, payload, timeout=timeout)
+        return manifest
+
+    def completed_run(
+        self, kind: str, payload: dict[str, Any], *, timeout: float = 10.0,
+    ) -> tuple[str, dict[str, Any]]:
         run_id, _ = self.create_run(kind, payload)
         terminal = self.wait_for_run(run_id, timeout=timeout)
         assert terminal["status"] == "completed", terminal
-        return self.manifest(run_id)
+        return run_id, self.manifest(run_id)
 
     def manifest(self, run_id: str) -> dict[str, Any]:
         result = self.request(f"/compute/v1/runs/{run_id}/manifest")

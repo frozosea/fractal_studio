@@ -111,10 +111,6 @@ std::shared_ptr<const compute::OrbitProgram> validateOrbitPayload(
         payload.contains("transitionVariants")) {
         unsupported(kind, "Orbit Program cannot be combined with axis transition");
     }
-    if (kind == "zoom_video" && payload.contains("lnMapRunId") &&
-        !payload.value("lnMapRunId", std::string()).empty()) {
-        unsupported(kind, "Orbit zoom export does not yet reuse an external lnMapRunId");
-    }
     try {
         return compute::parse_orbit_program_json(payload["orbitProgram"]);
     } catch (const compute::FormulaCompileError& error) {

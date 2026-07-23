@@ -1999,6 +1999,16 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
         }.dump());
     }
     cv::Mat strip  = compute::read_png(lk.pngPath.string());
+    std::shared_ptr<const compute::OrbitProgram> orbitProgram;
+    if (lk.sidecar.contains("orbitProgram") && !lk.sidecar["orbitProgram"].is_null()) {
+        orbitProgram = compute::parse_orbit_program_json(lk.sidecar["orbitProgram"]);
+        const std::string savedHash = lk.sidecar.value("orbitProgramHash", std::string());
+        if (savedHash.empty() || savedHash != orbitProgram->hash()) {
+            throw std::runtime_error("ln-map Orbit Program hash is missing or invalid");
+        }
+    } else if (!lk.sidecar.value("orbitProgramHash", std::string()).empty()) {
+        throw std::runtime_error("ln-map Orbit Program payload is missing");
+    }
 
     const double sidecarDepth = lk.sidecar.value("depthOctaves", 40.0);
     const std::string crStr   = lk.sidecar.value("centerReStr", std::string());
@@ -2063,8 +2073,14 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     mp.engine     = "auto";
     mp.scalar_type = "auto";
     mp.rotation_deg = std::isfinite(rotationDeg) ? rotationDeg : 0.0;
+    mp.orbit_program = orbitProgram;
 
-    auto run = runner.createRun("zoom-video", body);
+    Json runSnapshot = j;
+    if (orbitProgram) {
+        runSnapshot["orbitProgram"] = lk.sidecar["orbitProgram"];
+        runSnapshot["orbitProgramHash"] = orbitProgram->hash();
+    }
+    auto run = runner.createRun("zoom-video", runSnapshot.dump());
     const auto cancelToken = runner.cancelToken(run.id);
     mp.should_cancel = [cancelToken]() {
         return cancelToken->load(std::memory_order_relaxed);
@@ -2488,14 +2504,6 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         ? compute::parse_orbit_program_json(j["orbitProgram"])
         : std::shared_ptr<const compute::OrbitProgram>{};
     const std::string lnMapRunId = j.value("lnMapRunId", std::string(""));
-    if (orbitProgram && !lnMapRunId.empty()) {
-        throw HttpError(422, Json{{"error", {
-            {"code", "UNSUPPORTED_CAPABILITY"},
-            {"message", "Orbit zoom export does not yet reuse an external lnMapRunId"},
-            {"details", {{"kind", "zoom_video"}}},
-        }}}.dump());
-    }
-
     const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                               ? j["centerReStr"].get<std::string>() : std::string();
     const std::string ciStr = (j.contains("centerImStr") && j["centerImStr"].is_string())
@@ -3276,6 +3284,19 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             const Json savedSc = Json::parse(scBuf.str());
             if (savedSc.value("segmented", false)) {
                 throw std::runtime_error("reusing segmented ln-map runs is not supported yet");
+            }
+            const std::string savedOrbitHash =
+                savedSc.value("orbitProgramHash", std::string());
+            if (orbitProgram) {
+                if (savedOrbitHash.empty() || savedOrbitHash != orbitProgram->hash()) {
+                    throw std::runtime_error(
+                        "ln-map reuse mismatch for orbitProgramHash "
+                        "(re-render the ln-map for the current Orbit Program)");
+                }
+            } else if (!savedOrbitHash.empty()) {
+                throw std::runtime_error(
+                    "ln-map reuse mismatch for orbitProgramHash "
+                    "(the saved ln-map uses an Orbit Program)");
             }
 
             const std::string identityMismatch = detail::lnMapIdentityMismatch(
