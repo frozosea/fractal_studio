@@ -27,3 +27,22 @@ def test_capabilities_report_runtime_hardware(client: ComputeClient) -> None:
     assert isinstance(hardware["cuda"]["compiled"], bool)
     assert isinstance(hardware["cuda"]["runtime"], bool)
     assert hardware["cuda"]["deviceCount"] >= 0
+
+
+def test_job_registry_drives_advertised_kind_lists(client: ComputeClient) -> None:
+    capabilities = client.request("/compute/v1/capabilities").json()
+    jobs = capabilities["jobs"]
+
+    assert {job["kind"] for job in jobs if job["persistent"]} == set(capabilities["persistentKinds"])
+    assert {job["kind"] for job in jobs if job["preview"]} == set(capabilities["previewKinds"])
+
+
+def test_job_registry_describes_compatibility(client: ComputeClient) -> None:
+    jobs = client.request("/compute/v1/capabilities").json()["jobs"]
+    map_job = next(job for job in jobs if job["kind"] == "map_image")
+
+    assert map_job["orbitProgram"] is True
+    assert "escape" in map_job["metrics"]
+    assert "openmp" in map_job["engines"]
+    assert "fp64" in map_job["scalars"]
+    assert "image/png" in map_job["outputMediaTypes"]

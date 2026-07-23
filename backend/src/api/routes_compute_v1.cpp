@@ -18,6 +18,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace fsd {
 namespace {
@@ -25,6 +26,59 @@ namespace {
 constexpr int COMPUTE_SCHEMA_VERSION = 1;
 std::mutex g_idempotencyMutex;
 std::map<std::string, std::weak_ptr<std::mutex>> g_idempotencyLocks;
+
+struct ComputeCapability {
+    const char* kind;
+    bool persistent;
+    bool preview;
+    bool orbitPayload;
+    const char* variantProfile;
+    const char* metrics;
+    const char* engines;
+    const char* scalars;
+    const char* outputMediaTypes;
+};
+
+constexpr std::array<ComputeCapability, 18> COMPUTE_CAPABILITIES = {{
+    {"map_image", true, true, true, "builtin_2d_or_safe_dsl", "escape,min_abs,max_abs,envelope,min_pairwise_dist,mandel_ship_agree", "auto,openmp,avx2,avx512,cuda,hybrid", "auto,fp32,fp64,fx64,fp80,fp128", "image/png,application/octet-stream"},
+    {"raw_field", false, true, true, "builtin_2d_or_safe_dsl", "escape,min_abs,max_abs,envelope,min_pairwise_dist", "auto,openmp,avx2,avx512,cuda,hybrid", "auto,fp32,fp64,fx64,fp80,fp128", "application/json"},
+    {"ln_map", true, false, true, "builtin_2d_or_safe_dsl", "escape", "auto,openmp,avx2,avx512,cuda", "auto,fp32,fp64,fx64,fp80,fp128", "image/png,application/json"},
+    {"zoom_video", true, false, true, "builtin_2d_or_safe_dsl", "escape", "auto,openmp,avx2,avx512,cuda,hybrid", "auto,fp32,fp64,fx64,fp80,fp128", "video/mp4,image/png,application/json"},
+    {"legacy_zoom_video", true, false, false, "ln_map_sidecar_snapshot", "escape", "auto,openmp,avx2,avx512,cuda,hybrid", "auto,fp32,fp64,fx64,fp80,fp128", "video/mp4"},
+    {"video_preview", false, true, true, "builtin_2d_or_safe_dsl", "escape", "auto,openmp", "fp64", "application/json,image/png"},
+    {"transition_video", true, false, false, "axis_pair_or_multi", "escape,min_abs,max_abs,envelope", "auto,openmp,avx2,cuda", "auto,fp32,fp64,fx64,fp80,fp128", "video/mp4,image/png,application/json"},
+    {"transition_video_preview", false, true, false, "axis_pair_or_multi", "escape,min_abs,max_abs,envelope", "auto,openmp,avx2,cuda", "auto,fp32,fp64,fx64,fp80,fp128", "application/json,image/png"},
+    {"hs_mesh", true, false, true, "builtin_2d_or_safe_dsl", "escape,min_abs,max_abs,envelope,min_pairwise_dist", "auto,openmp", "fp64", "model/gltf-binary,application/sla"},
+    {"hs_field", true, false, true, "builtin_2d_or_safe_dsl", "escape,min_abs,max_abs,envelope,min_pairwise_dist", "auto,openmp", "fp64", "application/octet-stream,application/json"},
+    {"transition_mesh", true, false, false, "axis_pair_or_multi", "escape", "auto,openmp,avx2,cuda", "auto,fp32,fp64", "model/gltf-binary,application/sla"},
+    {"transition_voxels", true, false, false, "axis_pair_or_multi", "escape", "auto,openmp,avx2,cuda", "auto,fp32,fp64", "application/sla"},
+    {"special_points_enumerate", true, false, false, "mandelbrot_special_points", "newton_residual", "openmp", "fp64,mpfr", "application/json"},
+    {"special_points_search", true, false, false, "mandelbrot_special_points", "newton_residual", "openmp", "fp64,mpfr", "application/json"},
+    {"special_points_auto", false, true, false, "mandelbrot_special_points", "newton_residual", "openmp", "fp64,mpfr", "application/json"},
+    {"special_points_seed", false, true, false, "mandelbrot_special_points", "newton_residual", "openmp", "fp64,mpfr", "application/json"},
+    {"special_points_snap", false, true, false, "mandelbrot_special_points", "newton_residual", "openmp", "fp64,mpfr", "application/json"},
+    {"benchmark", true, false, false, "builtin_benchmark_workloads", "escape", "available_candidates", "available_candidates", "application/json"},
+}};
+
+const ComputeCapability* findCapability(std::string_view kind) {
+    for (const auto& capability : COMPUTE_CAPABILITIES) {
+        if (kind == capability.kind) return &capability;
+    }
+    return nullptr;
+}
+
+Json commaSeparatedArray(std::string_view values) {
+    Json result = Json::array();
+    std::size_t start = 0;
+    while (start <= values.size()) {
+        const std::size_t comma = values.find(',', start);
+        const std::size_t end = comma == std::string_view::npos ? values.size() : comma;
+        if (end > start) result.push_back(values.substr(start, end - start));
+        if (comma == std::string_view::npos) break;
+        start = comma + 1;
+    }
+    return result;
+}
 
 std::shared_ptr<std::mutex> idempotencyLock(const std::string& key) {
     std::lock_guard<std::mutex> lock(g_idempotencyMutex);
@@ -94,11 +148,12 @@ Json parseLegacyResponse(const std::string& text, const std::string& kind) {
 
 std::shared_ptr<const compute::OrbitProgram> validateOrbitPayload(
     const std::string& kind, const Json& payload, bool persistent) {
+    const ComputeCapability* capability = findCapability(kind);
+    if (capability == nullptr || (persistent ? !capability->persistent : !capability->preview)) {
+        unsupported(kind, persistent ? "unknown persistent Compute kind" : "unknown preview Compute kind");
+    }
     if (!payload.contains("orbitProgram") || payload["orbitProgram"].is_null()) return {};
-    const bool supportedKind = kind == "map_image" || kind == "ln_map" || kind == "zoom_video" ||
-        kind == "hs_mesh" || kind == "hs_field" ||
-        (!persistent && (kind == "raw_field" || kind == "video_preview"));
-    if (!supportedKind) {
+    if (!capability->orbitPayload) {
         unsupported(kind, "this Compute build supports Orbit Program only for 2D/Julia map and HS outputs");
     }
     if (payload.value("metric", std::string("escape")) != "escape") {
@@ -335,18 +390,28 @@ std::string computeV1HealthRoute() {
 }
 
 std::string computeV1CapabilitiesRoute() {
+    Json persistentKinds = Json::array();
+    Json previewKinds = Json::array();
+    Json jobs = Json::array();
+    for (const auto& capability : COMPUTE_CAPABILITIES) {
+        if (capability.persistent) persistentKinds.push_back(capability.kind);
+        if (capability.preview) previewKinds.push_back(capability.kind);
+        jobs.push_back({
+            {"kind", capability.kind}, {"persistent", capability.persistent},
+            {"preview", capability.preview}, {"orbitProgram", capability.orbitPayload},
+            {"variantProfile", capability.variantProfile},
+            {"metrics", commaSeparatedArray(capability.metrics)},
+            {"engines", commaSeparatedArray(capability.engines)},
+            {"scalars", commaSeparatedArray(capability.scalars)},
+            {"outputMediaTypes", commaSeparatedArray(capability.outputMediaTypes)},
+        });
+    }
     return Json{
         {"schemaVersion", COMPUTE_SCHEMA_VERSION},
         {"rendererVersion", rendererVersion()},
-        {"persistentKinds", Json::array({
-            "map_image", "ln_map", "zoom_video", "legacy_zoom_video", "transition_video",
-            "hs_mesh", "hs_field", "transition_mesh", "transition_voxels",
-            "special_points_enumerate", "special_points_search", "benchmark",
-        })},
-        {"previewKinds", Json::array({
-            "map_image", "raw_field", "video_preview", "transition_video_preview",
-            "special_points_auto", "special_points_seed", "special_points_snap",
-        })},
+        {"persistentKinds", std::move(persistentKinds)},
+        {"previewKinds", std::move(previewKinds)},
+        {"jobs", std::move(jobs)},
         {"orbitPrograms", {
             {"formula", true}, {"sequence", true}, {"weightedSchedule", false},
             {"outputBlend", false}, {"axisTransition", true}, {"axisMulti", true},
