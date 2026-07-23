@@ -27,6 +27,46 @@ def test_map_run_manifest_contains_escape_certificate(client: ComputeClient) -> 
     assert len(png["sha256"]) == 64
 
 
+def test_map_manifest_proves_openmp_execution(client: ComputeClient) -> None:
+    manifest = client.completed_manifest("map_image", map_payload(orbit=True))
+
+    execution = manifest["hardwareExecution"]
+    assert execution["requestedEngine"] == "openmp"
+    assert execution["actualEngine"] == "openmp"
+    assert execution["hardwareClass"] == "cpu"
+    assert execution["kernelReported"] is True
+    assert execution["runtimeAvailable"] is True
+    assert execution["engineFallback"] is False
+
+
+def test_run_status_exposes_verified_hardware_execution(client: ComputeClient) -> None:
+    run_id, _ = client.create_run("map_image", map_payload(orbit=True))
+
+    terminal = client.wait_for_run(run_id)
+
+    execution = terminal["hardwareExecution"]
+    assert execution["actualEngine"] == "openmp"
+    assert execution["hardwareClass"] == "cpu"
+    assert execution["kernelReported"] is True
+    assert execution["evidenceSource"] == "kernel_completion_telemetry"
+
+
+def test_cuda_request_reports_real_gpu_or_explicit_fallback(client: ComputeClient) -> None:
+    capabilities = client.request("/compute/v1/capabilities").json()
+    manifest = client.completed_manifest("map_image", map_payload(engine="cuda"))
+
+    execution = manifest["hardwareExecution"]
+    assert execution["requestedEngine"] == "cuda"
+    assert execution["kernelReported"] is True
+    if capabilities["hardware"]["cuda"]["runtime"]:
+        assert execution["hardwareClass"] in {"gpu", "hybrid"}
+        assert "cuda" in execution["actualEngine"]
+        assert execution["engineFallback"] is False
+    else:
+        assert execution["hardwareClass"] == "cpu"
+        assert execution["engineFallback"] is True
+
+
 def test_hs_mesh_run_manifest_contains_both_mesh_formats(client: ComputeClient) -> None:
     manifest = client.completed_manifest("hs_mesh", hs_mesh_payload())
 

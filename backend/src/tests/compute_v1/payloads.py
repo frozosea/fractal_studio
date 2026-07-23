@@ -18,11 +18,14 @@ def sequence_program() -> dict[str, Any]:
     }
 
 
-def map_payload(*, orbit: bool = False, size: int = 64, iterations: int = 32) -> dict[str, Any]:
+def map_payload(
+    *, orbit: bool = False, size: int = 64, iterations: int = 32,
+    engine: str = "openmp", scalar: str = "fp64",
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "centerRe": -0.75, "centerIm": 0.0, "scale": 3.0,
         "width": size, "height": size, "iterations": iterations,
-        "variant": "mandelbrot", "engine": "openmp", "scalarType": "fp64",
+        "variant": "mandelbrot", "engine": engine, "scalarType": scalar,
     }
     if orbit:
         payload["orbitProgram"] = sequence_program()

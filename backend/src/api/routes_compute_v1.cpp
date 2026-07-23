@@ -2,6 +2,7 @@
 #include "routes_common.hpp"
 
 #include "../include/db.hpp"
+#include "../compute/engine_select.hpp"
 #include "../compute/orbit_program_json.hpp"
 
 #include <openssl/evp.h>
@@ -188,6 +189,81 @@ Json normalizedRunResponse(const std::string& kind, const Json& legacy) {
     return Json{{"schemaVersion", COMPUTE_SCHEMA_VERSION}, {"data", std::move(data)}};
 }
 
+Json hardwareCapabilitiesJson() {
+    const auto caps = compute::runtime_capabilities();
+    return {
+        {"cpu", {
+            {"logicalCores", caps.logical_cores},
+            {"physicalCores", caps.physical_cores},
+            {"openmp", {{"compiled", caps.openmp_compiled}, {"runtime", caps.openmp_runtime}}},
+            {"avx2", {{"compiled", caps.avx2_compiled}, {"runtime", caps.avx2_runtime}}},
+            {"avx512", {{"compiled", caps.avx512_compiled}, {"runtime", caps.avx512_runtime}}},
+        }},
+        {"cuda", {
+            {"compiled", caps.cuda_compiled}, {"runtime", caps.cuda_runtime},
+            {"deviceCount", caps.cuda_device_count}, {"name", caps.cuda_name},
+            {"computeCapability", {
+                {"major", caps.cuda_compute_major}, {"minor", caps.cuda_compute_minor},
+            }},
+            {"totalVramBytes", caps.cuda_total_vram},
+            {"freeVramBytes", caps.cuda_free_vram},
+        }},
+    };
+}
+
+std::string hardwareClassForEngine(const std::string& engine) {
+    const bool cuda = engine.find("cuda") != std::string::npos;
+    const bool cpu = engine.find("openmp") != std::string::npos ||
+        engine.find("avx2") != std::string::npos ||
+        engine.find("avx512") != std::string::npos ||
+        engine.find("perturbation") != std::string::npos;
+    if (cuda && cpu) return "hybrid";
+    if (cuda) return "gpu";
+    if (cpu) return "cpu";
+    return "unknown";
+}
+
+bool requestedEngineMatches(const std::string& requested, const std::string& actual) {
+    if (requested.empty() || requested == "auto" || actual.empty()) return true;
+    return actual.find(requested) != std::string::npos;
+}
+
+Json hardwareExecutionJson(const std::string& status, const Json& progress,
+                           const Json& params) {
+    const std::string requestedEngine = params.value("engine", std::string("auto"));
+    const std::string requestedScalar = params.value("scalarType", std::string("auto"));
+    const std::string actualEngine = progress.value(
+        "engine", progress.value("finalFrameEngine", std::string()));
+    const std::string actualScalar = progress.value(
+        "scalar", progress.value("finalFrameScalar", std::string()));
+    const std::string hardwareClass = hardwareClassForEngine(actualEngine);
+    const bool completed = status == "completed";
+    const bool kernelReported = completed &&
+        progress.value("kernelReported", false) && !actualEngine.empty();
+    const bool engineFallback = kernelReported &&
+        !requestedEngineMatches(requestedEngine, actualEngine);
+    const auto caps = compute::runtime_capabilities();
+    bool runtimeAvailable = false;
+    if (hardwareClass == "gpu") runtimeAvailable = caps.cuda_runtime;
+    else if (hardwareClass == "hybrid") runtimeAvailable = caps.cuda_runtime && caps.openmp_runtime;
+    else if (hardwareClass == "cpu") runtimeAvailable = caps.openmp_runtime;
+
+    Json evidence = {
+        {"requestedEngine", requestedEngine}, {"requestedScalar", requestedScalar},
+        {"actualEngine", actualEngine}, {"actualScalar", actualScalar},
+        {"hardwareClass", hardwareClass}, {"kernelReported", kernelReported},
+        {"runtimeAvailable", runtimeAvailable}, {"engineFallback", engineFallback},
+        {"evidenceSource", kernelReported ? "kernel_completion_telemetry" : "not_yet_reported"},
+        {"elapsedMs", progress.value("elapsedMs", 0.0)},
+    };
+    if (engineFallback) {
+        evidence["fallbackReason"] = "requested engine was not reported by the completed kernel";
+    } else {
+        evidence["fallbackReason"] = nullptr;
+    }
+    return evidence;
+}
+
 Json runPayload(Json payload, const std::string& kind,
                 const std::filesystem::path& repoRoot, JobRunner& runner) {
     if (kind == "map_image") {
@@ -261,6 +337,7 @@ std::string computeV1CapabilitiesRoute() {
             {"safeDsl", true},
         }},
         {"escapeSemantics", {{"certifiedRadius", true}, {"strictUnverified", true}}},
+        {"hardware", hardwareCapabilitiesJson()},
     }.dump();
 }
 
@@ -311,6 +388,11 @@ std::string computeV1RunStatusRoute(const std::filesystem::path& repoRoot,
                                     const std::string& runId) {
     const Json legacy = parseLegacyResponse(
         runStatusRoute(repoRoot, runner, "runId=" + runId), "run_status");
+    Json params = Json::object();
+    try {
+        params = Json::parse(openDb(repoRoot).getRun(runId).paramsJson);
+    } catch (...) {}
+    const Json progress = legacy.value("progress", Json::object());
     Json artifacts = Json::array();
     for (const Json& artifact : legacy.value("artifacts", Json::array())) {
         artifacts.push_back({
@@ -325,7 +407,10 @@ std::string computeV1RunStatusRoute(const std::filesystem::path& repoRoot,
         {"startedAt", legacy.value("startedAt", 0LL)},
         {"finishedAt", legacy.value("finishedAt", 0LL)},
         {"cancelRequested", legacy.value("cancelRequested", false)},
-        {"progress", legacy.value("progress", Json::object())}, {"artifacts", artifacts},
+        {"progress", progress},
+        {"hardwareExecution", hardwareExecutionJson(
+            legacy.value("status", std::string()), progress, params)},
+        {"artifacts", artifacts},
     }}}.dump();
 }
 
@@ -391,6 +476,9 @@ std::string computeV1ManifestRoute(const std::filesystem::path& repoRoot,
         {"rendererVersion", rendererVersion()}, {"recipeHash", sha256Text(row.paramsJson)},
         {"status", status.value("status", std::string())},
         {"effective", {{"engine", engine}, {"scalar", scalar}}},
+        {"hardwareExecution", hardwareExecutionJson(
+            status.value("status", std::string()), progress,
+            Json::parse(row.paramsJson))},
         {"escapeAnalysis", std::move(escapeAnalysis)},
         {"artifacts", artifacts},
     }.dump();

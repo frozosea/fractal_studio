@@ -1304,6 +1304,7 @@ std::string mapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& run
                     {"percent", 100.0},
                     {"engine", rendered.engineUsed},
                     {"scalar", rendered.scalarUsed},
+                    {"kernelReported", true},
                     {"elapsedMs", runner.runElapsedMs(run.id)},
                     {"cancelable", false},
                     {"resourceLocks", Json::array({"cuda_heavy", "cpu_heavy"})},
