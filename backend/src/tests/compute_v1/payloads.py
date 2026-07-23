@@ -89,3 +89,9 @@ def transition_mesh_payload() -> dict[str, Any]:
         "transitionTo": "burning_ship", "engine": "openmp",
         "scalarType": "fp32", "iso": 0.5,
     }
+
+
+def transition_voxels_payload() -> dict[str, Any]:
+    payload = transition_mesh_payload()
+    payload["iso"] = 0.48
+    return payload

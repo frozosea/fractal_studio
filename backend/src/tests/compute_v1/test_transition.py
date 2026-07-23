@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .client import ComputeClient
-from .payloads import transition_mesh_payload
+from .payloads import transition_mesh_payload, transition_voxels_payload
 
 
 def test_transition_mesh_run_is_asynchronous(client: ComputeClient) -> None:
@@ -31,3 +31,30 @@ def test_legacy_transition_mesh_remains_synchronous(client: ComputeClient) -> No
     assert result.status == 200
     assert result.json()["status"] == "completed"
     assert result.json()["vertexCount"] > 0
+
+
+def test_transition_voxels_run_is_async_with_stl_and_hardware(client: ComputeClient) -> None:
+    run_id, response = client.create_run(
+        "transition_voxels", transition_voxels_payload(),
+    )
+
+    assert response.json()["data"]["status"] == "queued"
+    assert client.wait_for_run(run_id)["status"] == "completed"
+    manifest = client.manifest(run_id)
+    execution = manifest["hardwareExecution"]
+    assert "application/sla" in {item["mediaType"] for item in manifest["artifacts"]}
+    assert execution["kernelReported"] is True
+    assert execution["actualEngine"] == "openmp_fp32"
+    assert execution["hardwareClass"] == "cpu"
+
+
+def test_legacy_transition_voxels_keeps_inline_geometry(client: ComputeClient) -> None:
+    result = client.request(
+        "/api/transition/voxels", body=transition_voxels_payload(), authorized=False,
+    )
+
+    data = result.json()
+    assert result.status == 200
+    assert data["status"] == "completed"
+    assert data["faceCount"] > 0
+    assert len(data["posB64"]) > 0

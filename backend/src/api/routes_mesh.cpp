@@ -635,24 +635,30 @@ std::string transitionVoxelsRoute(const std::filesystem::path&, JobRunner& runne
     if (!(p.bailout_sq > 0.0) || !std::isfinite(p.bailout_sq)) throw std::runtime_error("invalid bailoutSq");
 
     auto run = runner.createRun("transition-voxels", body);
-    auto transitionLease = acquireTransitionLease(runner, run.id);
-    (void)transitionLease;
-    runner.setStatus(run.id, "running");
-    runner.setCancelable(run.id, false);
-    setTransitionProgress(runner, run.id, "volume", 0, 2, p.engine, p.scalar_type);
+    const bool background = j.value("background", false);
+    auto transitionLease = std::make_shared<ResourceManager::Lease>(
+        acquireTransitionLease(runner, run.id));
+    const auto cancelToken = runner.cancelToken(run.id);
+    p.should_cancel = [cancelToken]() {
+        return cancelToken->load(std::memory_order_relaxed);
+    };
+    runner.setCancelable(run.id, true);
+    setTransitionProgress(runner, run.id, "queued", 0, 2,
+                          p.engine, p.scalar_type, true);
 
-    const auto t0 = std::chrono::steady_clock::now();
-    compute::McField field;
-    try {
+    auto execute = [=, &runner]() mutable -> Json {
+        (void)transitionLease;
+        runner.setStatus(run.id, "running");
+        setTransitionProgress(runner, run.id, "volume", 0, 2,
+                              p.engine, p.scalar_type, true);
+        compute::McField field;
+        try {
+        const auto t0 = std::chrono::steady_clock::now();
         field = compute::buildTransitionVolume(p);
-        setTransitionProgress(runner, run.id, "voxel_mesh", 1, 2, field.engine_used, field.scalar_used);
-    } catch (const std::exception&) {
-        setTransitionProgress(runner, run.id, "failed", 0, 2, p.engine, p.scalar_type);
-        runner.setStatus(run.id, "failed");
-        throw;
-    }
-    const auto t1 = std::chrono::steady_clock::now();
-    const double elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        setTransitionProgress(runner, run.id, "voxel_mesh", 1, 2,
+                              field.engine_used, field.scalar_used, true);
+        const auto t1 = std::chrono::steady_clock::now();
+        const double elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
     const int N = field.Nx;
 
@@ -661,6 +667,9 @@ std::string transitionVoxelsRoute(const std::filesystem::path&, JobRunner& runne
     std::vector<uint8_t> dep(static_cast<size_t>(N) * N * N, 0);
     size_t voxelCount = 0;
     for (int i = 0; i < N * N * N; ++i) {
+        if ((i & 65535) == 0 && p.should_cancel()) {
+            throw std::runtime_error("cancelled");
+        }
         const float v = field.data[i];
         if (v < iso) {
             vol[i] = 1;
@@ -696,6 +705,7 @@ std::string transitionVoxelsRoute(const std::filesystem::path&, JobRunner& runne
     std::vector<uint8_t> depU8;
 
     for (int zi = 0; zi < N; ++zi) {
+        if (p.should_cancel()) throw std::runtime_error("cancelled");
         for (int yi = 0; yi < N; ++yi) {
             for (int xi = 0; xi < N; ++xi) {
                 if (!getVol(xi, yi, zi)) continue;  // outside — skip
@@ -740,6 +750,9 @@ std::string transitionVoxelsRoute(const std::filesystem::path&, JobRunner& runne
         stlOut.write(reinterpret_cast<const char*>(&triCount), 4);
         const uint16_t attr = 0;
         for (size_t fi = 0; fi < faceCount; ++fi) {
+            if ((fi & 4095U) == 0U && p.should_cancel()) {
+                throw std::runtime_error("cancelled");
+            }
             // Normal (float32 × 3)
             const float nx = static_cast<float>(normI8[fi * 3 + 0]);
             const float ny = static_cast<float>(normI8[fi * 3 + 1]);
@@ -778,7 +791,9 @@ std::string transitionVoxelsRoute(const std::filesystem::path&, JobRunner& runne
         }
     }
     runner.addArtifact(run.id, Artifact{"transition-voxels", stlPath.string(), "stl"});
-    setTransitionProgress(runner, run.id, "completed", 2, 2, field.engine_used, field.scalar_used);
+    setTransitionProgress(runner, run.id, "completed", 2, 2,
+                          field.engine_used, field.scalar_used, false, true);
+    runner.setCancelable(run.id, false);
     runner.setStatus(run.id, "completed");
 
     const std::string stlId = run.id + ":transition_voxels.stl";
@@ -798,7 +813,38 @@ std::string transitionVoxelsRoute(const std::filesystem::path&, JobRunner& runne
         {"normB64",  base64Encode(reinterpret_cast<const uint8_t*>(normI8.data()), normI8.size())},
         {"depthB64", base64Encode(depU8.data(), depU8.size())},
     };
-    return resp.dump();
+    return resp;
+        } catch (const std::exception& error) {
+            std::error_code cleanupError;
+            std::filesystem::remove(
+                std::filesystem::path(run.outputDir) / "transition_voxels.stl.tmp",
+                cleanupError);
+            runner.setCancelable(run.id, false);
+            const std::string engine = field.engine_used.empty() ? p.engine : field.engine_used;
+            const std::string scalar = field.scalar_used.empty() ? p.scalar_type : field.scalar_used;
+            if (std::string(error.what()) == "cancelled") {
+                setTransitionProgress(runner, run.id, "cancelled", 0, 2, engine, scalar);
+                runner.setStatus(run.id, "cancelled");
+            } else {
+                setTransitionProgress(runner, run.id, "failed", 0, 2, engine, scalar);
+                runner.setStatus(run.id, "failed");
+            }
+            throw;
+        }
+    };
+
+    if (background) {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+        return Json{{"runId", run.id}, {"status", "queued"}}.dump();
+    }
+
+    return execute().dump();
 }
 
 } // namespace fsd
