@@ -61,6 +61,7 @@ ctest --test-dir runtime/build --output-on-failure
 - 每类持久产物的实际 HTTP 生命周期与 kernel hardware telemetry
 - 安全 DSL/Orbit sequence、严格逃逸、ln-map/zoom Orbit hash 复用一致性
 - 能力注册表的每个 kind 都必须在 `compute_v1_jobs.md` 恰好有一个任务章节；公共端点和 Worker 安全不变量也有文档覆盖检查
+- 从零调用手册必须覆盖 Key、workload、DSL/sequence、transition 和硬件证明；参数化 DSL 示例通过真实 HTTP 执行，完整 JSON 示例在文档提交前做语法解析
 
 Compute v1 HTTP 合同可以独立运行：
 

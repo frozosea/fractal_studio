@@ -97,6 +97,8 @@ Vue 3 frontend
 - [x] `legacy_zoom_video` 在 Compute v1 下真正后台执行，创建立即返回 queued，保留旧 `/api/video/zoom` 默认同步行为，并支持协作取消。
 - [x] 将 Compute v1 文档提升为服务后端可独立实现的规范：公共 transport/状态/错误合同、18 个 kind 的 payload/默认值/限制/产物参考，以及 FastAPI ComputeClient、Outbox、轮询取消、artifact 摄取和硬件验收指南。
 - [x] 文档覆盖检查从 C++ 单一能力注册表提取 kind，要求 18 个任务章节一一对应，并检查全部私有端点与 Worker 安全不变量，避免新增能力后文档静默漏项。
+- [x] 补齐从零调用手册：明确服务 Key 由部署方生成并双端注入，不存在用户申请端点；解释 job kind 与 benchmark workload 的区别，并给出 preview/run/poll/cancel/download、参数化 DSL、M/B sequence、transition rotation/zoom/mesh、HS、special points 和 benchmark 的可复制请求。
+- [x] 修正 DSL 文档中 `parameters` 被误写成数组的问题；规范为 object，并用真实 HTTP 验证实数及 `{re,im}` 复数参数。
 
 ### C2 — 安全 DSL 与 Orbit Program
 
@@ -202,6 +204,8 @@ Vue 3 frontend
 | 2026-07-23 | Service-backend documentation handoff | normative transport contract + 18-kind job reference + FastAPI/Outbox integration guide; registry-driven documentation audit | 3/3 documentation checks passed |
 | 2026-07-23 | Post-documentation real HTTP regression | `pytest -q backend/src/tests/compute_v1 --backend-binary=backend/build/fractal_studio_backend --studio-root=.` | 63/63 passed in 21.75s |
 | 2026-07-23 | Documentation handoff final regression | `ctest --test-dir backend/build --output-on-failure`; from `platform-backend/`, `python -m pytest -q tests` | 9/9 CTest (including real HTTP); 5/5 Platform passed |
+| 2026-07-23 | Compute cookbook usability | Key/workload/DSL/sequence/transition cookbook; parse every complete JSON block; real HTTP parameterized DSL preview | 8/8 JSON examples valid; 4/4 documentation checks; focused HTTP passed |
+| 2026-07-23 | Post-cookbook Compute regression | full Compute pytest and CTest | 65/65 pytest in 26.91s; 9/9 CTest in 25.31s |
 
 ## Commit Log / 提交记录
 
@@ -235,6 +239,8 @@ Vue 3 frontend
 | `5a6ad7b` | 移除未使用且与 Three 冲突的 model-viewer，更新 lockfile/PostCSS 并恢复可重复前端安装。 |
 | `af961ba` | 发布服务后端可独立实施的 Compute transport 合同、18-kind 任务参考和 Platform Worker 对接指南。 |
 | `89fa4ce` | 增加能力注册表驱动的文档覆盖测试，并从项目/Compute 文档入口链接新合同。 |
+| `d63f893` | 增加从 Key 配置到各玩法真实请求的 Compute v1 调用手册，并修正 DSL parameters 示例。 |
+| `7d4da38` | 自动检查调用手册关键内容，并通过真实 HTTP 验证参数化 DSL 请求。 |
 
 ## Delivery Rules / 交付规则
 
