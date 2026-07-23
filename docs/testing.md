@@ -60,6 +60,7 @@ ctest --test-dir runtime/build --output-on-failure
 - Compute v1 鉴权、capabilities、预览、异步 run、轮询、取消、manifest、SHA-256 和 Range
 - 每类持久产物的实际 HTTP 生命周期与 kernel hardware telemetry
 - 安全 DSL/Orbit sequence、严格逃逸、ln-map/zoom Orbit hash 复用一致性
+- 能力注册表的每个 kind 都必须在 `compute_v1_jobs.md` 恰好有一个任务章节；公共端点和 Worker 安全不变量也有文档覆盖检查
 
 Compute v1 HTTP 合同可以独立运行：
 

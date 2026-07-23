@@ -2,7 +2,7 @@
 
 `backend/` 是私有 C++ Compute 服务。它负责分形数学、CPU/GPU 执行、Compute run 生命周期和临时产物；用户、订单、配额、资产与市场数据属于 `platform-backend/`。
 
-Compute v1 的 HTTP 合同见 [Compute v1 Contract](../docs/compute_v1_contract.md)，商业化实施状态见 [Commercialization Implementation](../docs/commercialization_implementation.md)。
+服务后端从 [Compute v1 Contract](../docs/compute_v1_contract.md) 开始，逐任务字段和产物见 [Compute v1 Jobs](../docs/compute_v1_jobs.md)，Worker 实现流程见 [Platform–Compute Integration](../docs/platform_compute_integration.md)。商业化实施状态见 [Commercialization Implementation](../docs/commercialization_implementation.md)。
 
 ## Build
 
@@ -76,4 +76,3 @@ runtime/compute-test-venv/bin/python -m pytest -q \
 Compute 使用 `runtime/db/fractal_studio.sqlite` 保存本机 run 状态，产物位于 `runtime/runs/`。它们不是商业事实来源；Platform Worker 校验 manifest 和 SHA-256 后再把商业资产上传对象存储。
 
 进程重启时 JobRunner 会协调本地未完成状态。Platform 仍须把提交视为至少一次投递，并使用稳定 `idempotencyKey`；相同 key 会返回相同 Compute run。
-
