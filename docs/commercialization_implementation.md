@@ -4,6 +4,8 @@
 
 最后更新：2026-07-23
 
+2026-07-24 补充：Platform 协作者的实际 ComputeClient 以 C++ 私有 `/api/*` 为准。当前适配工作从 `platform_backend@81bc3fc` 派生，实施状态见 [C++ Compute `/api` 生产合同实施记录](compute_api_contract_implementation.md)；本批次不修改 Platform Backend。
+
 ## Status Legend / 状态说明
 
 - `pending`：尚未开始。
