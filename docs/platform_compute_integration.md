@@ -149,6 +149,8 @@ else:
 
 不要用 `progress.percent==100`、artifact 出现或 `kernelReported` 单独判断完成。
 
+Compute 的 `percent` 是 stage-local 且 optional：视频进入新阶段时可以从 100 重新变成 0，special-points 主要报告 accepted/seed 数而没有统一 percent。Platform 应保存完整 `compute_progress`，再按 [调用手册进度规则](compute_v1_cookbook.md#34-进度条怎样做)派生面向 UI 的单调展示值。当前底座只保存 `progress_percent` 仍不足以支撑正式产品的阶段标签、ETA 和取消状态，M2 DTO 需要补齐这些派生字段。
+
 ### 6.4 Cancel race
 
 用户取消只更新 Platform job + outbox，不直接从 API route 阻塞等待 Compute。Worker 转发取消后继续轮询：
@@ -201,6 +203,8 @@ await object_writer.commit()
 ```
 
 对象 key 必须由 Platform 自己生成，例如 `jobs/<platform_job_id>/<artifact_uuid>`；不要直接使用 Compute `name`。上传成功后在一个事务中写接收记录、manifest、终态和 Outbox 后续事件。失败重试时按 sha256 幂等复用或清理未提交 multipart upload。
+
+`map_image` 的商业 PNG 固定从 completed manifest 中选择 `mediaType=image/png` 且 artifact ID 以 `:map.png` 结尾的项；同步 preview 的 RGBA8 不能被当作 PNG Asset。二维旋转由不可变配方中的 `rotationDeg` 表达，不应由对象存储摄取阶段再做图像旋转。
 
 底座阶段只保存 manifest，不创建商业 Asset；M3 的资产摄取在校验闭环之后执行。
 

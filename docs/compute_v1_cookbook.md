@@ -234,6 +234,144 @@ curl -sS -X POST \
 
 取消响应的 `accepted=true` 不是终态，仍要继续轮询。
 
+### 3.4 进度条怎样做
+
+轮询 `GET /compute/v1/runs/{id}`，读取 `data.status` 和 `data.progress`：
+
+```json
+{
+  "status": "running",
+  "progress": {
+    "taskType": "video_export",
+    "stage": "video_warp_encode",
+    "current": 42,
+    "total": 120,
+    "percent": 35.0,
+    "elapsedMs": 8120,
+    "estimatedRemainingMs": 15000,
+    "cancelable": true,
+    "kernelReported": false,
+    "currentFrame": 42,
+    "totalFrames": 120
+  }
+}
+```
+
+字段含义：
+
+| 字段 | 是否总有 | UI 用法 |
+|---|:---:|---|
+| `stage` | 通常 | 当前阶段机器名；UI 用自己的本地化标签，不直接展示下划线字符串 |
+| `current`, `total` | 否 | 当前阶段单位，可能是 frame、row、candidate、mesh step，不是统一工作量 |
+| `percent` | 否 | **当前阶段**百分比，不保证跨 stage 单调 |
+| `elapsedMs` | 通常 | Compute run 已耗时，不含 Platform 排队时间 |
+| `estimatedRemainingMs` | 否 | 只对当前阶段估算；初期或不可估算时为 null |
+| `cancelable` | 否 | Compute 当前是否仍可协作取消；用户取消入口还要结合平台状态 |
+| `kernelReported` | 否 | kernel 完成证据，不是进度完成判断 |
+| `details` | 否 | kind-specific 观测对象，保存原文但不要强类型依赖全部键 |
+
+主要 stage：
+
+| kind | 正常阶段顺序 |
+|---|---|
+| `map_image` | `queued -> render -> png_encode -> completed` |
+| `ln_map` | `queued -> render -> completed` |
+| `zoom_video` | `queued -> final_frame -> ln_map_equalization? -> ln_map/ln_map_render -> video_warp_encode` |
+| `legacy_zoom_video` | `queued -> video_warp_encode` |
+| `transition_video` | `queued -> transition_preview -> transition_render` |
+| `hs_field` | `queued -> field -> completed` |
+| `hs_mesh` | `queued -> field_and_mesh -> completed` |
+| `transition_mesh` | `queued -> volume -> marching_cubes -> completed` |
+| `transition_voxels` | `queued -> volume -> voxel_mesh -> completed` |
+| `special_points_enumerate` | `queued -> enumerating -> completed` |
+| `special_points_search` | `queued -> searching -> completed` |
+| `benchmark` | `queued -> running -> completed` |
+
+任意任务都可能转入 `failed` 或 `cancelled`。视频复用已有 ln-map 时会跳过某些阶段；因此不能用固定阶段数量判断完成。
+
+推荐 UI 同时展示“阶段标签 + 阶段内进度”。如果产品只允许一根总进度条，权重属于 Platform/UI 策略而不是 Compute 数学事实，例如：
+
+```text
+zoom:       final_frame 0..10, ln-map 10..60, encode 60..99, terminal 100
+transition: preview 0..10, render 10..99, terminal 100
+3D mesh:    volume 0..70, meshing 70..99, terminal 100
+```
+
+切换阶段时可以用 `max(previousDisplayed, mappedStagePercent)` 避免视觉倒退，但数据库仍应保存 Compute 原始 progress。只有 `data.status=completed` 才显示 100%；failed/cancelled 即使此前 99% 也必须显示对应终态，不能伪装完成。
+
+Platform 当前底座的 `RenderJobView` 只有 `progress_percent`。正式 M2 API 至少还需要从内部保存的 Compute progress 派生 `stage`、本地化 stage label 所需的稳定 code、`current/total`、`estimatedRemainingMs` 和 `cancelable`；公共响应包络仍遵守商业 PDF。
+
+### 3.5 明确导出 `.png`
+
+RGBA preview 不会生成 PNG。要获得可保存、可上架的 `.png`，必须创建异步 `map_image` run。下面是一个带二维旋转的 PNG 请求：
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "map_image",
+  "idempotencyKey": "rotated-png-0001",
+  "payload": {
+    "centerRe": -0.75,
+    "centerIm": 0.0,
+    "scale": 3.0,
+    "rotationDeg": 30.0,
+    "width": 1920,
+    "height": 1080,
+    "iterations": 1000,
+    "variant": "mandelbrot",
+    "colorMap": "inferno",
+    "engine": "auto",
+    "scalarType": "auto"
+  }
+}
+```
+
+将该 JSON POST 到 `/compute/v1/runs`，按第 3.3 节轮询。完成 manifest 中固定有一个 `map.png`，逻辑 kind 为 `image`，MIME 为 `image/png`。不要使用创建响应里的 legacy `imagePath`。
+
+从 manifest 精确选择并下载：
+
+```bash
+export PNG_ARTIFACT_ID=$(jq -r '
+  .artifacts[]
+  | select(.mediaType == "image/png" and (.artifactId | endswith(":map.png")))
+  | .artifactId
+' manifest.json)
+
+curl -sS --get "$COMPUTE_BASE_URL/compute/v1/artifacts" \
+  -H "Authorization: Bearer $COMPUTE_SERVICE_KEY" \
+  --data-urlencode "artifactId=$PNG_ARTIFACT_ID" \
+  -o result.png
+
+file result.png
+sha256sum result.png
+```
+
+必须校验 manifest 的 `sizeBytes` 和 `sha256` 后，Platform 才能把它上传对象存储并在 M3 创建 Asset。服务后端不能让浏览器直接使用 Compute artifact URL。
+
+### 3.6 二维 `rotationDeg`
+
+`rotationDeg` 围绕 viewport 的 `centerRe/centerIm` 旋转**采样坐标轴**，不会改变中心、scale、图片尺寸或迭代公式。令屏幕中心偏移为 `(dx, dy)`，其中 dy 向数学平面的正虚轴为正：
+
+```text
+sampleRe = centerRe + dx*cos(a) - dy*sin(a)
+sampleIm = centerIm + dx*sin(a) + dy*cos(a)
+a = rotationDeg * pi / 180
+```
+
+因此正角度把屏幕的正 x 采样轴转向正虚轴；从“固定分形内容相对画布”的视觉效果看，内容会向相反方向转。前端若提供顺/逆时针按钮，应以实际画布验证文案，不要只按 CSS transform 的方向猜。
+
+建议 Platform 接受任意有限度数并规范化到 `[-180, 180)` 保存；Compute 本身通过 sin/cos 周期处理角度。`rotationDeg=0` 是无旋转。
+
+它与 transition 参数完全不同：
+
+| 字段 | 含义 |
+|---|---|
+| `rotationDeg` | 在当前二维 viewport/slice 内绕中心旋转画面采样轴 |
+| `thetaDeg` | 选择 axis transition 空间中的固定切片角 |
+| `thetaStartDeg/thetaEndDeg` | transition rotation 视频的切片角动画范围 |
+
+`rotationDeg` 可用于 map/raw field、zoom 视频画面、transition 视频的当前 slice 和 special-point viewport。非零二维旋转会禁用 map 的 fixed-point 整数快路径；深 zoom 时实际 scalar/engine 可能回退，所以必须读取 `hardwareExecution`，不能假定请求的 `fx64` 一定执行。
+
 ## 4. 自定义公式到底是什么
 
 DSL 的 `source` 定义**一次迭代输出**：
