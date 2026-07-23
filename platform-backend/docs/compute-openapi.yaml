@@ -1,0 +1,282 @@
+openapi: 3.1.0
+info:
+  title: Fractal Compute private API
+  version: 1.0.0
+  description: |
+    Required production contract between Platform worker and C++ Compute.
+    Current C++ server must implement service authentication and clientJobId idempotency
+    before Platform M2/M7 is built against this contract.
+servers:
+  - url: http://compute.internal
+security:
+  - ComputeServiceKey: []
+paths:
+  /api/map/render-inline:
+    post:
+      operationId: renderMapInline
+      summary: Bounded non-persistent RGBA8 map preview
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MapRequest' }
+      responses:
+        '200':
+          description: Raw RGBA8 pixels, exactly width * height * 4 bytes
+          headers:
+            X-FSD-Width: { schema: { type: integer, minimum: 1, maximum: 1024 } }
+            X-FSD-Height: { schema: { type: integer, minimum: 1, maximum: 1024 } }
+            X-FSD-Pixel-Format: { schema: { type: string, const: rgba8 } }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '204': { description: Preview was preempted or cancelled; empty body }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '413': { $ref: '#/components/responses/Problem413' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+  /api/map/render:
+    post:
+      operationId: createMapRender
+      summary: Create durable PNG render
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/MapRequest'
+                - type: object
+                  required: [clientJobId, stillExport, background]
+                  properties:
+                    clientJobId: { $ref: '#/components/schemas/ClientJobId' }
+                    stillExport: { type: boolean, const: true }
+                    background: { type: boolean, const: true }
+      responses:
+        '200': { $ref: '#/components/responses/RunAccepted' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '409': { $ref: '#/components/responses/Problem409' }
+        '413': { $ref: '#/components/responses/Problem413' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+  /api/video/export:
+    post:
+      operationId: createVideoExport
+      summary: Create durable MP4 video render
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/VideoRequest'
+                - type: object
+                  required: [clientJobId]
+                  properties: { clientJobId: { $ref: '#/components/schemas/ClientJobId' } }
+      responses:
+        '200': { $ref: '#/components/responses/RunAccepted' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '409': { $ref: '#/components/responses/Problem409' }
+        '413': { $ref: '#/components/responses/Problem413' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+  /api/hs/mesh:
+    post:
+      operationId: createHsMesh
+      summary: Create durable GLB and STL mesh render
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/MeshRequest'
+                - type: object
+                  required: [clientJobId]
+                  properties: { clientJobId: { $ref: '#/components/schemas/ClientJobId' } }
+      responses:
+        '200': { $ref: '#/components/responses/RunAccepted' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '409': { $ref: '#/components/responses/Problem409' }
+        '413': { $ref: '#/components/responses/Problem413' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+  /api/transition/mesh:
+    post:
+      operationId: createTransitionMesh
+      summary: Create durable GLB and STL transition mesh render
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/TransitionMeshRequest'
+                - type: object
+                  required: [clientJobId]
+                  properties: { clientJobId: { $ref: '#/components/schemas/ClientJobId' } }
+      responses:
+        '200': { $ref: '#/components/responses/RunAccepted' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '409': { $ref: '#/components/responses/Problem409' }
+        '413': { $ref: '#/components/responses/Problem413' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+  /api/runs/status:
+    get:
+      operationId: getRunStatus
+      parameters:
+        - name: runId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: Current durable run state
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/RunStatus' } }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+  /api/runs/cancel:
+    post:
+      operationId: cancelRun
+      summary: Only supported production cancellation endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [runId]
+              properties: { runId: { type: string, minLength: 1, maxLength: 128 } }
+      responses:
+        '200':
+          description: Cancellation request accepted; polling determines terminal state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runId, status]
+                properties:
+                  runId: { type: string }
+                  status: { type: string, const: cancel_requested }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+components:
+  securitySchemes:
+    ComputeServiceKey:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-service-key
+  schemas:
+    ClientJobId: { type: string, format: uuid, description: Platform render_jobs.id; repeat returns same runId }
+    MapRequest:
+      type: object
+      required: [width, height, iterations, variant, centerRe, centerIm, scale]
+      properties:
+        centerRe: { type: number, finite: true }
+        centerIm: { type: number, finite: true }
+        scale: { type: number, exclusiveMinimum: 0 }
+        width: { type: integer, minimum: 1, maximum: 4096 }
+        height: { type: integer, minimum: 1, maximum: 4096 }
+        iterations: { type: integer, minimum: 1, maximum: 1000000 }
+        variant: { type: string, maxLength: 64 }
+        colorMap: { type: string, maxLength: 64 }
+        julia: { type: boolean }
+        juliaRe: { type: number }
+        juliaIm: { type: number }
+        bailout: { type: number, exclusiveMinimum: 0 }
+        engine: { type: string, enum: [auto, cpu, cuda] }
+        scalarType: { type: string, enum: [auto, float, double, long_double] }
+        requestId: { type: string, format: uuid }
+    VideoRequest:
+      allOf:
+        - $ref: '#/components/schemas/MapRequest'
+        - type: object
+          required: [fps, durationSeconds]
+          properties:
+            fps: { type: integer, minimum: 1, maximum: 60 }
+            durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 30 }
+    MeshRequest:
+      type: object
+      required: [centerRe, centerIm, scale, resolution, iterations, variant]
+      properties:
+        centerRe: { type: number }
+        centerIm: { type: number }
+        scale: { type: number, exclusiveMinimum: 0 }
+        resolution: { type: integer, minimum: 8, maximum: 1024 }
+        iterations: { type: integer, minimum: 1, maximum: 1000000 }
+        variant: { type: string, maxLength: 64 }
+        heightScale: { type: number }
+        heightClamp: { type: number, exclusiveMinimum: 0 }
+        bailout: { type: number, exclusiveMinimum: 0 }
+    TransitionMeshRequest:
+      type: object
+      required: [centerX, centerY, centerZ, extent, resolution, iterations, transitionFrom, transitionTo]
+      properties:
+        centerX: { type: number }
+        centerY: { type: number }
+        centerZ: { type: number }
+        extent: { type: number, exclusiveMinimum: 0 }
+        resolution: { type: integer, minimum: 8, maximum: 1024 }
+        iterations: { type: integer, minimum: 1, maximum: 10000 }
+        bailout: { type: number, exclusiveMinimum: 0 }
+        transitionFrom: { type: string, maxLength: 64 }
+        transitionTo: { type: string, maxLength: 64 }
+        iso: { type: number }
+        engine: { type: string, enum: [auto, cpu, cuda] }
+        scalarType: { type: string, enum: [fp32, fp64] }
+    RunAccepted:
+      type: object
+      required: [runId, clientJobId, status]
+      properties:
+        runId: { type: string }
+        clientJobId: { $ref: '#/components/schemas/ClientJobId' }
+        status: { type: string, enum: [queued, running, completed, failed, cancelled] }
+    RunStatus:
+      allOf:
+        - $ref: '#/components/schemas/RunAccepted'
+        - type: object
+          required: [progressPercent, artifacts]
+          properties:
+            progressPercent: { type: integer, minimum: 0, maximum: 100 }
+            error: { type: string, maxLength: 512 }
+            artifacts:
+              type: array
+              items:
+                type: object
+                required: [artifactId, purpose, mediaType, sizeBytes]
+                properties:
+                  artifactId: { type: string }
+                  purpose: { type: string, enum: [master, preview_source] }
+                  mediaType: { type: string, enum: [image/png, video/mp4, model/gltf-binary, model/stl] }
+                  sizeBytes: { type: integer, minimum: 1, maximum: 524288000 }
+    Problem:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string, format: uuid }
+  responses:
+    Problem400: { description: Invalid request, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Problem401: { description: Missing or invalid service key, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Problem403: { description: Service key has insufficient scope, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Problem404: { description: Run not found, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Problem409: { description: Invalid run state or saturated Compute resource, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Problem413: { description: Request or artifact limit exceeded, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Problem429: { description: Compute rate limit exceeded, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Problem500: { description: Compute failure, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }

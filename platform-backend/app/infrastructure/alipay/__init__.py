@@ -1,0 +1,2 @@
+"""Alipay payment adapter."""
+

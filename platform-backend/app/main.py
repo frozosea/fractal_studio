@@ -1,37 +1,44 @@
-from __future__ import annotations
+"""ASGI application entry point."""
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+import uuid
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.auth.router import router as auth_router
 from app.core.config import get_settings
-from app.core.http import request_id_middleware
-from app.studio.router import router as studio_router
+from app.core.request_context import request_id_var
 
 
-app = FastAPI(title="Fractal Studio Platform", version="0.1.0")
-app.middleware("http")(request_id_middleware)
-app.include_router(studio_router)
+app = FastAPI(title="Fractal Platform API", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(get_settings().trusted_origins),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "Idempotency-Key", "X-CSRF-Token", "X-Request-ID"],
+)
+app.include_router(auth_router)
 
 
-@app.get("/health/live")
-async def live() -> dict:
-    return {"status": "ok", "service": "fractal-studio-platform"}
+@app.middleware("http")
+async def assign_request_id(request, call_next):
+    supplied = request.headers.get("x-request-id")
+    try:
+        request_id = str(uuid.UUID(supplied)) if supplied else str(uuid.uuid4())
+    except ValueError:
+        request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    token = request_id_var.set(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        request_id_var.reset(token)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
-@app.get("/health/ready")
-async def ready() -> dict:
-    settings = get_settings()
-    return {
-        "status": "ok",
-        "environment": settings.environment,
-        "foundationRoutesEnabled": settings.foundation_routes_enabled,
-    }
-
-
-@app.exception_handler(HTTPException)
-async def http_error(_: Request, error: HTTPException) -> JSONResponse:
-    if isinstance(error.detail, dict) and "code" in error.detail:
-        payload = error.detail
-    else:
-        payload = {"code": "HTTP_ERROR", "message": str(error.detail), "details": {}}
-    return JSONResponse(status_code=error.status_code, content={"error": payload})
+@app.get("/healthz", tags=["system"])
+async def healthz() -> dict[str, str]:
+    """Container liveness endpoint; does not expose dependencies or secrets."""
+    return {"status": "ok"}

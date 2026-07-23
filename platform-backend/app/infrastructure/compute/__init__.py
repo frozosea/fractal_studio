@@ -1,2 +1,2 @@
-"""Private C++ Compute adapter."""
+"""C++ Compute adapters."""
 

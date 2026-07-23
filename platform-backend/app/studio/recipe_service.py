@@ -1,0 +1,2 @@
+"""Canonical fractal structure lifecycle."""
+

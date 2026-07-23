@@ -1,45 +1,55 @@
-# Fractal Studio Platform Backend
+# Fractal Platform Backend
 
-商业平台的模块化 FastAPI 单体。浏览器最终只访问该服务；C++ Compute 通过私网 `/compute/v1/*` 契约调用。
+MVP modular-monolith skeleton. Architecture contract: [platform-backend-spec.md](docs/platform-backend-spec.md).
 
-Compute 服务 Key 不是在线申请的用户 Key。部署方生成随机共享密钥并同时注入 C++ 的 `FSD_COMPUTE_SERVICE_KEY` 与本服务 API/Worker 的 `COMPUTE_SERVICE_KEY`。从零配置和各类请求示例见 [Compute v1 调用手册](../docs/compute_v1_cookbook.md)。
-
-当前里程碑仅包含 M2/M7 架构底座：开发/测试预览、持久渲染任务、PostgreSQL Outbox、Compute 轮询/取消和 manifest 校验。生产环境会在 M1 会话完成前强制关闭这些临时 Studio 路由。
-
-## Local stack
-
-从仓库根目录启动：
+## Development start
 
 ```bash
+cp .env.example .env
 docker compose -f docker-compose.dev.yml up --build
 ```
 
-服务：
+- API: `http://localhost:18000/healthz`, OpenAPI UI: `http://localhost:18000/docs`
+- PostgreSQL: `localhost:15432`
+- Redis: `localhost:16379`
+- MinIO API: `http://localhost:19000`, console: `http://localhost:19001`
 
-- Platform API: `http://127.0.0.1:8000`
-- private Compute development port: `http://127.0.0.1:18080`
-- PostgreSQL: `127.0.0.1:5432`
-- Redis: `127.0.0.1:6379`
-- MinIO API/console: `127.0.0.1:9000` / `9001`
+`migrate` applies `alembic upgrade head` before API/worker start and watches `migrations/` for
+new revisions. API uses Uvicorn reload; worker uses `watchfiles`; source changes apply without
+image rebuild. Rebuild only after changing `pyproject.toml` or `uv.lock`.
 
-开发预览：
+C++ Compute is outside this Compose project. Run it separately and set `COMPUTE_BASE_URL`; Docker
+can reach a host instance through `host.docker.internal`.
 
-```bash
-curl -X POST http://127.0.0.1:8000/v1/studio/preview \
-  -H 'Content-Type: application/json' \
-  -d '{"kind":"map_image","payload":{"width":64,"height":64,"iterations":64}}' \
-  --output preview.rgba
-```
+## Development user
 
-创建任务需要 `Idempotency-Key`：
+After Compose starts, create or reuse a local user and persist its cookie jar:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/render-jobs \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: example-map-0001' \
-  -d '{"kind":"map_image","payload":{"width":256,"height":256,"iterations":256}}'
+./scripts/dev-user.sh
 ```
 
-## Production guard
+The script uses real `POST /v1/auth/register` / `POST /v1/auth/login` endpoints, then writes
+gitignored local files:
 
-`APP_ENV=production` 时 `FOUNDATION_ROUTES_ENABLED` 必须为 false，否则进程拒绝启动。生产 Compute 必须配置非空 `COMPUTE_SERVICE_KEY`，且 Compute 端必须使用相同的 `FSD_COMPUTE_SERVICE_KEY`。
+- `scripts/.dev-user.env` — email and generated/provided development password;
+- `scripts/.dev-user.cookies` — opaque `fs_session` cookie used by the API.
+
+On first run it registers the user. On later runs it logs in with saved credentials, updates the
+cookie jar, and verifies `GET /v1/me`. These files contain local credentials: use only for
+development and never commit or share them.
+
+Create a particular local user or point script at another API:
+
+```bash
+DEV_USER_EMAIL=alice@example.test DEV_USER_PASSWORD='local-password' ./scripts/dev-user.sh
+API_URL=http://localhost:18000 ./scripts/dev-user.sh
+```
+
+Use saved session for manual authenticated requests:
+
+```bash
+curl --noproxy '*' -fsS \
+  -b scripts/.dev-user.cookies \
+  http://localhost:18000/v1/me
+```

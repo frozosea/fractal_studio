@@ -1,11 +1,14 @@
-FROM python:3.12-slim
+FROM ghcr.io/astral-sh/uv:0.11.31-python3.12-trixie-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_DEV=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
+
 WORKDIR /app
 
-COPY platform-backend/pyproject.toml /app/pyproject.toml
-COPY platform-backend/alembic.ini /app/alembic.ini
-COPY platform-backend/app /app/app
-RUN pip install --no-cache-dir .
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-install-project
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+COPY . ./
