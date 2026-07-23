@@ -79,3 +79,13 @@ def zoom_payload() -> dict[str, Any]:
         "colorMap": "classic_cos", "cudaWarp": False,
         "orbitProgram": sequence_program(),
     }
+
+
+def transition_mesh_payload() -> dict[str, Any]:
+    return {
+        "centerX": 0.0, "centerY": 0.0, "centerZ": 0.0,
+        "extent": 2.0, "resolution": 16, "iterations": 32,
+        "bailout": 2.0, "transitionFrom": "mandelbrot",
+        "transitionTo": "burning_ship", "engine": "openmp",
+        "scalarType": "fp32", "iso": 0.5,
+    }

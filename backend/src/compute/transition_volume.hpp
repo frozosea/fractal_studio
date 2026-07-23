@@ -14,6 +14,7 @@
 
 #include <string>
 #include <vector>
+#include <functional>
 
 namespace fsd::compute {
 
@@ -40,6 +41,7 @@ struct TransitionVolumeParams {
     // runtime capabilities allow them.
     std::string engine = "auto";
     std::string scalar_type = "fp32";
+    std::function<bool()> should_cancel;
 };
 
 McField buildTransitionVolume(const TransitionVolumeParams& p);

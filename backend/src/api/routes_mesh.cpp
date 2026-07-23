@@ -136,7 +136,8 @@ void setTransitionProgress(
     int total,
     const std::string& engine,
     const std::string& scalar,
-    bool cancelable = false
+    bool cancelable = false,
+    bool kernelReported = false
 ) {
     const double percent = total > 0
         ? (100.0 * static_cast<double>(current) / static_cast<double>(total))
@@ -149,6 +150,7 @@ void setTransitionProgress(
         {"percent", percent},
         {"engine", engine},
         {"scalar", scalar},
+        {"kernelReported", kernelReported},
         {"elapsedMs", runner.runElapsedMs(runId)},
         {"estimatedRemainingMs", nullptr},
         {"cancelable", cancelable},
@@ -485,32 +487,51 @@ std::string transitionMeshRoute(const std::filesystem::path&, JobRunner& runner,
     if (!(p.bailout_sq > 0.0) || !std::isfinite(p.bailout_sq)) throw std::runtime_error("invalid bailoutSq");
 
     auto run = runner.createRun("transition-mesh", body);
-    auto transitionLease = acquireTransitionLease(runner, run.id);
-    (void)transitionLease;
-    runner.setStatus(run.id, "running");
-    runner.setCancelable(run.id, false);
-    setTransitionProgress(runner, run.id, "volume", 0, 2, p.engine, p.scalar_type);
+    const bool background = j.value("background", false);
+    auto transitionLease = std::make_shared<ResourceManager::Lease>(
+        acquireTransitionLease(runner, run.id));
+    const auto cancelToken = runner.cancelToken(run.id);
+    p.should_cancel = [cancelToken]() {
+        return cancelToken->load(std::memory_order_relaxed);
+    };
+    runner.setCancelable(run.id, true);
+    setTransitionProgress(runner, run.id, "queued", 0, 2,
+                          p.engine, p.scalar_type, true);
 
-    double fieldMs = 0.0, mcMs = 0.0;
-    size_t vc = 0, tc = 0;
-    std::string fieldEngineUsed = "openmp_fp32";
-    std::string fieldScalarUsed = "fp32";
-
-    try {
+    struct TransitionMeshResult {
+        double fieldMs = 0.0;
+        double marchingCubesMs = 0.0;
+        size_t vertexCount = 0;
+        size_t triangleCount = 0;
+        std::string engine = "openmp_fp32";
+        std::string scalar = "fp32";
+    };
+    auto execute = [=, &runner]() mutable -> TransitionMeshResult {
+        (void)transitionLease;
+        runner.setStatus(run.id, "running");
+        setTransitionProgress(runner, run.id, "volume", 0, 2,
+                              p.engine, p.scalar_type, true);
+        TransitionMeshResult result;
+        try {
         const auto t0 = std::chrono::steady_clock::now();
         compute::McField field = compute::buildTransitionVolume(p);
-        fieldEngineUsed = field.engine_used;
-        fieldScalarUsed = field.scalar_used;
+        result.engine = field.engine_used;
+        result.scalar = field.scalar_used;
         const auto t1 = std::chrono::steady_clock::now();
-        setTransitionProgress(runner, run.id, "marching_cubes", 1, 2, fieldEngineUsed, fieldScalarUsed);
+        setTransitionProgress(runner, run.id, "marching_cubes", 1, 2,
+                              result.engine, result.scalar, true);
+        if (p.should_cancel()) throw std::runtime_error("cancelled");
         compute::Mesh mesh = compute::marchingCubes(field, static_cast<float>(iso));
+        if (p.should_cancel()) throw std::runtime_error("cancelled");
         const auto t2 = std::chrono::steady_clock::now();
-        fieldMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        mcMs    = std::chrono::duration<double, std::milli>(t2 - t1).count();
-        vc = mesh.vertices.size();
-        tc = mesh.triangleCount();
+        result.fieldMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        result.marchingCubesMs = std::chrono::duration<double, std::milli>(t2 - t1).count();
+        result.vertexCount = mesh.vertices.size();
+        result.triangleCount = mesh.triangleCount();
 
-        if (vc == 0) throw std::runtime_error("empty mesh (iso value gives no surface)");
+        if (result.vertexCount == 0) {
+            throw std::runtime_error("empty mesh (iso value gives no surface)");
+        }
 
         const std::filesystem::path glbPath =
             std::filesystem::path(run.outputDir) / "transition_mesh.glb";
@@ -521,13 +542,38 @@ std::string transitionMeshRoute(const std::filesystem::path&, JobRunner& runner,
 
         runner.addArtifact(run.id, Artifact{"transition-mesh", glbPath.string(), "mesh"});
         runner.addArtifact(run.id, Artifact{"transition-mesh", stlPath.string(), "stl"});
-        setTransitionProgress(runner, run.id, "completed", 2, 2, fieldEngineUsed, fieldScalarUsed);
+        setTransitionProgress(runner, run.id, "completed", 2, 2,
+                              result.engine, result.scalar, false, true);
+        runner.setCancelable(run.id, false);
         runner.setStatus(run.id, "completed");
-    } catch (const std::exception&) {
-        setTransitionProgress(runner, run.id, "failed", 0, 2, fieldEngineUsed, fieldScalarUsed);
-        runner.setStatus(run.id, "failed");
-        throw;
+        return result;
+        } catch (const std::exception& error) {
+            runner.setCancelable(run.id, false);
+            if (std::string(error.what()) == "cancelled") {
+                setTransitionProgress(runner, run.id, "cancelled", 0, 2,
+                                      result.engine, result.scalar);
+                runner.setStatus(run.id, "cancelled");
+            } else {
+                setTransitionProgress(runner, run.id, "failed", 0, 2,
+                                      result.engine, result.scalar);
+                runner.setStatus(run.id, "failed");
+            }
+            throw;
+        }
+    };
+
+    if (background) {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+        return Json{{"runId", run.id}, {"status", "queued"}}.dump();
     }
+
+    const TransitionMeshResult result = execute();
 
     const std::string glbId = run.id + ":transition_mesh.glb";
     const std::string stlId = run.id + ":transition_mesh.stl";
@@ -538,12 +584,12 @@ std::string transitionMeshRoute(const std::filesystem::path&, JobRunner& runner,
         {"stlArtifactId", stlId},
         {"glbUrl",     "/api/artifacts/content?artifactId=" + glbId},
         {"stlUrl",     "/api/artifacts/download?artifactId=" + stlId},
-        {"vertexCount", vc},
-        {"triangleCount", tc},
-        {"fieldMs",  fieldMs},
-        {"mcMs",     mcMs},
-        {"fieldEngineUsed", fieldEngineUsed},
-        {"fieldScalarUsed", fieldScalarUsed},
+        {"vertexCount", result.vertexCount},
+        {"triangleCount", result.triangleCount},
+        {"fieldMs",  result.fieldMs},
+        {"mcMs",     result.marchingCubesMs},
+        {"fieldEngineUsed", result.engine},
+        {"fieldScalarUsed", result.scalar},
     };
     return resp.dump();
 }

@@ -295,7 +295,10 @@ Json runPayload(Json payload, const std::string& kind,
         payload["background"] = true;
         return parseLegacyResponse(hsFieldRoute(repoRoot, runner, payload.dump()), kind);
     }
-    if (kind == "transition_mesh") return parseLegacyResponse(transitionMeshRoute(repoRoot, runner, payload.dump()), kind);
+    if (kind == "transition_mesh") {
+        payload["background"] = true;
+        return parseLegacyResponse(transitionMeshRoute(repoRoot, runner, payload.dump()), kind);
+    }
     if (kind == "transition_voxels") return parseLegacyResponse(transitionVoxelsRoute(repoRoot, runner, payload.dump()), kind);
     if (kind == "special_points_enumerate") {
         return parseLegacyResponse(specialPointsEnumerateRoute(repoRoot, runner, payload.dump()), kind);

@@ -29,6 +29,14 @@ namespace fsd::compute {
 
 namespace {
 
+bool transition_cancel_requested(const TransitionVolumeParams& p) {
+    return p.should_cancel && p.should_cancel();
+}
+
+void throw_if_transition_cancelled(const TransitionVolumeParams& p) {
+    if (transition_cancel_requested(p)) throw std::runtime_error("cancelled");
+}
+
 inline float transition_real_projection_f32(Variant v, float x2, float axis2) {
     const bool post_abs =
         v == Variant::Fish || v == Variant::Vase || v == Variant::Bird ||
@@ -140,6 +148,7 @@ void build_transition_range_openmp(const TransitionVolumeParams& p, int N, int z
     const int maxIter = p.iterations;
 
     for (int zi = z_begin; zi < z_end; zi++) {
+        if (transition_cancel_requested(p)) continue;
         const float z0 = zmin + (static_cast<float>(zi) + 0.5f) / static_cast<float>(N) * span;
         for (int yi = 0; yi < N; yi++) {
             const float y0 = ymin + (static_cast<float>(yi) + 0.5f) / static_cast<float>(N) * span;
@@ -153,6 +162,7 @@ void build_transition_range_openmp(const TransitionVolumeParams& p, int N, int z
                 int iter = 0;
                 bool escaped = false;
                 for (; iter < maxIter; iter++) {
+                    if ((iter & 63) == 0 && transition_cancel_requested(p)) break;
                     const float nx =
                         transition_real_projection_f32(p.from_variant, x2, y2)
                       + transition_real_projection_f32(p.to_variant,   x2, z2)
@@ -205,6 +215,7 @@ void build_transition_range_multi_openmp(const TransitionVolumeParams& p, int N,
     const int maxIter = p.iterations;
 
     for (int zi = z_begin; zi < z_end; zi++) {
+        if (transition_cancel_requested(p)) continue;
         const float z0 = zmin + (static_cast<float>(zi) + 0.5f) / static_cast<float>(N) * span;
         for (int yi = 0; yi < N; yi++) {
             const float y0 = ymin + (static_cast<float>(yi) + 0.5f) / static_cast<float>(N) * span;
@@ -224,6 +235,7 @@ void build_transition_range_multi_openmp(const TransitionVolumeParams& p, int N,
                 int iter = 0;
                 bool escaped = false;
                 for (; iter < maxIter; iter++) {
+                    if ((iter & 63) == 0 && transition_cancel_requested(p)) break;
                     float real_sum = 0.0f;
                     float influence_sum = 0.0f;
                     std::array<float, MAX_TRANSITION_LEGS> next_axis{};
@@ -344,6 +356,7 @@ bool build_transition_hybrid_cuda_cpu(const TransitionVolumeParams& p, int N, Mc
 
     std::thread gpu_thread([&]() {
         while (true) {
+            if (transition_cancel_requested(p)) break;
             const int z0 = next_z.fetch_add(gpu_batch);
             if (z0 >= N) break;
             const int zCount = std::min(gpu_batch, N - z0);
@@ -371,6 +384,7 @@ bool build_transition_hybrid_cuda_cpu(const TransitionVolumeParams& p, int N, Mc
     for (int i = 0; i < cpu_threads; ++i) {
         workers.emplace_back([&]() {
             while (true) {
+                if (transition_cancel_requested(p)) break;
                 const int z0 = next_z.fetch_add(1);
                 if (z0 >= N) break;
                 render_cpu_range(z0, 1);
@@ -414,6 +428,7 @@ bool build_transition_hybrid_cuda_cpu(const TransitionVolumeParams& p, int N, Mc
 } // namespace
 
 McField buildTransitionVolume(const TransitionVolumeParams& p) {
+    throw_if_transition_cancelled(p);
     if (p.multi_legs.empty() && (!variant_supports_axis_transition(p.from_variant) ||
         !variant_supports_axis_transition(p.to_variant))) {
         throw std::runtime_error("transition variants must be quadratic Mandelbrot-family variants");
@@ -433,6 +448,7 @@ McField buildTransitionVolume(const TransitionVolumeParams& p) {
 #if USE_CUDA_TRANSITION
     if (selected_engine == "hybrid") {
         if (build_transition_hybrid_cuda_cpu(p, N, field)) {
+            throw_if_transition_cancelled(p);
             return field;
         }
         field.data.assign(static_cast<size_t>(N) * N * N, 1.0f);
@@ -443,6 +459,7 @@ McField buildTransitionVolume(const TransitionVolumeParams& p) {
         try {
             fsd_cuda::CudaTransitionVolumeParams cp = make_cuda_transition_params(p, N);
             fsd_cuda::cuda_build_transition_volume(cp, field.data);
+            throw_if_transition_cancelled(p);
             field.engine_used = p.multi_legs.empty() ? "cuda_fp32" : "cuda_multi_fp32";
             return field;
         } catch (...) {
@@ -454,6 +471,7 @@ McField buildTransitionVolume(const TransitionVolumeParams& p) {
 
     if (selected_engine == "avx2") {
         if (buildTransitionVolumeAvx2(p, field)) {
+            throw_if_transition_cancelled(p);
             return field;
         }
         field.data.assign(static_cast<size_t>(N) * N * N, 1.0f);
@@ -464,12 +482,15 @@ McField buildTransitionVolume(const TransitionVolumeParams& p) {
 
     #pragma omp parallel for num_threads(thread_count) schedule(dynamic, 1)
     for (int zi = 0; zi < N; zi++) {
+        if (transition_cancel_requested(p)) continue;
         if (p.multi_legs.empty()) {
             build_transition_range_openmp(p, N, zi, zi + 1, field);
         } else {
             build_transition_range_multi_openmp(p, N, zi, zi + 1, field);
         }
     }
+
+    throw_if_transition_cancelled(p);
 
     if (!p.multi_legs.empty()) field.engine_used = "openmp_multi_fp32";
 
