@@ -6,6 +6,10 @@
 
 2026-07-24 补充：Platform 协作者的实际 ComputeClient 以 C++ 私有 `/api/*` 为准。当前适配工作从 `platform_backend@81bc3fc` 派生，已完成 7 条生产路由、真实 HTTP/跨端客户端验证和本地前端临时密钥接入；实施状态见 [C++ Compute `/api` 生产合同实施记录](compute_api_contract_implementation.md)。本批次未修改 Platform Backend。
 
+2026-07-24 染色扩展：内置 `colorMap/smooth/colorMode/lnMapColorMode` 和安全声明式
+`colorProgram` v1 的接口、能力矩阵及 Platform/前端任务见 [染色合同](coloring_contract.md)。首批只在
+二维 preview/PNG 启用自定义 gradient，其他输出必须显式拒绝。
+
 ## Status Legend / 状态说明
 
 - `pending`：尚未开始。

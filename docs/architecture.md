@@ -63,6 +63,7 @@ Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件
 ## Pipeline Deep Dives / 计算链路文档
 
 - [render_pipeline.md](render_pipeline.md): 2D map、Julia、transition slice、raw field、engine/scalar、自定义公式。
+- [coloring_contract.md](coloring_contract.md): 内置染色字段、安全自定义 gradient、能力矩阵和商业接入任务。
 - [special_points.md](special_points.md): center/Misiurewicz、Newton 求解、搜索、分类、持久化。
 - [recurrence_metric.md](recurrence_metric.md): `min_pairwise_dist` 的公式、复杂度、回退策略和 HS-Recurrence 用法。
 - [3d_pipeline.md](3d_pipeline.md): HS field/mesh、transition volume、marching cubes、voxel export。
