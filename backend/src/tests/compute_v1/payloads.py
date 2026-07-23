@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+from typing import Any
+
+
+def builtin_formula(identifier: str = "mandelbrot") -> dict[str, Any]:
+    return {"type": "formula", "formula": {"type": "builtin", "id": identifier}}
+
+
+def sequence_program() -> dict[str, Any]:
+    return {
+        "type": "sequence",
+        "repeat": True,
+        "steps": [
+            {"span": 1, "program": builtin_formula("mandelbrot")},
+            {"span": 1, "program": builtin_formula("burning_ship")},
+        ],
+    }
+
+
+def map_payload(*, orbit: bool = False, size: int = 64, iterations: int = 32) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "centerRe": -0.75, "centerIm": 0.0, "scale": 3.0,
+        "width": size, "height": size, "iterations": iterations,
+        "variant": "mandelbrot", "engine": "openmp", "scalarType": "fp64",
+    }
+    if orbit:
+        payload["orbitProgram"] = sequence_program()
+    return payload
+
+
+def strict_dsl_payload() -> dict[str, Any]:
+    return {
+        "centerRe": 100.0, "centerIm": 0.0, "scale": 1e-6,
+        "viewportAspect": 1.0, "width": 1, "height": 1, "iterations": 5,
+        "julia": True, "juliaRe": 0.0, "juliaIm": 0.0, "metric": "escape",
+        "orbitProgram": {
+            "type": "formula", "formula": {"type": "dsl", "source": "z"},
+        },
+    }
+
+
+def hs_mesh_payload() -> dict[str, Any]:
+    return {
+        "centerRe": -0.75, "centerIm": 0.0, "scale": 3.0,
+        "resolution": 8, "iterations": 16, "metric": "min_abs",
+        "heightScale": 0.5, "heightClamp": 2.0,
+        "orbitProgram": sequence_program(),
+    }
+
+
+def ln_map_payload(*, color_mode: str = "escape", orbit: Any = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "centerRe": -0.75, "centerIm": 0.0, "variant": "mandelbrot",
+        "widthS": 128, "depthOctaves": 1.0, "lnMapExtraOctaves": 2.0,
+        "iterations": 32, "lnMapColorMode": color_mode, "colorMap": "classic_cos",
+    }
+    if orbit is not None:
+        payload["orbitProgram"] = orbit
+    return payload
+
+
+def zoom_payload() -> dict[str, Any]:
+    return {
+        "centerRe": -0.75, "centerIm": 0.0,
+        "width": 128, "height": 128, "previewWidth": 64, "previewHeight": 64,
+        "widthS": 128, "previewLnMapWidthS": 128,
+        "depthOctaves": 0.05, "secondsPerOctave": 1.0,
+        "fps": 1, "iterations": 16, "lnMapColorMode": "escape",
+        "colorMap": "classic_cos", "cudaWarp": False,
+        "orbitProgram": sequence_program(),
+    }

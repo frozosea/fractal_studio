@@ -283,14 +283,34 @@ if(HAS_CUDA)
 endif()
 add_test(NAME compute_path_diff COMMAND compute_path_diff)
 
-add_test(
-    NAME compute_v1_http_smoke
-    COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/compute_v1_http_smoke.py
-            $<TARGET_FILE:fractal_studio_backend>
-            ${CMAKE_CURRENT_SOURCE_DIR}/..
+set(FSD_PYTEST_PYTHON "" CACHE FILEPATH "Python interpreter with pytest installed")
+if(FSD_PYTEST_PYTHON)
+    set(_FSD_PYTEST_PYTHON "${FSD_PYTEST_PYTHON}")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/platform-venv/bin/python")
+    set(_FSD_PYTEST_PYTHON
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/platform-venv/bin/python")
+else()
+    set(_FSD_PYTEST_PYTHON "${Python3_EXECUTABLE}")
+endif()
+execute_process(
+    COMMAND "${_FSD_PYTEST_PYTHON}" -c "import pytest"
+    RESULT_VARIABLE _FSD_PYTEST_IMPORT_RESULT
+    OUTPUT_QUIET ERROR_QUIET
 )
-set_tests_properties(compute_v1_http_smoke PROPERTIES TIMEOUT 30)
+if(_FSD_PYTEST_IMPORT_RESULT EQUAL 0)
+    add_test(
+        NAME compute_v1_http_contract
+        COMMAND "${_FSD_PYTEST_PYTHON}" -m pytest -q
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/compute_v1
+                --backend-binary=$<TARGET_FILE:fractal_studio_backend>
+                --studio-root=${CMAKE_CURRENT_SOURCE_DIR}/..
+    )
+    set_tests_properties(compute_v1_http_contract PROPERTIES TIMEOUT 60)
+else()
+    message(WARNING
+        "pytest not found; Compute v1 HTTP contract tests are disabled. "
+        "Install backend/requirements-test.txt or set FSD_PYTEST_PYTHON.")
+endif()
 
 include(CheckCXXSourceCompiles)
 set(CMAKE_REQUIRED_LIBRARIES quadmath)
