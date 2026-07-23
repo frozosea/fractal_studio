@@ -58,7 +58,7 @@ Vue 3 frontend
 | Scope | Progress | Current boundary |
 |---|---:|---|
 | Compute 底座（C0–C2） | 100% | 首个商业底座范围完成；weighted schedule、output blend 和参数曲线属于后续产品玩法批次。 |
-| Platform/部署底座（P0–D0） | 约 68% | API/Worker/Outbox 代码完成；真实 PostgreSQL/完整 Compose E2E 受 Docker 权限限制。 |
+| Platform/部署底座（P0–D0） | 约 68% | API/Worker/Outbox 代码及 Compute 对接文档完成；真实 PostgreSQL/完整 Compose E2E 受 Docker 权限限制。 |
 | 前端双轨（F0） | 0% | 尚未开始拆分前端 API 与页面。 |
 | 商业模块（M1–M6） | 0% | 身份、资产、市场、支付和账本尚未开始。 |
 | 完整商业化路线 | 约 30% | 已完成可运行的 Compute/Platform 技术底座，产品商业闭环尚未进入。 |
@@ -95,6 +95,8 @@ Vue 3 frontend
 - [x] Benchmark 改为后台 run/取消；manifest 使用 `multi_path` 证据逐 candidate 保存 requested/actual engine/scalar、样本数、吞吐与回退原因，不虚构单一 engine。
 - [x] zoom/transition video 在 kernel 完成点报告 `kernelReported` 与实际 engine/scalar；真实 HTTP 合同验证 MP4 和硬件类别。
 - [x] `legacy_zoom_video` 在 Compute v1 下真正后台执行，创建立即返回 queued，保留旧 `/api/video/zoom` 默认同步行为，并支持协作取消。
+- [x] 将 Compute v1 文档提升为服务后端可独立实现的规范：公共 transport/状态/错误合同、18 个 kind 的 payload/默认值/限制/产物参考，以及 FastAPI ComputeClient、Outbox、轮询取消、artifact 摄取和硬件验收指南。
+- [x] 文档覆盖检查从 C++ 单一能力注册表提取 kind，要求 18 个任务章节一一对应，并检查全部私有端点与 Worker 安全不变量，避免新增能力后文档静默漏项。
 
 ### C2 — 安全 DSL 与 Orbit Program
 
@@ -197,6 +199,8 @@ Vue 3 frontend
 | 2026-07-23 | Compute foundation final regression | full real-process HTTP suite, full CTest, Platform unit tests and test-size audit | 60/60 pytest; 9/9 CTest; 5/5 Platform; longest test 14 lines |
 | 2026-07-23 | Deployment contract | `docker compose -f docker-compose.dev.yml config -q`; secure Compute container defaults and reduced Docker context | passed; daemon execution remains unavailable to current user |
 | 2026-07-23 | Frontend dependency install | remove unused model-viewer peer conflict; `npm ci`, `npm ls --all`, `npm audit --omit=dev`, production Vite build | passed; production dependencies have 0 vulnerabilities; Vite 5 dev-only major-upgrade advisories remain documented |
+| 2026-07-23 | Service-backend documentation handoff | normative transport contract + 18-kind job reference + FastAPI/Outbox integration guide; registry-driven documentation audit | 3/3 documentation checks passed |
+| 2026-07-23 | Post-documentation real HTTP regression | `pytest -q backend/src/tests/compute_v1 --backend-binary=backend/build/fractal_studio_backend --studio-root=.` | 63/63 passed in 21.75s |
 
 ## Commit Log / 提交记录
 
@@ -228,6 +232,8 @@ Vue 3 frontend
 | `5c3d54e` | `legacy_zoom_video` 接入真实后台 run/queued 响应与协作取消，旧 API 默认同步语义保持不变。 |
 | `f3a5fa2` | Compute job 单一注册表统一生成 kind 清单、入口校验与逐任务兼容矩阵。 |
 | `5a6ad7b` | 移除未使用且与 Three 冲突的 model-viewer，更新 lockfile/PostCSS 并恢复可重复前端安装。 |
+| `af961ba` | 发布服务后端可独立实施的 Compute transport 合同、18-kind 任务参考和 Platform Worker 对接指南。 |
+| `89fa4ce` | 增加能力注册表驱动的文档覆盖测试，并从项目/Compute 文档入口链接新合同。 |
 
 ## Delivery Rules / 交付规则
 
