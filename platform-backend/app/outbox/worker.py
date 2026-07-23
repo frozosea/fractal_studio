@@ -14,7 +14,13 @@ from app.core.db import get_engine
 from app.core.logging import worker_log
 from app.core.request_context import request_id_var
 from app.outbox import repository
-from app.outbox.models import DueWorkReader, OutboxEvent, OutboxHandler, RetryableOutboxError
+from app.outbox.models import (
+    DueWorkReader,
+    OutboxEvent,
+    OutboxHandler,
+    RescheduleOutboxEvent,
+    RetryableOutboxError,
+)
 from app.outbox.service import TransactionalOutboxService
 
 
@@ -88,6 +94,20 @@ class OutboxWorker:
         token = request_id_var.set(event.causation_request_id or f"outbox:{event.id}")
         try:
             await self._handlers.dispatch(event)
+        except RescheduleOutboxEvent as deferred:
+            async with get_engine().begin() as connection:
+                rescheduled = await repository.defer_same_event(
+                    connection,
+                    event_id=event.id,
+                    worker_id=self._worker_id,
+                    delay_seconds=deferred.delay_seconds,
+                )
+            worker_log(
+                logging.INFO if rescheduled else logging.WARNING,
+                "outbox event deferred" if rescheduled else "outbox lease lost before deferral",
+                event_id=event.id,
+                event_type=event.event_type,
+            )
         except RetryableOutboxError as error:
             await self._fail(event, error.code)
         except Exception:
@@ -145,7 +165,9 @@ async def run() -> None:
             loop.add_signal_handler(signal_name, stop_event.set)
         except NotImplementedError:
             pass
-    worker = OutboxWorker()
+    from app.studio.render_worker import build_render_handler_registry
+
+    worker = OutboxWorker(handlers=build_render_handler_registry())
     worker_log(logging.INFO, "outbox worker started", worker_id=worker._worker_id)
     await worker.run(stop_event)
     worker_log(logging.INFO, "outbox worker stopped", worker_id=worker._worker_id)

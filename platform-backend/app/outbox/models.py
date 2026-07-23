@@ -42,6 +42,14 @@ class RetryableOutboxError(Exception):
         super().__init__(code)
 
 
+class RescheduleOutboxEvent(Exception):
+    """Normal deferred work: reuse the same event row without consuming retry attempts."""
+
+    def __init__(self, *, delay_seconds: int) -> None:
+        self.delay_seconds = delay_seconds
+        super().__init__("reschedule")
+
+
 OutboxHandler = Callable[[OutboxEvent], Awaitable[None]]
 
 

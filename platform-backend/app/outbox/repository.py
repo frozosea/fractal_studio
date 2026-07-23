@@ -180,6 +180,24 @@ async def reschedule_or_dead_letter(
     return next_status
 
 
+async def defer_same_event(
+    connection: AsyncConnection, *, event_id: UUID, worker_id: str, delay_seconds: int
+) -> bool:
+    """Put a successfully handled long-running poll back to pending; no retry/dead-letter budget spent."""
+    result = await connection.execute(
+        text(
+            """
+            UPDATE outbox_events
+            SET status = 'pending', available_at = now() + (:delay_seconds * interval '1 second'),
+                lease_owner = NULL, lease_until = NULL
+            WHERE id = :event_id AND status = 'leased' AND lease_owner = :worker_id
+            """
+        ),
+        {"event_id": event_id, "worker_id": worker_id, "delay_seconds": delay_seconds},
+    )
+    return result.rowcount == 1
+
+
 async def release_expired_leases(connection: AsyncConnection) -> int:
     """Operational sweep; claim also sees expired leases directly, so this is optional hygiene."""
     result = await connection.execute(

@@ -63,3 +63,89 @@ class CursorPage(BaseModel):
 class RecipeCollectionView(BaseModel):
     data: list[RecipeView]
     page: CursorPage
+
+
+class ImageOutputSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["image"]
+    format: Literal["png"]
+    width: int = Field(ge=1, le=4096)
+    height: int = Field(ge=1, le=4096)
+
+
+class VideoOutputSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    kind: Literal["video"]
+    format: Literal["mp4"]
+    width: int = Field(ge=1, le=1920)
+    height: int = Field(ge=1, le=1080)
+    duration_seconds: Annotated[float, Field(gt=0, le=30)] = Field(alias="durationSeconds")
+    fps: int = Field(ge=1, le=60)
+
+
+class HsMeshSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, allow_inf_nan=False)
+
+    height_scale: float | None = Field(default=None, alias="heightScale")
+    height_clamp: Annotated[float | None, Field(gt=0)] = Field(default=None, alias="heightClamp")
+
+
+class HsMeshOutputSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    kind: Literal["hs_mesh"]
+    format: Literal["glb", "stl"]
+    resolution: int = Field(ge=8, le=1024)
+    mesh_spec: HsMeshSpec = Field(default_factory=HsMeshSpec, alias="meshSpec")
+
+
+class TransitionMeshSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, allow_inf_nan=False)
+
+    center_x: float = Field(alias="centerX")
+    center_y: float = Field(alias="centerY")
+    center_z: float = Field(alias="centerZ")
+    extent: Annotated[float, Field(gt=0)]
+    transition_from: str = Field(alias="transitionFrom", min_length=1, max_length=64)
+    transition_to: str = Field(alias="transitionTo", min_length=1, max_length=64)
+    bailout: Annotated[float | None, Field(gt=0)] = None
+    iso: float | None = None
+    engine: Literal["auto", "cpu", "cuda"] = "auto"
+    scalar_type: Literal["fp32", "fp64"] = Field(default="fp32", alias="scalarType")
+
+
+class TransitionMeshOutputSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    kind: Literal["transition_mesh"]
+    format: Literal["glb", "stl"]
+    resolution: int = Field(ge=8, le=1024)
+    iterations: int = Field(ge=1, le=10_000)
+    mesh_spec: TransitionMeshSpec = Field(alias="meshSpec")
+
+
+RenderOutputSpec = Annotated[
+    ImageOutputSpec | VideoOutputSpec | HsMeshOutputSpec | TransitionMeshOutputSpec,
+    Field(discriminator="kind"),
+]
+
+
+class RenderJobCreateInput(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    recipe_id: UUID = Field(alias="recipeId")
+    output: RenderOutputSpec
+
+
+class RenderJobView(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID
+    recipe_id: UUID = Field(alias="recipeId")
+    status: str
+    progress_percent: int = Field(alias="progressPercent")
+    asset_id: UUID | None = Field(default=None, alias="assetId")
+    error_code: str | None = Field(default=None, alias="errorCode")
+    created_at: datetime = Field(alias="createdAt")
