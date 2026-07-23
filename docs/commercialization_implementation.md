@@ -92,7 +92,7 @@ Vue 3 frontend
 - [x] Compute v1 transition mesh 改为后台 run；后台任务持有 transition/CPU/CUDA 资源租约，支持 volume 协作取消并报告实际 volume engine/scalar。
 - [x] Compute v1 transition voxels 改为后台 run；保留旧接口内联几何，Compute manifest 统一保存 STL、硬件证据和取消终态。
 - [x] Special points enumerate 改为 Compute v1 后台 run，search 保持既有后台调度；两者统一补齐 OpenMP/fp64 kernel 完成证据、JSON artifact 和取消终态。
-- [ ] 将 benchmark 剩余同步持久任务改为后台 run；其 manifest 必须保存逐 candidate 的 requested/actual engine/scalar、样本数与回退原因，不能用虚构的单一 `multi_engine` 代替硬件证据。
+- [x] Benchmark 改为后台 run/取消；manifest 使用 `multi_path` 证据逐 candidate 保存 requested/actual engine/scalar、样本数、吞吐与回退原因，不虚构单一 engine。
 - [ ] zoom/transition video 已有后台 run 和实际 engine/scalar 字段，但仍需在各 kernel 完成点补 `kernelReported` 证据标志及对应硬件合同测试。
 
 ### C2 — 安全 DSL 与 Orbit Program
@@ -179,6 +179,7 @@ Vue 3 frontend
 | 2026-07-23 | Post-transition regression | full domain HTTP suite, CTest, Platform tests and test-size audit | 45/45 pytest; 9/9 CTest; 5/5 Platform; longest test 14 lines |
 | 2026-07-23 | Special point run lifecycle | enumerate returns queued and supports cancel; enumerate/search manifests contain JSON report and OpenMP/fp64 completion evidence | focused HTTP tests passed |
 | 2026-07-23 | Post-special-points regression | full domain HTTP suite, CTest and Platform unit tests | 49/49 pytest; 9/9 CTest; 5/5 Platform |
+| 2026-07-23 | Async hardware benchmark | queued/cancel lifecycle and per-candidate requested/actual path evidence in manifest | focused HTTP tests passed |
 
 ## Commit Log / 提交记录
 
@@ -202,6 +203,7 @@ Vue 3 frontend
 | `db398ec` | Transition mesh 接入后台 run，延长资源租约至任务结束，并为 volume kernel 增加协作取消与硬件证据。 |
 | `d955d8d` | Transition voxels 接入后台 run/取消/硬件证据，后台持有资源租约，旧接口继续提供内联几何。 |
 | `73c4f95` | Special points enumerate/search 统一后台 run telemetry、JSON artifact、取消状态与 OpenMP/fp64 硬件证据。 |
+| `b668599` | Benchmark 接入异步 run/取消，并以 multi-path manifest 保存各硬件候选的实际执行和回退证据。 |
 
 ## Delivery Rules / 交付规则
 
