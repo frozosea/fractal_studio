@@ -57,7 +57,7 @@ Vue 3 frontend
 
 | Scope | Progress | Current boundary |
 |---|---:|---|
-| Compute 底座（C0–C2） | 约 95% | 2D/Julia/HS/ln-map/zoom 安全 DSL、typed AST 与周期序列已可用；后续组合节点未完成。 |
+| Compute 底座（C0–C2） | 约 97% | 2D/Julia/HS/ln-map/zoom 与 transition 持久产物已进入后台 run；special/benchmark 和后续组合节点仍待整理。 |
 | Platform/部署底座（P0–D0） | 约 68% | API/Worker/Outbox 代码完成；真实 PostgreSQL/完整 Compose E2E 受 Docker 权限限制。 |
 | 前端双轨（F0） | 0% | 尚未开始拆分前端 API 与页面。 |
 | 商业模块（M1–M6） | 0% | 身份、资产、市场、支付和账本尚未开始。 |
@@ -90,7 +90,8 @@ Vue 3 frontend
 - [x] Compute v1 的 ln-map 与 HS mesh 改为真正后台 run；创建立即返回 queued，支持轮询/协作取消，并记录 kernel 硬件执行证据；旧 `/api` 默认同步行为保持不变。
 - [x] Compute v1 HS field 改为后台 run，输出 float64 二进制 field 与 JSON sidecar manifest artifact，支持取消和硬件证据；旧 `/api/hs/field` 继续返回内联 base64。
 - [x] Compute v1 transition mesh 改为后台 run；后台任务持有 transition/CPU/CUDA 资源租约，支持 volume 协作取消并报告实际 volume engine/scalar。
-- [ ] 将 transition voxels、special points 和 benchmark 等剩余同步持久任务统一改为后台 run，并补齐同等级硬件执行证据。
+- [x] Compute v1 transition voxels 改为后台 run；保留旧接口内联几何，Compute manifest 统一保存 STL、硬件证据和取消终态。
+- [ ] 将 special points 和 benchmark 等剩余同步持久任务统一改为后台 run，并补齐同等级硬件执行证据。
 - [ ] zoom/transition video 已有后台 run 和实际 engine/scalar 字段，但仍需在各 kernel 完成点补 `kernelReported` 证据标志及对应硬件合同测试。
 
 ### C2 — 安全 DSL 与 Orbit Program
@@ -173,6 +174,8 @@ Vue 3 frontend
 | 2026-07-23 | Async/hardware regression | domain pytest suite, full CTest, and Platform unit tests | 33/33 pytest; 9/9 CTest; 5/5 Platform |
 | 2026-07-23 | Async HS field lifecycle | queued run produces float64 binary + JSON metadata, reports OpenMP kernel evidence, supports cancellation, and preserves legacy inline response | 4/4 focused HTTP tests passed |
 | 2026-07-23 | Async transition mesh | queued run owns its resource lease through completion, emits GLB/STL, reports actual volume hardware, supports cancellation, and preserves legacy sync response | focused HTTP tests passed |
+| 2026-07-23 | Async transition voxels | queued run owns its resource lease, produces STL manifest, reports actual volume hardware, supports cancellation, and preserves legacy inline geometry | focused HTTP tests passed |
+| 2026-07-23 | Post-transition regression | full domain HTTP suite, CTest, Platform tests and test-size audit | 45/45 pytest; 9/9 CTest; 5/5 Platform; longest test 14 lines |
 
 ## Commit Log / 提交记录
 
@@ -194,6 +197,7 @@ Vue 3 frontend
 | `01683cc` | Compute v1 的 ln-map 与 HS mesh 改为真正异步 run，加入协作取消、后台生命周期保护及 kernel 完成 telemetry。 |
 | `7b6eb1e` | HS field 接入异步 run/取消/硬件证据，并将 float64 网格与元数据纳入可校验 manifest artifact。 |
 | `db398ec` | Transition mesh 接入后台 run，延长资源租约至任务结束，并为 volume kernel 增加协作取消与硬件证据。 |
+| `d955d8d` | Transition voxels 接入后台 run/取消/硬件证据，后台持有资源租约，旧接口继续提供内联几何。 |
 
 ## Delivery Rules / 交付规则
 
