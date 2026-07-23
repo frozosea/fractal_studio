@@ -7,6 +7,16 @@ const backendPort = viteEnv?.VITE_BACKEND_PORT ?? '18080'
 const BASE =
   viteEnv?.VITE_BACKEND_URL ??
   `http://${location.hostname}:${backendPort}`
+// Migration-only direct Compute credential. dev.sh injects it for the local
+// legacy UI; commercial browser builds must leave it empty and call Platform.
+const COMPUTE_SERVICE_KEY = viteEnv?.VITE_COMPUTE_SERVICE_KEY ?? ''
+
+function computeHeaders(json = false): Record<string, string> {
+  const headers: Record<string, string> = {}
+  if (json) headers['Content-Type'] = 'application/json'
+  if (COMPUTE_SERVICE_KEY) headers.Authorization = `Bearer ${COMPUTE_SERVICE_KEY}`
+  return headers
+}
 
 function isLoopbackHostname(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
@@ -30,7 +40,7 @@ export function isLocalBrowserAccess(): boolean {
 async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(BASE + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: computeHeaders(true),
     body: JSON.stringify(body),
     signal,
   })
@@ -45,7 +55,7 @@ async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): P
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(BASE + path)
+  const res = await fetch(BASE + path, { headers: computeHeaders() })
   if (!res.ok) throw new Error(`${path}: ${res.status}`)
   return res.json() as Promise<T>
 }
@@ -53,7 +63,7 @@ async function getJson<T>(path: string): Promise<T> {
 async function postArrayBuffer(path: string, body: unknown, signal?: AbortSignal): Promise<{ status: number; headers: Headers; data?: ArrayBuffer }> {
   const res = await fetch(BASE + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: computeHeaders(true),
     body: JSON.stringify(body),
     signal,
   })

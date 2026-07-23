@@ -18,6 +18,10 @@ FRONTEND_DIR="$SCRIPT_DIR/frontend"
 VITE_BIN="$FRONTEND_DIR/node_modules/.bin/vite"
 BACKEND_PORT="${BACKEND_PORT:-18080}"
 FRONTEND_PORT="${FRONTEND_PORT:-5174}"
+# One ephemeral development credential is injected into both processes. An
+# explicitly configured value wins; the generated value is never printed or
+# written to disk. Do not use VITE_COMPUTE_SERVICE_KEY in commercial builds.
+COMPUTE_SERVICE_KEY="${FSD_COMPUTE_SERVICE_KEY:-}"
 BACKEND_PID=""
 BACKEND_GROUP_PID=""
 FRONTEND_PID=""
@@ -159,6 +163,12 @@ fi
 if [[ ! -x "$VITE_BIN" ]]; then
     fail "Vite is not installed; run 'cd $FRONTEND_DIR && npm install' first"
 fi
+if [[ -z "$COMPUTE_SERVICE_KEY" ]]; then
+    if ! command -v openssl >/dev/null 2>&1; then
+        fail "openssl is required to generate the local Compute service key"
+    fi
+    COMPUTE_SERVICE_KEY="$(openssl rand -hex 32)"
+fi
 if ! command -v setsid >/dev/null 2>&1 || ! setsid --help 2>&1 | grep -q -- '--fork'; then
     fail "util-linux setsid with --fork is required to manage service process groups"
 fi
@@ -255,7 +265,9 @@ launch_session() {
 # checkout directory being named "fractal_studio".
 echo "[dev.sh] Starting backend on :$BACKEND_PORT ..."
 if ! launch_session "$SCRIPT_DIR" "$LOG_DIR/backend.log" \
-    "$LOG_DIR/.backend-session.$$" "$BACKEND_BIN" "$BACKEND_PORT"; then
+    "$LOG_DIR/.backend-session.$$" env \
+    "FSD_COMPUTE_SERVICE_KEY=$COMPUTE_SERVICE_KEY" \
+    "$BACKEND_BIN" "$BACKEND_PORT"; then
     fail "could not start the backend session"
 fi
 BACKEND_PID="$LAUNCHED_PID"
@@ -314,7 +326,10 @@ wait_for_backend || exit 1
 FRONTEND_BACKEND_URL="${VITE_BACKEND_URL:-}"
 
 echo "[dev.sh] Starting frontend on :$FRONTEND_PORT ..."
-frontend_command=(env "VITE_BACKEND_PORT=$BACKEND_PORT")
+frontend_command=(env
+    "VITE_BACKEND_PORT=$BACKEND_PORT"
+    "VITE_COMPUTE_SERVICE_KEY=$COMPUTE_SERVICE_KEY"
+)
 if [[ -n "$FRONTEND_BACKEND_URL" ]]; then
     frontend_command+=("VITE_BACKEND_URL=$FRONTEND_BACKEND_URL")
 fi
