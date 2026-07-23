@@ -40,8 +40,8 @@ Vue 3 frontend
 | ID | Milestone | Status | Acceptance |
 |---|---|---|---|
 | C0 | 基线与能力清单 | completed | 当前构建/测试通过；所有旧端点和能力形成单一映射。 |
-| C1 | C++ Compute v1 | in_progress | 鉴权、capabilities、preview、run/status/cancel、manifest、artifact 闭环完成。 |
-| C2 | 安全 DSL 与 Orbit Program | in_progress | DSL 无原生代码执行；单公式和周期序列接入通用 CPU 渲染；严格逃逸元数据完成。 |
+| C1 | C++ Compute v1 | completed | 鉴权、capabilities、preview、全部现有持久产物的 run/status/cancel、manifest、artifact 与硬件证据闭环完成。 |
+| C2 | 安全 DSL 与 Orbit Program | completed | DSL 无原生代码执行；单公式和周期序列接入约定管线；严格逃逸与 Orbit 复用一致性完成。 |
 | P0 | FastAPI 架构底座 | in_progress | Python 工程、迁移、ComputeClient、Outbox Worker 和真实渲染闭环完成。 |
 | D0 | 本地部署底座 | in_progress | Compose 启动 API、Worker、PostgreSQL、Redis、MinIO、Compute 并通过健康检查。 |
 | F0 | 前端双轨接入 | pending | 保持现有设计；Platform/legacy API 可按环境切换；现有页面无回归。 |
@@ -57,7 +57,7 @@ Vue 3 frontend
 
 | Scope | Progress | Current boundary |
 |---|---:|---|
-| Compute 底座（C0–C2） | 约 97% | 2D/Julia/HS/ln-map/zoom 与 transition 持久产物已进入后台 run；special/benchmark 和后续组合节点仍待整理。 |
+| Compute 底座（C0–C2） | 100% | 首个商业底座范围完成；weighted schedule、output blend 和参数曲线属于后续产品玩法批次。 |
 | Platform/部署底座（P0–D0） | 约 68% | API/Worker/Outbox 代码完成；真实 PostgreSQL/完整 Compose E2E 受 Docker 权限限制。 |
 | 前端双轨（F0） | 0% | 尚未开始拆分前端 API 与页面。 |
 | 商业模块（M1–M6） | 0% | 身份、资产、市场、支付和账本尚未开始。 |
@@ -71,7 +71,7 @@ Vue 3 frontend
 - [x] 阅读现有架构、二维、三维、视频、测试和 feature-status 文档。
 - [x] 枚举现有 C++ HTTP 入口和前端实际调用面。
 - [x] 完成 Release 构建和现有 CTest 基线。
-- [x] 建立 Compute v1 能力注册与版本化 `kind` 列表。
+- [x] 建立 Compute v1 单一能力注册表；由同一表生成版本化 persistent/preview `kind` 清单、入口校验和逐 job 的 variant profile、metric、engine、scalar、Orbit、输出格式兼容信息。
 - [x] 在 `routes_compute_v1.cpp` 固化旧 API 到 Compute v1 `kind` 的完整映射。
 
 ### C1 — C++ Compute v1
@@ -79,7 +79,7 @@ Vue 3 frontend
 - [x] 私网 Bearer 服务密钥与常量时间比较。
 - [x] 版本化错误包络和 `422 UNSUPPORTED_CAPABILITY`。
 - [x] 健康、能力和同步预览接口骨架；map preview 返回原始二进制帧。
-- [x] 统一 run 创建、状态和取消适配；原生后台任务保持异步，同步 legacy job 暂在 Worker 调用内完成。
+- [x] 统一 run 创建、状态和取消适配；所有现有持久 Compute kind 均通过后台 run 执行，旧 `/api` 的同步响应按双轨兼容约定保留。
 - [x] 统一 manifest、相对路径约束、MIME、大小和 SHA-256。
 - [x] 私有 artifact 流式读取与 Range。
 - [x] 旧 `/api/*` 双轨兼容和 `FSD_ENABLE_LEGACY_API` 商业关闭开关。
@@ -93,7 +93,8 @@ Vue 3 frontend
 - [x] Compute v1 transition voxels 改为后台 run；保留旧接口内联几何，Compute manifest 统一保存 STL、硬件证据和取消终态。
 - [x] Special points enumerate 改为 Compute v1 后台 run，search 保持既有后台调度；两者统一补齐 OpenMP/fp64 kernel 完成证据、JSON artifact 和取消终态。
 - [x] Benchmark 改为后台 run/取消；manifest 使用 `multi_path` 证据逐 candidate 保存 requested/actual engine/scalar、样本数、吞吐与回退原因，不虚构单一 engine。
-- [ ] zoom/transition video 已有后台 run 和实际 engine/scalar 字段，但仍需在各 kernel 完成点补 `kernelReported` 证据标志及对应硬件合同测试。
+- [x] zoom/transition video 在 kernel 完成点报告 `kernelReported` 与实际 engine/scalar；真实 HTTP 合同验证 MP4 和硬件类别。
+- [x] `legacy_zoom_video` 在 Compute v1 下真正后台执行，创建立即返回 queued，保留旧 `/api/video/zoom` 默认同步行为，并支持协作取消。
 
 ### C2 — 安全 DSL 与 Orbit Program
 
@@ -112,9 +113,17 @@ Vue 3 frontend
 - [x] Orbit Program 传播到 HS field/mesh；escape、min/max abs、envelope 和 recurrence 走确定性 fp64/OpenMP 通用路径。
 - [x] Orbit Program 传播到 ln-map 的 escape 与全部 mapped color modes；单公式与旧路径执行 HTTP PNG hash parity。
 - [x] Orbit Program 同时传播到 zoom preview/export 的最终笛卡尔帧与 ln-map 条带；真实 HTTP export 生成 MP4 manifest。
-- [ ] `legacy_zoom_video` 的外部 ln-map 复用加入 Orbit hash 一致性校验；当前显式拒绝该组合。
+- [x] 外部 ln-map 复用校验 Orbit hash；统一 zoom 拒绝 hash 不一致，legacy zoom 从已校验 sidecar 恢复 Orbit，并将其写入不可变 run 快照。
 - [x] axis transition/transition video 保持独立顶层数学，普通 Orbit Program 请求显式 `422`，不转换为线性 blend。
-- [ ] `weighted_schedule`、`output_blend`、参数曲线和动画；axis transition 继续保持独立顶层数学。
+
+### Compute Product Roadmap / 后续计算玩法
+
+以下能力在原计划中即属于底座之后的分批启用项，不计入 C1/C2 完成条件；在 capabilities 中保持 `false`，请求不会静默降级：
+
+- [ ] `weighted_schedule`：确定性 smooth weighted round-robin，只调度离散公式。
+- [ ] `output_blend`：独立二维动力系统；权重归一化后组合复数输出，默认无逃逸证书。
+- [ ] 权重/参数随迭代或视频时间变化的曲线与动画。
+- [ ] 已审核热门 AST 的 SIMD/CUDA kernel 生成；不得改变 DSL 语义或规范化 hash。
 
 ### P0 — FastAPI 架构底座
 
@@ -180,6 +189,12 @@ Vue 3 frontend
 | 2026-07-23 | Special point run lifecycle | enumerate returns queued and supports cancel; enumerate/search manifests contain JSON report and OpenMP/fp64 completion evidence | focused HTTP tests passed |
 | 2026-07-23 | Post-special-points regression | full domain HTTP suite, CTest and Platform unit tests | 49/49 pytest; 9/9 CTest; 5/5 Platform |
 | 2026-07-23 | Async hardware benchmark | queued/cancel lifecycle and per-candidate requested/actual path evidence in manifest | focused HTTP tests passed |
+| 2026-07-23 | Video hardware completion | zoom and transition MP4 runs report kernel completion telemetry from returned render stats, not requested values | 8/8 focused HTTP tests passed |
+| 2026-07-23 | Orbit ln-map reuse | independent ln-map sidecar records generation identity; matching Orbit hash exports, mismatch fails, legacy zoom restores immutable Orbit snapshot | 5/5 zoom HTTP tests passed |
+| 2026-07-23 | Legacy zoom async lifecycle | Compute create returns queued, Orbit sidecar export completes with verified hardware, and a large render reaches cancelled | 15/15 focused video/cancellation HTTP tests passed |
+| 2026-07-23 | Capability registry | `jobs[]` drives advertised kind sets and request validation; contract checks per-job Orbit/metric/engine/scalar/output metadata | 9/9 focused capabilities/validation HTTP tests passed |
+| 2026-07-23 | Compute foundation final regression | full real-process HTTP suite, full CTest, Platform unit tests and test-size audit | 60/60 pytest; 9/9 CTest; 5/5 Platform; longest test 14 lines |
+| 2026-07-23 | Deployment contract | `docker compose -f docker-compose.dev.yml config -q`; secure Compute container defaults and reduced Docker context | passed; daemon execution remains unavailable to current user |
 
 ## Commit Log / 提交记录
 
@@ -204,6 +219,12 @@ Vue 3 frontend
 | `d955d8d` | Transition voxels 接入后台 run/取消/硬件证据，后台持有资源租约，旧接口继续提供内联几何。 |
 | `73c4f95` | Special points enumerate/search 统一后台 run telemetry、JSON artifact、取消状态与 OpenMP/fp64 硬件证据。 |
 | `b668599` | Benchmark 接入异步 run/取消，并以 multi-path manifest 保存各硬件候选的实际执行和回退证据。 |
+| `ac54b88` | Zoom/transition 视频从实际 kernel 返回值记录完成硬件证据，并新增 MP4 HTTP 合同测试。 |
+| `1beccbf` | 外部 ln-map 加入 Orbit hash/生成身份一致性校验，legacy zoom 恢复 Orbit 不可变快照。 |
+| `50cc5a9` | 发布 Compute 构建运维说明、私有 HTTP 合同、测试入口和商业安全边界。 |
+| `4499d3c` | Compute 容器默认关闭 legacy/原生编译、使用非 root 用户，并缩减 Docker 构建上下文。 |
+| `5c3d54e` | `legacy_zoom_video` 接入真实后台 run/queued 响应与协作取消，旧 API 默认同步语义保持不变。 |
+| `f3a5fa2` | Compute job 单一注册表统一生成 kind 清单、入口校验与逐任务兼容矩阵。 |
 
 ## Delivery Rules / 交付规则
 

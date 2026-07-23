@@ -49,6 +49,8 @@ Authorization: Bearer <FSD_COMPUTE_SERVICE_KEY>
 
 ## Capability matrix
 
+`GET /compute/v1/capabilities` 的 `jobs[]` 来自服务端单一注册表。每项包含 `kind`、`persistent`、`preview`、`orbitProgram`、`variantProfile`、`metrics`、`engines`、`scalars` 和 `outputMediaTypes`；兼容性校验和顶层 kind 清单使用同一注册表。Platform 应读取这些字段，不要在客户端复制一份可能过期的矩阵。
+
 持久 kind：
 
 - `map_image`, `ln_map`, `zoom_video`, `legacy_zoom_video`, `transition_video`
@@ -167,4 +169,3 @@ Compute v1 错误使用结构化包络：
 ```
 
 常见状态：`400` 请求/DSL/幂等键无效，`401` 服务鉴权失败，`404` run 或 artifact 不存在，`409` 资源冲突，`416` Range 不可满足，`422` 能力组合不支持，`500` 适配器或 kernel 失败。调用方只对超时和可恢复的 `5xx` 做有限重试；`4xx` 不应盲目重试。
-
