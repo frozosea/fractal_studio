@@ -170,6 +170,7 @@ ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
 
 ```bash
 cd frontend
+npm ci
 npm run build
 ```
 
@@ -263,6 +264,7 @@ ctest --test-dir runtime/build --output-on-failure
 
 ```bash
 cd frontend
+npm ci
 npm run build
 ```
 

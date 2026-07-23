@@ -80,8 +80,10 @@ cmake --build runtime/build -j
 
 ```bash
 cd frontend
-npm install
+npm ci
 ```
+
+`npm ci` 使用已提交的 `package-lock.json` 做可重复安装。修改依赖时才使用 `npm install` 并同时提交 lockfile。
 
 开发：
 
@@ -166,6 +168,22 @@ Runs: http://localhost:18080/api/runs
 ```
 
 ## Troubleshooting / 排障
+
+### `npm install` reports `ERESOLVE`
+
+- 不要先使用 `--force` 或 `--legacy-peer-deps`，这会绕过实际 peer dependency 冲突。
+- 确认 `frontend/package.json` 与 `frontend/package-lock.json` 来自同一个提交，然后运行 `npm ci`。
+- 当前 3D viewer 直接使用 `three`；未使用的 `@google/model-viewer` 已移除，避免它把 Three 锁在不兼容的次版本。
+- `npm audit --omit=dev` 应为 0。完整 audit 仍可能报告 Vite 5 开发服务器告警；升级到 Vite 8 是单独的跨主版本迁移，不应通过 `npm audit fix --force` 顺带完成。
+
+### `bash dev.sh` reports file not found
+
+`dev.sh` 位于仓库根目录，不在 `frontend/` 中。安装依赖后这样启动：
+
+```bash
+cd /home/test/fractal_studio_project/fractal_studio
+./dev.sh
+```
 
 ### Frontend opens but API calls fail
 

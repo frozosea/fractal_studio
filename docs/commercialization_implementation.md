@@ -141,6 +141,7 @@ Vue 3 frontend
 ### D0/F0 — 部署与前端迁移
 
 - [x] 本地 Compose、迁移 one-shot 服务和健康依赖配置。
+- [x] 前端 lockfile 可重复安装；移除未使用且与当前 Three peer 冲突的 `@google/model-viewer`，生产依赖 audit 为 0。
 - [ ] 实际启动完整 Compose；当前执行用户无 Docker daemon 权限。
 - [ ] MinIO/S3 与生产 OSS 适配器边界。
 - [ ] 拆分 Platform API、legacy API 和领域 DTO。
@@ -195,6 +196,7 @@ Vue 3 frontend
 | 2026-07-23 | Capability registry | `jobs[]` drives advertised kind sets and request validation; contract checks per-job Orbit/metric/engine/scalar/output metadata | 9/9 focused capabilities/validation HTTP tests passed |
 | 2026-07-23 | Compute foundation final regression | full real-process HTTP suite, full CTest, Platform unit tests and test-size audit | 60/60 pytest; 9/9 CTest; 5/5 Platform; longest test 14 lines |
 | 2026-07-23 | Deployment contract | `docker compose -f docker-compose.dev.yml config -q`; secure Compute container defaults and reduced Docker context | passed; daemon execution remains unavailable to current user |
+| 2026-07-23 | Frontend dependency install | remove unused model-viewer peer conflict; `npm ci`, `npm ls --all`, `npm audit --omit=dev`, production Vite build | passed; production dependencies have 0 vulnerabilities; Vite 5 dev-only major-upgrade advisories remain documented |
 
 ## Commit Log / 提交记录
 
@@ -225,6 +227,7 @@ Vue 3 frontend
 | `4499d3c` | Compute 容器默认关闭 legacy/原生编译、使用非 root 用户，并缩减 Docker 构建上下文。 |
 | `5c3d54e` | `legacy_zoom_video` 接入真实后台 run/queued 响应与协作取消，旧 API 默认同步语义保持不变。 |
 | `f3a5fa2` | Compute job 单一注册表统一生成 kind 清单、入口校验与逐任务兼容矩阵。 |
+| `5a6ad7b` | 移除未使用且与 Three 冲突的 model-viewer，更新 lockfile/PostCSS 并恢复可重复前端安装。 |
 
 ## Delivery Rules / 交付规则
 
