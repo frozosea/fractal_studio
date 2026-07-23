@@ -57,3 +57,43 @@ async def test_compute_error_preserves_structured_error() -> None:
     assert captured.value.code == "UNSUPPORTED_CAPABILITY"
     assert captured.value.status_code == 422
 
+
+@pytest.mark.asyncio
+async def test_compute_error_accepts_legacy_string_error() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "artifact not found"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = ComputeClient(settings(), http)
+        with pytest.raises(ComputeError) as captured:
+            await client.capabilities()
+    assert captured.value.code == "COMPUTE_REQUEST_FAILED"
+    assert str(captured.value) == "artifact not found"
+
+
+@pytest.mark.asyncio
+async def test_verify_artifact_checks_streamed_size_and_sha256() -> None:
+    content = b"verified artifact"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["artifactId"] == "run:result.png"
+        return httpx.Response(200, content=content)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = ComputeClient(settings(), http)
+        await client.verify_artifact(
+            "run:result.png", len(content), __import__("hashlib").sha256(content).hexdigest()
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_artifact_rejects_manifest_mismatch() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"tampered")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = ComputeClient(settings(), http)
+        with pytest.raises(ComputeError) as captured:
+            await client.verify_artifact("run:result.png", 8, "0" * 64)
+    assert captured.value.code == "ARTIFACT_INTEGRITY_FAILED"
+    assert captured.value.details["actualSizeBytes"] == 8

@@ -89,11 +89,21 @@ class RenderWorker:
         if manifest.get("status") != "completed":
             raise ComputeError("INVALID_MANIFEST", "completed Compute run returned non-completed manifest")
         for artifact in manifest.get("artifacts", []):
-            if not artifact.get("name") or not artifact.get("sha256") or artifact.get("sizeBytes") is None:
-                raise ComputeError("INVALID_MANIFEST", "artifact is missing name, size or SHA-256")
+            if (
+                not artifact.get("artifactId") or not artifact.get("name")
+                or not artifact.get("sha256") or artifact.get("sizeBytes") is None
+            ):
+                raise ComputeError("INVALID_MANIFEST", "artifact is missing id, name, size or SHA-256")
             name = str(artifact["name"])
             if name.startswith("/") or ".." in name.split("/"):
                 raise ComputeError("INVALID_MANIFEST", "artifact name is not a safe relative path")
+            size_bytes = artifact["sizeBytes"]
+            if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 0:
+                raise ComputeError("INVALID_MANIFEST", "artifact sizeBytes must be a non-negative integer")
+            sha256 = str(artifact["sha256"])
+            if len(sha256) != 64 or any(character not in "0123456789abcdefABCDEF" for character in sha256):
+                raise ComputeError("INVALID_MANIFEST", "artifact SHA-256 must contain 64 hexadecimal characters")
+            await self._compute.verify_artifact(str(artifact["artifactId"]), size_bytes, sha256)
         job.result_manifest_json = manifest
         job.status = "completed"
         job.progress_percent = 100
@@ -118,4 +128,3 @@ class RenderWorker:
             idempotency_key=f"render.poll:{job.id}:{sequence}",
             available_at=datetime.now(timezone.utc) + timedelta(seconds=1),
         )
-

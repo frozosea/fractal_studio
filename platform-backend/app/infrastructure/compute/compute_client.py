@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from typing import Any
 
 import httpx
@@ -36,18 +37,22 @@ class ComputeClient:
         for attempt in range(3):
             try:
                 response = await self._client.request(method, f"{self._base_url}{path}", **kwargs)
-            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
                 if attempt == 2:
                     raise ComputeError("COMPUTE_UNAVAILABLE", str(exc), 503) from exc
                 await asyncio.sleep(0.1 * (2**attempt))
                 continue
-            if response.status_code in {502, 503} and attempt < 2:
+            if response.status_code in {502, 503, 504} and attempt < 2:
                 await asyncio.sleep(0.1 * (2**attempt))
                 continue
             if response.is_error:
                 try:
                     error = response.json().get("error", {})
-                except ValueError:
+                except (AttributeError, ValueError):
+                    error = {}
+                if isinstance(error, str):
+                    error = {"message": error}
+                elif not isinstance(error, dict):
                     error = {}
                 raise ComputeError(
                     str(error.get("code", "COMPUTE_REQUEST_FAILED")),
@@ -94,3 +99,50 @@ class ComputeClient:
     async def manifest(self, compute_run_id: str) -> dict[str, Any]:
         return (await self._request("GET", f"/compute/v1/runs/{compute_run_id}/manifest")).json()
 
+    async def verify_artifact(
+        self, artifact_id: str, expected_size: int, expected_sha256: str,
+    ) -> None:
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            async with self._client.stream(
+                "GET",
+                f"{self._base_url}/compute/v1/artifacts",
+                headers=self._headers,
+                params={"artifactId": artifact_id},
+            ) as response:
+                if response.is_error:
+                    await response.aread()
+                    try:
+                        error = response.json().get("error", {})
+                    except (AttributeError, ValueError):
+                        error = {}
+                    if isinstance(error, str):
+                        error = {"message": error}
+                    elif not isinstance(error, dict):
+                        error = {}
+                    raise ComputeError(
+                        str(error.get("code", "COMPUTE_REQUEST_FAILED")),
+                        str(error.get("message", response.text or "Compute request failed")),
+                        response.status_code,
+                        error.get("details") if isinstance(error.get("details"), dict) else {},
+                    )
+                async for chunk in response.aiter_bytes():
+                    digest.update(chunk)
+                    size += len(chunk)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+            raise ComputeError("COMPUTE_UNAVAILABLE", str(exc), 503) from exc
+        actual_sha256 = digest.hexdigest()
+        if size != expected_size or actual_sha256.lower() != expected_sha256.lower():
+            raise ComputeError(
+                "ARTIFACT_INTEGRITY_FAILED",
+                "Compute artifact does not match its manifest",
+                502,
+                {
+                    "artifactId": artifact_id,
+                    "expectedSizeBytes": expected_size,
+                    "actualSizeBytes": size,
+                    "expectedSha256": expected_sha256,
+                    "actualSha256": actual_sha256,
+                },
+            )
