@@ -1,6 +1,6 @@
 # Compute v1 Job Reference / 任务参考
 
-本文逐项定义 Compute v1 当前注册的 18 个 `kind`。公共包络、鉴权、状态、manifest、错误和下载规则见 [compute_v1_contract.md](compute_v1_contract.md)。这里的默认值是 **Compute v1 当前实际默认值**；Platform 可以施加更严格的产品限制，但不能放宽 Compute 限制。
+本文逐项定义 Compute v1 当前注册的 18 个 `kind`。如果尚不清楚应该选择哪个 kind，或不知道如何请求 DSL、sequence 和 transition，请先看[从零调用手册](compute_v1_cookbook.md)。公共包络、鉴权、状态、manifest、错误和下载规则见 [compute_v1_contract.md](compute_v1_contract.md)。这里的默认值是 **Compute v1 当前实际默认值**；Platform 可以施加更严格的产品限制，但不能放宽 Compute 限制。
 
 表中“必需产物”表示 `completed` manifest 必须出现的文件。名称按 artifact 文件名判断，MIME 还应与表中一致。所有数值必须为有限值，除非字段另有说明。
 

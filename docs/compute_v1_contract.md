@@ -1,6 +1,6 @@
 # Compute v1 私有 HTTP 合同
 
-本文是 Platform API/Worker 与 C++ Compute v1 之间的**规范性合同**。服务后端开发者不需要阅读 C++ 源码即可据此实现鉴权、能力发现、预览、异步任务、取消、产物接收和硬件执行校验。各 `kind` 的 payload、默认值、限制和产物见 [compute_v1_jobs.md](compute_v1_jobs.md)，推荐的 Worker 实现流程见 [platform_compute_integration.md](platform_compute_integration.md)。
+本文是 Platform API/Worker 与 C++ Compute v1 之间的**规范性合同**。第一次接入请先阅读 [从零调用手册](compute_v1_cookbook.md)，其中解释 Key 的生成方式、workload 选择、自定义公式、Orbit sequence、transition 和可复制的 `curl`。各 `kind` 的完整 payload、默认值、限制和产物见 [compute_v1_jobs.md](compute_v1_jobs.md)，推荐的 Worker 实现流程见 [platform_compute_integration.md](platform_compute_integration.md)。
 
 合同版本为 `schemaVersion: 1`。除明确标为“仅供观测”的字段外，本文出现的字段均为 v1 合同的一部分。JSON 字段名区分大小写；未说明可为 `null` 的字段不得发送 `null`。
 
@@ -16,6 +16,8 @@
 建议连接参数：连接超时 2 秒，普通 JSON 请求总超时 15 秒，artifact 流式读取超时按文件大小单独配置。运行时长不受创建请求超时控制，必须依赖轮询。
 
 ## 2. 鉴权与通用头
+
+服务 Key 不是用户申请的 API Key，也没有申请端点。它由部署方生成，分别注入 Compute 的 `FSD_COMPUTE_SERVICE_KEY` 与 Platform API/Worker 的 `COMPUTE_SERVICE_KEY`。生成、Compose 配置和轮换方法见[调用手册第 1 节](compute_v1_cookbook.md#1-key-不是申请的)。
 
 除 health 外必须发送：
 
@@ -406,7 +408,7 @@ Compute v1 自身错误采用：
   "formula": {
     "type": "dsl",
     "source": "z*z+c",
-    "parameters": []
+    "parameters": {}
   }
 }
 ```

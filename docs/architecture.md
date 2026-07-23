@@ -68,6 +68,7 @@ Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件
 - [3d_pipeline.md](3d_pipeline.md): HS field/mesh、transition volume、marching cubes、voxel export。
 - [video_pipeline.md](video_pipeline.md): ln-map、preview、统一视频导出、warp/encode。
 - [compute_v1_contract.md](compute_v1_contract.md): Platform 调用 Compute 的规范性 HTTP transport 合同。
+- [compute_v1_cookbook.md](compute_v1_cookbook.md): Key、workload、curl、DSL/sequence 与 transition 的上手手册。
 - [compute_v1_jobs.md](compute_v1_jobs.md): 18 个 Compute kind 的 payload、限制、响应与产物合同。
 - [platform_compute_integration.md](platform_compute_integration.md): FastAPI ComputeClient、Outbox Worker、manifest 摄取和硬件验收流程。
 - [testing.md](testing.md): 自动测试、构建检查、手动 QA 和提交前检查。
@@ -100,6 +101,7 @@ Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件
 - `docs/3d_pipeline.md`: HS、transition volume、mesh 和 voxel。
 - `docs/video_pipeline.md`: ln-map 和视频导出。
 - `docs/compute_v1_contract.md`: Compute v1 公共 transport、状态、manifest 与错误合同。
+- `docs/compute_v1_cookbook.md`: Compute v1 从零调用和玩法请求示例。
 - `docs/compute_v1_jobs.md`: Compute v1 逐 kind 参数和产物参考。
 - `docs/platform_compute_integration.md`: Platform 服务后端的 Compute 对接实现指南。
 - `docs/testing.md`: 测试和 QA。

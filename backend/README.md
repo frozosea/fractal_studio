@@ -2,7 +2,7 @@
 
 `backend/` 是私有 C++ Compute 服务。它负责分形数学、CPU/GPU 执行、Compute run 生命周期和临时产物；用户、订单、配额、资产与市场数据属于 `platform-backend/`。
 
-服务后端从 [Compute v1 Contract](../docs/compute_v1_contract.md) 开始，逐任务字段和产物见 [Compute v1 Jobs](../docs/compute_v1_jobs.md)，Worker 实现流程见 [Platform–Compute Integration](../docs/platform_compute_integration.md)。商业化实施状态见 [Commercialization Implementation](../docs/commercialization_implementation.md)。
+第一次接入先看 [Compute v1 从零调用手册](../docs/compute_v1_cookbook.md)，它包含 Key、workload、curl、DSL/sequence 和 transition 示例。规范协议见 [Compute v1 Contract](../docs/compute_v1_contract.md)，逐任务字段和产物见 [Compute v1 Jobs](../docs/compute_v1_jobs.md)，Worker 实现流程见 [Platform–Compute Integration](../docs/platform_compute_integration.md)。商业化实施状态见 [Commercialization Implementation](../docs/commercialization_implementation.md)。
 
 ## Build
 

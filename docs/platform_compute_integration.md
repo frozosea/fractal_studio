@@ -1,6 +1,6 @@
 # Platform Backend 对接 Compute v1 指南
 
-本文给 FastAPI 服务后端开发者一条可直接实现的最小闭环。公共商业 API 和领域字段以 `platform-backend-spec.zh.pdf` 为准；本文只规定 Platform 内部如何调度 C++ Compute。HTTP 合同见 [compute_v1_contract.md](compute_v1_contract.md)，任务参数见 [compute_v1_jobs.md](compute_v1_jobs.md)。
+本文给 FastAPI 服务后端开发者一条可直接实现的最小闭环。公共商业 API 和领域字段以 `platform-backend-spec.zh.pdf` 为准；本文只规定 Platform 内部如何调度 C++ Compute。第一次手动调用、Key 配置和公式/transition 示例见[从零调用手册](compute_v1_cookbook.md)，HTTP 合同见 [compute_v1_contract.md](compute_v1_contract.md)，任务参数见 [compute_v1_jobs.md](compute_v1_jobs.md)。
 
 ## 1. Platform 内部组件
 
