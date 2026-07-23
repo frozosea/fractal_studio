@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from .client import ComputeClient
-from .payloads import transition_mesh_payload, transition_voxels_payload
+from .payloads import (
+    transition_mesh_payload, transition_video_payload, transition_voxels_payload,
+)
 
 
 def test_transition_mesh_run_is_asynchronous(client: ComputeClient) -> None:
@@ -58,3 +60,16 @@ def test_legacy_transition_voxels_keeps_inline_geometry(client: ComputeClient) -
     assert data["status"] == "completed"
     assert data["faceCount"] > 0
     assert len(data["posB64"]) > 0
+
+
+def test_transition_video_manifest_reports_kernel_hardware(client: ComputeClient) -> None:
+    manifest = client.completed_manifest(
+        "transition_video", transition_video_payload(), timeout=20.0,
+    )
+
+    execution = manifest["hardwareExecution"]
+    assert "video/mp4" in {item["mediaType"] for item in manifest["artifacts"]}
+    assert execution["kernelReported"] is True
+    assert execution["actualEngine"] == "openmp"
+    assert execution["actualScalar"] == "fp64"
+    assert execution["hardwareClass"] == "cpu"

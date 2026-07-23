@@ -97,6 +97,17 @@ def transition_voxels_payload() -> dict[str, Any]:
     return payload
 
 
+def transition_video_payload() -> dict[str, Any]:
+    return {
+        "centerRe": -0.75, "centerIm": 0.0, "scale": 3.0,
+        "width": 128, "height": 128, "iterations": 16,
+        "fps": 1, "durationSec": 2.0,
+        "thetaStartDeg": 0.0, "thetaEndDeg": 90.0,
+        "transitionFrom": "mandelbrot", "transitionTo": "burning_ship",
+        "engine": "openmp", "scalarType": "fp64",
+    }
+
+
 def special_points_enumerate_payload() -> dict[str, Any]:
     return {
         "kind": "center", "periodMin": 1, "periodMax": 1,

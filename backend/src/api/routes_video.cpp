@@ -1965,7 +1965,7 @@ void setVideoProgress(
         {"errorMessage", errorMessage},
         {"details", details},
     };
-    for (const char* key : {"engine", "scalar", "finalFrameEngine", "finalFrameScalar", "lnMapEngine", "lnMapScalar", "lnMapMode", "lnMapColorMode", "lnMapPass", "lnMapStatsSource", "lnMapStatsReused", "lnMapLayerSummary", "lnMapValidationSummary", "currentLnMapSegment", "lnMapSegmentCount", "lnMapSegmentHeight", "warpMethod", "encoder", "currentFrame", "totalFrames", "currentLnMapRow", "totalLnMapRows", "warpTotalMs", "copyTotalMs", "writeTotalMs", "encodeCloseMs", "avgWarpMs", "avgCopyMs", "avgWriteMs", "rawVideoBytes", "stripWidth", "stripHeight", "opencvRemapSafe"}) {
+    for (const char* key : {"engine", "scalar", "kernelReported", "finalFrameEngine", "finalFrameScalar", "lnMapEngine", "lnMapScalar", "lnMapMode", "lnMapColorMode", "lnMapPass", "lnMapStatsSource", "lnMapStatsReused", "lnMapLayerSummary", "lnMapValidationSummary", "currentLnMapSegment", "lnMapSegmentCount", "lnMapSegmentHeight", "warpMethod", "encoder", "currentFrame", "totalFrames", "currentLnMapRow", "totalLnMapRows", "warpTotalMs", "copyTotalMs", "writeTotalMs", "encodeCloseMs", "avgWarpMs", "avgCopyMs", "avgWriteMs", "rawVideoBytes", "stripWidth", "stripHeight", "opencvRemapSafe"}) {
         if (details.contains(key)) j[key] = details[key];
     }
     if (terminalStage) runner.setCancelable(runId, false);
@@ -2097,7 +2097,7 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
     try {
         const auto t0 = std::chrono::steady_clock::now();
         throwIfCancelled(runner, run.id);
-        compute::render_map(mp, finalImg);
+        const compute::MapStats finalStats = compute::render_map(mp, finalImg);
         throwIfCancelled(runner, run.id);
         setVideoProgress(runner, run.id, "video_warp_encode", 0, frameCount, depthOctaves, depthOctaves,
                          "", "", Json{{"currentFrame", 0}, {"totalFrames", frameCount}});
@@ -2120,7 +2120,10 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
         if (cancelToken->load(std::memory_order_relaxed)) throw std::runtime_error("cancelled");
         const auto t1 = std::chrono::steady_clock::now();
         elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
+        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount},
+                            {"engine", finalStats.engine_used}, {"scalar", finalStats.scalar_used},
+                            {"kernelReported", true}, {"warpMethod", warpMethod},
+                            {"encoder", encoderUsed}};
         mergeVideoWarpStats(doneDetails, warpStats);
         setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, depthOctaves, depthOctaves,
                          "", "", doneDetails);
@@ -3137,7 +3140,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 resolveVideoEncodeOptions(j, finalImg));
             throwIfCancelled(runner, run.id);
 
-            Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
+            Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"kernelReported", true}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
             mergeVideoWarpStats(doneDetails, warpStats);
             setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, reportedDepth, reportedDepth,
                              "", "", doneDetails);
@@ -3483,7 +3486,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             resolveVideoEncodeOptions(j, finalImg)
         );
         throwIfCancelled(runner, run.id);
-        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
+        Json doneDetails = {{"currentFrame", frameCount}, {"totalFrames", frameCount}, {"kernelReported", true}, {"lnMapEngine", lnStats.engine_used}, {"lnMapScalar", lnStats.scalar_used}, {"lnMapMode", lnStats.precision_mode}, {"lnMapColorMode", lnMapColorMode}, {"lnMapStatsSource", lnMapStatsSource}, {"lnMapStatsReused", lnMapStatsReused}, {"lnMapLayerSummary", lnStats.layer_summary}, {"lnMapValidationSummary", lnStats.validation_summary}, {"finalFrameEngine", finalStats.engine_used}, {"finalFrameScalar", finalStats.scalar_used}, {"warpMethod", warpMethod}, {"encoder", encoderUsed}};
         mergeVideoWarpStats(doneDetails, warpStats);
         setVideoProgress(runner, run.id, "video_warp_encode", frameCount, frameCount, depth, depth,
                          "", "", doneDetails);
@@ -3982,21 +3985,22 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
 
         const double progressStart = animationMode == "zoom" ? 0.0 : thetaStartDeg;
         const double progressEnd = animationMode == "zoom" ? zoomDepth : thetaEndDeg;
+        compute::MapStats transitionStats;
 
         setVideoProgress(runner, run.id, "transition_preview", 0, 2, progressStart, progressEnd,
                          "", "", Json{{"animationMode", animationMode}, {"thetaDeg", thetaFixedDeg}});
 
         cv::Mat startImg, endImg;
         if (animationMode == "zoom") {
-            compute::render_transition(buildTp(thetaFixedDeg, zoomStartScale), startImg);
+            transitionStats = compute::render_transition(buildTp(thetaFixedDeg, zoomStartScale), startImg);
         } else {
-            compute::render_transition(buildTp(thetaStartDeg, scale), startImg);
+            transitionStats = compute::render_transition(buildTp(thetaStartDeg, scale), startImg);
         }
         throwIfCancelled(runner, run.id);
         if (animationMode == "zoom") {
-            compute::render_transition(buildTp(thetaFixedDeg, zoomEndScale), endImg);
+            transitionStats = compute::render_transition(buildTp(thetaFixedDeg, zoomEndScale), endImg);
         } else {
-            compute::render_transition(buildTp(thetaEndDeg, scale), endImg);
+            transitionStats = compute::render_transition(buildTp(thetaEndDeg, scale), endImg);
         }
         throwIfCancelled(runner, run.id);
 
@@ -4067,7 +4071,7 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
 
                     auto tp = buildTp(thetaDeg, frameScale);
                     cv::Mat frame;
-                    compute::render_transition(tp, frame);
+                    transitionStats = compute::render_transition(tp, frame);
 
                     const size_t bytes = static_cast<size_t>(frame.rows) * frame.step;
                     if (!pipe.writeAll(
@@ -4157,6 +4161,9 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
         setVideoProgress(runner, run.id, "transition_render", frameCount, frameCount,
                          progressEnd, progressEnd, "", "",
                          Json{{"currentFrame", frameCount}, {"totalFrames", frameCount},
+                              {"engine", transitionStats.engine_used},
+                              {"scalar", transitionStats.scalar_used},
+                              {"kernelReported", true},
                               {"animationMode", animationMode}, {"thetaDeg", thetaFixedDeg},
                               {"depthOctaves", zoomDepth}, {"targetScale", zoomEndScale},
                               {"secondsPerOctave", zoomSecondsPerOctave}, {"encoder", encoderUsed}});
@@ -4179,8 +4186,10 @@ std::string transitionVideoExportRoute(const std::filesystem::path& repoRoot, Jo
             {"rotationDeg", rotationDeg},
             {"transitionFrom", fromStr},
             {"transitionTo", toStr},
-            {"engine", engineStr},
-            {"scalarType", scalarStr},
+            {"requestedEngine", engineStr},
+            {"requestedScalarType", scalarStr},
+            {"engine", transitionStats.engine_used},
+            {"scalarType", transitionStats.scalar_used},
         };
         const std::filesystem::path reportPath = std::filesystem::path(run.outputDir) / "transition_export.json";
         atomicWriteText(reportPath, renderLog.dump(2));

@@ -20,3 +20,5 @@ def test_zoom_video_run_produces_mp4(client: ComputeClient) -> None:
     media_types = {item["mediaType"] for item in manifest["artifacts"]}
     assert manifest["escapeAnalysis"]["certifiedRadius"] == 2.0
     assert "video/mp4" in media_types
+    assert manifest["hardwareExecution"]["kernelReported"] is True
+    assert manifest["hardwareExecution"]["hardwareClass"] == "cpu"
