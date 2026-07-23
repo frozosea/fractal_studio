@@ -109,7 +109,7 @@ Platform /api request
 | status/cancel | completed | flat RunStatus、artifact allowlist、404、legacy run 分流和 cancel response 已覆盖。 |
 | 本地前端 service key | completed | `dev.sh` 同值注入 C++/Vite；统一 fetch helper 带 Bearer；随机值不落盘、不打印。 |
 | Platform HTTP integration | completed | 测试直接导入协作者真实 `ComputeClient`，对 C++ 完成 preview、create、poll 和 PNG 解析。 |
-| 回归与文档 | in progress | Compute HTTP `85 passed`，真实 Platform client `1 passed`，前端生产构建通过；尚待 CTest 和最终文档审计。 |
+| 回归与文档 | completed | Compute HTTP `86 passed`（含真实 Platform client），CTest `9/9`，前端生产构建与 `dev.sh` 启停通过；路径文档已完成一致性审计。 |
 
 ## 6. 测试策略
 

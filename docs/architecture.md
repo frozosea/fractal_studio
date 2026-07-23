@@ -67,11 +67,12 @@ Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件
 - [recurrence_metric.md](recurrence_metric.md): `min_pairwise_dist` 的公式、复杂度、回退策略和 HS-Recurrence 用法。
 - [3d_pipeline.md](3d_pipeline.md): HS field/mesh、transition volume、marching cubes、voxel export。
 - [video_pipeline.md](video_pipeline.md): ln-map、preview、统一视频导出、warp/encode。
-- [compute_v1_contract.md](compute_v1_contract.md): Platform 调用 Compute 的规范性 HTTP transport 合同。
+- [platform_compute_integration.md](platform_compute_integration.md): 当前 Platform Worker 调用 C++ 私有 `/api/*` 的生产合同与状态机。
+- [compute_v1_contract.md](compute_v1_contract.md): C++ `/compute/v1/*` 工具/扩展合同；当前 Platform Worker 不使用。
 - [compute_v1_cookbook.md](compute_v1_cookbook.md): Key、workload、curl、DSL/sequence 与 transition 的上手手册。
 - [orbit_recipe_product_tasks.md](orbit_recipe_product_tasks.md): repeat block、公式编排、不可变配方/视角存档和服务后端/前端任务清单。
 - [compute_v1_jobs.md](compute_v1_jobs.md): 18 个 Compute kind 的 payload、限制、响应与产物合同。
-- [platform_compute_integration.md](platform_compute_integration.md): FastAPI ComputeClient、Outbox Worker、manifest 摄取和硬件验收流程。
+- [platform_compute_integration.md](platform_compute_integration.md): 实际 FastAPI ComputeClient、7 条 `/api` 路由、Outbox Worker 和已知缺口。
 - [testing.md](testing.md): 自动测试、构建检查、手动 QA 和提交前检查。
 
 ## Concurrency And Cancellation / 并发与取消
@@ -101,7 +102,7 @@ Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件
 - `docs/recurrence_metric.md`: `min_pairwise_dist` / HS-Recurrence。
 - `docs/3d_pipeline.md`: HS、transition volume、mesh 和 voxel。
 - `docs/video_pipeline.md`: ln-map 和视频导出。
-- `docs/compute_v1_contract.md`: Compute v1 公共 transport、状态、manifest 与错误合同。
+- `docs/compute_v1_contract.md`: Compute v1 工具/扩展 transport、状态、manifest 与错误合同。
 - `docs/compute_v1_cookbook.md`: Compute v1 从零调用和玩法请求示例。
 - `docs/compute_v1_jobs.md`: Compute v1 逐 kind 参数和产物参考。
 - `docs/platform_compute_integration.md`: Platform 服务后端的 Compute 对接实现指南。

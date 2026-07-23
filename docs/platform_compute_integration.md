@@ -1,279 +1,183 @@
-# Platform Backend 对接 Compute v1 指南
+# Platform Backend 对接 C++ Compute 指南
 
-本文给 FastAPI 服务后端开发者一条可直接实现的最小闭环。公共商业 API 和领域字段以 `platform-backend-spec.zh.pdf` 为准；本文只规定 Platform 内部如何调度 C++ Compute。第一次手动调用、Key 配置和公式/transition 示例见[从零调用手册](compute_v1_cookbook.md)，HTTP 合同见 [compute_v1_contract.md](compute_v1_contract.md)，任务参数见 [compute_v1_jobs.md](compute_v1_jobs.md)。
+本文只描述当前 `platform_backend@81bc3fc` 已实现、C++ 已验证的生产调用链。不要把
+`/compute/v1/*` 的通用 Compute v1 工具合同误当成当前 Platform Worker 合同。
 
-## 1. Platform 内部组件
+## 1. 权威来源与边界
 
-```text
-Browser
-  -> FastAPI route/service
-     -> PostgreSQL transaction:
-          render_jobs + quota_reservations + outbox_events
+发生冲突时按以下顺序判断：
 
-Outbox Worker
-  -> claim event (FOR UPDATE SKIP LOCKED)
-  -> select Compute node from capability snapshot
-  -> POST /compute/v1/runs
-  -> persist node_id + compute_run_id
-  -> poll /runs/{id}
-  -> GET manifest
-  -> verify hardware + artifacts
-  -> stream artifact -> object storage
-  -> PostgreSQL terminal transaction
-```
+1. [`platform-backend/docs/compute-openapi.yaml`](../platform-backend/docs/compute-openapi.yaml)：生产 HTTP 合同。
+2. [`ComputeClient`](../platform-backend/app/infrastructure/compute/compute_client.py)：当前真实调用与错误映射。
+3. [`compute_request_mapper.py`](../platform-backend/app/studio/compute_request_mapper.py)：Recipe/Output 到 Compute body 的字段映射。
+4. [`render_worker.py`](../platform-backend/app/studio/render_worker.py)：提交、轮询与取消状态机。
+5. C++ adapter：[`routes_platform_compute.cpp`](../backend/src/api/routes_platform_compute.cpp)。
 
-Redis 只用于限流和配额计数，不作为渲染队列。Outbox 是唯一后台任务来源。
-
-## 2. 建议的强类型 DTO
-
-服务端应把运输合同与 18 类 recipe payload 分开。payload 可用 Pydantic discriminated union 建模；第一阶段也可以在完成 kind allowlist 和大小限制后保存为 `dict[str, Any]`，但发送时必须来自不可变 recipe snapshot，不能接收浏览器任意 JSON 直通私网。
-
-用户可编辑的 Orbit 文档、repeat block、不可变配方版本和 SavedView 属于 Platform，不属于 Compute transport DTO。具体数据边界、编译流程和服务后端验收任务见 [Orbit 编排与配方存档任务清单](orbit_recipe_product_tasks.md)。
-
-```python
-from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class StrictDto(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class ComputeRunRequest(StrictDto):
-    schemaVersion: Literal[1] = 1
-    kind: str
-    idempotencyKey: str = Field(min_length=1, max_length=200)
-    payload: dict[str, Any]
-
-
-class ComputeArtifact(StrictDto):
-    artifactId: str
-    name: str
-    kind: str
-    mediaType: str
-    sizeBytes: int = Field(ge=0)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    contentPath: str
-
-
-class ComputeErrorBody(BaseModel):
-    # 迁移期底层错误尚不全是统一 envelope，HTTP client 需保留 raw body。
-    error: dict[str, Any] | str
-```
-
-响应模型建议 `extra="allow"`：Compute 的 `progress.details` 和某些 preview 数据会向后兼容地增加观测字段，Transport 客户端不应因此拒绝整个响应。请求模型保持 `extra="forbid"`，防止把 Platform 内部字段误发给 Compute。
-
-`map_image` preview 必须使用独立方法返回 `bytes + headers`；不要让通用 JSON 方法尝试解析它。artifact 使用 `httpx.AsyncClient.stream()`，不能一次性读入内存。
-
-## 3. ComputeClient 接口
-
-建议只暴露以下内部方法：
-
-```python
-class ComputeClient:
-    async def health(self) -> Health: ...
-    async def capabilities(self) -> Capabilities: ...
-    async def preview_json(self, kind: str, payload: dict) -> dict: ...
-    async def preview_rgba(self, payload: dict) -> RgbaFrame: ...
-    async def create_run(self, request: ComputeRunRequest) -> CreatedRun: ...
-    async def get_run(self, run_id: str) -> ComputeRun: ...
-    async def cancel_run(self, run_id: str) -> CancelResult: ...
-    async def get_manifest(self, run_id: str) -> ComputeManifest: ...
-    async def stream_artifact(self, artifact_id: str, range_: str | None = None): ...
-```
-
-所有方法自动添加 bearer 密钥；调用者不能自行提供 Authorization。base URL 和密钥按 `compute_node_id` 从受保护配置读取，密钥不得写入数据库事件、日志或异常字符串。
-
-有限重试只能包围单次 HTTP 操作：连接失败/超时/502/503/504 可按 1、2、4 秒加抖动重试，`POST /runs` 始终复用原 idempotency key。不要在 client 内部等待任务完成；轮询属于 Worker 状态机。
-
-## 4. PostgreSQL 最小持久状态
-
-`render_jobs` 至少保存：
-
-| 字段 | 用途 |
-|---|---|
-| `id`, `user_id`, `recipe_snapshot_id`, `kind` | 平台身份与不可变输入 |
-| `status`, `cancel_requested_at` | 平台状态和用户意图 |
-| `idempotency_key` | 固定 `platform-job:<uuid>`，unique |
-| `request_payload`, `platform_recipe_hash` | 实际发送快照和 Platform 规范化 hash |
-| `compute_node_id`, `compute_run_id` | 必须成对持久化；run ID 在该节点命名空间内 |
-| `compute_renderer_version`, `capability_snapshot` | 可复现性与节点选择证据 |
-| `compute_status`, `compute_progress` | 最近一次轮询原文 |
-| `compute_recipe_hash`, `effective_engine`, `effective_scalar` | terminal manifest 数据 |
-| `hardware_execution`, `escape_analysis`, `compute_manifest` | 完整审计对象 |
-| `error_code`, `error_message_internal` | 内部失败；公共错误另做安全映射 |
-| `lease_owner`, `lease_expires_at`, `attempt_count`, `next_attempt_at` | Outbox/Worker 恢复 |
-| `created_at`, `started_at`, `finished_at` | Platform UTC 时间；Compute epoch ms 可另存 |
-
-不要把 `legacyResult`、legacy artifact URL 或 Compute 本地绝对路径当业务字段。
-
-## 5. 创建事务
-
-API 收到合法公共请求后在**一个 PostgreSQL 事务**中：
-
-1. 锁定/检查额度并写 `quota_reservations`。
-2. 固化 recipe snapshot，计算 Platform recipe hash。
-3. 创建 `render_jobs(status='queued')` 和稳定 idempotency key。
-4. 创建唯一 outbox event，例如 `(aggregate_id, event_type)` unique。
-5. 提交事务后立即向浏览器返回 platform job ID；API 进程不直接调用 Compute。
-
-重复公共请求按 PDF 的公共幂等规则返回同一 platform job。Outbox 重复投递也必须落到同一 Compute idempotency key。
-
-## 6. Worker 状态机
-
-### 6.1 Claim
-
-在短事务中使用 `FOR UPDATE SKIP LOCKED` 领取到期 event，写 `lease_owner/lease_expires_at` 后立即提交。计算和网络请求不得持有数据库行锁。租约必须可过期重领。
-
-### 6.2 Submit 或 resume
+浏览器公共接口属于 FastAPI `/v1/*`；C++ `/api/*` 是私网服务间接口：
 
 ```text
-if compute_node_id and compute_run_id exist:
-    resume polling that exact node/run
-else:
-    choose node whose snapshot supports kind/mode/orbit/hardware policy
-    POST /runs with stable key and immutable payload
-    transactionally save node_id + run_id + renderer/capability snapshot
+Browser -> FastAPI /v1/* -> PostgreSQL Outbox -> Worker
+       Worker -> C++ Compute private /api/*
 ```
 
-保存 run ID 失败后 Worker 可能重复 `POST /runs`；Compute 幂等键会返回同一 run。若相同平台 key 对应的 kind/hash 不同，应在 Platform 本地标为一致性故障，不发送请求。
+生产浏览器不能获得 Compute base URL 或 service key。旧 Vue 直连 C++ 只属于本地迁移模式。
 
-### 6.3 Poll
+## 2. Key 从哪里来
 
-建议初始 250–500 ms，逐步上升到 2–5 秒并加抖动。每次轮询：
+Compute key 不是用户申请的 API key，也没有申请接口。部署人员生成一个随机服务密钥，并把
+同一个值分别注入：
 
-- 保存 `compute_status` 和完整 progress；
-- 第一次观察到 running 时设置 Platform `started_at`；
-- 若平台已收到取消意图且尚未转发，调用 cancel 一次并记录结果；
-- `queued/running`：续租或安排下一次短轮询；
-- `completed`：进入 manifest 接收；
-- `failed/cancelled`：进入 terminal transaction。
+```bash
+export COMPUTE_SERVICE_KEY="$(openssl rand -hex 32)"        # Platform API/Worker
+export FSD_COMPUTE_SERVICE_KEY="$COMPUTE_SERVICE_KEY"       # C++ Compute
+```
 
-不要用 `progress.percent==100`、artifact 出现或 `kernelReported` 单独判断完成。
+Platform 配置还需要 `COMPUTE_BASE_URL=http://compute.internal:18080`。所有生产路由请求都带：
 
-Compute 的 `percent` 是 stage-local 且 optional：视频进入新阶段时可以从 100 重新变成 0，special-points 主要报告 accepted/seed 数而没有统一 percent。Platform 应保存完整 `compute_progress`，再按 [调用手册进度规则](compute_v1_cookbook.md#34-进度条怎样做)派生面向 UI 的单调展示值。当前底座只保存 `progress_percent` 仍不足以支撑正式产品的阶段标签、ETA 和取消状态，M2 DTO 需要补齐这些派生字段。
+```http
+Authorization: Bearer <service-key>
+```
 
-### 6.4 Cancel race
+错误/缺失 key 返回 `401` flat Problem。密钥不得进入数据库、Outbox payload、日志或浏览器构建。
+本地旧前端直接运行根目录 `./dev.sh`；脚本会生成一次性开发值并同时注入 Vite/C++，不落盘、不打印。
 
-用户取消只更新 Platform job + outbox，不直接从 API route 阻塞等待 Compute。Worker 转发取消后继续轮询：
+## 3. 当前 7 条生产路由
 
-| Compute terminal | Platform 处理 |
-|---|---|
-| `cancelled` | 释放额度/按策略结算，终态 cancelled。 |
-| `completed` | 记录“取消晚于完成”；可接收或丢弃产物由产品策略决定，但事实终态不可伪造成 Compute cancelled。 |
-| `failed` | 保存真实失败；同时保留取消意图。 |
+| Method | Path | 用途 | 成功响应 |
+|---|---|---|---|
+| POST | `/api/map/render-inline` | 有界 RGBA8 预览 | 200 binary / 204 |
+| POST | `/api/map/render` | 异步 PNG | flat `RunAccepted` |
+| POST | `/api/video/export` | 异步 MP4 | flat `RunAccepted` |
+| POST | `/api/hs/mesh` | 异步 HS GLB/STL | flat `RunAccepted` |
+| POST | `/api/transition/mesh` | 异步 transition GLB/STL | flat `RunAccepted` |
+| GET | `/api/runs/status?runId=...` | Worker 轮询 | flat `RunStatus` |
+| POST | `/api/runs/cancel` | 转发取消意图 | `cancel_requested` |
 
-### 6.5 Failed run
+生产响应没有 `schemaVersion/data` 包络，也没有 `computeRunId` 字段；实际字段名是 `runId`。
 
-Compute terminal `failed` 通常通过 `GET /runs/{id}` 返回 HTTP 200。失败详情优先从 `progress.errorMessage`、`progress.details.error`、`progress.failedStage` 读取并原样保存到内部字段。给浏览器使用稳定的 Platform 错误码，不泄漏路径、FFmpeg stderr 或节点配置。
+### 3.1 Preview
 
-## 7. Manifest 和 artifact 接收
+Platform 必须用 `map_preview_v1()` 生成 body。`requestId` 为 UUID；`engine` 取
+`auto/cpu/cuda`，`scalarType` 取 `auto/float/double/long_double`。C++ 会映射到实际
+`openmp/cuda` 与 `fp32/fp64/fp80`。
 
-建议单独实现 `verify_manifest(kind, expected, manifest)`：
+成功时必须同时校验：
+
+- `Content-Type: application/octet-stream`
+- `X-FSD-Width`、`X-FSD-Height`
+- `X-FSD-Pixel-Format: rgba8`
+- body 长度严格等于 `width * height * 4`
+
+预览最大宽高均为 1024。204 表示被抢占/取消，不得当作空白成功图。
+
+### 3.2 Durable request
+
+所有 durable body 都必须包含 UUID `clientJobId`，它就是 Platform `render_jobs.id`，也是
+Compute 幂等键。相同 ID + 相同规范 body 返回同一 `runId`；相同 ID + 不同 body 返回 409。
+
+请求必须由 `map_durable_v1()` 从不可变 recipe snapshot 和 output spec 生成，禁止浏览器 JSON
+直接透传。四类映射：
+
+- image：map 字段 + `clientJobId` + `stillExport=true` + `background=true`。
+- video：map 字段 + `clientJobId/fps/durationSeconds`；C++ 内部转成 `durationSec`。
+- HS：`centerRe/centerIm/scale/resolution/iterations/variant/bailout` 加可选高度参数。
+- transition：`centerX/Y/Z/extent/resolution/iterations/transitionFrom/To` 加可选 mesh 参数。
+
+注意：当前 FFmpeg 链要求视频宽高至少 128；Platform Pydantic/OpenAPI 暂允许 1..127，这是已知
+跨端合同差异。C++ 会明确返回 400，不会静默放大。Platform 后续应把视频下界收紧到 128。
+
+## 4. 响应 DTO
+
+创建成功：
+
+```json
+{
+  "runId": "...",
+  "clientJobId": "00000000-0000-4000-8000-000000000000",
+  "status": "queued"
+}
+```
+
+轮询成功：
+
+```json
+{
+  "runId": "...",
+  "clientJobId": "00000000-0000-4000-8000-000000000000",
+  "status": "completed",
+  "progressPercent": 100,
+  "artifacts": [
+    {
+      "artifactId": "run-id:map.png",
+      "purpose": "master",
+      "mediaType": "image/png",
+      "sizeBytes": 1234
+    }
+  ]
+}
+```
+
+允许的 artifact media type 只有 `image/png`、`video/mp4`、`model/gltf-binary`、`model/stl`；
+本地路径、progress JSON、FFmpeg stderr 和 Compute v1 manifest 不会进入该 DTO。
+
+错误统一为：
+
+```json
+{
+  "code": "invalid_request",
+  "message": "safe message",
+  "requestId": "00000000-0000-4000-8000-000000000000"
+}
+```
+
+Platform 当前 client 将 401/403 映射为 `compute_auth_failed`，404 为 `compute_run_not_found`，
+409 为 `compute_conflict`，5xx/连接失败为 `compute_unavailable`，其他 4xx 为 `compute_rejected`。
+
+## 5. Worker 状态机
+
+Outbox 仍是唯一后台执行器，Redis 不是渲染队列。领取事件使用
+`FOR UPDATE SKIP LOCKED` 和短租约；网络请求不得持有数据库锁：
 
 ```text
-schemaVersion == 1
-computeRunId == saved compute_run_id
-status == completed
-rendererVersion non-empty
-recipeHash matches 64 lowercase hex
-required artifact set for kind is present
-every artifactId is non-empty and unique
-every sizeBytes >= 0 and sha256 is 64 lowercase hex
-hardware policy passes
-escapeAnalysis shape is valid
+claim event with short lease
+  -> if runId missing: create_durable_run(saved route/body)
+  -> persist compute_node_id + compute_run_id
+  -> if cancel requested: POST /api/runs/cancel
+  -> GET /api/runs/status
+  -> queued/running: release and reschedule poll
+  -> completed/failed/cancelled: terminal transaction
 ```
 
-各 kind 必需文件见任务参考。对于文件名可变的视频，使用 `mediaType=video/mp4` + kind 验证；固定 sidecar/关键帧仍验证文件名。
+提交失败后重试必须复用已持久化的 route、body 和 `clientJobId`；这是跨 Outbox 至少一次投递的
+`idempotency` 边界。网络请求/计算期间不得持有 PostgreSQL 行锁。取消（`cancel`）后继续轮询，
+Compute 若已完成就保存 completed 事实，不能伪造成 cancelled。
 
-流式搬运伪代码：
+`progressPercent` 是当前 adapter 从 kernel stage progress 取整后的 0..100。正式 UI 若需要阶段名、
+ETA、实际 engine/scalar、`kernelReported` 和硬件执行证据，必须扩展生产 OpenAPI；不能从请求的
+`engine` 猜测硬件。
 
-```python
-hasher = hashlib.sha256()
-size = 0
-async with client.stream_artifact(item.artifactId) as response:
-    response.raise_for_status()
-    async for chunk in response.aiter_bytes():
-        size += len(chunk)
-        hasher.update(chunk)
-        await object_writer.write(chunk)
+## 6. 当前明确缺口
 
-if size != item.sizeBytes or hasher.hexdigest() != item.sha256:
-    await object_writer.abort()
-    raise ArtifactIntegrityError(...)
-await object_writer.commit()
+生产 OpenAPI 目前没有以下接口，服务后端不得假装已经存在：
+
+- capabilities/health 的生产 `/api` 版本；
+- manifest/SHA-256 获取；
+- artifact 私有流式下载；
+- status 中的 `hardwareExecution`、实际 engine/scalar、逃逸证书；
+- Orbit Program/DSL 在生产 `/api` body 中的字段。
+
+这些能力已经存在于另一套 `/compute/v1/*` 工具合同中，但当前 Platform `ComputeClient` 不调用它。
+M3 资产摄取和付费 GPU 硬件验收前，必须先扩展协作者 OpenAPI 与 `ComputeClient`，再实现 C++
+对应生产路由；不能让 Worker 私自混用两套 DTO。
+
+## 7. 验收命令与结果
+
+```bash
+cmake -S backend -B runtime/build -DCMAKE_BUILD_TYPE=Release
+cmake --build runtime/build -j2
+ctest --test-dir runtime/build --output-on-failure
 ```
 
-对象 key 必须由 Platform 自己生成，例如 `jobs/<platform_job_id>/<artifact_uuid>`；不要直接使用 Compute `name`。上传成功后在一个事务中写接收记录、manifest、终态和 Outbox 后续事件。失败重试时按 sha256 幂等复用或清理未提交 multipart upload。
-
-`map_image` 的商业 PNG 固定从 completed manifest 中选择 `mediaType=image/png` 且 artifact ID 以 `:map.png` 结尾的项；同步 preview 的 RGBA8 不能被当作 PNG Asset。二维旋转由不可变配方中的 `rotationDeg` 表达，不应由对象存储摄取阶段再做图像旋转。
-
-底座阶段只保存 manifest，不创建商业 Asset；M3 的资产摄取在校验闭环之后执行。
-
-## 8. 硬件策略实现
-
-节点选择前验证 capability snapshot；任务完成后再次验证 `hardwareExecution`：
-
-```python
-def verify_hardware(evidence, required_class=None, required_engine=None):
-    if evidence.kernelReported is not True:
-        raise HardwareEvidenceError("kernel did not report completion")
-    if evidence.runtimeAvailable is not True:
-        raise HardwareEvidenceError("reported runtime unavailable")
-    if not evidence.actualEngine or not evidence.actualScalar:
-        raise HardwareEvidenceError("missing actual path")
-    if required_class and evidence.hardwareClass != required_class:
-        raise HardwareEvidenceError("wrong hardware class")
-    if required_engine and evidence.actualEngine != required_engine:
-        raise HardwareEvidenceError("requested engine was not used")
-```
-
-`engine=auto` 的普通渲染可接受语义等价 actual path，但必须记录。付费 GPU SKU 则应要求 `hardwareClass in {'gpu','hybrid'}`，并根据产品定义决定 hybrid 是否合格。`cudaWarp=true`、`videoEncoder=h264_nvenc` 或节点存在 CUDA 都不等价于 fractal kernel 使用 CUDA。
-
-Benchmark 逐项验证 `paths[]`；只有 requested/actual 完全匹配、`available=true`、样本数符合请求的路径能更新节点性能评分。
-
-## 9. Preview 代理
-
-预览仍应通过 FastAPI：
-
-- 鉴权/配额/限流在 Platform 完成；浏览器只持有 Cookie session。
-- Platform 从 immutable draft 构造 allowlisted Compute payload，设置较小尺寸/迭代/超时。
-- JSON preview 去掉 legacy `/api/*` URL；如需图片，Platform 用 artifact ID 拉取后代理或生成受控临时 URL。
-- RGBA preview 校验响应头、尺寸和 body 长度，再返回浏览器。
-- 同步 preview 超时不转成持久 run；浏览器可重新请求，Platform 按预览策略限流。
-
-固定测试主体只允许 development/test 开关。生产未完成 M1 时，Studio 路由保持关闭。
-
-## 10. HTTP 到 Platform 错误映射
-
-| Compute 结果 | Platform 内部分类 | 是否自动重试 |
-|---|---|:---:|
-| connect/timeout, 502/503/504 | `compute_temporarily_unavailable` | 有限重试 |
-| 400 validation/DSL | `invalid_compute_recipe` | no |
-| 401 | `compute_node_misconfigured` + alert | no |
-| 404 before run ID saved | `compute_submission_unknown` | 原 key 重提一次 |
-| 404 after run ID saved | `compute_run_lost` + alert | no new run automatically |
-| 409 resource lock | `compute_node_busy` | yes, reschedule |
-| 422 | `unsupported_compute_capability` | no |
-| terminal failed | `compute_execution_failed` | 产品策略决定，不能换数学静默重跑 |
-| artifact size/hash mismatch | `compute_artifact_integrity_failed` + alert | 可重下载；不可发布 |
-| hardware evidence mismatch | `compute_hardware_policy_failed` + alert | 不可发布 |
-
-公共 API 的状态码和响应包络仍按商业 PDF，不要把 Compute 的内部 HTTP 状态一比一暴露。
-
-## 11. 最小集成验收
-
-服务后端完成 Compute 对接至少要有真实 HTTP 集成测试：
-
-1. 无密钥 capabilities 为 401，health 无密钥为 200。
-2. FastAPI 创建 preview 并收到合法 RGBA/JSON。
-3. 一个平台 job 经 PostgreSQL Outbox 提交真实 `map_image` run，重投仍是同一 Compute run。
-4. Worker 跨进程/租约重领后使用已保存 run ID 恢复轮询。
-5. completed manifest 的全部 artifact 经真实 HTTP 下载并校验 size/SHA-256。
-6. 制造长任务、转发取消并观察 terminal；另测取消/完成竞争。
-7. 指定 CPU/GPU 策略，既验证结果又断言 `hardwareExecution` 的 actual path。
-8. 对 18 个 kind 至少做合同级 payload/能力测试；当前持久 kind 全部跑一次真实 run。
-9. 422 组合不会回退成 Mandelbrot，失败 progress 会进入 Platform 内部错误。
-10. 浏览器请求链路中不存在 C++ base URL 或服务密钥。
-
-仓库已有 Compute 自身的真实 HTTP pytest 套件；Platform 测试应把 API、Worker、PostgreSQL 和 Compute 一起放入 Compose，而不是只 mock `ComputeClient`。
+2026-07-24 当前结果：CTest 9/9；Compute HTTP pytest 86 个测试通过；其中测试会启动真实 C++
+进程，并直接导入协作者的真实 `ComputeClient` 完成 preview、create、poll 和 PNG artifact DTO 解析。
+测试位于 `backend/src/tests/compute_v1/test_platform_*.py`，每个测试可独立执行。

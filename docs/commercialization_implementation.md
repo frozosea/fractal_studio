@@ -183,7 +183,7 @@ Vue 3 frontend
 | 2026-07-23 | Artifact integrity ingestion | Platform ComputeClient streams artifact bytes and rejects size/SHA-256 mismatch before Worker completion | 5/5 focused client tests passed |
 | 2026-07-23 | Orbit product handoff | repeat block semantics, flat v1 compiler boundary, recipe/revision/saved-view ownership and backend/frontend task lists | documented; implementation remains pending |
 | 2026-07-23 | Platform migration | `alembic upgrade head --sql` using PostgreSQL dialect | passed; 73 lines generated |
-| 2026-07-23 | Platform preview integration | Uvicorn -> Compute v1 -> OpenMP 64×64 RGBA; propagated engine/scalar/request headers | passed |
+| 2026-07-23 | Platform preview integration | Uvicorn -> private `/api/map/render-inline` -> OpenMP 64×64 RGBA; propagated engine/scalar/request headers | passed |
 | 2026-07-23 | Compose validation | `docker compose -f docker-compose.dev.yml config -q` | passed; daemon start unavailable to current user |
 | 2026-07-23 | Safe DSL/Orbit unit contract | `orbit_program_smoke` covers parser, constants/parameters, canonical hash, limits and M/B deterministic sequence | passed |
 | 2026-07-23 | Strict escape regression | `compute_path_diff` covers certified escape, unverified run-to-limit and numerical-divergence classification | passed |

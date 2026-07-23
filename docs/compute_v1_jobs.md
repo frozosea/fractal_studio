@@ -37,7 +37,7 @@
 
 ### 1.3 输出和内部字段
 
-Platform payload **不要发送** `background`, `taskType`, `localExport`, `requestId`, `preemptKey`, `preemptSeq`。Compute v1 适配器会为持久任务设置后台执行；其余字段属于旧浏览器/本地导出实现，不是平台合同。
+Compute v1 payload **不要发送** `background`, `taskType`, `localExport`, `requestId`, `preemptKey`, `preemptSeq`。Compute v1 适配器会为持久任务设置后台执行；其余字段属于旧浏览器/本地导出实现，不是本合同。当前 Platform Worker 使用另一套生产 `/api/*` DTO，见 [Platform–Compute 对接指南](platform_compute_integration.md)。
 
 ## 2. 二维 map 与 raw field
 
