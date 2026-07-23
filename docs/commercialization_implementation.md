@@ -84,6 +84,7 @@ Vue 3 frontend
 - [x] 私有 artifact 流式读取与 Range。
 - [x] 旧 `/api/*` 双轨兼容和 `FSD_ENABLE_LEGACY_API` 商业关闭开关。
 - [x] Compute v1 HTTP/鉴权/manifest 自动测试。
+- [x] Compute v1 HTTP 合同迁移为按领域拆分的 pytest 套件；每个测试独立启动后端、独立创建 run/产物，原 smoke 仅保留最小核心链路语义。
 - [x] `idempotencyKey` 持久响应缓存；重复 Outbox 提交返回同一 Compute run。
 - [ ] 将仍同步执行的 mesh/ln-map legacy job 改为统一后台 run。
 
@@ -137,22 +138,26 @@ Vue 3 frontend
 | 2026-07-23 | Initial baseline | `cmake -S backend -B runtime/build -DCMAKE_BUILD_TYPE=Release && cmake --build runtime/build -j2` | passed |
 | 2026-07-23 | Existing C++ suite | `ctest --test-dir runtime/build --output-on-failure` | 6/6 passed before Compute v1 changes |
 | 2026-07-23 | Compute v1 compile | Release build with OpenSSL-backed SHA-256 and new private routes | passed |
-| 2026-07-23 | Compute v1 HTTP contract | `compute_v1_http_smoke` covers auth, capabilities, RGBA preview, background run, manifest and artifact streaming | passed; full CTest 7/7 |
-| 2026-07-23 | Compute idempotency | `compute_v1_http_smoke` repeats the same key and asserts the same run ID | passed; full CTest 7/7 |
+| 2026-07-23 | Compute v1 HTTP contract | `compute_v1_http_contract` covers auth, capabilities, RGBA preview, background run, manifest and artifact streaming | passed; full CTest 7/7 at initial implementation |
+| 2026-07-23 | Compute idempotency | pytest contract repeats the same key and asserts the same run ID | passed; full CTest 7/7 at initial implementation |
 | 2026-07-23 | Platform unit tests | isolated Python 3.12 venv; `pytest -q platform-backend/tests` | 5 passed |
 | 2026-07-23 | Platform migration | `alembic upgrade head --sql` using PostgreSQL dialect | passed; 73 lines generated |
 | 2026-07-23 | Platform preview integration | Uvicorn -> Compute v1 -> OpenMP 64×64 RGBA; propagated engine/scalar/request headers | passed |
 | 2026-07-23 | Compose validation | `docker compose -f docker-compose.dev.yml config -q` | passed; daemon start unavailable to current user |
 | 2026-07-23 | Safe DSL/Orbit unit contract | `orbit_program_smoke` covers parser, constants/parameters, canonical hash, limits and M/B deterministic sequence | passed |
 | 2026-07-23 | Strict escape regression | `compute_path_diff` covers certified escape, unverified run-to-limit and numerical-divergence classification | passed |
-| 2026-07-23 | Orbit HTTP/run contract | `compute_v1_http_smoke` covers capabilities, sequence preview, raw strict field, compile errors, async manifest certificate and native compiler denial | passed; full CTest 8/8 |
+| 2026-07-23 | Orbit HTTP/run contract | `compute_v1_http_contract` covers capabilities, sequence preview, raw strict field, compile errors, async manifest certificate and native compiler denial | passed; full CTest 8/8 at initial implementation |
 | 2026-07-23 | HS Orbit parity/strictness | `hs_orbit_smoke` covers builtin parity, M/B sequence determinism and unverified run-to-limit | passed |
-| 2026-07-23 | HS Compute run | `compute_v1_http_smoke` creates an HS mesh with Orbit sequence and verifies GLB/STL manifest entries and radius certificate | passed; full CTest 9/9 |
+| 2026-07-23 | HS Compute run | pytest HTTP contract creates an HS mesh with Orbit sequence and verifies GLB/STL manifest entries and radius certificate | passed; full CTest 9/9 |
 | 2026-07-23 | Typed Orbit AST | `orbit_program_smoke` distinguishes real/complex parameters in canonical hashes and verifies function result/promotion types | passed; full CTest 9/9 |
 | 2026-07-23 | Output-blend escape counterexample | 50% Mandelbrot/Burning Ship complex-output DSL blend must report `certifiedRadius=null`; overflow remains numerical divergence, never escape | passed in `orbit_program_smoke` and `compute_path_diff` |
-| 2026-07-23 | Real Compute HTTP matrix | backend subprocess + Bearer HTTP covers 400/401/422 envelopes, binary/JSON previews, async poll/cancel, manifest, artifact and Range 206 | passed in `compute_v1_http_smoke` |
+| 2026-07-23 | Real Compute HTTP matrix | backend subprocess + Bearer HTTP covers 400/401/422 envelopes, binary/JSON previews, async poll/cancel, manifest, artifact and Range 206 | passed in `compute_v1_http_contract` |
 | 2026-07-23 | Orbit ln-map HTTP parity | Compute run renders escape/hist_eq sequence strips; builtin Orbit PNG SHA-256 equals legacy builtin PNG | passed; full CTest 9/9 |
 | 2026-07-23 | Orbit zoom HTTP E2E | real preview creates start/end/strip/final frames; async export is polled to completion and manifest contains MP4 plus escape certificate | passed; full CTest 9/9 |
+| 2026-07-23 | HTTP test maintainability | `pytest -q backend/src/tests/compute_v1 ...`; 11 test modules, fixture-managed real backend, no cross-test run/artifact sharing | 24/24 passed in 5.12s |
+| 2026-07-23 | Independent HTTP test | direct node selection of `test_validation.py::test_invalid_dsl_returns_unknown_function` | 1/1 passed in 0.12s |
+| 2026-07-23 | Test size rule | AST audit of every `test_*` function | all <= 12 lines; limit is 40 |
+| 2026-07-23 | Post-refactor CTest | `ctest --test-dir backend/build --output-on-failure` | 9/9 passed; `compute_v1_http_contract` invokes pytest |
 
 ## Commit Log / 提交记录
 
@@ -169,6 +174,7 @@ Vue 3 frontend
 | `d0cbbdd` | 扩展真实 Compute HTTP 进程测试，覆盖能力拒绝、Range 和取消终态。 |
 | `600b46b` | Orbit Program 接入 ln-map escape/mapped 路径、sidecar 证明信息和 HTTP parity。 |
 | `1464262` | Orbit Program 同步接入 zoom preview/export 的笛卡尔帧与条带，并以真实 HTTP 生成 MP4。 |
+| `823c319` | 删除 400 行单函数 HTTP 脚本，迁移为 24 个可独立运行的 pytest 合同测试、后端 fixture、API client 和 payload factory。 |
 
 ## Delivery Rules / 交付规则
 
@@ -177,3 +183,4 @@ Vue 3 frontend
 3. 不支持的组合显式失败，禁止静默替换 variant、Orbit Program 或数学语义。
 4. 现有本地 SQLite 历史只读保留，不迁入商业 PostgreSQL。
 5. `platform-backend-spec.zh.pdf` 是 M1–M7 领域与公共 API 的权威基线。
+6. HTTP 合同测试按可命名行为拆分；单个测试不超过 40 行，禁止依赖前序测试产生的 run 或 artifact。
