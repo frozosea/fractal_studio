@@ -31,6 +31,19 @@ def test_idempotency_key_rejects_different_request(client: ComputeClient) -> Non
     assert conflict.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
 
 
+def test_unknown_run_endpoints_return_structured_not_found(client: ComputeClient) -> None:
+    run_id = f"missing-{uuid.uuid4()}"
+
+    for method, suffix in (("GET", ""), ("GET", "/manifest"), ("POST", "/cancel")):
+        result = client.request(
+            f"/compute/v1/runs/{run_id}{suffix}",
+            method=method,
+            body={} if method == "POST" else None,
+        )
+        assert result.status == 404
+        assert result.json()["error"]["code"] == "COMPUTE_RUN_NOT_FOUND"
+
+
 def test_map_run_manifest_contains_escape_certificate(client: ComputeClient) -> None:
     manifest = client.completed_manifest("map_image", map_payload(orbit=True))
 

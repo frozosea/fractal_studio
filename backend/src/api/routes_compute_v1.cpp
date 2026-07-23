@@ -113,6 +113,19 @@ Json computeError(const std::string& code, const std::string& message,
     return Json{{"error", {{"code", code}, {"message", message}, {"details", std::move(details)}}}};
 }
 
+void requireComputeRun(JobRunner& runner, const std::string& runId) {
+    try {
+        (void)runner.getRun(runId);
+    } catch (const std::runtime_error& error) {
+        if (std::string_view(error.what()).starts_with("run not found:")) {
+            throw HttpError(404, computeError(
+                "COMPUTE_RUN_NOT_FOUND", "Compute run was not found",
+                Json{{"computeRunId", runId}}).dump());
+        }
+        throw;
+    }
+}
+
 [[noreturn]] void badRequest(const std::string& code, const std::string& message,
                              Json details = Json::object()) {
     throw HttpError(400, computeError(code, message, std::move(details)).dump());
@@ -590,6 +603,7 @@ std::string computeV1CreateRunRoute(const std::filesystem::path& repoRoot,
 std::string computeV1RunStatusRoute(const std::filesystem::path& repoRoot,
                                     JobRunner& runner,
                                     const std::string& runId) {
+    requireComputeRun(runner, runId);
     const Json legacy = parseLegacyResponse(
         runStatusRoute(repoRoot, runner, "runId=" + runId), "run_status");
     Json params = Json::object();
@@ -621,6 +635,7 @@ std::string computeV1RunStatusRoute(const std::filesystem::path& repoRoot,
 std::string computeV1CancelRunRoute(JobRunner& runner,
                                    const std::string& runId,
                                    const std::string& body) {
+    requireComputeRun(runner, runId);
     const Json legacy = parseLegacyResponse(cancelRunRoute(runner, runId, body), "cancel");
     return Json{{"schemaVersion", COMPUTE_SCHEMA_VERSION}, {"data", {
         {"computeRunId", runId}, {"status", legacy.value("status", std::string())},
@@ -632,6 +647,7 @@ std::string computeV1CancelRunRoute(JobRunner& runner,
 std::string computeV1ManifestRoute(const std::filesystem::path& repoRoot,
                                    JobRunner& runner,
                                    const std::string& runId) {
+    requireComputeRun(runner, runId);
     const Json status = parseLegacyResponse(
         runStatusRoute(repoRoot, runner, "runId=" + runId), "manifest");
     Db db = openDb(repoRoot);
