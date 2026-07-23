@@ -57,11 +57,11 @@ Vue 3 frontend
 
 | Scope | Progress | Current boundary |
 |---|---:|---|
-| Compute 底座（C0–C2） | 约 92% | 2D/Julia/HS/ln-map 安全 DSL、typed AST 与周期序列已可用；zoom 视频传播未完成。 |
+| Compute 底座（C0–C2） | 约 95% | 2D/Julia/HS/ln-map/zoom 安全 DSL、typed AST 与周期序列已可用；后续组合节点未完成。 |
 | Platform/部署底座（P0–D0） | 约 68% | API/Worker/Outbox 代码完成；真实 PostgreSQL/完整 Compose E2E 受 Docker 权限限制。 |
 | 前端双轨（F0） | 0% | 尚未开始拆分前端 API 与页面。 |
 | 商业模块（M1–M6） | 0% | 身份、资产、市场、支付和账本尚未开始。 |
-| 完整商业化路线 | 约 29% | 已完成可运行的 Compute/Platform 技术底座，产品商业闭环尚未进入。 |
+| 完整商业化路线 | 约 30% | 已完成可运行的 Compute/Platform 技术底座，产品商业闭环尚未进入。 |
 
 ## Current Work / 当前工作
 
@@ -103,7 +103,9 @@ Vue 3 frontend
 - [x] legacy `g++ + dlopen` 默认关闭，且只有 legacy API 与 compiler 两个开关都显式为真才允许；商业模式无法加载历史 `.so`。
 - [x] Orbit Program 传播到 HS field/mesh；escape、min/max abs、envelope 和 recurrence 走确定性 fp64/OpenMP 通用路径。
 - [x] Orbit Program 传播到 ln-map 的 escape 与全部 mapped color modes；单公式与旧路径执行 HTTP PNG hash parity。
-- [ ] Orbit Program 传播到 zoom 和其他派生视频；axis transition 视频不接受普通 Orbit Program。
+- [x] Orbit Program 同时传播到 zoom preview/export 的最终笛卡尔帧与 ln-map 条带；真实 HTTP export 生成 MP4 manifest。
+- [ ] `legacy_zoom_video` 的外部 ln-map 复用加入 Orbit hash 一致性校验；当前显式拒绝该组合。
+- [x] axis transition/transition video 保持独立顶层数学，普通 Orbit Program 请求显式 `422`，不转换为线性 blend。
 - [ ] `weighted_schedule`、`output_blend`、参数曲线和动画；axis transition 继续保持独立顶层数学。
 
 ### P0 — FastAPI 架构底座
@@ -150,6 +152,7 @@ Vue 3 frontend
 | 2026-07-23 | Output-blend escape counterexample | 50% Mandelbrot/Burning Ship complex-output DSL blend must report `certifiedRadius=null`; overflow remains numerical divergence, never escape | passed in `orbit_program_smoke` and `compute_path_diff` |
 | 2026-07-23 | Real Compute HTTP matrix | backend subprocess + Bearer HTTP covers 400/401/422 envelopes, binary/JSON previews, async poll/cancel, manifest, artifact and Range 206 | passed in `compute_v1_http_smoke` |
 | 2026-07-23 | Orbit ln-map HTTP parity | Compute run renders escape/hist_eq sequence strips; builtin Orbit PNG SHA-256 equals legacy builtin PNG | passed; full CTest 9/9 |
+| 2026-07-23 | Orbit zoom HTTP E2E | real preview creates start/end/strip/final frames; async export is polled to completion and manifest contains MP4 plus escape certificate | passed; full CTest 9/9 |
 
 ## Commit Log / 提交记录
 
@@ -165,6 +168,7 @@ Vue 3 frontend
 | `24434e9` | 固化 Mandelbrot/Burning Ship 各半输出组合无有限证书、不得误判逃逸的回归测试。 |
 | `d0cbbdd` | 扩展真实 Compute HTTP 进程测试，覆盖能力拒绝、Range 和取消终态。 |
 | `600b46b` | Orbit Program 接入 ln-map escape/mapped 路径、sidecar 证明信息和 HTTP parity。 |
+| `1464262` | Orbit Program 同步接入 zoom preview/export 的笛卡尔帧与条带，并以真实 HTTP 生成 MP4。 |
 
 ## Delivery Rules / 交付规则
 
