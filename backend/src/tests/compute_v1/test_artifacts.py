@@ -19,6 +19,17 @@ def test_artifact_download_returns_complete_png(client: ComputeClient) -> None:
     assert result.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_rotated_map_run_exports_map_png(client: ComputeClient) -> None:
+    payload = {**map_payload(), "rotationDeg": 30.0}
+
+    manifest = client.completed_manifest("map_image", payload)
+    png = artifact_with_media_type(manifest, "image/png")
+    result = client.artifact(str(png["artifactId"]))
+
+    assert str(png["artifactId"]).endswith(":map.png")
+    assert result.content.startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def test_artifact_range_returns_requested_png_signature(client: ComputeClient) -> None:
     png = render_png(client)
 

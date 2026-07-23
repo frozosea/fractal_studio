@@ -51,6 +51,16 @@ def test_run_status_exposes_verified_hardware_execution(client: ComputeClient) -
     assert execution["evidenceSource"] == "kernel_completion_telemetry"
 
 
+def test_completed_map_reports_terminal_progress(client: ComputeClient) -> None:
+    run_id, _ = client.create_run("map_image", map_payload())
+
+    terminal = client.wait_for_run(run_id)
+
+    assert terminal["progress"]["stage"] == "completed"
+    assert terminal["progress"]["percent"] == 100.0
+    assert terminal["progress"]["cancelable"] is False
+
+
 def test_cuda_request_reports_real_gpu_or_explicit_fallback(client: ComputeClient) -> None:
     capabilities = client.request("/compute/v1/capabilities").json()
     manifest = client.completed_manifest("map_image", map_payload(engine="cuda"))

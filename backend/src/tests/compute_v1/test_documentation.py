@@ -55,6 +55,8 @@ def test_cookbook_explains_first_call_and_math_features(studio_root: Path):
         "COMPUTE_SERVICE_KEY", "benchmark.workload", '"type": "dsl"',
         '"type": "sequence"', '"kind": "transition_video"',
         '"kind": "transition_mesh"', "certifiedRadius=null",
+        "进度条怎样做", "当前阶段", "rotationDeg", "png_encode",
+        "map.png", "image/png",
     }
     assert all(term in cookbook for term in required)
     assert '"parameters": []' not in cookbook
