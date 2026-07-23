@@ -27,15 +27,27 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def request(url: str, *, body: dict | None = None, authorized: bool = True) -> tuple[int, bytes, dict]:
-    headers = {}
+def request(
+    url: str,
+    *,
+    body: dict | None = None,
+    authorized: bool = True,
+    headers: dict[str, str] | None = None,
+    method: str | None = None,
+) -> tuple[int, bytes, dict]:
+    request_headers = dict(headers or {})
     data = None
     if authorized:
-        headers["Authorization"] = f"Bearer {SERVICE_KEY}"
+        request_headers["Authorization"] = f"Bearer {SERVICE_KEY}"
     if body is not None:
-        headers["Content-Type"] = "application/json"
+        request_headers["Content-Type"] = "application/json"
         data = json.dumps(body, separators=(",", ":")).encode()
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers=request_headers,
+        method=method or ("POST" if data is not None else "GET"),
+    )
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             return response.status, response.read(), dict(response.headers)
@@ -156,6 +168,35 @@ def main() -> int:
         assert status == 400
         assert json.loads(payload)["error"]["code"] == "UNKNOWN_FUNCTION"
 
+        rejection_cases = [
+            ({"schemaVersion": 2, "kind": "raw_field", "payload": strict_payload},
+             400, "UNSUPPORTED_SCHEMA_VERSION"),
+            ({"schemaVersion": 1, "kind": "raw_field",
+              "payload": {**strict_payload, "metric": "min_abs"}},
+             422, "UNSUPPORTED_CAPABILITY"),
+            ({"schemaVersion": 1, "kind": "transition_video_preview",
+              "payload": {"orbitProgram": sequence_program}},
+             422, "UNSUPPORTED_CAPABILITY"),
+            ({"schemaVersion": 1, "kind": "map_image",
+              "payload": {**sequence_payload, "transitionTheta": 45.0}},
+             422, "UNSUPPORTED_CAPABILITY"),
+        ]
+        for envelope, expected_status, expected_code in rejection_cases:
+            status, payload, _ = request(f"{base}/compute/v1/previews", body=envelope)
+            assert status == expected_status, (envelope["kind"], status, payload)
+            error = json.loads(payload)["error"]
+            assert error["code"] == expected_code
+            assert isinstance(error["details"], dict)
+
+        status, payload, _ = request(
+            f"{base}/compute/v1/runs",
+            body={"schemaVersion": 1, "kind": "ln_map",
+                  "idempotencyKey": f"unsupported-orbit:{port}",
+                  "payload": {"orbitProgram": sequence_program}},
+        )
+        assert status == 422
+        assert json.loads(payload)["error"]["code"] == "UNSUPPORTED_CAPABILITY"
+
         run_request = {
             "schemaVersion": 1, "kind": "map_image",
             "idempotencyKey": f"compute-v1-smoke:{port}", "payload": sequence_payload,
@@ -217,6 +258,45 @@ def main() -> int:
         assert status == 200
         assert headers.get("Content-Type") == "image/png"
         assert content.startswith(b"\x89PNG\r\n\x1a\n")
+
+        status, content, headers = request(
+            f"{base}/compute/v1/artifacts?{query}",
+            headers={"Range": "bytes=0-7"},
+        )
+        assert status == 206
+        assert content == b"\x89PNG\r\n\x1a\n"
+        assert headers.get("Content-Range", "").startswith("bytes 0-7/")
+
+        cancel_payload = {
+            **sequence_payload,
+            "width": 1024,
+            "height": 1024,
+            "iterations": 100_000,
+        }
+        status, payload, _ = request(
+            f"{base}/compute/v1/runs",
+            body={"schemaVersion": 1, "kind": "map_image",
+                  "idempotencyKey": f"compute-v1-cancel:{port}", "payload": cancel_payload},
+        )
+        assert status == 202
+        cancel_run_id = json.loads(payload)["data"]["computeRunId"]
+        status, payload, _ = request(
+            f"{base}/compute/v1/runs/{cancel_run_id}/cancel",
+            body={},
+            method="POST",
+        )
+        assert status == 202
+        cancel_result = json.loads(payload)["data"]
+        assert cancel_result["accepted"] is True
+        cancelled_status = ""
+        for _ in range(100):
+            status, payload, _ = request(f"{base}/compute/v1/runs/{cancel_run_id}")
+            assert status == 200
+            cancelled_status = json.loads(payload)["data"]["status"]
+            if cancelled_status in {"cancelled", "completed", "failed"}:
+                break
+            time.sleep(0.02)
+        assert cancelled_status == "cancelled"
         return 0
     finally:
         if process.poll() is None:
