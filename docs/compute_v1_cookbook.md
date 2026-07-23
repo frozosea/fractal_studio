@@ -503,6 +503,8 @@ n=3: Burning Ship step
 
 可用于 `map_image`, `raw_field`, `ln_map`, `zoom_video`, `video_preview`, `hs_field`, `hs_mesh`。例如把它复制到第 3.3 节 map payload 的 `orbitProgram` 即可。`span:3` 表示该公式连续执行三次再切换；`repeat` 在 v1 必须为 true。
 
+steps 可以任意排列，每个 formula 既可以是 builtin，也可以是第 4 节的安全 DSL。面向用户的多步分组和 `repeat_block` 不直接发送给 Compute v1：由 Platform 展开、规范化并保存不可变配方版本。协议和两端实施清单见 [Orbit 编排、Repeat Block 与配方存档任务清单](orbit_recipe_product_tasks.md)。
+
 当前不支持按 50% 概率随机选公式，也不支持把两个公式的复数输出线性相加。未来的 `weighted_schedule` 和 `output_blend` 是不同数学系统，在 capabilities 中仍为 false。
 
 ## 6. Transition 到底是什么

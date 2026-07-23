@@ -400,7 +400,9 @@ Compute v1 自身错误采用：
 }
 ```
 
-`span` 是正整数连续执行次数；序列按每像素相同的确定性日程循环到 `iterations`。当前启用 `formula` 和 `sequence`；`weighted_schedule`、`output_blend` 和参数曲线尚未启用。transition 使用独立 axis 数学，不能附带普通 Orbit Program。
+`span` 是正整数连续执行次数；序列按每像素相同的确定性日程循环到 `iterations`。当前启用 `formula` 和 `sequence`；`repeat_block`、`weighted_schedule`、`output_blend` 和参数曲线尚未作为 Compute v1 节点启用。transition 使用独立 axis 数学，不能附带普通 Orbit Program。
+
+产品编辑器中的 repeat block 首期由 Platform 权威编译器展开为扁平 sequence，具体语义、存档模型以及服务端/前端任务见 [Orbit 编排与配方存档任务清单](orbit_recipe_product_tasks.md)。不要把递归 sequence 当作 repeat block：当前内层 sequence 使用全局 `n` 取相位，和局部块重复的直觉不完全相同。
 
 安全 DSL：
 

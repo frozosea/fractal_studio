@@ -69,6 +69,7 @@ Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件
 - [video_pipeline.md](video_pipeline.md): ln-map、preview、统一视频导出、warp/encode。
 - [compute_v1_contract.md](compute_v1_contract.md): Platform 调用 Compute 的规范性 HTTP transport 合同。
 - [compute_v1_cookbook.md](compute_v1_cookbook.md): Key、workload、curl、DSL/sequence 与 transition 的上手手册。
+- [orbit_recipe_product_tasks.md](orbit_recipe_product_tasks.md): repeat block、公式编排、不可变配方/视角存档和服务后端/前端任务清单。
 - [compute_v1_jobs.md](compute_v1_jobs.md): 18 个 Compute kind 的 payload、限制、响应与产物合同。
 - [platform_compute_integration.md](platform_compute_integration.md): FastAPI ComputeClient、Outbox Worker、manifest 摄取和硬件验收流程。
 - [testing.md](testing.md): 自动测试、构建检查、手动 QA 和提交前检查。

@@ -132,6 +132,15 @@ Vue 3 frontend
 - [ ] `output_blend`：独立二维动力系统；权重归一化后组合复数输出，默认无逃逸证书。
 - [ ] 权重/参数随迭代或视频时间变化的曲线与动画。
 - [ ] 已审核热门 AST 的 SIMD/CUDA kernel 生成；不得改变 DSL 语义或规范化 hash。
+- [ ] 原生 `repeat_block` 仅在扁平展开无法满足规模/调试需求时进入 Compute 新 IR；首期由 Platform 编辑 IR 编译为现有 sequence。
+
+### Orbit 配方产品任务
+
+- [x] 定义 repeat block 的有限重复、不重置 `z/c/n` 语义，以及展开到扁平 Compute v1 sequence 的兼容策略。
+- [x] 划分 Compute 执行与 Platform Recipe/Draft/Revision/SavedView 存档边界。
+- [x] 发布服务后端和前端实施、限制、迁移与验收清单，见 [Orbit 编排与配方存档任务](orbit_recipe_product_tasks.md)。
+- [ ] Platform 实现编辑 IR、权威编译器、不可变版本、草稿并发控制和 SavedView API。
+- [ ] 前端实现时间线、repeat block 分组、DSL picker、保存/版本/视角恢复及响应式交互。
 
 ### P0 — FastAPI 架构底座
 
@@ -170,6 +179,7 @@ Vue 3 frontend
 | 2026-07-23 | Silent fallback/idempotency regression | unknown advertised fields and axis variants must return structured 422; reused key with changed payload must return 409 | passed over real HTTP |
 | 2026-07-23 | Resource/error regression | missing status, manifest and cancel targets return `404 COMPUTE_RUN_NOT_FOUND`; Platform accepts structured and legacy string errors | passed |
 | 2026-07-23 | Artifact integrity ingestion | Platform ComputeClient streams artifact bytes and rejects size/SHA-256 mismatch before Worker completion | 5/5 focused client tests passed |
+| 2026-07-23 | Orbit product handoff | repeat block semantics, flat v1 compiler boundary, recipe/revision/saved-view ownership and backend/frontend task lists | documented; implementation remains pending |
 | 2026-07-23 | Platform migration | `alembic upgrade head --sql` using PostgreSQL dialect | passed; 73 lines generated |
 | 2026-07-23 | Platform preview integration | Uvicorn -> Compute v1 -> OpenMP 64×64 RGBA; propagated engine/scalar/request headers | passed |
 | 2026-07-23 | Compose validation | `docker compose -f docker-compose.dev.yml config -q` | passed; daemon start unavailable to current user |

@@ -2,6 +2,8 @@
 
 这份文档记录前端结构、状态流和移动端/平板横屏适配策略。它的重点是让后续 UI 改动知道应该改哪里、怎么验证。
 
+Orbit 多步编排、repeat block、自定义公式选择、配方版本和视角存档的产品任务见 [Orbit 编排与配方存档任务清单](orbit_recipe_product_tasks.md)。该编辑器使用 Platform authoring DTO，不应直接让组件拼 Compute v1 JSON。
+
 ## App Structure / 应用结构
 
 | Area | Files | Notes |
