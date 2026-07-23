@@ -80,6 +80,18 @@ Json commaSeparatedArray(std::string_view values) {
     return result;
 }
 
+bool commaSeparatedContains(std::string_view values, std::string_view wanted) {
+    std::size_t start = 0;
+    while (start <= values.size()) {
+        const std::size_t comma = values.find(',', start);
+        const std::size_t end = comma == std::string_view::npos ? values.size() : comma;
+        if (values.substr(start, end - start) == wanted) return true;
+        if (comma == std::string_view::npos) break;
+        start = comma + 1;
+    }
+    return false;
+}
+
 std::shared_ptr<std::mutex> idempotencyLock(const std::string& key) {
     std::lock_guard<std::mutex> lock(g_idempotencyMutex);
     auto& weak = g_idempotencyLocks[key];
@@ -109,6 +121,97 @@ Json computeError(const std::string& code, const std::string& message,
 [[noreturn]] void unsupported(const std::string& kind, const std::string& message) {
     throw HttpError(422, computeError(
         "UNSUPPORTED_CAPABILITY", message, Json{{"kind", kind}}).dump());
+}
+
+std::string requireStringField(const std::string& kind, const Json& payload,
+                               const char* field) {
+    if (!payload[field].is_string()) {
+        badRequest("INVALID_REQUEST", std::string(field) + " must be a string",
+                   Json{{"kind", kind}, {"field", field}});
+    }
+    return payload[field].get<std::string>();
+}
+
+void validateAdvertisedValue(const std::string& kind, const Json& payload,
+                             const char* field, std::string_view allowed) {
+    if (!payload.contains(field) || payload[field].is_null()) return;
+    const std::string value = requireStringField(kind, payload, field);
+    if (!commaSeparatedContains(allowed, value)) {
+        throw HttpError(422, computeError(
+            "UNSUPPORTED_CAPABILITY", std::string("unsupported ") + field,
+            Json{{"kind", kind}, {"field", field}, {"value", value},
+                 {"allowed", commaSeparatedArray(allowed)}}).dump());
+    }
+}
+
+void validateBuiltinVariantValue(const std::string& kind, const Json& value,
+                                 const char* field, bool axisOnly) {
+    if (!value.is_string()) {
+        badRequest("INVALID_REQUEST", std::string(field) + " must be a canonical variant string",
+                   Json{{"kind", kind}, {"field", field}});
+    }
+    const std::string name = value.get<std::string>();
+    compute::Variant variant;
+    const bool known = compute::variant_from_name(name.c_str(), variant) &&
+        variant != compute::Variant::Custom;
+    const bool axisCompatible = known &&
+        static_cast<int>(variant) <= static_cast<int>(compute::Variant::Ship);
+    if (!known || (axisOnly && !axisCompatible)) {
+        throw HttpError(422, computeError(
+            "UNSUPPORTED_CAPABILITY",
+            axisOnly ? "variant has no axis-transition lift" : "unknown built-in variant",
+            Json{{"kind", kind}, {"field", field}, {"value", name}}).dump());
+    }
+}
+
+void validateAxisVariants(const std::string& kind, const Json& payload) {
+    for (const char* field : {"transitionFrom", "transitionTo"}) {
+        if (payload.contains(field) && !payload[field].is_null()) {
+            validateBuiltinVariantValue(kind, payload[field], field, true);
+        }
+    }
+    if (payload.contains("transitionVariants") && !payload["transitionVariants"].is_null()) {
+        if (!payload["transitionVariants"].is_array()) {
+            badRequest("INVALID_REQUEST", "transitionVariants must be an array",
+                       Json{{"kind", kind}, {"field", "transitionVariants"}});
+        }
+        for (const Json& value : payload["transitionVariants"]) {
+            validateBuiltinVariantValue(kind, value, "transitionVariants", true);
+        }
+    }
+    if (payload.contains("transitionLegs") && !payload["transitionLegs"].is_null()) {
+        if (!payload["transitionLegs"].is_array()) {
+            badRequest("INVALID_REQUEST", "transitionLegs must be an array",
+                       Json{{"kind", kind}, {"field", "transitionLegs"}});
+        }
+        for (const Json& leg : payload["transitionLegs"]) {
+            const Json* value = &leg;
+            if (leg.is_object()) {
+                if (!leg.contains("variant")) {
+                    badRequest("INVALID_REQUEST", "transition leg requires variant",
+                               Json{{"kind", kind}, {"field", "transitionLegs"}});
+                }
+                value = &leg["variant"];
+            }
+            validateBuiltinVariantValue(kind, *value, "transitionLegs.variant", true);
+        }
+    }
+}
+
+void validateCapabilityPayload(const std::string& kind, const Json& payload,
+                               const ComputeCapability& capability) {
+    validateAdvertisedValue(kind, payload, "metric", capability.metrics);
+    validateAdvertisedValue(kind, payload, "engine", capability.engines);
+    validateAdvertisedValue(kind, payload, "scalarType", capability.scalars);
+
+    const std::string_view profile = capability.variantProfile;
+    if (profile == "builtin_2d_or_safe_dsl") {
+        if (payload.contains("variant") && !payload["variant"].is_null()) {
+            validateBuiltinVariantValue(kind, payload["variant"], "variant", false);
+        }
+    } else if (profile == "axis_pair_or_multi") {
+        validateAxisVariants(kind, payload);
+    }
 }
 
 Json parseEnvelope(const std::string& body, std::string& kind,
@@ -152,6 +255,7 @@ std::shared_ptr<const compute::OrbitProgram> validateOrbitPayload(
     if (capability == nullptr || (persistent ? !capability->persistent : !capability->preview)) {
         unsupported(kind, persistent ? "unknown persistent Compute kind" : "unknown preview Compute kind");
     }
+    validateCapabilityPayload(kind, payload, *capability);
     if (!payload.contains("orbitProgram") || payload["orbitProgram"].is_null()) return {};
     if (!capability->orbitPayload) {
         unsupported(kind, "this Compute build supports Orbit Program only for 2D/Julia map and HS outputs");
@@ -465,11 +569,21 @@ std::string computeV1CreateRunRoute(const std::filesystem::path& repoRoot,
     const auto requestLock = idempotencyLock(idempotencyKey);
     std::lock_guard<std::mutex> lock(*requestLock);
     Db db = openDb(repoRoot);
+    const std::string requestHash = sha256Text(kind + "\n" + payload.dump());
+    std::string cachedHash;
     std::string cached;
-    if (db.getComputeRequestResponse(idempotencyKey, cached)) return cached;
+    if (db.getComputeRequestResponse(idempotencyKey, cachedHash, cached)) {
+        if (!cachedHash.empty() && cachedHash != requestHash) {
+            throw HttpError(409, computeError(
+                "IDEMPOTENCY_CONFLICT",
+                "idempotencyKey was already used for a different Compute request",
+                Json{{"idempotencyKey", idempotencyKey}}).dump());
+        }
+        return cached;
+    }
     const std::string response = normalizedRunResponse(
         kind, runPayload(std::move(payload), kind, repoRoot, runner)).dump();
-    db.upsertComputeRequestResponse(idempotencyKey, response, nowUnixMs());
+    db.upsertComputeRequestResponse(idempotencyKey, requestHash, response, nowUnixMs());
     return response;
 }
 

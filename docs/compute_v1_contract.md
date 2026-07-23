@@ -135,7 +135,7 @@ Platform 节点登记时保存完整响应；每次调度前至少检查目标 k
 `POST /runs` 额外要求：
 
 ```json
-"idempotencyKey": "platform-job:018f..."
+{"idempotencyKey": "platform-job:018f..."}
 ```
 
 约束：
@@ -144,9 +144,10 @@ Platform 节点登记时保存完整响应；每次调度前至少检查目标 k
 - `kind` 必须是非空字符串，并属于对应的 `persistentKinds` 或 `previewKinds`。
 - `payload` 必须是 JSON object。Orbit Program 只能放在 `payload.orbitProgram`，不能放在包络顶层。
 - `idempotencyKey` 长度为 1–200 字符。推荐固定使用 `platform-job:<platform_job_uuid>`，包括重试和 Worker 租约重领。
-- 相同 key 返回第一次保存的完整创建响应和同一个 `computeRunId`。
+- 相同 key 且 kind/payload 相同，返回第一次保存的完整创建响应和同一个 `computeRunId`。
+- 相同 key 绑定不同 kind/payload 时返回 `409 IDEMPOTENCY_CONFLICT`，不会误返回另一份配方的 run。
 
-v1 当前只按 key 去重，不比较第二次请求的 body。Platform **必须**在数据库中将 key 与不可变 recipe hash/kind 绑定；发现同 key 不同快照时应在调用 Compute 前失败，不能依赖 Compute 检出冲突。
+Platform 仍必须在自己的数据库中将 key 与不可变 recipe hash/kind 绑定，以便在网络调用前发现平台一致性错误。Compute 保存规范化 payload hash，作为至少一次投递的第二道防线；升级前创建、尚无 request hash 的旧本地缓存只能继续返回原响应。
 
 ## 6. 创建、轮询与取消
 
@@ -369,6 +370,7 @@ Compute v1 自身错误采用：
 | `401` | `COMPUTE_UNAUTHORIZED` | 节点凭据配置错误，告警且不盲重试。 |
 | `404` | 资源不存在 | run/artifact/node 路由不存在。 |
 | `409` | 资源锁冲突 | 节点重任务已占用；保留同一平台任务并退避重试调度。 |
+| `409` | `IDEMPOTENCY_CONFLICT` | 同一 key 对应不同 kind/payload；平台一致性故障，不重试。 |
 | `416` | 无 JSON body | Range 不可满足；重新完整下载。 |
 | `422` | `UNSUPPORTED_CAPABILITY` | kind、Orbit、metric 或数学/输出组合不支持，不重试。 |
 | `500` | `COMPUTE_ADAPTER_ERROR` | 适配层没有产生合法响应；节点故障。 |

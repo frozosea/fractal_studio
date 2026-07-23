@@ -17,6 +17,20 @@ def test_duplicate_idempotency_key_returns_same_run(client: ComputeClient) -> No
     assert first.json()["data"]["computeRunId"] == second.json()["data"]["computeRunId"]
 
 
+def test_idempotency_key_rejects_different_request(client: ComputeClient) -> None:
+    key = f"pytest:conflict:{uuid.uuid4()}"
+    first = client.envelope("map_image", map_payload())
+    second = client.envelope("map_image", map_payload(iterations=33))
+    first["idempotencyKey"] = second["idempotencyKey"] = key
+
+    created = client.request("/compute/v1/runs", body=first)
+    conflict = client.request("/compute/v1/runs", body=second)
+
+    assert created.status == 202
+    assert conflict.status == 409
+    assert conflict.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
+
+
 def test_map_run_manifest_contains_escape_certificate(client: ComputeClient) -> None:
     manifest = client.completed_manifest("map_image", map_payload(orbit=True))
 

@@ -75,8 +75,11 @@ public:
     // Compute v1 request deduplication. Product idempotency remains owned by
     // Platform; this cache prevents an at-least-once outbox delivery from
     // creating a second native run after a successful Compute response.
-    bool getComputeRequestResponse(const std::string& idempotencyKey, std::string& responseJson) const;
+    bool getComputeRequestResponse(const std::string& idempotencyKey,
+                                   std::string& requestHash,
+                                   std::string& responseJson) const;
     void upsertComputeRequestResponse(const std::string& idempotencyKey,
+                                      const std::string& requestHash,
                                       const std::string& responseJson,
                                       long long completedAt) const;
 

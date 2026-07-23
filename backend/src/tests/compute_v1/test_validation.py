@@ -47,6 +47,10 @@ def validation_cases() -> list[pytest.ParameterSet]:
     invalid_metric["metric"] = "min_abs"
     invalid_axis = map_payload(orbit=True)
     invalid_axis["transitionTheta"] = 45.0
+    unknown_variant = {**map_payload(), "variant": "not_a_formula"}
+    unknown_metric = {**map_payload(), "metric": "not_a_metric"}
+    unknown_engine = {**map_payload(), "engine": "magic_gpu"}
+    unknown_scalar = {**map_payload(), "scalarType": "fp42"}
     return [
         pytest.param(
             {"schemaVersion": 2, "kind": "raw_field", "payload": strict},
@@ -64,6 +68,28 @@ def validation_cases() -> list[pytest.ParameterSet]:
         pytest.param(
             {"schemaVersion": 1, "kind": "map_image", "payload": invalid_axis},
             422, "UNSUPPORTED_CAPABILITY", id="axis-on-map",
+        ),
+        pytest.param(
+            {"schemaVersion": 1, "kind": "map_image", "payload": unknown_variant},
+            422, "UNSUPPORTED_CAPABILITY", id="unknown-variant",
+        ),
+        pytest.param(
+            {"schemaVersion": 1, "kind": "map_image", "payload": unknown_metric},
+            422, "UNSUPPORTED_CAPABILITY", id="unknown-metric",
+        ),
+        pytest.param(
+            {"schemaVersion": 1, "kind": "map_image", "payload": unknown_engine},
+            422, "UNSUPPORTED_CAPABILITY", id="unknown-engine",
+        ),
+        pytest.param(
+            {"schemaVersion": 1, "kind": "map_image", "payload": unknown_scalar},
+            422, "UNSUPPORTED_CAPABILITY", id="unknown-scalar",
+        ),
+        pytest.param(
+            {"schemaVersion": 1, "kind": "transition_video_preview", "payload": {
+                "transitionFrom": "sin_z", "transitionTo": "burning_ship",
+            }},
+            422, "UNSUPPORTED_CAPABILITY", id="axis-variant-without-lift",
         ),
     ]
 
