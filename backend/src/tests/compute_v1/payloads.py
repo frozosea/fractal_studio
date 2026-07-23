@@ -52,6 +52,12 @@ def hs_mesh_payload() -> dict[str, Any]:
     }
 
 
+def hs_field_payload() -> dict[str, Any]:
+    payload = hs_mesh_payload()
+    payload.pop("heightScale")
+    return payload
+
+
 def ln_map_payload(*, color_mode: str = "escape", orbit: Any = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "centerRe": -0.75, "centerIm": 0.0, "variant": "mandelbrot",

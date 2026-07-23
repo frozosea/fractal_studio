@@ -339,54 +339,119 @@ std::string hsFieldRoute(const std::filesystem::path&, JobRunner& runner, const 
     if (!(p.bailout_sq > 0.0) || !std::isfinite(p.bailout_sq)) throw std::runtime_error("invalid bailoutSq");
 
     auto run = runner.createRun("hs-field", body);
-    runner.setStatus(run.id, "running");
+    const bool background = j.value("background", false);
+    const auto cancelToken = runner.cancelToken(run.id);
+    p.should_cancel = [cancelToken]() {
+        return cancelToken->load(std::memory_order_relaxed);
+    };
+    runner.setCancelable(run.id, true);
+    const std::string actualEngine = p.orbit_program ? "openmp_orbit" : "openmp";
+    auto setProgress = [&runner, run, actualEngine](const char* stage, int current,
+                                                    bool kernelReported) {
+        runner.setProgress(run.id, Json{
+            {"taskType", "hs_field"}, {"stage", stage},
+            {"current", current}, {"total", 1}, {"percent", 100.0 * current},
+            {"engine", actualEngine}, {"scalar", "fp64"},
+            {"kernelReported", kernelReported},
+            {"elapsedMs", runner.runElapsedMs(run.id)},
+            {"cancelable", !kernelReported},
+            {"resourceLocks", Json::array({"cpu_heavy"})},
+            {"details", Json::object()},
+        }.dump());
+    };
+    setProgress("queued", 0, false);
 
-    double elapsed = 0.0;
-
-    try {
+    struct HsFieldResult {
+        std::vector<double> values;
+        double minimum = 0.0;
+        double maximum = 0.0;
+        double elapsed = 0.0;
+    };
+    auto execute = [=, &runner]() mutable -> HsFieldResult {
+        runner.setStatus(run.id, "running");
+        setProgress("field", 0, false);
+        HsFieldResult result;
+        try {
         const auto t0 = std::chrono::steady_clock::now();
 
         // Reuse the existing field compute from buildHsMesh, which computes
         // raw metric values. We replicate the field computation here to return
         // the raw (un-normalized, un-meshed) float64 values. The frontend does
         // normalization and meshing.
-        std::vector<double> rawField;
-        compute::hs::computeHsField(p, rawField);
+        compute::hs::computeHsField(p, result.values);
 
         const auto t1 = std::chrono::steady_clock::now();
-        elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        result.elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
         // Compute min/max for the frontend (it normalizes for colorization).
-        double fmin =  std::numeric_limits<double>::infinity();
-        double fmax = -std::numeric_limits<double>::infinity();
-        for (double v : rawField) {
-            if (v < fmin) fmin = v;
-            if (v > fmax) fmax = v;
+        result.minimum =  std::numeric_limits<double>::infinity();
+        result.maximum = -std::numeric_limits<double>::infinity();
+        for (double value : result.values) {
+            if (value < result.minimum) result.minimum = value;
+            if (value > result.maximum) result.maximum = value;
         }
 
-        // Base64-encode as little-endian float64 array.
-        const auto* bytes = reinterpret_cast<const uint8_t*>(rawField.data());
-        const std::string fieldB64 = base64Encode(bytes, rawField.size() * sizeof(double));
-
+        const std::filesystem::path fieldPath =
+            std::filesystem::path(run.outputDir) / "hs_field.f64";
+        {
+            std::ofstream output(fieldPath, std::ios::binary);
+            if (!output) throw std::runtime_error("failed to open HS field artifact");
+            output.write(reinterpret_cast<const char*>(result.values.data()),
+                         static_cast<std::streamsize>(result.values.size() * sizeof(double)));
+            if (!output) throw std::runtime_error("failed to write HS field artifact");
+        }
+        const std::filesystem::path metadataPath =
+            std::filesystem::path(run.outputDir) / "hs_field.json";
+        {
+            std::ofstream output(metadataPath);
+            output << Json{
+                {"schemaVersion", 1}, {"dataType", "float64"},
+                {"byteOrder", "little_endian"},
+                {"shape", Json::array({p.resolution, p.resolution})},
+                {"fieldMin", result.minimum}, {"fieldMax", result.maximum},
+                {"engine", actualEngine}, {"scalar", "fp64"},
+            }.dump(2);
+            if (!output) throw std::runtime_error("failed to write HS field metadata");
+        }
+        runner.addArtifact(run.id, Artifact{"hs-field", fieldPath.string(), "field"});
+        runner.addArtifact(run.id, Artifact{"hs-field", metadataPath.string(), "report"});
+        setProgress("completed", 1, true);
+        runner.setCancelable(run.id, false);
         runner.setStatus(run.id, "completed");
+        return result;
+        } catch (const std::exception& error) {
+            runner.setCancelable(run.id, false);
+            if (std::string(error.what()) == "cancelled") {
+                setProgress("cancelled", 0, false);
+                runner.setStatus(run.id, "cancelled");
+            } else {
+                setProgress("failed", 0, false);
+                runner.setStatus(run.id, "failed");
+            }
+            throw;
+        }
+    };
 
-        const int N = p.resolution;
-        Json resp = {
-            {"runId",       run.id},
-            {"status",      "completed"},
-            {"width",       N},
-            {"height",      N},
-            {"fieldMin",    fmin},
-            {"fieldMax",    fmax},
-            {"fieldB64",    fieldB64},
-            {"generatedMs", elapsed},
-        };
-        return resp.dump();
-
-    } catch (const std::exception&) {
-        runner.setStatus(run.id, "failed");
-        throw;
+    if (background) {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+        return Json{{"runId", run.id}, {"status", "queued"}}.dump();
     }
+
+    const HsFieldResult result = execute();
+    const auto* bytes = reinterpret_cast<const uint8_t*>(result.values.data());
+    return Json{
+        {"runId", run.id}, {"status", "completed"},
+        {"width", p.resolution}, {"height", p.resolution},
+        {"fieldMin", result.minimum}, {"fieldMax", result.maximum},
+        {"fieldB64", base64Encode(bytes, result.values.size() * sizeof(double))},
+        {"generatedMs", result.elapsed},
+    }.dump();
 }
 
 // Transition 3D volume mesh (Mandelbrot ↔ Burning Ship bridge as a 3D object).
