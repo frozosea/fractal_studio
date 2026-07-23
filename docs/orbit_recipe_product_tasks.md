@@ -72,6 +72,8 @@ OrbitEditorDocument
 
 编译器应在展开后合并相邻且规范化公式 hash 相同的步骤。提交 Compute 前必须执行 Compute v1 的 64 steps、1,000,000 cycle span、256 nodes、32 depth 和 DSL 资源限制；超限时返回可定位到编辑器节点的产品错误，不能截断或静默简化。
 
+这些上限由 `orbit_program.cpp`（`MAX_SEQUENCE_STEPS=64`、span 1..1,000,000、`MAX_AST_NODES=256`、`MAX_AST_DEPTH=32`）在 Compute v1 运行时强制执行，与展开逻辑跑在 Platform 还是 Compute 无关：合法的扁平 sequence 本身就被卡在 64 个短 step 以内，因此请求体大小不是引入原生 `repeat_block` IR 的理由；Platform 编译器只需在调用 Compute 前做同等校验并拒绝超限文档。
+
 若未来需要保存而不展开数千个 block、逐 block 进度或局部迭代相位，再为 Compute 新增明确的 `repeat_block` IR 节点和 capability flag。该升级必须规定 `n` 是否重置；默认仍建议不重置，并以 golden parity 证明和扁平展开语义一致。
 
 ## 3. 配方与“奇形怪状”存档
