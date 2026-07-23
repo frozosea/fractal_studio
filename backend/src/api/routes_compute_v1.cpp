@@ -94,7 +94,8 @@ Json parseLegacyResponse(const std::string& text, const std::string& kind) {
 std::shared_ptr<const compute::OrbitProgram> validateOrbitPayload(
     const std::string& kind, const Json& payload, bool persistent) {
     if (!payload.contains("orbitProgram") || payload["orbitProgram"].is_null()) return {};
-    const bool supportedKind = kind == "map_image" || kind == "hs_mesh" || kind == "hs_field" ||
+    const bool supportedKind = kind == "map_image" || kind == "ln_map" ||
+        kind == "hs_mesh" || kind == "hs_field" ||
         (!persistent && kind == "raw_field");
     if (!supportedKind) {
         unsupported(kind, "this Compute build supports Orbit Program only for 2D/Julia map and HS outputs");
@@ -244,6 +245,12 @@ std::string computeV1CapabilitiesRoute() {
         {"orbitPrograms", {
             {"formula", true}, {"sequence", true}, {"weightedSchedule", false},
             {"outputBlend", false}, {"axisTransition", true}, {"axisMulti", true},
+        }},
+        {"orbitCompatibility", {
+            {"mapImage", true}, {"rawField", true}, {"julia", true},
+            {"lnMap", true}, {"hsField", true}, {"hsMesh", true},
+            {"zoomVideo", false}, {"transitionVideo", false},
+            {"transitionMesh", false}, {"transitionVoxels", false},
         }},
         {"customFormula", {
             {"legacyNativeCompile", legacyFormulaCompilerEnabled()},

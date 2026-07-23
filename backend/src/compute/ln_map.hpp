@@ -37,6 +37,7 @@ struct LnMapParams {
     double bailout = 2.0;
     double bailout_sq = 4.0;
     Variant variant = Variant::Mandelbrot;
+    std::shared_ptr<const OrbitProgram> orbit_program;
     Colormap colormap = Colormap::ClassicCos;
     std::string color_mode = "escape"; // escape, hist_eq, row_eq, log_lift, bands, frontier
     const LnMapEqualization* equalization_override = nullptr; // optional shared hist_eq LUT for segmented export

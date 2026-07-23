@@ -99,6 +99,8 @@ def main() -> int:
         assert capabilities["customFormula"]["safeDsl"] is True
         assert capabilities["customFormula"]["legacyNativeCompile"] is False
         assert capabilities["escapeSemantics"]["strictUnverified"] is True
+        assert capabilities["orbitCompatibility"]["lnMap"] is True
+        assert capabilities["orbitCompatibility"]["zoomVideo"] is False
 
         status, payload, _ = request(
             f"{base}/api/variants/compile",
@@ -188,15 +190,6 @@ def main() -> int:
             assert error["code"] == expected_code
             assert isinstance(error["details"], dict)
 
-        status, payload, _ = request(
-            f"{base}/compute/v1/runs",
-            body={"schemaVersion": 1, "kind": "ln_map",
-                  "idempotencyKey": f"unsupported-orbit:{port}",
-                  "payload": {"orbitProgram": sequence_program}},
-        )
-        assert status == 422
-        assert json.loads(payload)["error"]["code"] == "UNSUPPORTED_CAPABILITY"
-
         run_request = {
             "schemaVersion": 1, "kind": "map_image",
             "idempotencyKey": f"compute-v1-smoke:{port}", "payload": sequence_payload,
@@ -252,6 +245,60 @@ def main() -> int:
         assert {item["mediaType"] for item in hs_manifest["artifacts"]} >= {
             "model/gltf-binary", "application/sla",
         }
+
+        for color_mode in ("escape", "hist_eq"):
+            ln_payload = {
+                "centerRe": -0.75, "centerIm": 0.0,
+                "widthS": 128, "depthOctaves": 1.0, "lnMapExtraOctaves": 2.0,
+                "iterations": 32, "lnMapColorMode": color_mode,
+                "colorMap": "classic_cos", "orbitProgram": sequence_program,
+            }
+            status, payload, _ = request(
+                f"{base}/compute/v1/runs",
+                body={"schemaVersion": 1, "kind": "ln_map",
+                      "idempotencyKey": f"compute-v1-ln-{color_mode}:{port}",
+                      "payload": ln_payload},
+            )
+            assert status == 202
+            ln_run_id = json.loads(payload)["data"]["computeRunId"]
+            status, payload, _ = request(f"{base}/compute/v1/runs/{ln_run_id}/manifest")
+            assert status == 200
+            ln_manifest = json.loads(payload)
+            assert ln_manifest["status"] == "completed"
+            assert ln_manifest["escapeAnalysis"]["certifiedRadius"] == 2.0
+            assert {item["mediaType"] for item in ln_manifest["artifacts"]} >= {
+                "image/png", "application/json",
+            }
+
+        parity_hashes = []
+        for label, orbit in (
+            ("legacy", None),
+            ("orbit", {"type": "formula", "formula": {
+                "type": "builtin", "id": "mandelbrot"}}),
+        ):
+            ln_payload = {
+                "centerRe": -0.75, "centerIm": 0.0, "variant": "mandelbrot",
+                "widthS": 128, "depthOctaves": 1.0, "lnMapExtraOctaves": 2.0,
+                "iterations": 32, "lnMapColorMode": "escape", "colorMap": "classic_cos",
+            }
+            if orbit is not None:
+                ln_payload["orbitProgram"] = orbit
+            status, payload, _ = request(
+                f"{base}/compute/v1/runs",
+                body={"schemaVersion": 1, "kind": "ln_map",
+                      "idempotencyKey": f"compute-v1-ln-parity-{label}:{port}",
+                      "payload": ln_payload},
+            )
+            assert status == 202
+            parity_run_id = json.loads(payload)["data"]["computeRunId"]
+            status, payload, _ = request(f"{base}/compute/v1/runs/{parity_run_id}/manifest")
+            assert status == 200
+            parity_manifest = json.loads(payload)
+            parity_hashes.append(next(
+                item["sha256"] for item in parity_manifest["artifacts"]
+                if item["mediaType"] == "image/png"
+            ))
+        assert parity_hashes[0] == parity_hashes[1]
 
         query = urllib.parse.urlencode({"artifactId": artifact["artifactId"]})
         status, content, headers = request(f"{base}/compute/v1/artifacts?{query}")

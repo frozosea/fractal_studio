@@ -8,6 +8,7 @@
 #include "map_kernel_avx2.hpp"
 #include "map_kernel_avx512.hpp"
 #include "parallel.hpp"
+#include "orbit_program.hpp"
 #include "perturbation.hpp"
 #include "perturbation_avx2.hpp"
 #include "perturbation_avx512.hpp"
@@ -850,6 +851,86 @@ void compute_ln_iters_fp64(
     }
 }
 
+void compute_ln_iters_orbit(
+    const LnMapParams& p,
+    std::vector<int>& iters,
+    const TrigColumns& cols,
+    const LnMapProgress& on_row_done
+) {
+    if (!p.orbit_program) throw std::runtime_error("missing ln-map Orbit Program");
+    const Cx<double> julia_c{p.julia_re, p.julia_im};
+    const EscapeAnalysis& analysis = p.orbit_program->escape_analysis();
+    const bool certified = analysis.has_finite_radius();
+    const int s = p.width_s;
+    const int h = p.height_t;
+    std::atomic<int> rows_done{0};
+
+    #pragma omp parallel for num_threads(default_render_threads()) schedule(dynamic, 4)
+    for (int row = 0; row < h; ++row) {
+        if (ln_map_cancel_requested(p)) continue;
+        const double global_row = p.row_offset + static_cast<double>(row);
+        const double k = LN_FOUR - global_row * TAU / static_cast<double>(s);
+        const double radius = std::exp(k);
+        const size_t offset = static_cast<size_t>(row) * s;
+        for (int x = 0; x < s; ++x) {
+            const double pre = p.center_re + radius * cols.cos_col[static_cast<size_t>(x)];
+            const double pim = p.center_im + radius * cols.sin_col[static_cast<size_t>(x)];
+            Cx<double> z = p.julia ? Cx<double>{pre, pim} : Cx<double>{0.0, 0.0};
+            const Cx<double> c = p.julia ? julia_c : Cx<double>{pre, pim};
+            double escape_radius = analysis.certified_radius;
+            if (certified && p.julia) {
+                const double c_abs = std::hypot(c.re, c.im);
+                escape_radius = std::max(
+                    escape_radius, 0.5 * (1.0 + std::sqrt(1.0 + 4.0 * c_abs)));
+            }
+            const double escape_radius_sq = escape_radius * escape_radius;
+            int result = p.iterations;
+            for (int iteration = 0; iteration < p.iterations; ++iteration) {
+                z = p.orbit_program->step(z, c, iteration);
+                if (!std::isfinite(z.re) || !std::isfinite(z.im)) break;
+                const double norm_sq = z.re * z.re + z.im * z.im;
+                if (!std::isfinite(norm_sq)) break;
+                if (certified && norm_sq > escape_radius_sq) {
+                    result = iteration;
+                    break;
+                }
+            }
+            iters[offset + static_cast<size_t>(x)] = result;
+        }
+        if (on_row_done) {
+            const int done = rows_done.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (done == h || (done % 16) == 0) on_row_done(done);
+        }
+    }
+}
+
+LnMapStats render_ln_map_orbit_escape(
+    const LnMapParams& p, cv::Mat& out, const LnMapProgress& on_row_done
+) {
+    ensure_ln_out(p, out);
+    const auto start = std::chrono::steady_clock::now();
+    const TrigColumns cols = make_trig_columns(p.width_s);
+    std::vector<int> iters(static_cast<size_t>(p.width_s) * p.height_t, p.iterations);
+    compute_ln_iters_orbit(p, iters, cols, on_row_done);
+    throw_if_ln_map_cancelled(p);
+    for (int row = 0; row < p.height_t; ++row) {
+        uint8_t* pixels = out.ptr<uint8_t>(row);
+        for (int x = 0; x < p.width_s; ++x) {
+            const int iteration = iters[static_cast<size_t>(row) * p.width_s + x];
+            colorize_escape_bgr(iteration, p.iterations, p.colormap, 0.0, false,
+                                pixels[3 * x], pixels[3 * x + 1], pixels[3 * x + 2]);
+        }
+    }
+    LnMapStats stats;
+    stats.elapsed_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+    stats.pixel_count = p.width_s * p.height_t;
+    stats.engine_used = "openmp_orbit";
+    stats.scalar_used = "fp64";
+    stats.precision_mode = "standard";
+    return stats;
+}
+
 // Build the shared periodic coloring from the rendered ln-map escape-count field.
 // Direct linear mapping: phase = (count - count_min) / period, period chosen so the
 // whole strip spans total_octaves*cyclesPerOctave palette cycles. No equalization —
@@ -1218,7 +1299,7 @@ std::mutex g_ln_field_cache_mu;
 LnFieldCache g_ln_field_cache;
 
 bool ln_field_cache_matches(const LnMapParams& p, const LnFieldCache& c, size_t pixel_count) {
-    return c.valid && c.iters.size() == pixel_count &&
+    return !p.orbit_program && c.valid && c.iters.size() == pixel_count &&
            c.precision_mode == p.precision_mode &&
            c.julia == p.julia && c.center_re == p.center_re && c.center_im == p.center_im &&
            c.center_re_str == p.center_re_str && c.center_im_str == p.center_im_str &&
@@ -1239,6 +1320,10 @@ std::string compute_ln_field(
     const TrigColumns& cols,
     const LnMapProgress& on_row_done
 ) {
+    if (p.orbit_program) {
+        compute_ln_iters_orbit(p, iters, cols, on_row_done);
+        return "openmp_orbit_fp64";
+    }
     const int h = p.height_t;
     const bool want_fx64 = ln_map_scalar_is_fx64(p);
     const bool simd_variant = ln_map_variant_supported_by_simd(p.variant);
@@ -1316,7 +1401,9 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
         // the perturbation renderer regardless of precision mode — it is both exact and
         // fast at depth, replacing the fp32/fp64 band plan. The actual engine is
         // surfaced via stats so the UI can show degradation.
-        if (lnmap_perturbation_applicable(p)) {
+        if (p.orbit_program) {
+            field_engine = compute_ln_field(p, iters, cols, on_row_done);
+        } else if (lnmap_perturbation_applicable(p)) {
             field_engine = compute_ln_perturb_iters(p, iters, on_row_done);
         } else if (ln_map_fast_mode(p)) {
             field_engine = compute_ln_field_fast(p, iters, cols, on_row_done);
@@ -1324,13 +1411,15 @@ LnMapStats render_ln_map_mapped(const LnMapParams& p, cv::Mat& out, const LnMapP
             field_engine = compute_ln_field(p, iters, cols, on_row_done);
         }
         throw_if_ln_map_cancelled(p);
-        std::lock_guard<std::mutex> lk(g_ln_field_cache_mu);
-        g_ln_field_cache = LnFieldCache{true, p.julia, p.center_re, p.center_im, p.julia_re,
-                                        p.julia_im, p.bailout, p.bailout_sq,
-                                        p.row_offset, p.center_re_str, p.center_im_str,
-                                        s, h, p.iterations,
-                                        static_cast<int>(p.variant), p.precision_mode,
-                                        field_engine, iters};
+        if (!p.orbit_program) {
+            std::lock_guard<std::mutex> lk(g_ln_field_cache_mu);
+            g_ln_field_cache = LnFieldCache{true, p.julia, p.center_re, p.center_im, p.julia_re,
+                                            p.julia_im, p.bailout, p.bailout_sq,
+                                            p.row_offset, p.center_re_str, p.center_im_str,
+                                            s, h, p.iterations,
+                                            static_cast<int>(p.variant), p.precision_mode,
+                                            field_engine, iters};
+        }
     }
     throw_if_ln_map_cancelled(p);
 
@@ -2915,7 +3004,9 @@ LnMapStats render_ln_map(const LnMapParams& p, cv::Mat& out, const LnMapProgress
     }
     throw_if_ln_map_cancelled(p);
     LnMapStats stats;
-    if (p.color_mode != "escape") {
+    if (p.orbit_program && p.color_mode == "escape") {
+        stats = render_ln_map_orbit_escape(p, out, on_row_done);
+    } else if (p.color_mode != "escape") {
         // Mapped modes route deep strips through perturbation internally.
         stats = render_ln_map_mapped(p, out, on_row_done);
     } else if (lnmap_perturbation_applicable(p)) {

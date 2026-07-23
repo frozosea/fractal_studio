@@ -21,6 +21,7 @@
 #include "../compute/variants.hpp"
 #include "../compute/colormap.hpp"
 #include "../compute/image_io.hpp"
+#include "../compute/orbit_program_json.hpp"
 
 #include <opencv2/core.hpp>
 
@@ -220,6 +221,9 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
         lp.bailout = bailout;
         lp.bailout_sq = bailoutSq;
         lp.variant = v;
+        if (j.contains("orbitProgram") && !j["orbitProgram"].is_null()) {
+            lp.orbit_program = compute::parse_orbit_program_json(j["orbitProgram"]);
+        }
         lp.colormap = cm;
         lp.color_mode = colorMode;
         lp.color_cycles_per_octave = cyclesPerOctave;
@@ -275,6 +279,12 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
             {"layerSummary", stats.layer_summary},
             {"validationSummary", stats.validation_summary},
         };
+        if (lp.orbit_program) {
+            sidecar["orbitProgram"] = j["orbitProgram"];
+            sidecar["orbitProgramHash"] = lp.orbit_program->hash();
+            sidecar["escapeAnalysis"] = compute::escape_analysis_json(
+                lp.orbit_program->escape_analysis());
+        }
         if (stats.equalization.valid) {
             sidecar["eqCountMin"]      = stats.equalization.count_min;
             sidecar["eqPeriod"]        = stats.equalization.period;
