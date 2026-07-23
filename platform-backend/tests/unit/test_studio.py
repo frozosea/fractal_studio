@@ -10,6 +10,7 @@ from PIL import Image
 
 from app.core.config import Settings
 from app.infrastructure.compute.compute_client import InlineComputeFrame
+from app.infrastructure.redis.quota_store import PreviewQuotaUnavailable
 from app.studio.compute_request_mapper import PREVIEW_MAPPING_VERSION, map_preview_v1
 from app.studio.models import FractalSpec
 from app.studio.preview_service import PreviewService
@@ -30,6 +31,11 @@ class InlineFrameClient:
         assert timeout_seconds == 5.0
         self.requests.append(request_body)
         return self.frame
+
+
+class UnavailableLimiter:
+    async def allow(self, _user_id: UUID) -> bool:
+        raise PreviewQuotaUnavailable("redis_unavailable")
 
 
 def _settings() -> Settings:
@@ -97,4 +103,17 @@ async def test_preview_rejects_oversized_request_before_redis_or_compute() -> No
         await service.render(owner_id=UUID(int=1), canonical=canonical, width=1025, height=1)
 
     assert getattr(error.value, "status_code", None) == 422
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_preview_fails_closed_when_redis_is_unavailable() -> None:
+    client = InlineFrameClient(InlineComputeFrame(rgba=bytes([0, 0, 0, 255]), width=1, height=1))
+    service = PreviewService(settings=_settings(), rate_limiter=UnavailableLimiter(), compute_client=client)  # type: ignore[arg-type]
+    canonical = canonicalize_spec(FractalSpec.model_validate({"version": 1}))
+
+    with pytest.raises(Exception) as error:
+        await service.render(owner_id=UUID(int=1), canonical=canonical, width=1, height=1)
+
+    assert getattr(error.value, "status_code", None) == 503
     assert client.requests == []
