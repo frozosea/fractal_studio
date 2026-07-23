@@ -85,8 +85,9 @@ Vue 3 frontend
 - [x] 旧 `/api/*` 双轨兼容和 `FSD_ENABLE_LEGACY_API` 商业关闭开关。
 - [x] Compute v1 HTTP/鉴权/manifest 自动测试。
 - [x] Compute v1 HTTP 合同迁移为按领域拆分的 pytest 套件；每个测试独立启动后端、独立创建 run/产物，原 smoke 仅保留最小核心链路语义。
+- [x] capabilities 暴露 CPU/OpenMP/AVX/CUDA 编译与运行时快照；map run status/manifest 保存 kernel 完成点报告的实际 engine/scalar、硬件类别和回退状态。
 - [x] `idempotencyKey` 持久响应缓存；重复 Outbox 提交返回同一 Compute run。
-- [ ] 将仍同步执行的 mesh/ln-map legacy job 改为统一后台 run。
+- [ ] 将仍同步执行的 mesh/ln-map legacy job 改为统一后台 run，并为这些管线补齐同等级 kernel 硬件执行证据。
 
 ### C2 — 安全 DSL 与 Orbit Program
 
@@ -158,6 +159,11 @@ Vue 3 frontend
 | 2026-07-23 | Independent HTTP test | direct node selection of `test_validation.py::test_invalid_dsl_returns_unknown_function` | 1/1 passed in 0.12s |
 | 2026-07-23 | Test size rule | AST audit of every `test_*` function | all <= 12 lines; limit is 40 |
 | 2026-07-23 | Post-refactor CTest | `ctest --test-dir backend/build --output-on-failure` | 9/9 passed; `compute_v1_http_contract` invokes pytest |
+| 2026-07-23 | Hardware capability telemetry | authenticated capabilities reports CPU core/OpenMP/AVX and CUDA compile/runtime/device/VRAM state | passed in pytest HTTP contract |
+| 2026-07-23 | Verified hardware execution | OpenMP map completion must report `kernelReported=true`, actual engine/scalar and CPU class in run status and manifest | passed in pytest HTTP contract |
+| 2026-07-23 | CUDA execution/fallback | request CUDA and branch on runtime capability: CUDA runtime requires actual GPU/hybrid evidence; unavailable CUDA requires explicit CPU fallback | passed against current advertised runtime state |
+| 2026-07-23 | Hardware telemetry regression | `pytest -q backend/src/tests/compute_v1 ...` and full CTest | 28/28 pytest; 9/9 CTest |
+| 2026-07-23 | Platform regression after manifest extension | from `platform-backend/`: `pytest -q tests` | 5/5 passed |
 
 ## Commit Log / 提交记录
 
@@ -175,6 +181,7 @@ Vue 3 frontend
 | `600b46b` | Orbit Program 接入 ln-map escape/mapped 路径、sidecar 证明信息和 HTTP parity。 |
 | `1464262` | Orbit Program 同步接入 zoom preview/export 的笛卡尔帧与条带，并以真实 HTTP 生成 MP4。 |
 | `823c319` | 删除 400 行单函数 HTTP 脚本，迁移为 24 个可独立运行的 pytest 合同测试、后端 fixture、API client 和 payload factory。 |
+| `9ece9de` | Compute capabilities、run status 与 manifest 增加可验证硬件执行 telemetry，并测试 OpenMP 实际执行及 CUDA/CPU 回退真实性。 |
 
 ## Delivery Rules / 交付规则
 
@@ -184,3 +191,4 @@ Vue 3 frontend
 4. 现有本地 SQLite 历史只读保留，不迁入商业 PostgreSQL。
 5. `platform-backend-spec.zh.pdf` 是 M1–M7 领域与公共 API 的权威基线。
 6. HTTP 合同测试按可命名行为拆分；单个测试不超过 40 行，禁止依赖前序测试产生的 run 或 artifact。
+7. 硬件验收以 kernel 完成点报告的实际 engine/scalar 为准；请求参数本身不构成 GPU/CPU 已执行的证据，任何回退必须显式记录。
