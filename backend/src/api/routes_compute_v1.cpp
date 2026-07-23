@@ -94,9 +94,9 @@ Json parseLegacyResponse(const std::string& text, const std::string& kind) {
 std::shared_ptr<const compute::OrbitProgram> validateOrbitPayload(
     const std::string& kind, const Json& payload, bool persistent) {
     if (!payload.contains("orbitProgram") || payload["orbitProgram"].is_null()) return {};
-    const bool supportedKind = kind == "map_image" || kind == "ln_map" ||
+    const bool supportedKind = kind == "map_image" || kind == "ln_map" || kind == "zoom_video" ||
         kind == "hs_mesh" || kind == "hs_field" ||
-        (!persistent && kind == "raw_field");
+        (!persistent && (kind == "raw_field" || kind == "video_preview"));
     if (!supportedKind) {
         unsupported(kind, "this Compute build supports Orbit Program only for 2D/Julia map and HS outputs");
     }
@@ -109,6 +109,10 @@ std::shared_ptr<const compute::OrbitProgram> validateOrbitPayload(
     if (payload.contains("transitionTheta") || payload.contains("transitionThetaMilliDeg") ||
         payload.contains("transitionVariants")) {
         unsupported(kind, "Orbit Program cannot be combined with axis transition");
+    }
+    if (kind == "zoom_video" && payload.contains("lnMapRunId") &&
+        !payload.value("lnMapRunId", std::string()).empty()) {
+        unsupported(kind, "Orbit zoom export does not yet reuse an external lnMapRunId");
     }
     try {
         return compute::parse_orbit_program_json(payload["orbitProgram"]);
@@ -249,7 +253,7 @@ std::string computeV1CapabilitiesRoute() {
         {"orbitCompatibility", {
             {"mapImage", true}, {"rawField", true}, {"julia", true},
             {"lnMap", true}, {"hsField", true}, {"hsMesh", true},
-            {"zoomVideo", false}, {"transitionVideo", false},
+            {"zoomVideo", true}, {"transitionVideo", false},
             {"transitionMesh", false}, {"transitionVoxels", false},
         }},
         {"customFormula", {

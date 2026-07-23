@@ -100,7 +100,7 @@ def main() -> int:
         assert capabilities["customFormula"]["legacyNativeCompile"] is False
         assert capabilities["escapeSemantics"]["strictUnverified"] is True
         assert capabilities["orbitCompatibility"]["lnMap"] is True
-        assert capabilities["orbitCompatibility"]["zoomVideo"] is False
+        assert capabilities["orbitCompatibility"]["zoomVideo"] is True
 
         status, payload, _ = request(
             f"{base}/api/variants/compile",
@@ -299,6 +299,47 @@ def main() -> int:
                 if item["mediaType"] == "image/png"
             ))
         assert parity_hashes[0] == parity_hashes[1]
+
+        zoom_payload = {
+            "centerRe": -0.75, "centerIm": 0.0,
+            "width": 128, "height": 128, "previewWidth": 64, "previewHeight": 64,
+            "widthS": 128, "previewLnMapWidthS": 128,
+            "depthOctaves": 0.05, "secondsPerOctave": 1.0,
+            "fps": 1, "iterations": 16, "lnMapColorMode": "escape",
+            "colorMap": "classic_cos", "cudaWarp": False,
+            "orbitProgram": sequence_program,
+        }
+        status, payload, _ = request(
+            f"{base}/compute/v1/previews",
+            body={"schemaVersion": 1, "kind": "video_preview", "payload": zoom_payload},
+        )
+        assert status == 200
+        zoom_preview = json.loads(payload)["data"]
+        assert zoom_preview["status"] == "completed"
+        assert zoom_preview["finalFrameEngine"] == "openmp"
+        assert zoom_preview["finalFrameScalar"] == "fp64"
+
+        status, payload, _ = request(
+            f"{base}/compute/v1/runs",
+            body={"schemaVersion": 1, "kind": "zoom_video",
+                  "idempotencyKey": f"compute-v1-zoom:{port}", "payload": zoom_payload},
+        )
+        assert status == 202
+        zoom_run_id = json.loads(payload)["data"]["computeRunId"]
+        zoom_status = ""
+        for _ in range(300):
+            status, payload, _ = request(f"{base}/compute/v1/runs/{zoom_run_id}")
+            assert status == 200
+            zoom_status = json.loads(payload)["data"]["status"]
+            if zoom_status in {"completed", "failed", "cancelled"}:
+                break
+            time.sleep(0.02)
+        assert zoom_status == "completed"
+        status, payload, _ = request(f"{base}/compute/v1/runs/{zoom_run_id}/manifest")
+        assert status == 200
+        zoom_manifest = json.loads(payload)
+        assert zoom_manifest["escapeAnalysis"]["certifiedRadius"] == 2.0
+        assert "video/mp4" in {item["mediaType"] for item in zoom_manifest["artifacts"]}
 
         query = urllib.parse.urlencode({"artifactId": artifact["artifactId"]})
         status, content, headers = request(f"{base}/compute/v1/artifacts?{query}")

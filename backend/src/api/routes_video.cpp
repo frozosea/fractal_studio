@@ -36,6 +36,7 @@
 #include "../compute/variants.hpp"
 #include "../compute/colormap.hpp"
 #include "../compute/colorize.hpp"
+#include "../compute/orbit_program_json.hpp"
 
 #if defined(HAS_CUDA_KERNEL)
 #  include "../compute/cuda/video_warp.cuh"
@@ -2174,6 +2175,9 @@ std::string zoomVideoRoute(const std::filesystem::path& repoRoot, JobRunner& run
 std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
     (void)repoRoot;
     const Json j = parseJsonBody(body);
+    const auto orbitProgram = j.contains("orbitProgram") && !j["orbitProgram"].is_null()
+        ? compute::parse_orbit_program_json(j["orbitProgram"])
+        : std::shared_ptr<const compute::OrbitProgram>{};
 
     const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                               ? j["centerReStr"].get<std::string>() : std::string();
@@ -2295,15 +2299,20 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
         mp.engine     = "auto";
         mp.scalar_type = "auto";
         mp.rotation_deg = rotationDeg;
+        mp.orbit_program = orbitProgram;
 
         cv::Mat finalImg(previewH, previewW, CV_8UC3);
         compute::MapStats finalStats;
         compute::FieldOutput finalField;
-        if (lnMapColorMode == "escape") {
+        if (lnMapColorMode == "escape" && !orbitProgram) {
             finalStats = compute::render_map(mp, finalImg);
         } else {
             finalStats = compute::render_map_field(mp, finalField);
-            finalStats.engine_used += "_ln_" + lnMapColorMode;
+            if (lnMapColorMode == "escape") {
+                finalImg = compute::colorize_direct(mp, finalField);
+            } else {
+                finalStats.engine_used += "_ln_" + lnMapColorMode;
+            }
         }
 
         cv::Mat strip(t, s, CV_8UC3);
@@ -2321,6 +2330,7 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
         lp.bailout = bailout;
         lp.bailout_sq = bailoutSq;
         lp.variant = v;
+        lp.orbit_program = orbitProgram;
         lp.colormap = cm;
         lp.color_mode = lnMapColorMode;
         lp.color_cycles_per_octave = lnMapCyclesPerOctave;
@@ -2386,6 +2396,12 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
             {"layerSummary", lnStats.layer_summary},
             {"validationSummary", lnStats.validation_summary},
         };
+        if (orbitProgram) {
+            sidecar["orbitProgram"] = j["orbitProgram"];
+            sidecar["orbitProgramHash"] = orbitProgram->hash();
+            sidecar["escapeAnalysis"] = compute::escape_analysis_json(
+                orbitProgram->escape_analysis());
+        }
         detail::writeLnMapGenerationIdentity(sidecar, generationIdentity);
         if (lnStats.equalization.valid) {
             sidecar["eqCountMin"]      = lnStats.equalization.count_min;
@@ -2465,7 +2481,17 @@ std::string videoPreviewRoute(const std::filesystem::path& repoRoot, JobRunner& 
 
 std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
     const Json j = parseJsonBody(body);
+    const auto orbitProgram = j.contains("orbitProgram") && !j["orbitProgram"].is_null()
+        ? compute::parse_orbit_program_json(j["orbitProgram"])
+        : std::shared_ptr<const compute::OrbitProgram>{};
     const std::string lnMapRunId = j.value("lnMapRunId", std::string(""));
+    if (orbitProgram && !lnMapRunId.empty()) {
+        throw HttpError(422, Json{{"error", {
+            {"code", "UNSUPPORTED_CAPABILITY"},
+            {"message", "Orbit zoom export does not yet reuse an external lnMapRunId"},
+            {"details", {{"kind", "zoom_video"}}},
+        }}}.dump());
+    }
 
     const std::string crStr = (j.contains("centerReStr") && j["centerReStr"].is_string())
                               ? j["centerReStr"].get<std::string>() : std::string();
@@ -2645,6 +2671,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         mp.engine     = "auto";
         mp.scalar_type = "auto";
         mp.rotation_deg = rotationDeg;
+        mp.orbit_program = orbitProgram;
         mp.should_cancel = [cancelToken]() {
             return cancelToken->load(std::memory_order_relaxed);
         };
@@ -2660,14 +2687,18 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
         compute::MapStats finalStats;
         compute::FieldOutput finalField;   // held for deferred coloring (non-escape modes)
         bool finalFrameDeferred = false;
-        if (lnMapColorMode == "escape") {
+        if (lnMapColorMode == "escape" && !orbitProgram) {
             finalStats = compute::render_map(mp, finalImg);
         } else {
             // Compute the iteration field now, but defer coloring until after the strip:
             // Global color modes reuse strip-wide stats for a seamless warp blend.
             finalStats = compute::render_map_field(mp, finalField);
-            finalStats.engine_used += "_ln_" + lnMapColorMode;
-            finalFrameDeferred = true;
+            if (lnMapColorMode == "escape") {
+                finalImg = compute::colorize_direct(mp, finalField);
+            } else {
+                finalStats.engine_used += "_ln_" + lnMapColorMode;
+                finalFrameDeferred = true;
+            }
         }
         throwIfCancelled(runner, run.id);
 
@@ -2739,6 +2770,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 lp.bailout = bailout;
                 lp.bailout_sq = bailoutSq;
                 lp.variant = v;
+                lp.orbit_program = orbitProgram;
                 lp.colormap = cm;
                 lp.color_mode = lnMapColorMode;
                 lp.color_cycles_per_octave = lnMapCyclesPerOctave;
@@ -3033,6 +3065,12 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"validationSummary", lnStats.validation_summary},
                 {"segments", segJson},
             };
+            if (orbitProgram) {
+                sc["orbitProgram"] = j["orbitProgram"];
+                sc["orbitProgramHash"] = orbitProgram->hash();
+                sc["escapeAnalysis"] = compute::escape_analysis_json(
+                    orbitProgram->escape_analysis());
+            }
             detail::writeLnMapGenerationIdentity(sc, generationIdentity);
             if (lnStats.equalization.valid) {
                 sc["eqCountMin"]      = lnStats.equalization.count_min;
@@ -3309,6 +3347,7 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
             lp.bailout = bailout;
             lp.bailout_sq = bailoutSq;
             lp.variant = v;
+            lp.orbit_program = orbitProgram;
             lp.colormap = cm;
             lp.color_mode = lnMapColorMode;
             lp.color_cycles_per_octave = lnMapCyclesPerOctave;
@@ -3391,6 +3430,12 @@ std::string videoExportRoute(const std::filesystem::path& repoRoot, JobRunner& r
                 {"layerSummary", lnStats.layer_summary},
                 {"validationSummary", lnStats.validation_summary},
             };
+            if (orbitProgram) {
+                sc["orbitProgram"] = j["orbitProgram"];
+                sc["orbitProgramHash"] = orbitProgram->hash();
+                sc["escapeAnalysis"] = compute::escape_analysis_json(
+                    orbitProgram->escape_analysis());
+            }
             detail::writeLnMapGenerationIdentity(sc, generationIdentity);
             if (lnStats.equalization.valid) {
                 sc["eqCountMin"]      = lnStats.equalization.count_min;
