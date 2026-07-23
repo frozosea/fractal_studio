@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
     idempotency_lease_seconds: int = 30
     idempotency_ttl_hours: int = 24
+    redis_url: str = "redis://localhost:6379/0"
+    compute_base_url: str = "http://localhost:8080"
+    compute_service_key: str = ""
+    compute_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    compute_read_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    preview_max_width: int = Field(default=1024, ge=1, le=1024)
+    preview_max_height: int = Field(default=1024, ge=1, le=1024)
+    preview_max_pixels: int = Field(default=1_048_576, ge=1, le=1_048_576)
+    preview_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
     outbox_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
     outbox_lease_seconds: int = Field(default=30, ge=1, le=300)
     outbox_max_attempts: int = Field(default=10, ge=1, le=100)

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.auth.router import router as auth_router
 from app.core.config import get_settings
 from app.core.request_context import request_id_var
+from app.studio.router import router as studio_router
 
 
 app = FastAPI(title="Fractal Platform API", version="0.1.0")
@@ -19,6 +20,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "Idempotency-Key", "X-CSRF-Token", "X-Request-ID"],
 )
 app.include_router(auth_router)
+app.include_router(studio_router)
 
 
 @app.middleware("http")
