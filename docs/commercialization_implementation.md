@@ -87,7 +87,8 @@ Vue 3 frontend
 - [x] Compute v1 HTTP 合同迁移为按领域拆分的 pytest 套件；每个测试独立启动后端、独立创建 run/产物，原 smoke 仅保留最小核心链路语义。
 - [x] capabilities 暴露 CPU/OpenMP/AVX/CUDA 编译与运行时快照；map run status/manifest 保存 kernel 完成点报告的实际 engine/scalar、硬件类别和回退状态。
 - [x] `idempotencyKey` 持久响应缓存；重复 Outbox 提交返回同一 Compute run。
-- [ ] 将仍同步执行的 mesh/ln-map legacy job 改为统一后台 run，并为这些管线补齐同等级 kernel 硬件执行证据。
+- [x] Compute v1 的 ln-map 与 HS mesh 改为真正后台 run；创建立即返回 queued，支持轮询/协作取消，并记录 kernel 硬件执行证据；旧 `/api` 默认同步行为保持不变。
+- [ ] 将 HS field、transition mesh/voxels、special points 和 benchmark 等剩余同步持久任务统一改为后台 run，并补齐同等级硬件执行证据。
 
 ### C2 — 安全 DSL 与 Orbit Program
 
@@ -164,6 +165,9 @@ Vue 3 frontend
 | 2026-07-23 | CUDA execution/fallback | request CUDA and branch on runtime capability: CUDA runtime requires actual GPU/hybrid evidence; unavailable CUDA requires explicit CPU fallback | passed against current advertised runtime state |
 | 2026-07-23 | Hardware telemetry regression | `pytest -q backend/src/tests/compute_v1 ...` and full CTest | 28/28 pytest; 9/9 CTest |
 | 2026-07-23 | Platform regression after manifest extension | from `platform-backend/`: `pytest -q tests` | 5/5 passed |
+| 2026-07-23 | Async ln-map lifecycle | Compute create returns queued; background render reaches completed; cancel request reaches cancelled; manifest reports actual engine/scalar | passed over real HTTP |
+| 2026-07-23 | Async HS mesh lifecycle | Compute create returns queued; background mesh reaches completed; cooperative Orbit cancellation reaches cancelled; GLB/STL manifest keeps parity | passed over real HTTP |
+| 2026-07-23 | Async/hardware regression | domain pytest suite, full CTest, and Platform unit tests | 33/33 pytest; 9/9 CTest; 5/5 Platform |
 
 ## Commit Log / 提交记录
 
@@ -182,6 +186,7 @@ Vue 3 frontend
 | `1464262` | Orbit Program 同步接入 zoom preview/export 的笛卡尔帧与条带，并以真实 HTTP 生成 MP4。 |
 | `823c319` | 删除 400 行单函数 HTTP 脚本，迁移为 24 个可独立运行的 pytest 合同测试、后端 fixture、API client 和 payload factory。 |
 | `9ece9de` | Compute capabilities、run status 与 manifest 增加可验证硬件执行 telemetry，并测试 OpenMP 实际执行及 CUDA/CPU 回退真实性。 |
+| `01683cc` | Compute v1 的 ln-map 与 HS mesh 改为真正异步 run，加入协作取消、后台生命周期保护及 kernel 完成 telemetry。 |
 
 ## Delivery Rules / 交付规则
 
