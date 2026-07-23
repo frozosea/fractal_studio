@@ -99,6 +99,7 @@ Vue 3 frontend
 - [x] 文档覆盖检查从 C++ 单一能力注册表提取 kind，要求 18 个任务章节一一对应，并检查全部私有端点与 Worker 安全不变量，避免新增能力后文档静默漏项。
 - [x] 补齐从零调用手册：明确服务 Key 由部署方生成并双端注入，不存在用户申请端点；解释 job kind 与 benchmark workload 的区别，并给出 preview/run/poll/cancel/download、参数化 DSL、M/B sequence、transition rotation/zoom/mesh、HS、special points 和 benchmark 的可复制请求。
 - [x] 修正 DSL 文档中 `parameters` 被误写成数组的问题；规范为 object，并用真实 HTTP 验证实数及 `{re,im}` 复数参数。
+- [x] 补齐 UI/导出细节合同：progress 字段 optional、stage-local 百分比与主要 stage；二维 `rotationDeg` 的精确坐标公式及其与 transition theta 的区别；RGBA preview 与异步 `map.png` 商业导出的完整分流和校验流程。
 
 ### C2 — 安全 DSL 与 Orbit Program
 
@@ -206,6 +207,7 @@ Vue 3 frontend
 | 2026-07-23 | Documentation handoff final regression | `ctest --test-dir backend/build --output-on-failure`; from `platform-backend/`, `python -m pytest -q tests` | 9/9 CTest (including real HTTP); 5/5 Platform passed |
 | 2026-07-23 | Compute cookbook usability | Key/workload/DSL/sequence/transition cookbook; parse every complete JSON block; real HTTP parameterized DSL preview | 8/8 JSON examples valid; 4/4 documentation checks; focused HTTP passed |
 | 2026-07-23 | Post-cookbook Compute regression | full Compute pytest and CTest | 65/65 pytest in 26.91s; 9/9 CTest in 25.31s |
+| 2026-07-23 | Progress/rotation/PNG details | real HTTP rotated map export, PNG signature/name, terminal map progress, documentation coverage | focused 15/15; full Compute 67/67 in 22.76s; CTest 9/9 in 26.12s |
 
 ## Commit Log / 提交记录
 
@@ -241,6 +243,8 @@ Vue 3 frontend
 | `89fa4ce` | 增加能力注册表驱动的文档覆盖测试，并从项目/Compute 文档入口链接新合同。 |
 | `d63f893` | 增加从 Key 配置到各玩法真实请求的 Compute v1 调用手册，并修正 DSL parameters 示例。 |
 | `7d4da38` | 自动检查调用手册关键内容，并通过真实 HTTP 验证参数化 DSL 请求。 |
+| `1a4e485` | 明确各类任务 progress stage、二维 rotationDeg 坐标语义和异步 PNG 导出/下载流程。 |
+| `334adca` | 真实 HTTP 验证旋转 map.png 导出、PNG 下载和 terminal progress 字段。 |
 
 ## Delivery Rules / 交付规则
 
