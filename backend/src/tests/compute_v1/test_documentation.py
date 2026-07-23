@@ -46,3 +46,15 @@ def test_platform_guide_covers_worker_safety_invariants(studio_root: Path):
         "compute_run_id", "kernelReported", "SHA-256", "cancel",
     }
     assert all(term in guide for term in required)
+
+
+def test_cookbook_explains_first_call_and_math_features(studio_root: Path):
+    cookbook = (studio_root / "docs/compute_v1_cookbook.md").read_text()
+    required = {
+        "openssl rand -hex 32", "FSD_COMPUTE_SERVICE_KEY",
+        "COMPUTE_SERVICE_KEY", "benchmark.workload", '"type": "dsl"',
+        '"type": "sequence"', '"kind": "transition_video"',
+        '"kind": "transition_mesh"', "certifiedRadius=null",
+    }
+    assert all(term in cookbook for term in required)
+    assert '"parameters": []' not in cookbook

@@ -22,6 +22,25 @@ def test_invalid_dsl_returns_unknown_function(client: ComputeClient) -> None:
     assert result.json()["error"]["code"] == "UNKNOWN_FUNCTION"
 
 
+def test_parameterized_dsl_accepts_real_and_complex_object_values(
+    client: ComputeClient,
+) -> None:
+    payload = map_payload()
+    payload["orbitProgram"] = {
+        "type": "formula",
+        "formula": {
+            "type": "dsl", "source": "z*z+c+a*sin(z)+shift",
+            "parameters": {"a": 0.12, "shift": {"re": 0.01, "im": -0.02}},
+        },
+    }
+
+    result = client.preview("map_image", payload)
+
+    assert result.status == 200
+    assert result.headers["X-FSD-Engine"] == "openmp"
+    assert result.headers["X-FSD-Scalar"] == "fp64"
+
+
 def validation_cases() -> list[pytest.ParameterSet]:
     strict = strict_dsl_payload()
     invalid_metric = deepcopy(strict)
