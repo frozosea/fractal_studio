@@ -8,6 +8,7 @@ dependencies = [
   "boto3>=1.35,<2",
   "cryptography>=44,<47",
   "fastapi>=0.115,<1",
+  "greenlet>=3.1,<4",
   "httpx>=0.28,<1",
   "orjson>=3.10,<4",
   "pillow>=11,<12",
