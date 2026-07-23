@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .client import ComputeClient
 from .payloads import (
+    benchmark_payload,
     hs_field_payload, hs_mesh_payload, ln_map_payload, map_payload, sequence_program,
     transition_mesh_payload,
     transition_voxels_payload,
@@ -84,6 +85,18 @@ def test_special_points_enumeration_can_be_cancelled(client: ComputeClient) -> N
     payload = special_points_enumerate_payload()
     payload.update({"periodMax": 8, "maxSeedBatches": 200, "seedsPerBatch": 10_000})
     run_id, _ = client.create_run("special_points_enumerate", payload)
+
+    cancellation = client.cancel(run_id)
+    terminal = client.wait_for_run(run_id)
+
+    assert cancellation["accepted"] is True
+    assert terminal["status"] == "cancelled"
+
+
+def test_benchmark_can_be_cancelled(client: ComputeClient) -> None:
+    payload = benchmark_payload()
+    payload.update({"width": 512, "height": 512, "iterations": 10_000})
+    run_id, _ = client.create_run("benchmark", payload)
 
     cancellation = client.cancel(run_id)
     terminal = client.wait_for_run(run_id)

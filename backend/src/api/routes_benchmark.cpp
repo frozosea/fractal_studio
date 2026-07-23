@@ -19,7 +19,9 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -109,7 +111,9 @@ void setBenchmarkProgress(
     const std::string& stage,
     int current,
     int total,
-    Json details = Json::object()
+    Json details = Json::object(),
+    bool cancelable = false,
+    bool kernelReported = false
 ) {
     const double percent = total > 0
         ? 100.0 * static_cast<double>(current) / static_cast<double>(total)
@@ -120,8 +124,9 @@ void setBenchmarkProgress(
         {"current", current},
         {"total", total},
         {"percent", percent},
+        {"kernelReported", kernelReported},
         {"elapsedMs", runner.runElapsedMs(runId)},
-        {"cancelable", false},
+        {"cancelable", cancelable},
         {"resourceLocks", Json::array({"benchmark", "cpu_heavy", "cuda_heavy"})},
         {"details", std::move(details)},
     }.dump());
@@ -244,11 +249,12 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
     }
 
     auto run = runner.createRun("benchmark", body);
-    ResourceManager::Lease lease;
+    const bool background = jbody.value("background", false);
+    ResourceManager::Lease rawLease;
     std::string conflictLock, activeRunId;
     if (!resourceManager().tryAcquire(
             run.id, "benchmark", {"benchmark", "cpu_heavy", "cuda_heavy"},
-            lease, conflictLock, activeRunId)) {
+            rawLease, conflictLock, activeRunId)) {
         runner.setStatus(run.id, "failed");
         throw HttpError(409, Json{
             {"error", "benchmark already running"},
@@ -257,13 +263,17 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
             {"resourceLock", conflictLock},
         }.dump());
     }
-    (void)lease;
-    runner.setStatus(run.id, "running");
-    runner.setCancelable(run.id, false);
+    auto lease = std::make_shared<ResourceManager::Lease>(std::move(rawLease));
+    const auto cancelToken = runner.cancelToken(run.id);
+    runner.setCancelable(run.id, true);
+    setBenchmarkProgress(runner, run.id, "queued", 0, 0, Json::object(), true);
 
-    int completed = 0;
-    int total = 0;
-    try {
+    auto execute = [=, &runner]() mutable -> Json {
+        (void)lease;
+        runner.setStatus(run.id, "running");
+        int completed = 0;
+        int total = 0;
+        try {
         struct Candidate {
             std::string engine;
             std::string scalar;
@@ -297,7 +307,7 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
             candidates.push_back({"hybrid", "fp64"});
         }
         total = static_cast<int>(candidates.size());
-        setBenchmarkProgress(runner, run.id, "running", 0, total);
+        setBenchmarkProgress(runner, run.id, "running", 0, total, Json::object(), true);
 
         std::vector<BenchResult> results;
         results.reserve(candidates.size());
@@ -331,12 +341,15 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
         };
 
         for (const auto& candidate : candidates) {
+            if (cancelToken->load(std::memory_order_relaxed)) {
+                throw std::runtime_error("cancelled");
+            }
             setBenchmarkProgress(runner, run.id, "running", completed, total, Json{
                 {"family", "map_field"},
                 {"workload", workload},
                 {"requestedEngine", candidate.engine},
                 {"requestedScalar", candidate.scalar},
-            });
+            }, true);
 
             BenchResult result;
             result.workload = workload;
@@ -361,6 +374,9 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
             try {
                 bool pathMatches = true;
                 for (int warmup = 0; warmup < requestedWarmups; ++warmup) {
+                    if (cancelToken->load(std::memory_order_relaxed)) {
+                        throw std::runtime_error("cancelled");
+                    }
                     const RenderMeasurement measurement = renderOnce(candidate);
                     ++result.warmupCount;
                     if (!acceptMeasurement(measurement)) {
@@ -370,6 +386,9 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
                 }
 
                 for (int sample = 0; pathMatches && sample < requestedSamples; ++sample) {
+                    if (cancelToken->load(std::memory_order_relaxed)) {
+                        throw std::runtime_error("cancelled");
+                    }
                     const RenderMeasurement measurement = renderOnce(candidate);
                     if (!acceptMeasurement(measurement)) {
                         pathMatches = false;
@@ -411,7 +430,7 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
                 {"actualEngine", saved.actualEngine},
                 {"actualScalar", saved.actualScalar},
                 {"available", saved.available},
-            });
+            }, true);
         }
 
         Json jsonResults = Json::array();
@@ -461,22 +480,43 @@ std::string benchmarkRoute(JobRunner& runner, const std::string& body) {
             {"workUnits", workUnits},
             {"resultCount", results.size()},
             {"artifact", "benchmark.json"},
-        });
+            {"hardwareExecutions", jsonResults},
+        }, false, true);
+        runner.setCancelable(run.id, false);
         runner.setStatus(run.id, "completed");
-        return response.dump();
-    } catch (const std::exception& ex) {
+        return response;
+        } catch (const std::exception& ex) {
         try {
-            setBenchmarkProgress(runner, run.id, "failed", completed, total, Json{{"error", ex.what()}});
-            runner.setStatus(run.id, "failed");
+            const bool cancelled = cancelToken->load(std::memory_order_relaxed) ||
+                std::string(ex.what()) == "cancelled";
+            setBenchmarkProgress(runner, run.id, cancelled ? "cancelled" : "failed",
+                                 completed, total, Json{{"error", ex.what()}});
+            runner.setCancelable(run.id, false);
+            runner.setStatus(run.id, cancelled ? "cancelled" : "failed");
         } catch (...) {}
         throw;
-    } catch (...) {
+        } catch (...) {
         try {
             setBenchmarkProgress(runner, run.id, "failed", completed, total, Json{{"error", "unknown benchmark error"}});
+            runner.setCancelable(run.id, false);
             runner.setStatus(run.id, "failed");
         } catch (...) {}
         throw;
+        }
+    };
+
+    if (background) {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+        return Json{{"runId", run.id}, {"status", "queued"}}.dump();
     }
+
+    return execute().dump();
 }
 
 } // namespace fsd

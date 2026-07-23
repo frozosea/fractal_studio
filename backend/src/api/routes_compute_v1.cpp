@@ -230,6 +230,16 @@ bool requestedEngineMatches(const std::string& requested, const std::string& act
 
 Json hardwareExecutionJson(const std::string& status, const Json& progress,
                            const Json& params) {
+    const Json details = progress.value("details", Json::object());
+    if (details.contains("hardwareExecutions") && details["hardwareExecutions"].is_array()) {
+        return {
+            {"mode", "multi_path"},
+            {"kernelReported", status == "completed" && progress.value("kernelReported", false)},
+            {"evidenceSource", "benchmark_candidate_telemetry"},
+            {"paths", details["hardwareExecutions"]},
+            {"elapsedMs", progress.value("elapsedMs", 0.0)},
+        };
+    }
     const std::string requestedEngine = params.value("engine", std::string("auto"));
     const std::string requestedScalar = params.value("scalarType", std::string("auto"));
     const std::string actualEngine = progress.value(
@@ -310,7 +320,10 @@ Json runPayload(Json payload, const std::string& kind,
     if (kind == "special_points_search") {
         return parseLegacyResponse(specialPointsSearchRoute(repoRoot, runner, payload.dump()), kind);
     }
-    if (kind == "benchmark") return parseLegacyResponse(benchmarkRoute(runner, payload.dump()), kind);
+    if (kind == "benchmark") {
+        payload["background"] = true;
+        return parseLegacyResponse(benchmarkRoute(runner, payload.dump()), kind);
+    }
     unsupported(kind, "unknown persistent Compute job kind");
 }
 

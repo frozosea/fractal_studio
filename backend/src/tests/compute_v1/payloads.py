@@ -115,3 +115,12 @@ def special_points_search_payload() -> dict[str, Any]:
             "rotationDeg": 0.0, "width": 64, "height": 64,
         },
     }
+
+
+def benchmark_payload() -> dict[str, Any]:
+    return {
+        "centerRe": -0.75, "centerIm": 0.0, "scale": 1.5,
+        "width": 64, "height": 64, "iterations": 8,
+        "samples": 1, "warmup": 0, "replaceCache": False,
+        "workload": "pytest",
+    }
