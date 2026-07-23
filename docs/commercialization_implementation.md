@@ -88,7 +88,8 @@ Vue 3 frontend
 - [x] capabilities 暴露 CPU/OpenMP/AVX/CUDA 编译与运行时快照；map run status/manifest 保存 kernel 完成点报告的实际 engine/scalar、硬件类别和回退状态。
 - [x] `idempotencyKey` 持久响应缓存；重复 Outbox 提交返回同一 Compute run。
 - [x] Compute v1 的 ln-map 与 HS mesh 改为真正后台 run；创建立即返回 queued，支持轮询/协作取消，并记录 kernel 硬件执行证据；旧 `/api` 默认同步行为保持不变。
-- [ ] 将 HS field、transition mesh/voxels、special points 和 benchmark 等剩余同步持久任务统一改为后台 run，并补齐同等级硬件执行证据。
+- [x] Compute v1 HS field 改为后台 run，输出 float64 二进制 field 与 JSON sidecar manifest artifact，支持取消和硬件证据；旧 `/api/hs/field` 继续返回内联 base64。
+- [ ] 将 transition mesh/voxels、special points 和 benchmark 等剩余同步持久任务统一改为后台 run，并补齐同等级硬件执行证据。
 - [ ] zoom/transition video 已有后台 run 和实际 engine/scalar 字段，但仍需在各 kernel 完成点补 `kernelReported` 证据标志及对应硬件合同测试。
 
 ### C2 — 安全 DSL 与 Orbit Program
@@ -169,6 +170,7 @@ Vue 3 frontend
 | 2026-07-23 | Async ln-map lifecycle | Compute create returns queued; background render reaches completed; cancel request reaches cancelled; manifest reports actual engine/scalar | passed over real HTTP |
 | 2026-07-23 | Async HS mesh lifecycle | Compute create returns queued; background mesh reaches completed; cooperative Orbit cancellation reaches cancelled; GLB/STL manifest keeps parity | passed over real HTTP |
 | 2026-07-23 | Async/hardware regression | domain pytest suite, full CTest, and Platform unit tests | 33/33 pytest; 9/9 CTest; 5/5 Platform |
+| 2026-07-23 | Async HS field lifecycle | queued run produces float64 binary + JSON metadata, reports OpenMP kernel evidence, supports cancellation, and preserves legacy inline response | 4/4 focused HTTP tests passed |
 
 ## Commit Log / 提交记录
 
@@ -188,6 +190,7 @@ Vue 3 frontend
 | `823c319` | 删除 400 行单函数 HTTP 脚本，迁移为 24 个可独立运行的 pytest 合同测试、后端 fixture、API client 和 payload factory。 |
 | `9ece9de` | Compute capabilities、run status 与 manifest 增加可验证硬件执行 telemetry，并测试 OpenMP 实际执行及 CUDA/CPU 回退真实性。 |
 | `01683cc` | Compute v1 的 ln-map 与 HS mesh 改为真正异步 run，加入协作取消、后台生命周期保护及 kernel 完成 telemetry。 |
+| `7b6eb1e` | HS field 接入异步 run/取消/硬件证据，并将 float64 网格与元数据纳入可校验 manifest artifact。 |
 
 ## Delivery Rules / 交付规则
 
