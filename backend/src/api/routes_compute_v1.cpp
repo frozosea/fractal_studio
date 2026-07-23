@@ -304,6 +304,7 @@ Json runPayload(Json payload, const std::string& kind,
         return parseLegacyResponse(transitionVoxelsRoute(repoRoot, runner, payload.dump()), kind);
     }
     if (kind == "special_points_enumerate") {
+        payload["background"] = true;
         return parseLegacyResponse(specialPointsEnumerateRoute(repoRoot, runner, payload.dump()), kind);
     }
     if (kind == "special_points_search") {

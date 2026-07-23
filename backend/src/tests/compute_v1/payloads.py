@@ -95,3 +95,23 @@ def transition_voxels_payload() -> dict[str, Any]:
     payload = transition_mesh_payload()
     payload["iso"] = 0.48
     return payload
+
+
+def special_points_enumerate_payload() -> dict[str, Any]:
+    return {
+        "kind": "center", "periodMin": 1, "periodMax": 1,
+        "maxNewtonIter": 20, "maxSeedBatches": 1, "seedsPerBatch": 32,
+        "includeVariantExistence": False, "includeRejectedDebug": False,
+    }
+
+
+def special_points_search_payload() -> dict[str, Any]:
+    return {
+        "kind": "center", "periodMin": 1, "periodMax": 1,
+        "seedBudget": 32, "maxNewtonIter": 20,
+        "visibleOnly": True, "includeVariantCompatibility": False,
+        "viewport": {
+            "centerRe": -0.75, "centerIm": 0.0, "scale": 3.0,
+            "rotationDeg": 0.0, "width": 64, "height": 64,
+        },
+    }

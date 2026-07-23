@@ -449,17 +449,18 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
 
     auto run = runner.createRun("special-points-enumerate", body);
     RunLaunchGuard launchGuard(runner, run.id);
+    const bool background = j.value("background", false);
     runner.setCancelable(run.id, true);
     auto cancelToken = runner.cancelToken(run.id);
 
-    ResourceManager::Lease lease;
+    ResourceManager::Lease rawLease;
     std::string conflictLock;
     std::string activeRunId;
     if (!resourceManager().tryAcquire(
             run.id,
             "special_points_enumerate",
             {"special_points", "cpu_heavy"},
-            lease,
+            rawLease,
             conflictLock,
             activeRunId)) {
         runner.setProgress(run.id, Json{
@@ -476,9 +477,11 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
             {"resourceLock", conflictLock},
         }.dump());
     }
-    runner.setStatus(run.id, "running");
+    auto lease = std::make_shared<ResourceManager::Lease>(std::move(rawLease));
 
-    auto setProgress = [&](const std::string& stage, int accepted, int expected, int seeds, int batch) {
+    auto setProgress = [&runner, run](const std::string& stage, int accepted,
+                                     int expected, int seeds, int batch,
+                                     bool kernelReported = false) {
         Json progress = {
             {"taskType", "special_points"},
             {"stage", stage},
@@ -486,16 +489,23 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
             {"expectedCount", expected},
             {"seedCount", seeds},
             {"batchIndex", batch},
+            {"engine", "openmp"},
+            {"scalar", "fp64"},
+            {"kernelReported", kernelReported},
             {"elapsedMs", runner.runElapsedMs(run.id)},
             {"cancelable", true},
             {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
         };
         runner.setProgress(run.id, progress.dump());
     };
+    setProgress("queued", 0, totalExpectedOrThrow(req), 0, 0);
 
-    try {
+    auto execute = [=, &runner]() mutable -> Json {
+        (void)lease;
+        RunLaunchGuard terminalGuard(runner, run.id);
+        runner.setStatus(run.id, "running");
+        try {
         setProgress("enumerating", 0, totalExpectedOrThrow(req), 0, 0);
-        launchGuard.release();
         compute::SpecialPointEnumResponse resp = compute::enumerate_special_points(
             req,
             [&](int taskIndex, int taskCount, int accepted, int expected, int seeds, int batch) {
@@ -508,6 +518,9 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
                     {"expectedCount", expected},
                     {"seedCount", seeds},
                     {"batchIndex", batch},
+                    {"engine", "openmp"},
+                    {"scalar", "fp64"},
+                    {"kernelReported", false},
                     {"elapsedMs", runner.runElapsedMs(run.id)},
                     {"cancelable", true},
                     {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
@@ -518,8 +531,10 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
             [cancelToken]() { return cancelToken->load(std::memory_order_relaxed); });
 
         if (cancelToken->load(std::memory_order_relaxed) || resp.status == "cancelled") {
+            runner.setCancelable(run.id, false);
             runner.setStatus(run.id, "cancelled");
-            return Json{{"runId", run.id}, {"status", "cancelled"}}.dump();
+            terminalGuard.release();
+            return Json{{"runId", run.id}, {"status", "cancelled"}};
         }
 
         Json responseJson = enumResponseToJson(resp);
@@ -537,21 +552,44 @@ std::string specialPointsEnumerateRoute(const std::filesystem::path& repoRoot, J
         atomicWriteText(outPath, artifact.dump(2));
         runner.addArtifact(run.id, Artifact{"special-points", outPath.string(), "report"});
 
-        setProgress(resp.status, resp.accepted_count, resp.expected_count, resp.seed_count, req.max_seed_batches);
+        setProgress(resp.status, resp.accepted_count, resp.expected_count,
+                    resp.seed_count, req.max_seed_batches, true);
+        runner.setCancelable(run.id, false);
         runner.setStatus(run.id, "completed");
+        terminalGuard.release();
         const std::string artId = run.id + ":special_points.json";
         responseJson["reportArtifactId"] = artId;
         responseJson["reportDownloadUrl"] = "/api/artifacts/download?artifactId=" + artId;
-        return responseJson.dump();
-    } catch (const std::exception& e) {
+        return responseJson;
+        } catch (const std::exception&) {
+        runner.setCancelable(run.id, false);
         if (cancelToken->load(std::memory_order_relaxed)) {
             runner.setStatus(run.id, "cancelled");
         } else {
             runner.setStatus(run.id, "failed");
             setProgress("failed", 0, totalExpectedOrThrow(req), 0, 0);
         }
+        terminalGuard.release();
         throw;
+        }
+    };
+
+    launchGuard.release();
+    if (background) {
+        auto backgroundToken = runner.backgroundTaskToken();
+        std::thread([execute, backgroundToken]() mutable {
+            (void)backgroundToken;
+            try {
+                (void)execute();
+            } catch (...) {}
+        }).detach();
+        return Json{
+            {"runId", run.id}, {"status", "queued"},
+            {"acceptedCount", 0}, {"points", Json::array()},
+        }.dump();
     }
+
+    return execute().dump();
 }
 
 std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobRunner& runner, const std::string& body) {
@@ -579,6 +617,9 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
             {"period", period},
             {"acceptedCount", accepted},
             {"seedCount", seeds},
+            {"engine", "openmp"},
+            {"scalar", "fp64"},
+            {"kernelReported", false},
             {"elapsedMs", runner.runElapsedMs(run.id)},
             {"cancelable", true},
             {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
@@ -595,13 +636,18 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
             return preemptFlag->load(std::memory_order_relaxed) ||
                 cancelToken->load(std::memory_order_relaxed);
         };
-        auto setThreadProgress = [&](const std::string& stage, int period, int accepted, int seeds, const std::string& error = "") {
+        auto setThreadProgress = [&](const std::string& stage, int period, int accepted,
+                                     int seeds, const std::string& error = "",
+                                     bool kernelReported = false) {
             Json progress = {
                 {"taskType", "special_points_search"},
                 {"stage", stage},
                 {"period", period},
                 {"acceptedCount", accepted},
                 {"seedCount", seeds},
+                {"engine", "openmp"},
+                {"scalar", "fp64"},
+                {"kernelReported", kernelReported},
                 {"elapsedMs", runner.runElapsedMs(run.id)},
                 {"cancelable", true},
                 {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
@@ -615,6 +661,7 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
             for (;;) {
                 if (shouldCancel()) {
                     setThreadProgress("cancelled", req.period_min, 0, 0);
+                    runner.setCancelable(run.id, false);
                     runner.setStatus(run.id, "cancelled");
                     terminalGuard.release();
                     return;
@@ -635,6 +682,7 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
 
             if (shouldCancel()) {
                 setThreadProgress("cancelled", req.period_min, 0, 0);
+                runner.setCancelable(run.id, false);
                 runner.setStatus(run.id, "cancelled");
                 terminalGuard.release();
                 return;
@@ -653,6 +701,9 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
                         {"periodCount", periodCount},
                         {"acceptedCount", accepted},
                         {"seedCount", seeds},
+                        {"engine", "openmp"},
+                        {"scalar", "fp64"},
+                        {"kernelReported", false},
                         {"elapsedMs", runner.runElapsedMs(run.id)},
                         {"cancelable", true},
                         {"resourceLocks", Json::array({"special_points", "cpu_heavy"})},
@@ -664,6 +715,7 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
 
             if (shouldCancel() || resp.status == "cancelled") {
                 setThreadProgress("cancelled", req.period_min, resp.accepted_count, resp.seed_count);
+                runner.setCancelable(run.id, false);
                 runner.setStatus(run.id, "cancelled");
                 terminalGuard.release();
                 return;
@@ -683,12 +735,15 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
             atomicWriteText(outPath, artifact.dump(2));
             runner.addArtifact(run.id, Artifact{"special-points-search", outPath.string(), "report"});
 
-            setThreadProgress(resp.status, req.period_max, resp.accepted_count, resp.seed_count);
+            setThreadProgress(resp.status, req.period_max, resp.accepted_count,
+                              resp.seed_count, "", true);
+            runner.setCancelable(run.id, false);
             runner.setStatus(run.id, "completed");
             terminalGuard.release();
         } catch (const std::exception& e) {
             const bool cancelled = shouldCancel();
             try {
+                runner.setCancelable(run.id, false);
                 runner.setStatus(run.id, cancelled ? "cancelled" : "failed");
                 terminalGuard.release();
             } catch (...) {}
@@ -702,6 +757,7 @@ std::string specialPointsSearchRoute(const std::filesystem::path& repoRoot, JobR
             } catch (...) {}
         } catch (...) {
             try {
+                runner.setCancelable(run.id, false);
                 runner.setStatus(run.id, shouldCancel() ? "cancelled" : "failed");
                 terminalGuard.release();
             } catch (...) {}
