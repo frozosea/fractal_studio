@@ -35,12 +35,20 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     s3_access_key_id: str = ""
     s3_secret_access_key: str = ""
+    s3_server_side_encryption: str = ""
+    s3_sse_kms_key_id: str = ""
     preview_max_width: int = Field(default=1024, ge=1, le=1024)
     preview_max_height: int = Field(default=1024, ge=1, le=1024)
     preview_max_pixels: int = Field(default=1_048_576, ge=1, le=1_048_576)
     preview_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
     render_quota_max_active: int = Field(default=3, ge=1, le=100)
     master_download_ttl_seconds: int = Field(default=300, ge=60, le=900)
+    public_preview_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
+    media_max_input_bytes: int = Field(default=524_288_000, ge=1_048_576, le=2_147_483_647)
+    media_max_derivative_bytes: int = Field(default=262_144_000, ge=1_048_576, le=2_147_483_647)
+    media_ffmpeg_timeout_seconds: int = Field(default=120, ge=5, le=900)
+    media_temp_dir: str = "/tmp"
+    asset_cleanup_retry_delay_seconds: int = Field(default=300, ge=30, le=86_400)
     render_poll_interval_seconds: int = Field(default=3, ge=1, le=60)
     outbox_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
     outbox_lease_seconds: int = Field(default=30, ge=1, le=300)
@@ -66,6 +74,10 @@ class Settings(BaseSettings):
             raise ValueError("API_ORIGIN must use HTTPS in production")
         if any(origin.startswith("http://localhost") for origin in self.trusted_origins):
             raise ValueError("CORS_ORIGINS must not include localhost in production")
+        if self.s3_server_side_encryption not in {"AES256", "aws:kms"}:
+            raise ValueError("S3_SERVER_SIDE_ENCRYPTION must be AES256 or aws:kms in production")
+        if self.s3_server_side_encryption == "aws:kms" and not self.s3_sse_kms_key_id:
+            raise ValueError("S3_SSE_KMS_KEY_ID is required for aws:kms")
         return self
 
 

@@ -244,8 +244,14 @@ def build_render_handler_registry(
     registry.register("render.poll.v1", render_worker.poll_run_status)
     registry.register("render.cancel_requested.v1", render_worker.forward_cancellation)
     registry.register("render.quota_expired.v1", render_worker.expire_quota)
-    registry.register("asset.cleanup_orphan.v1", AssetCleanupService().delete_orphan)
-    registry.register("media.create_derivatives.v1", MediaWorker().create_derivatives)
+    cleanup = AssetCleanupService()
+    media = MediaWorker()
+    registry.register("cleanup.expired.v1", cleanup.cleanup_expired_objects)
+    registry.register("asset.cleanup_orphan.v1", cleanup.cleanup_expired_objects)
+    registry.register("media.create_derivatives.v1", media.create_derivatives)
     for event_type in ("render.created.v1", "render.poll.v1", "render.cancel_requested.v1"):
         registry.register_dead_letter(event_type, render_worker.fail_dead_letter)
+    registry.register_dead_letter("media.create_derivatives.v1", media.dead_letter)
+    registry.register_dead_letter("cleanup.expired.v1", cleanup.dead_letter)
+    registry.register_dead_letter("asset.cleanup_orphan.v1", cleanup.dead_letter)
     return registry

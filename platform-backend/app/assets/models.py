@@ -25,6 +25,8 @@ class AssetView(BaseModel):
     media_type: Literal["image", "video", "mesh"] = Field(alias="mediaType")
     status: Literal["processing", "ready", "failed", "deleted"]
     visibility: Literal["private", "hidden"]
+    derivative_status: Literal["pending", "ready", "failed"] = Field(alias="derivativeStatus")
+    derivative_error_code: str | None = Field(default=None, alias="derivativeErrorCode")
     created_at: datetime = Field(alias="createdAt")
     files: list[AssetFileView]
 

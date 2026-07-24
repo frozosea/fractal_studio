@@ -21,6 +21,8 @@ class AssetRecord:
     visibility: str
     created_at: datetime
     files: list[dict[str, object]]
+    derivative_status: str = "pending"
+    derivative_error_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,10 +44,28 @@ class DownloadAsset:
 
 
 @dataclass(frozen=True, slots=True)
+class AssetReadRecord:
+    """Internal M3 safe-reader source. Object keys never leave this repository/service pair."""
+
+    id: UUID
+    owner_id: UUID
+    media_type: str
+    status: str
+    visibility: str
+    derivative_keys: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
 class MutationResult:
     asset: AssetRecord | None
     code: str
     cleanup_keys: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupTask:
+    id: UUID
+    retry_generation: int
 
 
 async def create_or_get_processing(
@@ -230,12 +250,68 @@ async def mark_cleanup_done(connection: AsyncConnection, *, task_id: UUID) -> No
     )
 
 
+async def mark_cleanup_retry(
+    connection: AsyncConnection, *, task_id: UUID, error_code: str, delay_seconds: int
+) -> None:
+    await connection.execute(
+        text(
+            """
+            UPDATE storage_cleanup_tasks
+            SET available_at = now() + (:delay_seconds * interval '1 second'),
+                last_error_code = :error_code, last_error_at = now()
+            WHERE id = :id AND status = 'pending'
+            """
+        ),
+        {"id": task_id, "error_code": error_code[:120], "delay_seconds": delay_seconds},
+    )
+
+
+async def claim_due_cleanup_tasks(connection: AsyncConnection, *, limit: int = 25) -> list[CleanupTask]:
+    """Select abandoned/dead cleanup tasks; active cleanup outbox rows remain authoritative."""
+    selected = await connection.execute(
+        text(
+            """
+            SELECT c.id, c.retry_generation
+            FROM storage_cleanup_tasks c
+            WHERE c.status = 'pending' AND c.available_at <= now()
+              AND NOT EXISTS (
+                SELECT 1 FROM outbox_events e
+                WHERE e.aggregate_type = 'storage_cleanup_task' AND e.aggregate_id = c.id
+                  AND e.status IN ('pending', 'leased')
+              )
+            ORDER BY c.available_at, c.created_at, c.id
+            FOR UPDATE SKIP LOCKED
+            LIMIT :limit
+            """
+        ),
+        {"limit": limit},
+    )
+    tasks: list[CleanupTask] = []
+    for row in selected.mappings():
+        task_id = row["id"]
+        generation = int(row["retry_generation"]) + 1
+        await connection.execute(
+            text(
+                """
+                UPDATE storage_cleanup_tasks
+                SET retry_generation = :generation,
+                    available_at = now() + interval '5 minutes'
+                WHERE id = :id
+                """
+            ),
+            {"id": task_id, "generation": generation},
+        )
+        tasks.append(CleanupTask(id=task_id, retry_generation=generation))
+    return tasks
+
+
 async def find_owned(connection: AsyncConnection, *, asset_id: UUID, owner_id: UUID) -> AssetRecord | None:
     result = await connection.execute(
         text(
             """
             SELECT a.id, a.owner_id, a.recipe_id, a.media_type::text AS media_type,
                    a.status::text AS status, a.visibility::text AS visibility, a.created_at,
+                   a.derivative_status, a.derivative_error_code,
                    COALESCE(jsonb_agg(jsonb_build_object(
                      'purpose', f.purpose::text, 'mediaType', f.media_type, 'sizeBytes', f.size_bytes
                    )) FILTER (WHERE f.id IS NOT NULL), '[]'::jsonb) AS files
@@ -256,6 +332,7 @@ async def list_owned(
     owner_id: UUID,
     limit: int,
     status: str | None = None,
+    visibility: str | None = None,
     media_type: str | None = None,
     before_created_at: datetime | None = None,
     before_id: UUID | None = None,
@@ -270,6 +347,11 @@ async def list_owned(
     if media_type is not None:
         predicate += " AND a.media_type::text = :media_type"
         params["media_type"] = media_type
+    if visibility is None:
+        predicate += " AND a.visibility = 'private'"
+    else:
+        predicate += " AND a.visibility::text = :visibility"
+        params["visibility"] = visibility
     if before_created_at is not None and before_id is not None:
         predicate += " AND (a.created_at, a.id) < (:before_created_at, :before_id)"
         params.update({"before_created_at": before_created_at, "before_id": before_id})
@@ -278,6 +360,7 @@ async def list_owned(
             f"""
             SELECT a.id, a.owner_id, a.recipe_id, a.media_type::text AS media_type,
                    a.status::text AS status, a.visibility::text AS visibility, a.created_at,
+                   a.derivative_status, a.derivative_error_code,
                    COALESCE(jsonb_agg(jsonb_build_object(
                      'purpose', f.purpose::text, 'mediaType', f.media_type, 'sizeBytes', f.size_bytes
                    )) FILTER (WHERE f.id IS NOT NULL), '[]'::jsonb) AS files
@@ -330,11 +413,13 @@ async def add_derivative(
     sha256: str,
     size_bytes: int,
     media_type: str,
-) -> None:
-    await connection.execute(
+) -> bool:
+    locked = await connection.execute(
         text("SELECT id FROM assets WHERE id = :asset_id AND status = 'ready' FOR UPDATE"),
         {"asset_id": asset_id},
     )
+    if locked.scalar_one_or_none() is None:
+        return False
     await connection.execute(
         text(
             """
@@ -354,6 +439,136 @@ async def add_derivative(
             "media_type": media_type,
         },
     )
+    return True
+
+
+async def mark_derivatives_ready_if_complete(
+    connection: AsyncConnection, *, asset_id: UUID, expected_purposes: frozenset[str]
+) -> bool:
+    """Ready only after every media-type-required derivative is durably recorded."""
+    result = await connection.execute(
+        text(
+            """
+            UPDATE assets
+            SET derivative_status = 'ready', derivative_error_code = NULL, derivative_updated_at = now()
+            WHERE id = :asset_id AND status = 'ready'
+              AND NOT EXISTS (
+                SELECT 1 FROM unnest(CAST(:expected_purposes AS text[])) AS required(purpose)
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM asset_files f
+                  WHERE f.asset_id = assets.id AND f.purpose::text = required.purpose
+                )
+              )
+            """
+        ),
+        {"asset_id": asset_id, "expected_purposes": list(expected_purposes)},
+    )
+    return result.rowcount == 1
+
+
+async def mark_derivatives_failed(
+    connection: AsyncConnection, *, asset_id: UUID, error_code: str
+) -> bool:
+    result = await connection.execute(
+        text(
+            """
+            UPDATE assets
+            SET derivative_status = 'failed', derivative_error_code = :error_code, derivative_updated_at = now()
+            WHERE id = :asset_id AND status = 'ready'
+            """
+        ),
+        {"asset_id": asset_id, "error_code": error_code[:120]},
+    )
+    return result.rowcount == 1
+
+
+async def find_owned_read_record(
+    connection: AsyncConnection, *, asset_id: UUID, owner_id: UUID
+) -> AssetReadRecord | None:
+    return await _find_read_record(connection, asset_id=asset_id, owner_id=owner_id)
+
+
+async def find_ready_preview_record(
+    connection: AsyncConnection, *, asset_id: UUID
+) -> AssetReadRecord | None:
+    return await _find_read_record(
+        connection,
+        asset_id=asset_id,
+        owner_id=None,
+        required_status="ready",
+        required_visibility="private",
+    )
+
+
+async def find_publishable_read_record(
+    connection: AsyncConnection, *, asset_id: UUID, owner_id: UUID
+) -> AssetReadRecord | None:
+    return await _find_read_record(
+        connection,
+        asset_id=asset_id,
+        owner_id=owner_id,
+        required_status="ready",
+        required_visibility="private",
+    )
+
+
+async def _find_read_record(
+    connection: AsyncConnection,
+    *,
+    asset_id: UUID,
+    owner_id: UUID | None,
+    required_status: str | None = None,
+    required_visibility: str | None = None,
+) -> AssetReadRecord | None:
+    predicates = ["a.id = :asset_id"]
+    params: dict[str, object] = {"asset_id": asset_id}
+    if owner_id is not None:
+        predicates.append("a.owner_id = :owner_id")
+        params["owner_id"] = owner_id
+    if required_status is not None:
+        predicates.append("a.status::text = :required_status")
+        params["required_status"] = required_status
+    if required_visibility is not None:
+        predicates.append("a.visibility::text = :required_visibility")
+        params["required_visibility"] = required_visibility
+    result = await connection.execute(
+        text(
+            f"""
+            SELECT a.id, a.owner_id, a.media_type::text AS media_type,
+                   a.status::text AS status, a.visibility::text AS visibility,
+                   COALESCE(jsonb_object_agg(f.purpose::text, f.object_key)
+                     FILTER (WHERE f.purpose IN ('thumbnail', 'watermarked_preview', 'video_poster')),
+                     '{{}}'::jsonb) AS derivative_keys
+            FROM assets a
+            LEFT JOIN asset_files f ON f.asset_id = a.id
+            WHERE {' AND '.join(predicates)}
+            GROUP BY a.id
+            """
+        ),
+        params,
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        return None
+    data = dict(row)
+    return AssetReadRecord(
+        id=data["id"],
+        owner_id=data["owner_id"],
+        media_type=str(data["media_type"]),
+        status=str(data["status"]),
+        visibility=str(data["visibility"]),
+        derivative_keys={str(key): str(value) for key, value in dict(data["derivative_keys"]).items()},
+    )
+
+
+async def referenced_object_keys(connection: AsyncConnection, *, object_keys: list[str]) -> set[str]:
+    if not object_keys:
+        return set()
+    rows = await connection.execute(
+        text("SELECT object_key FROM asset_files WHERE object_key = ANY(CAST(:keys AS text[]))"),
+        {"keys": object_keys},
+    )
+    return {str(key) for key in rows.scalars()}
 
 
 async def find_download_asset(connection: AsyncConnection, *, asset_id: UUID) -> DownloadAsset | None:
@@ -461,4 +676,10 @@ def _asset_record(row: object) -> AssetRecord:
         visibility=str(data["visibility"]),
         created_at=data["created_at"],
         files=list(data["files"]),
+        derivative_status=str(data.get("derivative_status", "pending")),
+        derivative_error_code=(
+            str(data["derivative_error_code"])
+            if data.get("derivative_error_code") is not None
+            else None
+        ),
     )

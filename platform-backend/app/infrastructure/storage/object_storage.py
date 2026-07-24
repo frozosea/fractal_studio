@@ -39,7 +39,7 @@ class ObjectStorage:
             str(source),
             self._settings.s3_bucket,
             object_key,
-            ExtraArgs={"ContentType": media_type},
+            ExtraArgs=self._upload_args(object_key=object_key, media_type=media_type),
         )
 
     async def upload_bytes(self, *, object_key: str, body: bytes, media_type: str) -> None:
@@ -50,7 +50,7 @@ class ObjectStorage:
             Bucket=self._settings.s3_bucket,
             Key=object_key,
             Body=body,
-            ContentType=media_type,
+            **self._put_args(object_key=object_key, media_type=media_type),
         )
 
     async def download_file(self, *, object_key: str, destination: Path) -> None:
@@ -74,3 +74,22 @@ class ObjectStorage:
     async def delete(self, *, object_key: str) -> None:
         client = self._client()
         await asyncio.to_thread(client.delete_object, Bucket=self._settings.s3_bucket, Key=object_key)
+
+    def _upload_args(self, *, object_key: str, media_type: str) -> dict[str, str]:
+        return {"ContentType": media_type, **self._storage_policy_args(object_key)}
+
+    def _put_args(self, *, object_key: str, media_type: str) -> dict[str, str]:
+        return {"ContentType": media_type, **self._storage_policy_args(object_key)}
+
+    def _storage_policy_args(self, object_key: str) -> dict[str, str]:
+        """Prefix-based cache and encryption policy. Access remains signed, never ACL based."""
+        if object_key.startswith("public/previews/"):
+            args: dict[str, str] = {"CacheControl": "public, max-age=3600"}
+        else:
+            args = {"CacheControl": "private, no-store"}
+        encryption = self._settings.s3_server_side_encryption
+        if encryption:
+            args["ServerSideEncryption"] = encryption
+            if encryption == "aws:kms" and self._settings.s3_sse_kms_key_id:
+                args["SSEKMSKeyId"] = self._settings.s3_sse_kms_key_id
+        return args

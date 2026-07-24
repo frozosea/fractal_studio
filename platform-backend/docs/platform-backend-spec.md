@@ -697,6 +697,11 @@ classDiagram
     +findPublicPreview(assetId)
     +findPublishableAsset(assetId, ownerId)
   }
+  class AssetReadService {
+    +findOwnedAsset()
+    +findPublicPreview()
+    +findPublishableAsset()
+  }
   class ComputeArtifactReader {
     +downloadVerified()
     +calculateSha256()
@@ -705,6 +710,7 @@ classDiagram
     +createThumbnail()
     +createWatermarkedPreview()
     +createVideoPoster()
+    +createMeshPreview()
   }
   class ObjectStorage {
     +putObject()
@@ -738,6 +744,9 @@ classDiagram
   AssetRouter --> AssetService
   AssetService ..|> AssetIngestionPort_M3
   AssetRepository ..|> AssetReader_M3
+  AssetReadService ..|> AssetReader_M3
+  AssetReadService --> AssetRepository
+  AssetReadService --> ObjectStorage
   AssetService --> AssetRepository
   AssetService --> ComputeArtifactReader
   AssetService --> ObjectStorage
@@ -758,9 +767,10 @@ M5 owns entitlement data; M3 asks it through a narrow read port for a download.
 | Module | Why it exists / owns | Python dependencies | External dependencies and data |
 |---|---|---|---|
 | `AssetRouter` | Thin HTTP boundary for library, hide and download URL endpoints. | FastAPI, Pydantic v2 | `AccessMiddleware`, `AssetService` |
-| `AssetService` | One application service for asset metadata, ingest, hide and signed master URL. It implements M2 `AssetIngestionPort`: first creates a `processing` asset, then receives completed job plus selected artifacts, verifies/uploads master and atomically makes asset `ready`. | SQLAlchemy 2 async, `hashlib`, `pathlib`, Pydantic | `AssetRepository`, `ComputeArtifactReader`, `ObjectStorage`, M5 `EntitlementReader`, M7 `OutboxService`, PostgreSQL |
+| `AssetIngestionService` + `AssetLibraryService` | M3 application services for verified ingest and creator mutations/master URL. `AssetIngestionService` implements M2 `AssetIngestionPort`: it creates `processing`, verifies/uploads selected artifact, then atomically makes asset `ready`. `AssetLibraryService` owns hide, delete and protected master URL. | SQLAlchemy 2 async, `hashlib`, `pathlib`, Pydantic | `AssetRepository`, `ComputeArtifactReader`, `ObjectStorage`, M5 `EntitlementReader`, M7 `OutboxService`, PostgreSQL |
+| `AssetReadService` | M3 implementation of narrow M4 `AssetReader` port. It returns ownership/readiness and short-lived derivative URLs, never master URLs or storage DTO fields. | SQLAlchemy 2 async, `asyncio` | `AssetRepository`, `ObjectStorage`, PostgreSQL |
 | `ComputeArtifactReader` | Private adapter over Compute v1 manifest/content routes. It accepts only M2-selected manifest artifact IDs, streams `GET /compute/v1/artifacts?artifactId=...`, and verifies Compute manifest SHA-256/size before S3 upload. | `httpx.AsyncClient`, `hashlib`, `pathlib` | C++ Compute v1 manifest/content endpoints; M2 completed run and selected artifact IDs |
-| `MediaWorker` | Async follow-up after master ingest. Makes thumbnail, watermarked preview and video poster, then adds derivative `asset_files`. | Pillow, `subprocess` wrapper for ffmpeg | M7 PostgreSQL-outbox worker, worker temp directory, `AssetRepository`, `ObjectStorage` |
+| `MediaWorker` | Async follow-up after master ingest. Makes image thumbnail/watermark, video poster/watermark and deterministic PNG mesh preview. Compensates uploaded-but-unrecorded derivatives through M3 cleanup work. | Pillow, standard-library GLB/STL reader, `subprocess` wrapper for ffmpeg | M7 PostgreSQL-outbox worker, bounded worker temp directory, `AssetRepository`, `ObjectStorage` |
 | `ObjectStorage` | One S3/MinIO adapter for upload, delete and short-lived signed GET URL. It contains no marketplace rules. | `boto3`, app config | S3/MinIO bucket and encryption config |
 | `AssetRepository` | One M3-owned repository for both `assets` and `asset_files`. It provides safe `findOwnedAsset()`/`findPublicPreview()`/`findPublishableAsset()` reads through M3 port. | SQLAlchemy 2 ORM/Core, `asyncpg`, Alembic | PostgreSQL `assets`, `asset_files` tables |
 | `EntitlementReader_M5` | Consumer-owned M3 port implemented by M5. Answers only whether a user has an active entitlement for an asset; never exposes M5 tables or order details. | Python `Protocol` | M5 `entitlements` query implementation |
@@ -796,11 +806,16 @@ Boundary rules:
   outside transaction verify/download and upload master; then lock asset/job, insert master
   `asset_file`, set asset `ready`, complete job/release quota and append
   `media.create_derivatives.v1`. Failure marks asset/job failed and queues orphan cleanup.
-- `ready` means master exists. `visibility` is independent: `private` shows in owner library;
-  `hidden` removes it from creator UI. Hide may be restored to `private`.
+- `ready` means master exists. `visibility` is independent: `private` shows in default owner
+  library query; `hidden` appears only when explicitly filtered and may be restored to `private`.
+- `derivative_status` is `pending`, `ready` or `failed`. A ready image/mesh requires thumbnail plus
+  watermarked preview; a ready video requires poster plus watermarked preview. M4 publishability
+  uses M3 `AssetReader.findPublishableAsset()` and rejects missing derivatives.
 - Delete is soft creator deletion. Physical master cleanup is forbidden while any `order_item`
   or active entitlement references asset; sold masters remain retained for purchasers.
-- Public listing pages read `thumbnail`/`watermarked_preview`; original uses only M3 signed URL.
+- Public listing pages read short-lived signed derivative URLs from M3 `AssetReader`; original uses
+  only M3 owner/entitlement signed URL. Storage has no public ACL path: master/provenance uploads
+  are `private, no-store`; previews are cacheable and production uploads require SSE.
 - A signed URL has short TTL and requires `owner_id == user_id` or M5 `EntitlementReader` approval.
 - M3 does not create listings, calculate price, verify Alipay notifications, or grant entitlements.
 
@@ -808,7 +823,9 @@ Boundary rules:
 app/assets/router.py
 app/assets/service.py
 app/assets/repository.py
+app/assets/reader.py
 app/assets/media_worker.py
+app/assets/cleanup_service.py
 app/assets/models.py
 app/assets/ports.py
 app/infrastructure/compute/compute_artifact_reader.py
@@ -1471,6 +1488,7 @@ platform-backend/
       router.py
       service.py
       repository.py
+      reader.py
       media_worker.py
       cleanup_service.py
       ports.py
@@ -1488,6 +1506,7 @@ platform-backend/
       repository.py
       models.py
       ports.py
+      entitlement_reader.py
     finance/                      # M6: internal immutable sale ledger
       sale_ledger_writer.py
       cleanup_service.py
@@ -1516,6 +1535,7 @@ platform-backend/
       script.py.mako
       versions/
         20260723_0001_initial_platform_schema.py
+        20260724_0007_asset_media_lifecycle.py
   tests/
     conftest.py
     unit/
@@ -2281,7 +2301,7 @@ Recipes have no `PATCH`: `canonicalSpec` is immutable. Create a new recipe inste
 
 | Method and route | Auth | Idempotency | Input | Success output |
 |---|---|---|---|---|
-| `GET /v1/me/assets` | user | no | cursor query, optional `status`, `mediaType` | `200 CollectionResponse<AssetView>` |
+| `GET /v1/me/assets` | user | no | cursor query, optional `status`, `mediaType`, `visibility` | `200 CollectionResponse<AssetView>`; default returns only `visibility=private`, use `visibility=hidden` for restore UI |
 | `GET /v1/me/assets/{assetId}` | owner | no | none | `200 AssetView` |
 | `PATCH /v1/me/assets/{assetId}` | owner | yes | `AssetUpdateInput` | `200 AssetView`; hide/restore unlisted asset |
 | `DELETE /v1/me/assets/{assetId}` | owner | yes | none | `204`; soft delete. Sold master is retained, only hidden from creator. |

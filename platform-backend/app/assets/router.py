@@ -44,6 +44,7 @@ async def list_my_assets(
     asset_status: Literal["processing", "ready", "failed", "deleted"] | None = Query(
         default=None, alias="status"
     ),
+    visibility: Literal["private", "hidden"] | None = Query(default=None),
     media_type: Literal["image", "video", "mesh"] | None = Query(default=None, alias="mediaType"),
     principal: AccessPrincipal = Depends(require_principal),
 ) -> dict[str, object]:
@@ -54,6 +55,7 @@ async def list_my_assets(
             owner_id=principal.user_id,
             limit=limit + 1,
             status=asset_status,
+            visibility=visibility,
             media_type=media_type,
             before_created_at=before[0] if before else None,
             before_id=before[1] if before else None,

@@ -182,10 +182,12 @@ async def run() -> None:
         except NotImplementedError:
             pass
     from app.studio.quota_expiry_scheduler import RenderQuotaExpiryScheduler
+    from app.assets.cleanup_service import AssetCleanupScheduler
     from app.studio.render_worker import build_render_handler_registry
 
     worker = OutboxWorker(
-        handlers=build_render_handler_registry(), due_work_readers=(RenderQuotaExpiryScheduler(),)
+        handlers=build_render_handler_registry(),
+        due_work_readers=(RenderQuotaExpiryScheduler(), AssetCleanupScheduler()),
     )
     worker_log(logging.INFO, "outbox worker started", worker_id=worker._worker_id)
     await worker.run(stop_event)

@@ -12,14 +12,16 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, Request, status
 
 from app.assets import repository
+from app.assets.cleanup_service import queue_object_cleanup
 from app.assets.models import AssetFileView, AssetView, DownloadUrlView
-from app.assets.ports import DenyEntitlementReader, EntitlementReader
+from app.assets.ports import EntitlementReader
 from app.auth.models import AccessPrincipal
 from app.core import audit_writer
 from app.core.config import get_settings
 from app.core.db import get_engine
 from app.core import idempotency_service
 from app.core.request_context import request_id
+from app.commerce.entitlement_reader import PostgresEntitlementReader
 from app.infrastructure.compute.compute_artifact_reader import ArtifactIntegrityError, ComputeArtifactReader
 from app.infrastructure.storage.object_storage import ObjectStorage
 from app.outbox.models import NewOutboxEvent
@@ -157,19 +159,7 @@ class AssetIngestionService:
             await render_job_repository.fail_and_release(
                 connection, job_id=render_job_id, error_code="asset_ingestion_failed"
             )
-            if object_keys:
-                task_id = await repository.create_orphan_cleanup_task(
-                    connection, object_keys=object_keys
-                )
-                await TransactionalOutboxService(connection).append(
-                    NewOutboxEvent(
-                        event_type="asset.cleanup_orphan.v1",
-                        aggregate_type="storage_cleanup_task",
-                        aggregate_id=task_id,
-                        idempotency_key="delete",
-                        payload={"cleanupTaskId": str(task_id)},
-                    )
-                )
+            await queue_object_cleanup(connection, object_keys=object_keys)
 
     @staticmethod
     def _asset_media_type(output_kind: str) -> str:
@@ -252,6 +242,8 @@ def asset_view(record: repository.AssetRecord) -> AssetView:
         mediaType=record.media_type,
         status=record.status,
         visibility=record.visibility,
+        derivativeStatus=record.derivative_status,
+        derivativeErrorCode=record.derivative_error_code,
         createdAt=record.created_at,
         files=[
             AssetFileView.model_validate(item)
@@ -269,7 +261,7 @@ class AssetLibraryService:
         entitlement_reader: EntitlementReader | None = None,
     ) -> None:
         self._storage = object_storage or ObjectStorage()
-        self._entitlements = entitlement_reader or DenyEntitlementReader()
+        self._entitlements = entitlement_reader or PostgresEntitlementReader()
 
     async def change_visibility(
         self,
@@ -338,20 +330,11 @@ class AssetLibraryService:
                 return claim.replay_status or status.HTTP_204_NO_CONTENT, claim.replay_headers or {}
             result = await repository.soft_delete(connection, asset_id=asset_id, owner_id=principal.user_id)
             self._raise_mutation_error(result.code)
-            if result.cleanup_keys:
-                cleanup_task_id = await repository.create_orphan_cleanup_task(
-                    connection, object_keys=result.cleanup_keys
-                )
-                await TransactionalOutboxService(connection).append(
-                    NewOutboxEvent(
-                        event_type="asset.cleanup_orphan.v1",
-                        aggregate_type="storage_cleanup_task",
-                        aggregate_id=cleanup_task_id,
-                        idempotency_key="delete",
-                        payload={"cleanupTaskId": str(cleanup_task_id)},
-                        causation_request_id=request_id(request),
-                    )
-                )
+            await queue_object_cleanup(
+                connection,
+                object_keys=result.cleanup_keys,
+                causation_request_id=request_id(request),
+            )
             await audit_writer.record_user_action(
                 connection,
                 actor_user_id=principal.user_id,
