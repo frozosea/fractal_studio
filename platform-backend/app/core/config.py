@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     platform_fee_bps: int = Field(default=2000, ge=0, le=10_000)
     payment_attempt_ttl_minutes: int = Field(default=30, ge=1, le=1440)
     payment_reconcile_delay_seconds: int = Field(default=60, ge=0, le=3600)
+    payment_reconcile_pending_seconds: int = Field(default=60, ge=5, le=3600)
+    payment_reconcile_sweep_seconds: int = Field(default=300, ge=30, le=86_400)
     alipay_app_id: str = ""
     alipay_seller_id: str = ""
     alipay_private_key_path: str = ""
@@ -69,6 +71,8 @@ class Settings(BaseSettings):
     alipay_return_url: str = ""
     alipay_gateway_url: str = "https://openapi.alipay.com/gateway.do"
     alipay_stub_mode: bool = False
+    alipay_stub_public_key_url: str = ""
+    alipay_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 
     @property
     def trusted_origins(self) -> set[str]:
@@ -95,6 +99,8 @@ class Settings(BaseSettings):
         if not all((self.alipay_app_id, self.alipay_seller_id, self.alipay_private_key_path,
                     self.alipay_public_key_path, self.alipay_notify_url, self.alipay_return_url)):
             raise ValueError("Alipay production configuration is required")
+        if not self.alipay_notify_url.startswith("https://") or "?" in self.alipay_notify_url:
+            raise ValueError("ALIPAY_NOTIFY_URL must be a public HTTPS URL without query parameters")
         return self
 
 

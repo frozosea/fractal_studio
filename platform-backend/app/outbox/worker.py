@@ -183,11 +183,16 @@ async def run() -> None:
             pass
     from app.studio.quota_expiry_scheduler import RenderQuotaExpiryScheduler
     from app.assets.cleanup_service import AssetCleanupScheduler
+    from app.commerce.service import CommerceService
     from app.studio.render_worker import build_render_handler_registry
 
+    commerce = CommerceService()
+    handlers = build_render_handler_registry()
+    handlers.register("payment.reconcile.v1", commerce.reconcile_event)
+    handlers.register_dead_letter("payment.reconcile.v1", commerce.on_reconcile_dead_letter)
     worker = OutboxWorker(
-        handlers=build_render_handler_registry(),
-        due_work_readers=(RenderQuotaExpiryScheduler(), AssetCleanupScheduler()),
+        handlers=handlers,
+        due_work_readers=(RenderQuotaExpiryScheduler(), AssetCleanupScheduler(), commerce),
     )
     worker_log(logging.INFO, "outbox worker started", worker_id=worker._worker_id)
     await worker.run(stop_event)

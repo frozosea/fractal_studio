@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 from datetime import datetime
+from urllib.parse import parse_qsl
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
@@ -13,10 +14,31 @@ from fastapi.responses import JSONResponse
 from app.auth.models import AccessPrincipal
 from app.commerce.models import CheckoutInput
 from app.commerce.service import CheckoutService, _order_view
+from app.commerce.service import CommerceService
 from app.core.access_middleware import enforce_origin_and_csrf, require_principal
+from app.core.request_context import request_id
+from app.infrastructure.alipay.payment_gateway import AlipayProtocolError, PaymentGatewayConfigurationError
 
 
 router = APIRouter(prefix="/v1", tags=["commerce"])
+
+
+async def _alipay_form(request: Request) -> dict[str, str]:
+    if not request.headers.get("content-type", "").lower().startswith("application/x-www-form-urlencoded"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="alipay_notification_invalid")
+    try:
+        raw = await request.body()
+        ascii_items = parse_qsl(raw.decode("ascii"), keep_blank_values=True, strict_parsing=True, encoding="ascii")
+        charset = dict(ascii_items).get("charset", "utf-8").lower().replace("_", "-")
+        encoding = {"utf-8": "utf-8", "gbk": "gbk", "gb2312": "gbk"}.get(charset)
+        if encoding is None:
+            raise ValueError
+        items = parse_qsl(raw.decode("ascii"), keep_blank_values=True, strict_parsing=True, encoding=encoding)
+    except (UnicodeDecodeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="alipay_notification_invalid") from None
+    if len({key for key, _ in items}) != len(items):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="alipay_notification_invalid")
+    return dict(items)
 
 
 def _decode_cursor(cursor: str | None) -> tuple[datetime, UUID] | None:
@@ -51,6 +73,16 @@ async def checkout(
     for name, value in headers.items():
         response.headers[name] = value
     return response
+
+
+@router.post("/webhooks/alipay", include_in_schema=False)
+async def alipay_webhook(request: Request) -> Response:
+    fields = await _alipay_form(request)
+    try:
+        await CommerceService().process_notification(fields=fields, request_id_value=request_id(request))
+    except (AlipayProtocolError, PaymentGatewayConfigurationError) as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    return Response(content="success", media_type="text/plain")
 
 
 @router.get("/orders/{order_id}")

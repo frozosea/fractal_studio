@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import hashlib
+import logging
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -17,10 +19,14 @@ from app.core.config import get_settings
 from app.core.db import get_engine
 from app.core.request_context import request_id
 from app.infrastructure.alipay.payment_gateway import AlipayPaymentGateway, PaymentGatewayConfigurationError
+from app.infrastructure.alipay.payment_gateway import AlipayProtocolError, AlipayTrade
 from app.marketplace.ports import ListingSnapshotReader, PublishedOfferSnapshot
 from app.marketplace.service import MarketplaceService
-from app.outbox.models import NewOutboxEvent
+from app.outbox.models import NewOutboxEvent, OutboxEvent, RescheduleOutboxEvent, RetryableOutboxError
 from app.outbox.service import TransactionalOutboxService
+from app.core.logging import worker_log
+from app.finance.models import InsufficientCreatorBalanceError
+from app.finance.sale_ledger_writer import PostgresSaleLedgerWriter
 
 
 _CENT = Decimal("0.01")
@@ -122,3 +128,260 @@ class CheckoutService:
     def _subject(offer: PublishedOfferSnapshot) -> str:
         title = str(offer.listing_snapshot.get("title", "Fractal Studio asset")).strip()
         return (title or "Fractal Studio asset")[:128]
+
+
+class CommerceService:
+    """T12 authoritative provider transitions. Browser return never calls this service."""
+
+    def __init__(self, *, payments: AlipayPaymentGateway | None = None, ledger: PostgresSaleLedgerWriter | None = None) -> None:
+        self._payments = payments or AlipayPaymentGateway()
+        self._ledger = ledger or PostgresSaleLedgerWriter()
+
+    async def process_notification(self, *, fields: dict[str, str], request_id_value: str) -> None:
+        settings = get_settings()
+        self._validate_notification_shape(fields)
+        if fields["app_id"] != settings.alipay_app_id or fields["seller_id"] != settings.alipay_seller_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="alipay_merchant_mismatch")
+        await self._payments.verify_notification(fields)
+        trade = self._notification_trade(fields)
+        fingerprint = hashlib.sha256(self._notification_canonical(fields).encode()).hexdigest()
+        if trade.trade_status == "TRADE_CLOSED":
+            await self._process_closed_notification(
+                trade=trade, fingerprint=fingerprint, fields=fields, request_id_value=request_id_value
+            )
+            return
+        async with get_engine().begin() as connection:
+            attempt = await repository.lock_attempt_by_out_trade_no(connection, out_trade_no=trade.out_trade_no)
+            if attempt is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="payment_attempt_not_found")
+            self._validate_trade_against_attempt(trade, attempt)
+            inserted = await repository.insert_payment_notification(
+                connection, payment_attempt_id=attempt.id, fingerprint=fingerprint, trade_status=trade.trade_status,
+                payload_redacted=self._redacted_notification(fields),
+            )
+            if not inserted:
+                return
+            if trade.trade_status in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
+                await self._settle_locked(connection, attempt=attempt, trade=trade, request_id_value=request_id_value)
+
+    async def reconcile_event(self, event: OutboxEvent) -> None:
+        payment_attempt_id = self._event_attempt_id(event)
+        await self.reconcile_pending_payment(payment_attempt_id=payment_attempt_id, request_id_value=event.causation_request_id or f"outbox:{event.id}")
+
+    async def reconcile_pending_payment(self, *, payment_attempt_id: UUID, request_id_value: str) -> None:
+        async with get_engine().connect() as connection:
+            snapshot = await repository.find_attempt_for_reconciliation(connection, payment_attempt_id=payment_attempt_id)
+        if snapshot is None:
+            return
+        try:
+            trade = await self._payments.query_trade(out_trade_no=snapshot.out_trade_no)
+        except (AlipayProtocolError, PaymentGatewayConfigurationError) as error:
+            raise RetryableOutboxError(str(error)) from error
+        if trade.total_amount != snapshot.amount:
+            raise RetryableOutboxError("alipay_amount_mismatch")
+        if trade.trade_status in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
+            await self._settle_by_attempt(payment_attempt_id=payment_attempt_id, trade=trade, request_id_value=request_id_value)
+            return
+        if trade.trade_status == "TRADE_CLOSED":
+            async with get_engine().begin() as connection:
+                attempt = await repository.lock_attempt_by_id(connection, payment_attempt_id=payment_attempt_id)
+                if attempt is None:
+                    return
+                self._validate_trade_against_attempt(trade, attempt)
+                if attempt.order_status == "pending_payment":
+                    if await repository.close_unpaid(connection, attempt=attempt):
+                        await self._audit(connection, "payment.closed", attempt, request_id_value)
+                    return
+            await self._reverse_paid(
+                payment_attempt_id=payment_attempt_id, amount=trade.refund_amount or trade.total_amount,
+                reference=trade.trade_no, request_id_value=request_id_value,
+            )
+            return
+        if trade.trade_status == "WAIT_BUYER_PAY":
+            if snapshot.expires_at <= datetime.now(UTC):
+                try:
+                    closed = await self._payments.close_trade(out_trade_no=snapshot.out_trade_no)
+                except (AlipayProtocolError, PaymentGatewayConfigurationError) as error:
+                    raise RetryableOutboxError(str(error)) from error
+                if closed is not None and closed.trade_status == "TRADE_CLOSED":
+                    async with get_engine().begin() as connection:
+                        attempt = await repository.lock_attempt_by_id(connection, payment_attempt_id=payment_attempt_id)
+                        if attempt is not None and await repository.close_unpaid(connection, attempt=attempt):
+                            await self._audit(connection, "payment.closed", attempt, request_id_value)
+                    return
+            raise RescheduleOutboxEvent(delay_seconds=get_settings().payment_reconcile_pending_seconds)
+        raise RetryableOutboxError("alipay_trade_status_unknown")
+
+    async def schedule_due_work(self, service: TransactionalOutboxService) -> int:
+        attempts = await repository.list_pending_attempt_ids(service.connection, limit=100)
+        bucket = int(datetime.now(UTC).timestamp() // get_settings().payment_reconcile_sweep_seconds)
+        for attempt_id in attempts:
+            await service.append(NewOutboxEvent(
+                event_type="payment.reconcile.v1", aggregate_type="payment_attempt", aggregate_id=attempt_id,
+                idempotency_key=f"sweep-{bucket}", payload={"paymentAttemptId": str(attempt_id)},
+            ))
+        return len(attempts)
+
+    async def on_reconcile_dead_letter(self, event: OutboxEvent, error_code: str) -> None:
+        try:
+            payment_attempt_id = self._event_attempt_id(event)
+        except RetryableOutboxError:
+            worker_log(logging.ERROR, "payment reconcile dead event invalid", event_id=event.id, error_code=error_code)
+            return
+        async with get_engine().begin() as connection:
+            await repository.mark_payment_exception(connection, payment_attempt_id=payment_attempt_id)
+        worker_log(logging.ERROR, "payment reconcile requires review", event_id=event.id, error_code=error_code,
+                   payment_attempt_id=payment_attempt_id)
+
+    async def _settle_by_attempt(self, *, payment_attempt_id: UUID, trade: AlipayTrade, request_id_value: str) -> None:
+        async with get_engine().begin() as connection:
+            attempt = await repository.lock_attempt_by_id(connection, payment_attempt_id=payment_attempt_id)
+            if attempt is None:
+                return
+            self._validate_trade_against_attempt(trade, attempt)
+            await self._settle_locked(connection, attempt=attempt, trade=trade, request_id_value=request_id_value)
+
+    async def _settle_locked(self, connection, *, attempt: repository.LockedPaymentAttempt, trade: AlipayTrade,
+                             request_id_value: str) -> None:
+        if attempt.alipay_trade_no is not None and attempt.alipay_trade_no != trade.trade_no:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="alipay_trade_mismatch")
+        if not await repository.mark_settled(connection, attempt=attempt, alipay_trade_no=trade.trade_no):
+            return
+        await repository.grant_entitlements(connection, buyer_id=attempt.buyer_id, items=attempt.items)
+        for item in attempt.items:
+            await self._ledger.record_sale(connection, order_item_id=item.id, request_id_value=request_id_value)
+        await self._audit(connection, "payment.settled", attempt, request_id_value)
+
+    async def _reverse_paid(self, *, payment_attempt_id: UUID, amount: Decimal, reference: str,
+                            request_id_value: str) -> None:
+        try:
+            async with get_engine().begin() as connection:
+                attempt = await repository.lock_attempt_by_id(connection, payment_attempt_id=payment_attempt_id)
+                if attempt is None or attempt.order_status != "fulfilled":
+                    return
+                reversal = await repository.create_or_get_reversal(
+                    connection, attempt=attempt, amount=amount, external_reference=reference
+                )
+                if reversal.status in {"applied", "manual_review"}:
+                    return
+                if amount != attempt.order_amount:
+                    await repository.mark_reversal_manual_review(connection, reversal_id=reversal.id, order_id=attempt.order_id)
+                    await self._audit(connection, "payment.reversal_manual_review", attempt, request_id_value)
+                    return
+                for item in attempt.items:
+                    await self._ledger.reverse_sale(connection, order_item_id=item.id, request_id_value=request_id_value)
+                await repository.apply_reversal(connection, reversal_id=reversal.id, attempt=attempt)
+                await self._audit(connection, "payment.reversed", attempt, request_id_value)
+        except InsufficientCreatorBalanceError:
+            async with get_engine().begin() as connection:
+                attempt = await repository.lock_attempt_by_id(connection, payment_attempt_id=payment_attempt_id)
+                if attempt is None:
+                    return
+                reversal = await repository.create_or_get_reversal(
+                    connection, attempt=attempt, amount=amount, external_reference=reference
+                )
+                await repository.mark_reversal_manual_review(connection, reversal_id=reversal.id, order_id=attempt.order_id)
+                await self._audit(connection, "payment.reversal_manual_review", attempt, request_id_value)
+
+    async def _process_closed_notification(
+        self, *, trade: AlipayTrade, fingerprint: str, fields: dict[str, str], request_id_value: str
+    ) -> None:
+        """Keep provider acknowledgement coupled to close/reversal outcome, including manual review."""
+        try:
+            async with get_engine().begin() as connection:
+                attempt = await repository.lock_attempt_by_out_trade_no(connection, out_trade_no=trade.out_trade_no)
+                if attempt is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="payment_attempt_not_found")
+                self._validate_trade_against_attempt(trade, attempt)
+                if not await repository.insert_payment_notification(
+                    connection, payment_attempt_id=attempt.id, fingerprint=fingerprint, trade_status=trade.trade_status,
+                    payload_redacted=self._redacted_notification(fields),
+                ):
+                    return
+                if attempt.order_status == "pending_payment":
+                    if await repository.close_unpaid(connection, attempt=attempt):
+                        await self._audit(connection, "payment.closed", attempt, request_id_value)
+                    return
+                if attempt.order_status != "fulfilled":
+                    return
+                reversal = await repository.create_or_get_reversal(
+                    connection, attempt=attempt, amount=trade.refund_amount or trade.total_amount,
+                    external_reference=trade.trade_no,
+                )
+                if reversal.status != "detected":
+                    return
+                if reversal.amount != attempt.order_amount:
+                    await repository.mark_reversal_manual_review(connection, reversal_id=reversal.id, order_id=attempt.order_id)
+                    await self._audit(connection, "payment.reversal_manual_review", attempt, request_id_value)
+                    return
+                for item in attempt.items:
+                    await self._ledger.reverse_sale(connection, order_item_id=item.id, request_id_value=request_id_value)
+                await repository.apply_reversal(connection, reversal_id=reversal.id, attempt=attempt)
+                await self._audit(connection, "payment.reversed", attempt, request_id_value)
+        except InsufficientCreatorBalanceError:
+            async with get_engine().begin() as connection:
+                attempt = await repository.lock_attempt_by_out_trade_no(connection, out_trade_no=trade.out_trade_no)
+                if attempt is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="payment_attempt_not_found")
+                self._validate_trade_against_attempt(trade, attempt)
+                inserted = await repository.insert_payment_notification(
+                    connection, payment_attempt_id=attempt.id, fingerprint=fingerprint, trade_status=trade.trade_status,
+                    payload_redacted=self._redacted_notification(fields),
+                )
+                if not inserted:
+                    return
+                reversal = await repository.create_or_get_reversal(
+                    connection, attempt=attempt, amount=trade.refund_amount or trade.total_amount,
+                    external_reference=trade.trade_no,
+                )
+                await repository.mark_reversal_manual_review(connection, reversal_id=reversal.id, order_id=attempt.order_id)
+                await self._audit(connection, "payment.reversal_manual_review", attempt, request_id_value)
+
+    @staticmethod
+    def _validate_notification_shape(fields: dict[str, str]) -> None:
+        required = ("app_id", "seller_id", "out_trade_no", "total_amount", "trade_no", "trade_status", "sign", "sign_type")
+        if any(not fields.get(name, "").strip() for name in required):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="alipay_notification_invalid")
+
+    @staticmethod
+    def _notification_trade(fields: dict[str, str]) -> AlipayTrade:
+        try:
+            amount = Decimal(fields["total_amount"])
+            if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
+                raise ValueError
+            refund_value = fields.get("refund_amount")
+            refund = Decimal(refund_value) if refund_value else None
+        except (InvalidOperation, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="alipay_amount_invalid") from error
+        return AlipayTrade(out_trade_no=fields["out_trade_no"], trade_no=fields["trade_no"],
+            trade_status=fields["trade_status"], total_amount=amount.quantize(_CENT),
+            refund_amount=refund.quantize(_CENT) if refund is not None else None)
+
+    @staticmethod
+    def _validate_trade_against_attempt(trade: AlipayTrade, attempt: repository.LockedPaymentAttempt) -> None:
+        if trade.out_trade_no != attempt.out_trade_no or trade.total_amount != attempt.amount:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="alipay_payment_mismatch")
+
+    @staticmethod
+    def _notification_canonical(fields: dict[str, str]) -> str:
+        return "&".join(f"{key}={fields[key]}" for key in sorted(fields) if key not in {"sign", "sign_type"})
+
+    @staticmethod
+    def _redacted_notification(fields: dict[str, str]) -> dict[str, object]:
+        return {"fieldNames": sorted(fields), "outTradeNo": fields["out_trade_no"], "tradeStatus": fields["trade_status"],
+                "tradeNoHash": hashlib.sha256(fields["trade_no"].encode()).hexdigest(),
+                "signatureHash": hashlib.sha256(fields["sign"].encode()).hexdigest()}
+
+    @staticmethod
+    def _event_attempt_id(event: OutboxEvent) -> UUID:
+        try:
+            return UUID(str(event.payload["paymentAttemptId"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise RetryableOutboxError("payment_reconcile_payload_invalid") from error
+
+    @staticmethod
+    async def _audit(connection, action: str, attempt: repository.LockedPaymentAttempt, request_id_value: str) -> None:
+        await audit_writer.record_system_action(
+            connection, action=action, subject_type="order", subject_id=attempt.order_id,
+            request_id_value=request_id_value, metadata={"paymentAttemptId": str(attempt.id)},
+        )
