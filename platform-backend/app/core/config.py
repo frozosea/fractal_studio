@@ -57,6 +57,18 @@ class Settings(BaseSettings):
     outbox_schedule_interval_seconds: float = Field(default=30.0, gt=0, le=3600)
     outbox_backoff_base_seconds: int = Field(default=2, ge=1, le=300)
     outbox_backoff_max_seconds: int = Field(default=300, ge=1, le=3600)
+    commission_policy_version: str = "mvp-v1"
+    platform_fee_bps: int = Field(default=2000, ge=0, le=10_000)
+    payment_attempt_ttl_minutes: int = Field(default=30, ge=1, le=1440)
+    payment_reconcile_delay_seconds: int = Field(default=60, ge=0, le=3600)
+    alipay_app_id: str = ""
+    alipay_seller_id: str = ""
+    alipay_private_key_path: str = ""
+    alipay_public_key_path: str = ""
+    alipay_notify_url: str = ""
+    alipay_return_url: str = ""
+    alipay_gateway_url: str = "https://openapi.alipay.com/gateway.do"
+    alipay_stub_mode: bool = False
 
     @property
     def trusted_origins(self) -> set[str]:
@@ -78,6 +90,11 @@ class Settings(BaseSettings):
             raise ValueError("S3_SERVER_SIDE_ENCRYPTION must be AES256 or aws:kms in production")
         if self.s3_server_side_encryption == "aws:kms" and not self.s3_sse_kms_key_id:
             raise ValueError("S3_SSE_KMS_KEY_ID is required for aws:kms")
+        if self.alipay_stub_mode:
+            raise ValueError("ALIPAY_STUB_MODE must be false in production")
+        if not all((self.alipay_app_id, self.alipay_seller_id, self.alipay_private_key_path,
+                    self.alipay_public_key_path, self.alipay_notify_url, self.alipay_return_url)):
+            raise ValueError("Alipay production configuration is required")
         return self
 
 

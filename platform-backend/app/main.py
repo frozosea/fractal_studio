@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from app.auth.router import router as auth_router
 from app.assets.router import router as assets_router
+from app.commerce.router import router as commerce_router
 from app.marketplace.router import router as marketplace_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging, log_event
@@ -32,6 +33,7 @@ app.include_router(auth_router)
 app.include_router(studio_router)
 app.include_router(assets_router)
 app.include_router(marketplace_router)
+app.include_router(commerce_router)
 
 
 def _uuid7() -> str:
