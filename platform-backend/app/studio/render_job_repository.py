@@ -299,10 +299,66 @@ async def fail_and_release(connection: AsyncConnection, *, job_id: UUID, error_c
     changed = await set_status(
         connection,
         job_id=job_id,
-        expected={"queued", "submitting", "running", "cancel_requested"},
+        expected={"queued", "submitting", "running", "compute_succeeded", "ingesting"},
         next_status="failed",
         error_code=error_code,
     )
     if changed:
         await release_reservation(connection, job_id=job_id)
-    return changed
+        return True
+    # A user cancellation wins over an infrastructure failure observed concurrently.
+    return await cancel_and_release(connection, job_id=job_id)
+
+
+async def find_expired_reservation_job_ids(connection: AsyncConnection) -> list[UUID]:
+    result = await connection.execute(
+        text(
+            """
+            SELECT render_job_id FROM quota_reservations
+            WHERE status = 'reserved' AND expires_at <= now()
+            FOR UPDATE SKIP LOCKED
+            """
+        )
+    )
+    return list(result.scalars())
+
+
+async def expire_reservation_and_terminalize(connection: AsyncConnection, *, job_id: UUID) -> bool:
+    result = await connection.execute(
+        text(
+            """
+            SELECT q.status::text AS reservation_status, q.expires_at, j.status::text AS job_status
+            FROM quota_reservations q JOIN render_jobs j ON j.id = q.render_job_id
+            WHERE q.render_job_id = :job_id
+            FOR UPDATE OF q, j
+            """
+        ),
+        {"job_id": job_id},
+    )
+    row = result.mappings().one_or_none()
+    if row is None or row["reservation_status"] != "reserved":
+        return False
+    if row["expires_at"] > datetime.now(UTC):
+        return False
+    job_status = str(row["job_status"])
+    if job_status in TERMINAL_STATUSES:
+        await release_reservation(connection, job_id=job_id)
+        return True
+    next_status = "cancelled" if job_status == "cancel_requested" else "failed"
+    await connection.execute(
+        text(
+            """
+            UPDATE render_jobs SET status = CAST(:next_status AS render_job_status),
+              error_code = CASE WHEN :next_status = 'failed' THEN 'quota_reservation_expired' ELSE error_code END
+            WHERE id = :job_id
+            """
+        ),
+        {"job_id": job_id, "next_status": next_status},
+    )
+    await connection.execute(
+        text(
+            "UPDATE quota_reservations SET status = 'expired' WHERE render_job_id = :job_id AND status = 'reserved'"
+        ),
+        {"job_id": job_id},
+    )
+    return True

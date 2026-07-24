@@ -62,20 +62,23 @@ def test_preview_mapper_is_pure_and_versioned() -> None:
 
     request = map_preview_v1(canonical.spec, width=64, height=32, request_id=request_id)
 
-    assert PREVIEW_MAPPING_VERSION == "map-preview-v1"
+    assert PREVIEW_MAPPING_VERSION == "compute-v1-preview-v1"
     assert request == {
-        "width": 64,
-        "height": 32,
-        "iterations": 256,
-        "variant": "mandelbrot",
-        "centerRe": 0.0,
-        "centerIm": 0.0,
-        "scale": 4.0,
-        "julia": False,
-        "bailout": 4.0,
-        "engine": "auto",
-        "scalarType": "auto",
-        "requestId": str(request_id),
+        "schemaVersion": 1,
+        "kind": "map_image",
+        "payload": {
+            "width": 64,
+            "height": 32,
+            "iterations": 256,
+            "variant": "mandelbrot",
+            "centerRe": 0.0,
+            "centerIm": 0.0,
+            "scale": 4.0,
+            "julia": False,
+            "bailout": 4.0,
+            "engine": "auto",
+            "scalarType": "auto",
+        },
     }
     assert canonical.spec["seed"] == 42
 
@@ -90,7 +93,7 @@ async def test_preview_encodes_compute_rgba_to_png_without_durable_dependency() 
 
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
     assert Image.open(io.BytesIO(png)).size == (2, 2)
-    assert client.requests[0]["width"] == 2
+    assert client.requests[0]["payload"]["width"] == 2
 
 
 @pytest.mark.asyncio

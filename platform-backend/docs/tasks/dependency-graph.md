@@ -99,13 +99,13 @@ flowchart LR
 | T10 | T12/T13 | append-only sale/payout journal plus locked creator balance projection. |
 | T11 | T08/T12 | EntitlementReader boolean for download; pending order/payment and immutable order item. |
 | T12 | T13 | settled creator credit or reversal/manual-review status before funds may be reserved. |
-| T15 | T06/T07 | Real Compute auth, clientJobId replay, cancellation, and artifact integrity contract; E2E stub remains valid until production switch. |
+| T15 | T06/T07 | Compute v1 deployment acceptance: auth, idempotencyKey replay, cancellation and artifact integrity; E2E stub remains valid until production switch. |
 
 ## External gates
 
 | Gate | Blocks | Evidence required |
 |---|---|---|
-| Compute production contract | T06/T07 real Compute mode | compute-openapi.yaml supports Bearer service auth, clientJobId uniqueness, limits, standard errors, one cancel route, artifact manifest/checksum contract. Use stub until then. |
+| Compute v1 deployment | T06/T07 real Compute mode | Compute v1 runs with Bearer key and legacy API disabled; contract/E2E evidence covers replay, cancellation and manifest checksum ingestion. |
 | Object storage | T07/T08/T13 | Private/public prefixes, MinIO/S3 credentials, encryption policy, short signed GET URLs, lifecycle cleanup permissions. |
 | Alipay merchant configuration | T11/T12 real gateway mode | RSA2 keys, app_id, seller_id, public HTTPS notify_url, page.pay/wap.pay enabled, documented query/close access. Use signed stub in E2E. |
 | Finance operations policy | T13 | finance_operator assignment, QR scanning/retention policy, Merchant Portal transfer process, external reference format. |

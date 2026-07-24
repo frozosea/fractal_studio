@@ -29,7 +29,7 @@ M2. Studio And Render Job Module; Responsibilities And Dependencies; Verified Cu
 
 - T01, T02, T03.
 - Pydantic v2, hashlib, canonical JSON/orjson, redis.asyncio, httpx.AsyncClient, Pillow.
-- Compute contract stub implements POST /api/map/render-inline with RGBA8 bytes and X-FSD-width/X-FSD-height; production dependency is compute-openapi.yaml.
+- Compute contract stub implements authenticated `POST /compute/v1/previews` v1 `map_image` envelope with RGBA8 bytes and X-FSD-width/X-FSD-height.
 - Does not depend on outbox; durable rendering is T06.
 
 ## Test plan

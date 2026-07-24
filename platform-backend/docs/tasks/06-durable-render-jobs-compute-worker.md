@@ -19,9 +19,9 @@ Provide idempotent durable Compute work with correct state transitions, cancella
 
 - POST /v1/render-jobs atomically stores queued job, immutable output spec/mapping_version, PostgreSQL reservation, and render.created.v1; it returns 202 before Compute submission.
 - Allowed outputs only: image/png, video/mp4, HS mesh glb|stl, transition mesh glb|stl; all limits are validated.
-- Worker submits clientJobId=render_job.id once, stores runId, reuses the same poll row, updates progress, and never remaps a saved job.
-- Cancellation uses only POST /api/runs/cancel. It is CAS/row-locked; cancellation after compute_succeeded is 409; terminal transitions release quota once.
-- Production integration is blocked until Compute implements compute-openapi.yaml: Bearer auth, clientJobId uniqueness, standard errors, limits, checksums/manifest contract, and one cancel route.
+- Worker submits stable `idempotencyKey=platform-job:{render_job.id}` to `POST /compute/v1/runs`, stores `computeRunId`, reuses the same poll row, updates progress, and never remaps a saved job.
+- Cancellation uses only `POST /compute/v1/runs/{computeRunId}/cancel`. It is CAS/row-locked; cancellation after compute_succeeded is 409; terminal transitions release quota once.
+- Production transport uses Compute v1 bearer auth, replay key, manifest checksum/size verification and private artifact stream.
 
 ## Specification source
 
@@ -43,7 +43,7 @@ curl --noproxy '*' -sS -f -b /tmp/studio.cookie http://localhost:8000/v1/render-
 curl --noproxy '*' -sS -f -b /tmp/studio.cookie -H 'Idempotency-Key: cancel-0001' -X POST http://localhost:8000/v1/render-jobs/RENDER_JOB_ID/cancel
 ~~~
 
-Use Compute stub modes queued, running, completed, and transient failure. Assert 202 queued, then running/completed via GET, one submission for clientJobId, one quota release, and a ready asset only after T07 ingest. Create a second job and cancel before submission; assert 202 then cancelled. Force compute_succeeded and assert cancel returns 409.
+Use Compute v1 stub modes queued, running, completed, and transient failure. Assert 202 queued, then running/completed via GET, one replay key submission, one quota release, and a ready asset through M3 ingest. Create a second job and cancel before submission; assert 202 then cancelled. Force compute_succeeded and assert cancel returns 409.
 
 ## Implementation plan
 

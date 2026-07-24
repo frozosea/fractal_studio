@@ -8,6 +8,8 @@ from fastapi import Request
 
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
+user_id_var: ContextVar[str | None] = ContextVar("user_id", default=None)
+idempotency_key_var: ContextVar[str | None] = ContextVar("idempotency_key", default=None)
 
 
 def request_id(request: Request) -> str:

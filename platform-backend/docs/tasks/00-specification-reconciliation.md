@@ -22,7 +22,7 @@ Make the specification and task plan internally consistent and make every planne
 - tests/conftest.py is the shared test fixture entry point. tests/e2e/ contains scenario files and fixtures but does not replace the root conftest unless an explicit new layout is approved.
 - The specification names the producer for delayed cleanup.expired.v1 events and periodic payment reconciliation; M7 worker owns scheduling/scanning, while M3/M5/M6 own handler business rules.
 - A strictly E2E-profile-only bootstrap contract creates finance_operator and disabled-user fixtures before tests. It is disabled outside the e2e Compose profile, has no browser route, accepts no runtime production input, and never ships with production defaults.
-- The external Compute gate names a separately owned C++ delivery: Bearer service auth, clientJobId uniqueness, request limits, standard errors, one cancel route, and artifact checksum/manifest support. Platform tasks do not claim this C++ work is complete.
+- The external Compute gate names Compute v1 deployment acceptance: Bearer service auth, idempotencyKey replay, request limits, standard errors, one v1 cancel route and artifact checksum/manifest support.
 
 ## Specification source
 
@@ -51,4 +51,4 @@ Assert the seeded operator authenticates and may access finance-only test flows,
 2. Record the M7 periodic scheduling owner and event payload/availability policy.
 3. Define fixed E2E fixture identities through profile-scoped environment values; create them only in an isolated test database before API tests start.
 4. Add a documentation check that rejects ambiguous canonical file paths and an E2E Compose check that rejects seed variables outside the e2e profile.
-5. Link the Compute gate to the C++ owner/repository and keep Platform integration in stub mode until its acceptance evidence exists.
+5. Link the Compute v1 deployment gate to C++ owner/repository and retain stub mode until operational acceptance evidence exists.

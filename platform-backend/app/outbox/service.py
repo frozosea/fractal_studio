@@ -37,6 +37,11 @@ class TransactionalOutboxService:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
 
+    @property
+    def connection(self) -> AsyncConnection:
+        """For a DueWorkReader running inside this same scheduler transaction."""
+        return self._connection
+
     async def append(self, event: NewOutboxEvent) -> UUID:
         if not _EVENT_TYPE.fullmatch(event.event_type):
             raise ValueError("event_type must end with .v<positive schema version>")

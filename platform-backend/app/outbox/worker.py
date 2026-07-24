@@ -7,7 +7,7 @@ import logging
 import re
 import signal
 import uuid
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 
 from app.core.config import Settings, get_settings
 from app.core.db import get_engine
@@ -32,6 +32,7 @@ class HandlerRegistry:
 
     def __init__(self) -> None:
         self._handlers: dict[str, OutboxHandler] = {}
+        self._dead_handlers: dict[str, Callable[[OutboxEvent, str], Awaitable[None]]] = {}
 
     def register(self, event_type: str, handler: OutboxHandler) -> None:
         if event_type in self._handlers:
@@ -43,6 +44,16 @@ class HandlerRegistry:
         if handler is None:
             raise RetryableOutboxError("handler_not_registered")
         await handler(event)
+
+    def register_dead_letter(
+        self, event_type: str, handler: Callable[[OutboxEvent, str], Awaitable[None]]
+    ) -> None:
+        self._dead_handlers[event_type] = handler
+
+    async def handle_dead_letter(self, event: OutboxEvent, error_code: str) -> None:
+        handler = self._dead_handlers.get(event.event_type)
+        if handler is not None:
+            await handler(event, error_code)
 
 
 class OutboxWorker:
@@ -60,8 +71,8 @@ class OutboxWorker:
         self._due_work_readers = tuple(due_work_readers)
         self._last_schedule_at = 0.0
 
-    def _backoff_seconds(self, attempt_count: int) -> int:
-        delay = self._settings.outbox_backoff_base_seconds * (2 ** max(0, attempt_count - 1))
+    def _backoff_seconds(self, retry_count: int) -> int:
+        delay = self._settings.outbox_backoff_base_seconds * (2 ** max(0, retry_count))
         return min(delay, self._settings.outbox_backoff_max_seconds)
 
     async def run_scheduler_once(self) -> int:
@@ -136,8 +147,13 @@ class OutboxWorker:
                 worker_id=self._worker_id,
                 error_code=error_code,
                 max_attempts=self._settings.outbox_max_attempts,
-                backoff_seconds=self._backoff_seconds(event.attempt_count),
+                backoff_seconds=self._backoff_seconds(event.retry_count),
             )
+        if next_status == "dead":
+            try:
+                await self._handlers.handle_dead_letter(event, error_code)
+            except Exception:
+                worker_log(logging.ERROR, "outbox dead-letter handler failed", event_id=event.id)
         worker_log(
             logging.ERROR if next_status == "dead" else logging.WARNING,
             "outbox event dead-lettered" if next_status == "dead" else "outbox event rescheduled",
@@ -165,9 +181,12 @@ async def run() -> None:
             loop.add_signal_handler(signal_name, stop_event.set)
         except NotImplementedError:
             pass
+    from app.studio.quota_expiry_scheduler import RenderQuotaExpiryScheduler
     from app.studio.render_worker import build_render_handler_registry
 
-    worker = OutboxWorker(handlers=build_render_handler_registry())
+    worker = OutboxWorker(
+        handlers=build_render_handler_registry(), due_work_readers=(RenderQuotaExpiryScheduler(),)
+    )
     worker_log(logging.INFO, "outbox worker started", worker_id=worker._worker_id)
     await worker.run(stop_event)
     worker_log(logging.INFO, "outbox worker stopped", worker_id=worker._worker_id)

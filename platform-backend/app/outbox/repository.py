@@ -21,6 +21,7 @@ def _event_from_row(row: dict[str, object]) -> OutboxEvent:
         payload=row["payload_json"],
         schema_version=int(row["schema_version"]),
         attempt_count=int(row["attempt_count"]),
+        retry_count=int(row["retry_count"]),
         available_at=row["available_at"],
         causation_request_id=row["causation_request_id"],
     )
@@ -34,11 +35,11 @@ async def append(connection: AsyncConnection, event: NewOutboxEvent) -> UUID:
             """
             INSERT INTO outbox_events (
               id, event_type, schema_version, aggregate_type, aggregate_id, payload_json,
-              idempotency_key, status, available_at, attempt_count, causation_request_id
+              idempotency_key, status, available_at, attempt_count, retry_count, causation_request_id
             ) VALUES (
               :id, :event_type, :schema_version, :aggregate_type, :aggregate_id,
               CAST(:payload_json AS jsonb), :idempotency_key, 'pending',
-              COALESCE(:available_at, now()), 0, :causation_request_id
+              COALESCE(:available_at, now()), 0, 0, :causation_request_id
             )
             ON CONFLICT (event_type, aggregate_id, idempotency_key) DO NOTHING
             RETURNING id
@@ -110,7 +111,7 @@ async def claim_due_batch(
                 attempt_count = attempt_count + 1
             WHERE id = ANY(CAST(:event_ids AS uuid[]))
             RETURNING id, event_type, schema_version, aggregate_type, aggregate_id, payload_json,
-                      idempotency_key, attempt_count, available_at, causation_request_id
+                      idempotency_key, attempt_count, retry_count, available_at, causation_request_id
             """
         ),
         {"worker_id": worker_id, "lease_seconds": lease_seconds, "event_ids": event_ids},
@@ -145,7 +146,7 @@ async def reschedule_or_dead_letter(
     current = await connection.execute(
         text(
             """
-            SELECT attempt_count
+            SELECT retry_count
             FROM outbox_events
             WHERE id = :event_id AND status = 'leased' AND lease_owner = :worker_id
             FOR UPDATE
@@ -153,10 +154,11 @@ async def reschedule_or_dead_letter(
         ),
         {"event_id": event_id, "worker_id": worker_id},
     )
-    attempt_count = current.scalar_one_or_none()
-    if attempt_count is None:
+    retry_count = current.scalar_one_or_none()
+    if retry_count is None:
         return None
-    next_status = "dead" if attempt_count >= max_attempts else "pending"
+    retry_count = int(retry_count) + 1
+    next_status = "dead" if retry_count >= max_attempts else "pending"
     await connection.execute(
         text(
             """
@@ -165,6 +167,7 @@ async def reschedule_or_dead_letter(
                 available_at = CASE WHEN CAST(:next_status AS outbox_status) = 'pending'
                   THEN now() + (:backoff_seconds * interval '1 second') ELSE available_at END,
                 lease_owner = NULL, lease_until = NULL,
+                retry_count = :retry_count,
                 last_error_code = :error_code, last_error_at = now(),
                 dead_at = CASE WHEN CAST(:next_status AS outbox_status) = 'dead' THEN now() ELSE dead_at END
             WHERE id = :event_id
@@ -175,6 +178,7 @@ async def reschedule_or_dead_letter(
             "next_status": next_status,
             "backoff_seconds": backoff_seconds,
             "error_code": error_code,
+            "retry_count": retry_count,
         },
     )
     return next_status

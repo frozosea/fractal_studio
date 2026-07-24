@@ -30,3 +30,23 @@ async def record_user_action(
         subject_id=subject_id,
         metadata=safe_metadata,
     )
+
+
+async def record_system_action(
+    connection: AsyncConnection,
+    *,
+    action: str,
+    subject_type: str,
+    subject_id: uuid.UUID,
+    request_id_value: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    await audit_repository.append(
+        connection,
+        actor_user_id=None,
+        actor_type="system",
+        action=action,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        metadata={"requestId": request_id_value, **(metadata or {})},
+    )

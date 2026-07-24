@@ -30,6 +30,7 @@ class OutboxEvent:
     payload: dict[str, Any]
     schema_version: int
     attempt_count: int
+    retry_count: int
     available_at: datetime
     causation_request_id: str | None
 

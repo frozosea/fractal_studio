@@ -23,11 +23,12 @@ def test_durable_image_mapper_binds_job_id_before_worker_submission() -> None:
         client_job_id=JOB_ID,
     )
 
-    assert RENDER_MAPPING_VERSION == "render-v1"
-    assert route == "/api/map/render"
-    assert body["clientJobId"] == str(JOB_ID)
-    assert body["stillExport"] is True
-    assert body["background"] is True
+    assert RENDER_MAPPING_VERSION == "compute-v1-render-v1"
+    assert route == "/compute/v1/runs"
+    assert body["schemaVersion"] == 1
+    assert body["kind"] == "map_image"
+    assert body["idempotencyKey"] == f"platform-job:{JOB_ID}"
+    assert body["payload"]["width"] == 512
 
 
 def test_durable_video_and_mesh_mappers_allow_only_contract_routes() -> None:
@@ -67,14 +68,20 @@ def test_durable_video_and_mesh_mappers_allow_only_contract_routes() -> None:
         client_job_id=JOB_ID,
     )
 
-    assert (video_route, video["durationSeconds"], video["fps"]) == ("/api/video/export", 30.0, 60)
-    assert (mesh_route, mesh["resolution"], mesh["clientJobId"]) == (
-        "/api/hs/mesh",
-        128,
-        str(JOB_ID),
+    assert (video_route, video["kind"], video["payload"]["durationSec"], video["payload"]["fps"]) == (
+        "/compute/v1/runs",
+        "zoom_video",
+        30.0,
+        60,
     )
-    assert (transition_route, transition["transitionFrom"], transition["iterations"]) == (
-        "/api/transition/mesh",
+    assert (mesh_route, mesh["kind"], mesh["payload"]["resolution"]) == (
+        "/compute/v1/runs",
+        "hs_mesh",
+        128,
+    )
+    assert (transition_route, transition["kind"], transition["payload"]["transitionFrom"], transition["payload"]["iterations"]) == (
+        "/compute/v1/runs",
+        "transition_mesh",
         "a",
         100,
     )

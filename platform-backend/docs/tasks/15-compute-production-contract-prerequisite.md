@@ -1,8 +1,8 @@
-# T15 — Compute Production Contract Prerequisite
+# T15 — Compute v1 Deployment Acceptance
 
 ## Task description
 
-Implement the C++ Compute production contract required before Platform switches from its E2E stub to a real private Compute service. This is an external prerequisite owned by the Compute codebase, tracked here because M2/M3 production acceptance depends on it.
+Verify deployment of the implemented C++ Compute v1 contract before Platform switches from its E2E stub to a real private Compute service.
 
 ## Work scope
 
@@ -13,13 +13,13 @@ Implement the C++ Compute production contract required before Platform switches 
 
 ## Goal
 
-Provide an authenticated, idempotent, bounded, and unambiguous private Compute API that Platform can safely retry and ingest from.
+Deploy and prove the authenticated, idempotent, bounded private Compute v1 API that Platform retries and ingests from.
 
 ## Acceptance criteria
 
-- Every private route requires Authorization: Bearer service key; missing/unknown/revoked key is 401 and a key without render scope is 403. Key IDs support two active hashes for rotation.
-- Durable submission accepts unique clientJobId and returns a stable run result under replay; request limits and standard error body/status enum match compute-openapi.yaml.
-- POST /api/runs/cancel is the only production cancellation route. The legacy POST /api/runs/{runId}/cancel route is removed or rejects use with a migration-safe documented response.
+- Every private Compute v1 route requires `Authorization: Bearer` service key; missing/unknown key is 401.
+- Durable `POST /compute/v1/runs` accepts stable `idempotencyKey` and returns a stable run result under replay; request limits and error envelope match compute-openapi.yaml.
+- `POST /compute/v1/runs/{id}/cancel` is the only Platform cancellation route; legacy `/api/*` is disabled in production.
 - Run status/artifact enumeration expose stable artifact IDs, kinds, sizes, and checksums/manifest data required by Platform. Artifact content remains private and has no browser credential path.
 - Inline preview preserves RGBA8 plus X-FSD-width/X-FSD-height contract. Still/video/mesh routes enforce declared input/output limits.
 
@@ -31,7 +31,7 @@ Verified Current C++ Compute Contract And Required Production Contract; Compute 
 
 - T00 canonical Compute delivery record; Compute repository owner and deployment environment.
 - C++ HTTP/auth implementation, cryptographic key hashing, compute-openapi.yaml, and contract-test tooling.
-- T06 and T07 remain stub-compatible but cannot pass real-Compute production acceptance until this task is complete.
+- T06 and T07 are stub-compatible; this task provides production deployment evidence against a real Compute v1 process.
 - No browser receives Compute key or reaches Compute routes directly.
 
 ## Test plan
@@ -43,13 +43,10 @@ curl --noproxy '*' -sS -f -b /tmp/studio.cookie http://localhost:8000/v1/render-
 curl --noproxy '*' -sS -f -b /tmp/studio.cookie -H 'Idempotency-Key: real-compute-cancel-0001' -X POST http://localhost:8000/v1/render-jobs/CANCELLABLE_RENDER_JOB_ID/cancel
 ~~~
 
-Run the same contract suite directly against private Compute with missing, wrong-scope, old, and rotated keys; then run the Platform API flow above against real Compute. Assert one clientJobId submission under worker retry, no Platform use of the legacy cancel route, verified checksum/manifest ingestion, and no Compute response field leaking through Platform API.
+Run the contract suite directly against private Compute with missing and valid keys; then run Platform API flow against real Compute. Assert one replay key submission under worker retry, no Platform use of legacy routes, verified checksum/manifest ingestion, and no Compute response field leaking through Platform API.
 
 ## Implementation plan
 
-1. Align C++ routes and DTOs with compute-openapi.yaml; add standard error serializer and request validation/limits.
-2. Add service-key verification, scopes, key IDs, dual-hash rotation, and audit-safe logging.
-3. Persist/enforce clientJobId idempotency and stable run/artifact metadata with checksums/manifest.
-4. Consolidate cancellation to POST /api/runs/cancel and remove/disable the legacy path.
-5. Add contract tests covering auth, replay, limits, status, artifact integrity, and cancellation.
-6. Replace only the E2E Compute stub profile after Platform T06/T07 real-service E2E passes.
+1. Deploy Compute with `FSD_COMPUTE_SERVICE_KEY` and `FSD_ENABLE_LEGACY_API=0`.
+2. Run C++ Compute v1 contract tests and Platform real-service E2E.
+3. Record key-rotation, private-network and artifact-retention operational evidence.

@@ -1,7 +1,8 @@
-"""Contract-compatible private Compute stub for local M2 T05/T06 E2E runs only."""
+"""Small C++ Compute v1-compatible stub for Platform E2E only."""
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -14,28 +15,49 @@ _SERVICE_KEY = "Bearer test-compute-key"
 
 @dataclass
 class _Run:
-    client_job_id: str
-    output_kind: str
+    compute_kind: str
     polls: int = 0
     cancelled: bool = False
-    create_attempts: int = 0
 
 
-_runs_by_id: dict[str, _Run] = {}
-_run_id_by_client_job: dict[str, str] = {}
+_runs: dict[str, _Run] = {}
+_run_by_idempotency_key: dict[str, str] = {}
 _transient_attempts: dict[str, int] = {}
+_MASTER_BYTES = b"fractal-compute-stub-master" * 3
+_MASTER_SHA256 = hashlib.sha256(_MASTER_BYTES).hexdigest()
 
 
 def _require_service_key(authorization: str | None) -> None:
     if authorization != _SERVICE_KEY:
-        raise HTTPException(status_code=401)
+        raise HTTPException(status_code=401, detail="COMPUTE_UNAUTHORIZED")
 
 
-@app.post("/api/map/render-inline")
+def _payload(envelope: dict[str, object]) -> tuple[str, dict[str, object]]:
+    if envelope.get("schemaVersion") != 1 or not isinstance(envelope.get("kind"), str):
+        raise HTTPException(status_code=400)
+    payload = envelope.get("payload")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400)
+    return str(envelope["kind"]), payload
+
+
+def _master_filename(run: _Run) -> str:
+    return {
+        "map_image": "master.png",
+        "zoom_video": "master.mp4",
+        "hs_mesh": "master.glb",
+        "transition_mesh": "master.glb",
+    }[run.compute_kind]
+
+
+@app.post("/compute/v1/previews")
 async def render_inline(
-    payload: dict[str, object], authorization: str | None = Header(default=None)
+    envelope: dict[str, object], authorization: str | None = Header(default=None)
 ) -> Response:
     _require_service_key(authorization)
+    kind, payload = _payload(envelope)
+    if kind != "map_image":
+        raise HTTPException(status_code=422)
     width = int(payload["width"])
     height = int(payload["height"])
     rgba = bytes([32, 128, 255, 255]) * (width * height)
@@ -50,86 +72,111 @@ async def render_inline(
     )
 
 
-@app.post("/api/map/render")
-@app.post("/api/video/export")
-@app.post("/api/hs/mesh")
-@app.post("/api/transition/mesh")
-async def create_durable(payload: dict[str, object], authorization: str | None = Header(default=None)) -> dict[str, object]:
+@app.post("/compute/v1/runs", status_code=202)
+async def create_durable(
+    envelope: dict[str, object], authorization: str | None = Header(default=None)
+) -> dict[str, object]:
     _require_service_key(authorization)
-    client_job_id = str(payload["clientJobId"])
-    if client_job_id in _run_id_by_client_job:
-        run_id = _run_id_by_client_job[client_job_id]
-        return {"runId": run_id, "clientJobId": client_job_id, "status": "queued"}
+    kind, payload = _payload(envelope)
+    key = str(envelope.get("idempotencyKey", ""))
+    if not key:
+        raise HTTPException(status_code=400)
+    if key in _run_by_idempotency_key:
+        return _created_body(_run_by_idempotency_key[key], _runs[_run_by_idempotency_key[key]])
     if payload.get("variant") == "compute_rejected":
         raise HTTPException(status_code=503)
     if payload.get("variant") == "transient_failure":
-        _transient_attempts[client_job_id] = _transient_attempts.get(client_job_id, 0) + 1
-        if _transient_attempts[client_job_id] == 1:
+        _transient_attempts[key] = _transient_attempts.get(key, 0) + 1
+        if _transient_attempts[key] == 1:
             raise HTTPException(status_code=503)
-    route = "image"
-    if "durationSeconds" in payload:
-        route = "video"
-    elif "transitionFrom" in payload:
-        route = "transition_mesh"
-    elif "resolution" in payload:
-        route = "hs_mesh"
     run_id = f"run-{uuid4().hex}"
-    _run_id_by_client_job[client_job_id] = run_id
-    _runs_by_id[run_id] = _Run(client_job_id=client_job_id, output_kind=route)
-    return {"runId": run_id, "clientJobId": client_job_id, "status": "queued"}
+    _run_by_idempotency_key[key] = run_id
+    _runs[run_id] = _Run(compute_kind=kind)
+    return _created_body(run_id, _runs[run_id])
 
 
-@app.get("/api/runs/status")
-async def run_status(runId: str, authorization: str | None = Header(default=None)) -> dict[str, object]:
+@app.get("/compute/v1/runs/{run_id}")
+async def run_status(run_id: str, authorization: str | None = Header(default=None)) -> dict[str, object]:
     _require_service_key(authorization)
-    run = _runs_by_id.get(runId)
+    run = _runs.get(run_id)
     if run is None:
         raise HTTPException(status_code=404)
     if run.cancelled:
-        return _run_body(runId, run, status="cancelled", progress=0, artifacts=[])
+        return _status_body(run_id, run, status="cancelled", progress=0)
     run.polls += 1
     if run.polls == 1:
-        return _run_body(runId, run, status="running", progress=50, artifacts=[])
+        return _status_body(run_id, run, status="running", progress=50)
+    return _status_body(run_id, run, status="completed", progress=100)
+
+
+@app.get("/compute/v1/runs/{run_id}/manifest")
+async def manifest(run_id: str, authorization: str | None = Header(default=None)) -> dict[str, object]:
+    _require_service_key(authorization)
+    run = _runs.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404)
+    if run.cancelled:
+        return {"schemaVersion": 1, "computeRunId": run_id, "status": "cancelled", "artifacts": []}
+    if run.polls < 2:
+        return {"schemaVersion": 1, "computeRunId": run_id, "status": "running", "artifacts": []}
     media_type = {
-        "image": "image/png",
-        "video": "video/mp4",
+        "map_image": "image/png",
+        "zoom_video": "video/mp4",
         "hs_mesh": "model/gltf-binary",
         "transition_mesh": "model/gltf-binary",
-    }[run.output_kind]
-    return _run_body(
-        runId,
-        run,
-        status="completed",
-        progress=100,
-        artifacts=[
+    }[run.compute_kind]
+    filename = _master_filename(run)
+    return {
+        "schemaVersion": 1,
+        "computeRunId": run_id,
+        "status": "completed",
+        "rendererVersion": "compute-stub",
+        "artifacts": [
             {
-                "artifactId": f"{runId}:master",
-                "purpose": "master",
+                "artifactId": f"{run_id}:{filename}",
+                "name": filename,
+                "kind": "image" if media_type == "image/png" else "video" if media_type == "video/mp4" else "mesh",
                 "mediaType": media_type,
-                "sizeBytes": 64,
+                "sizeBytes": len(_MASTER_BYTES),
+                "sha256": _MASTER_SHA256,
+                "contentPath": f"/compute/v1/artifacts?artifactId={run_id}:{filename}",
             }
         ],
-    )
+    }
 
 
-@app.post("/api/runs/cancel")
-async def cancel_run(payload: dict[str, object], authorization: str | None = Header(default=None)) -> dict[str, object]:
+@app.get("/compute/v1/artifacts")
+async def artifact(artifactId: str, authorization: str | None = Header(default=None)) -> Response:
     _require_service_key(authorization)
-    run_id = str(payload["runId"])
-    run = _runs_by_id.get(run_id)
+    run_id, separator, name = artifactId.partition(":")
+    if not separator or run_id not in _runs or name != _master_filename(_runs[run_id]):
+        raise HTTPException(status_code=404)
+    return Response(content=_MASTER_BYTES, media_type="application/octet-stream")
+
+
+@app.post("/compute/v1/runs/{run_id}/cancel", status_code=202)
+async def cancel_run(
+    run_id: str, _payload_body: dict[str, object], authorization: str | None = Header(default=None)
+) -> dict[str, object]:
+    _require_service_key(authorization)
+    run = _runs.get(run_id)
     if run is None:
         raise HTTPException(status_code=404)
     run.cancelled = True
-    return {"runId": run_id, "status": "cancel_requested"}
+    return {"schemaVersion": 1, "data": {"computeRunId": run_id, "status": "running", "accepted": True, "cancelRequested": True}}
 
 
-def _run_body(
-    run_id: str, run: _Run, *, status: str, progress: int, artifacts: list[dict[str, object]]
-) -> dict[str, object]:
+def _created_body(run_id: str, run: _Run) -> dict[str, object]:
+    return {"schemaVersion": 1, "data": {"computeRunId": run_id, "kind": run.compute_kind, "status": "queued"}}
+
+
+def _status_body(run_id: str, run: _Run, *, status: str, progress: int) -> dict[str, object]:
     return {
-        "runId": run_id,
-        "clientJobId": run.client_job_id,
-        "status": status,
-        "progressPercent": progress,
-        "artifacts": artifacts,
+        "schemaVersion": 1,
+        "data": {
+            "computeRunId": run_id,
+            "status": status,
+            "progress": {"percent": progress},
+            "artifacts": [],
+        },
     }

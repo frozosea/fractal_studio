@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class FractalSpec(BaseModel):
@@ -30,6 +30,12 @@ class FractalSpec(BaseModel):
     scalar_type: Literal["auto", "float", "double", "long_double"] = Field(
         default="auto", alias="scalarType"
     )
+
+    @model_validator(mode="after")
+    def require_julia_constant(self) -> "FractalSpec":
+        if self.julia and (self.julia_re is None or self.julia_im is None):
+            raise ValueError("juliaRe and juliaIm are required when julia is true")
+        return self
 
 
 class RecipeInput(BaseModel):

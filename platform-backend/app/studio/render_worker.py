@@ -5,6 +5,9 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.assets.ports import AssetIngestionPort
+from app.assets.cleanup_service import AssetCleanupService
+from app.assets.service import AssetIngestionService
+from app.core import audit_writer
 from app.core.config import Settings, get_settings
 from app.core.db import get_engine
 from app.infrastructure.compute.compute_client import ComputeArtifact, ComputeClient, ComputeClientError
@@ -12,13 +15,6 @@ from app.outbox.models import NewOutboxEvent, OutboxEvent, RescheduleOutboxEvent
 from app.outbox.service import TransactionalOutboxService
 from app.outbox.worker import HandlerRegistry
 from app.studio import render_job_repository
-
-
-class DeferredAssetIngestionPort:
-    """T06 preserves completed metadata; T07 replaces this with durable M3 ingestion."""
-
-    async def create_from_completed_render(self, *, render_job_id: UUID) -> None:
-        raise RescheduleOutboxEvent(delay_seconds=30)
 
 
 class RenderWorker:
@@ -31,7 +27,7 @@ class RenderWorker:
     ) -> None:
         self._settings = settings or get_settings()
         self._compute = compute_client or ComputeClient(self._settings)
-        self._ingestion = ingestion_port or DeferredAssetIngestionPort()
+        self._ingestion = ingestion_port or AssetIngestionService()
 
     @staticmethod
     def _job_id(event: OutboxEvent) -> UUID:
@@ -74,9 +70,6 @@ class RenderWorker:
         except (KeyError, TypeError, ValueError):
             await self._fail(job_id, "invalid_saved_compute_request")
             return
-        if run.client_job_id != str(job_id):
-            await self._fail(job_id, "compute_client_job_mismatch")
-            return
         async with get_engine().begin() as connection:
             current = await render_job_repository.lock_for_worker(connection, job_id=job_id)
             if current is None:
@@ -114,9 +107,6 @@ class RenderWorker:
             run = await self._compute.get_run_status(run_id=job.compute_run_id)
         except ComputeClientError as error:
             raise RetryableOutboxError(error.code) from error
-        if run.client_job_id != str(job_id):
-            await self._fail(job_id, "compute_client_job_mismatch")
-            return
         if run.status in {"queued", "running", "submitting"}:
             async with get_engine().begin() as connection:
                 await render_job_repository.update_progress(
@@ -133,19 +123,28 @@ class RenderWorker:
         if run.status != "completed":
             await self._fail(job_id, "compute_invalid_status")
             return
-        selected = self._select_artifacts(job.output_spec, run.artifacts)
+        try:
+            manifest = await self._compute.get_run_manifest(run_id=job.compute_run_id)
+        except ComputeClientError as error:
+            raise RetryableOutboxError(error.code) from error
+        if manifest.run_id != job.compute_run_id or manifest.status != "completed":
+            await self._fail(job_id, "compute_invalid_manifest")
+            return
+        selected = self._select_artifacts(job.output_spec, manifest.artifacts)
         if not selected:
             await self._fail(job_id, "compute_master_artifact_missing")
             return
         metadata = {
-            "runId": run.run_id,
-            "status": run.status,
+            "runId": manifest.run_id,
+            "status": manifest.status,
             "artifacts": [
                 {
                     "artifactId": item.artifact_id,
-                    "purpose": item.purpose,
+                    "name": item.name,
+                    "kind": item.kind,
                     "mediaType": item.media_type,
                     "sizeBytes": item.size_bytes,
+                    "sha256": item.sha256,
                 }
                 for item in selected
             ],
@@ -181,6 +180,37 @@ class RenderWorker:
         async with get_engine().begin() as connection:
             await render_job_repository.fail_and_release(connection, job_id=job_id, error_code=error_code)
 
+    async def fail_dead_letter(self, event: OutboxEvent, error_code: str) -> None:
+        job_id = self._job_id(event)
+        async with get_engine().begin() as connection:
+            changed = await render_job_repository.fail_and_release(
+                connection, job_id=job_id, error_code=f"outbox_{error_code}"[:120]
+            )
+            if changed:
+                await audit_writer.record_system_action(
+                    connection,
+                    action="render_job.outbox_dead_lettered",
+                    subject_type="render_job",
+                    subject_id=job_id,
+                    request_id_value=event.causation_request_id or f"outbox:{event.id}",
+                    metadata={"eventType": event.event_type, "errorCode": error_code},
+                )
+
+    async def expire_quota(self, event: OutboxEvent) -> None:
+        job_id = self._job_id(event)
+        async with get_engine().begin() as connection:
+            changed = await render_job_repository.expire_reservation_and_terminalize(
+                connection, job_id=job_id
+            )
+            if changed:
+                await audit_writer.record_system_action(
+                    connection,
+                    action="render_job.quota_expired",
+                    subject_type="render_job",
+                    subject_id=job_id,
+                    request_id_value=event.causation_request_id or f"outbox:{event.id}",
+                )
+
     @staticmethod
     def _select_artifacts(
         output_spec: dict[str, object], artifacts: tuple[ComputeArtifact, ...]
@@ -188,8 +218,8 @@ class RenderWorker:
         expected_media = {
             "image": "image/png",
             "video": "video/mp4",
-            "hs_mesh": {"glb": "model/gltf-binary", "stl": "model/stl"},
-            "transition_mesh": {"glb": "model/gltf-binary", "stl": "model/stl"},
+            "hs_mesh": {"glb": "model/gltf-binary", "stl": "application/sla"},
+            "transition_mesh": {"glb": "model/gltf-binary", "stl": "application/sla"},
         }
         kind = output_spec.get("kind")
         expected = expected_media.get(kind)
@@ -200,7 +230,7 @@ class RenderWorker:
         return [
             artifact
             for artifact in artifacts
-            if artifact.purpose == "master" and artifact.media_type == expected and 0 < artifact.size_bytes <= 524_288_000
+            if artifact.media_type == expected and 0 < artifact.size_bytes <= 524_288_000
         ][:1]
 
 
@@ -212,4 +242,8 @@ def build_render_handler_registry(
     registry.register("render.created.v1", render_worker.submit_image_video_or_mesh_run)
     registry.register("render.poll.v1", render_worker.poll_run_status)
     registry.register("render.cancel_requested.v1", render_worker.forward_cancellation)
+    registry.register("render.quota_expired.v1", render_worker.expire_quota)
+    registry.register("asset.cleanup_orphan.v1", AssetCleanupService().delete_orphan)
+    for event_type in ("render.created.v1", "render.poll.v1", "render.cancel_requested.v1"):
+        registry.register_dead_letter(event_type, render_worker.fail_dead_letter)
     return registry

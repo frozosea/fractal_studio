@@ -12,6 +12,7 @@ from app.auth import session_service
 from app.auth.models import AccessPrincipal
 from app.core.config import get_settings
 from app.core.db import get_engine
+from app.core.request_context import user_id_var
 
 
 async def require_principal(request: Request) -> AccessPrincipal:
@@ -22,6 +23,8 @@ async def require_principal(request: Request) -> AccessPrincipal:
     if principal is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthenticated")
     request.state.principal = principal
+    request.state.user_id = str(principal.user_id)
+    user_id_var.set(str(principal.user_id))
     return principal
 
 

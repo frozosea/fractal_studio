@@ -132,7 +132,9 @@ async def list_recipes(*, owner_id: UUID, cursor: str | None, limit: int) -> Rec
             owner_id=owner_id,
             before_created_at=before_created_at,
             before_id=before_id,
-            limit=limit,
+            limit=limit + 1,
         )
-    next_cursor = _encode_cursor(records[-1]) if len(records) == limit else None
-    return RecipeCollectionView(data=[_view(record) for record in records], page=CursorPage(next_cursor=next_cursor))
+    has_next = len(records) > limit
+    page_records = records[:limit]
+    next_cursor = _encode_cursor(page_records[-1]) if has_next and page_records else None
+    return RecipeCollectionView(data=[_view(record) for record in page_records], page=CursorPage(next_cursor=next_cursor))

@@ -189,7 +189,7 @@ durable product state; its Redis rate-limit counter is intentionally ephemeral.
 | Alipay notification or reconcile | lock payment attempt, record notification fingerprint when present, settle or reverse immutable order, entitlement and ledger records | Verify RSA2 and merchant/order/amount. Duplicate notification is no-op. Reversal appends compensating entries and revokes entitlement by licence policy. |
 | Create manual payout request | upload QR to unguessable staging object; then lock balance, reserve amount and create `payout_requests` row | DB references QR only after upload succeeds. Failed transaction leaves an orphan-cleanup event. One open request per creator. |
 | Mark manual payout paid or rejected | lock request and creator balance, consume reserved amount or release it, append audit event | `finance_operator` records external transfer reference only after human confirmation in Alipay Merchant Portal. |
-| Outbox claim | lease due event, increment attempt count, persist retry schedule | Use `FOR UPDATE SKIP LOCKED`; delivery is at least once, so handlers must lock their aggregate and be idempotent. |
+| Outbox claim | lease due event, increment delivery count; failed handler increments retry count and persists retry schedule | Use `FOR UPDATE SKIP LOCKED`; delivery is at least once, so handlers must lock their aggregate and be idempotent. |
 
 Additional rules:
 
@@ -510,7 +510,6 @@ classDiagram
   class RenderJobService {
     +createImageVideoOrMeshJob()
     +requestCancel()
-    +completeJobWithAsset()
   }
   class QuotaService {
     +reserveRenderQuota()
@@ -518,14 +517,11 @@ classDiagram
   }
   class ComputeClient {
     +renderMapInline()
-    +createStillRender()
-    +createVideoExport()
-    +createHsMesh()
-    +createTransitionMesh()
+    +createDurableRun()
     +getRunStatus()
+    +getRunManifest()
     +cancelRun()
-    +listRunArtifacts()
-    +downloadArtifactContent()
+    +streamArtifact()
   }
   class RecipeRepository {
     +save()
@@ -543,7 +539,7 @@ classDiagram
   class RenderWorker {
     +submitImageVideoOrMeshRun()
     +pollRunStatus()
-    +ingestRunArtifacts()
+    +ingestCompletedRender()
     +forwardCancellation()
   }
   class AssetIngestionPort_M3 {
@@ -551,10 +547,7 @@ classDiagram
   }
   class ComputeRequestMapper {
     +mapPreviewV1()
-    +mapStillV1()
-    +mapVideoV1()
-    +mapHsMeshV1()
-    +mapTransitionMeshV1()
+    +mapDurableV1()
   }
   class FractalRecipe {
     +id
@@ -612,12 +605,12 @@ app/infrastructure/compute/compute_client.py
 |---|---|---|---|
 | `StudioRouter` | HTTP boundary for preview, canonical-structure save and one image/video/mesh render-job endpoint. Parses DTOs and maps domain errors to HTTP. No business rules. | FastAPI, Pydantic v2, dependency injection | `AccessMiddleware`, `IdempotencyService`, `RecipeService`, `PreviewService`, `RenderJobService` |
 | `RecipeService` | Canonicalises immutable fractal-structure JSON, validates supported fields, hashes it, and creates or reuses the owner recipe. It persists the structure, never a rendered binary. | Pydantic v2, `hashlib`, standard `json` or `orjson` | `RecipeRepository`, renderer capability read model |
-| `PreviewService` | Enforces cheap preview limits, maps canonical spec through the same versioned mapper, calls Compute synchronously, then returns PNG. Never creates a `render_job`, S3 object or asset. | `httpx.AsyncClient`, Pydantic, FastAPI response types | Redis rate limiter through `QuotaService`, `ComputeRequestMapper.mapPreviewV1()`, `ComputeClient.renderMapInline()`, `RgbaPngEncoder`, C++ `POST /api/map/render-inline` |
+| `PreviewService` | Enforces cheap preview limits, maps canonical spec through the same versioned mapper, calls Compute synchronously, then returns PNG. Never creates a `render_job`, S3 object or asset. | `httpx.AsyncClient`, Pydantic, FastAPI response types | Redis rate limiter through `QuotaService`, `ComputeRequestMapper.mapPreviewV1()`, `ComputeClient.renderMapInline()`, `RgbaPngEncoder`, C++ `POST /compute/v1/previews` |
 | `RgbaPngEncoder` | Converts the real Compute `application/octet-stream` RGBA8 response plus `X-FSD-width`/`X-FSD-height` headers into `image/png`. Keeps browser API stable without changing C++. | Pillow | in-memory frame only; no S3 or database |
 | `RenderJobService` | Creates idempotent image, video or mesh jobs from an existing immutable canonical recipe. `output.kind` is `image`, `video`, `hs_mesh` or `transition_mesh`; it persists requested output spec, reserves quota, owns state transition/cancellation request, and does not render inline. | SQLAlchemy 2 async transaction API, Pydantic | `RenderJobRepository`, `QuotaService`, `OutboxService`, PostgreSQL |
 | `QuotaService` | Stops one user exhausting CPU/GPU/storage. PostgreSQL reservation is durable authority for renders; Redis is preview rate limit only. | `redis.asyncio`, SQLAlchemy 2 async | PostgreSQL quota/reservation history; Redis atomic rate-limit window |
 | `ComputeRequestMapper` | Versioned translation from `canonicalSpec` + `outputSpec` to Compute request DTOs. `mapping_version` is saved in `render_jobs` before first Compute call, so a retry cannot remap an old job. | Pydantic v2 | `docs/compute-openapi.yaml`; no HTTP or DB |
-| `ComputeClient` | Typed private HTTP adapter. Sends mapper output, mandatory `clientJobId`, `Authorization: Bearer` service key, timeout/retry policy, and translates response/error DTOs. | `httpx.AsyncClient`, Pydantic v2 | C++ Compute internal DNS URL, `COMPUTE_SERVICE_KEY` secret |
+| `ComputeClient` | Typed private HTTP adapter. Sends v1 envelope with stable `idempotencyKey`, `Authorization: Bearer` service key, timeout/retry policy, and translates response/error DTOs. | `httpx.AsyncClient`, Pydantic v2 | C++ Compute internal DNS URL, `COMPUTE_SERVICE_KEY` secret |
 | `RecipeRepository` | Persists and loads only recipe data. Hides SQL from service. | SQLAlchemy 2 ORM/Core, `asyncpg`, Alembic migrations | PostgreSQL `fractal_recipes` table |
 | `RenderJobRepository` | Persists job state, external `compute_run_id`, progress and terminal result. Provides poll read model. | SQLAlchemy 2 ORM/Core, `asyncpg`, Alembic migrations | PostgreSQL `render_jobs` table |
 | `OutboxService` | Commits `render.created.v1` and `render.cancel_requested.v1` in same DB transaction as job state. Prevents lost background work. | SQLAlchemy 2 async | PostgreSQL `outbox_events`; M7 worker claims rows directly |
@@ -637,51 +630,40 @@ Boundary rules:
   in `RenderJob.computeResultJson`. The resulting asset is linked through `Asset.renderJobId`; `RenderJobView.assetId`
   is derived from that relation.
 
-#### Verified Current C++ Compute Contract And Required Production Contract
+#### Verified Current C++ Compute v1 Contract
 
 The methods below are the actual routes in `fractal_studio-master/backend/src/core/http_server.cpp`.
 `ComputeClient` is a Platform-side adapter; its method names above are not C++ API paths.
 
 | Platform operation | Verified C++ route | Current result used by Platform |
 |---|---|---|
-| bounded image preview | `POST /api/map/render-inline` | binary RGBA frame and `X-FSD-*` metadata headers; no run/artifact |
-| durable still image | `POST /api/map/render` with `stillExport=true`, `background=true` | `runId`, queued/completed status; PNG artifact is written under the run directory |
-| durable video | `POST /api/video/export` | `runId`; background job produces MP4 plus PNG/JSON artifacts |
-| durable HS mesh | `POST /api/hs/mesh` | `runId`; background job produces GLB and STL artifacts |
-| durable transition mesh | `POST /api/transition/mesh` | `runId`; background job produces GLB and STL artifacts |
-| poll a run | `GET /api/runs/status?runId={runId}` | run status, progress and artifact IDs/paths |
-| cancel a run | `POST /api/runs/cancel` with `{ runId }` | `status=cancel_requested` |
-| enumerate run artifacts | `GET /api/artifacts?runId={runId}` | `artifactId`, kind, size, content/download paths |
-| read artifact bytes | `GET /api/artifacts/content?artifactId={runId:fileName}` | binary image/video/mesh/report bytes |
+| bounded image preview | `POST /compute/v1/previews` | v1 `map_image` envelope; binary RGBA and `X-FSD-*` headers |
+| durable image/video/mesh | `POST /compute/v1/runs` | v1 envelope with stable `idempotencyKey`; `202` and `data.computeRunId` |
+| poll a run | `GET /compute/v1/runs/{computeRunId}` | v1 envelope, terminal status and progress object |
+| cancel a run | `POST /compute/v1/runs/{computeRunId}/cancel` with `{}` | `202`; accepted cancellation intent |
+| completed manifest | `GET /compute/v1/runs/{computeRunId}/manifest` | authoritative hashes, sizes and media types |
+| read artifact bytes | `GET /compute/v1/artifacts?artifactId=...` | private binary stream |
 
 `ComputeRequestMapper` is explicit, versioned and pure. It accepts only validated
 `FractalRecipe.canonicalSpec` plus `RenderJob.outputSpecJson`, then produces C++ bodies:
 
 | `output.kind` | mapper method | C++ route | allowed master artifact |
 |---|---|---|---|
-| `image` | `mapStillV1()` | `/api/map/render` | PNG |
-| `video` | `mapVideoV1()` | `/api/video/export` | MP4 |
-| `hs_mesh` | `mapHsMeshV1()` | `/api/hs/mesh` | GLB or STL |
-| `transition_mesh` | `mapTransitionMeshV1()` | `/api/transition/mesh` | GLB or STL |
+| `image` | `mapStillV1()` | `/compute/v1/runs`, `kind=map_image` | PNG |
+| `video` | `mapVideoV1()` | `/compute/v1/runs`, `kind=zoom_video` | MP4 |
+| `hs_mesh` | `mapHsMeshV1()` | `/compute/v1/runs`, `kind=hs_mesh` | GLB or STL |
+| `transition_mesh` | `mapTransitionMeshV1()` | `/compute/v1/runs`, `kind=transition_mesh` | GLB or STL |
 
 Mapper changes create a new `mapping_version`; that value is persisted in `render_jobs` when a job
 is created, before M7 can call Compute. Selected artifact IDs are saved later in
 `RenderJob.computeResultJson`. A job never re-maps a saved recipe differently while it is running.
 
-Current server source also registers legacy `POST /api/runs/{runId}/cancel`; Platform **must not**
-call it. Production contract has exactly one cancel path: `POST /api/runs/cancel`.
-
-Compute auth contract: every private request sends `Authorization: Bearer <service-key>`.
-Compute returns `401` for missing/unknown/revoked key and `403` for valid key lacking `render`
-scope. Rotation uses key IDs in server configuration with two active hashes: deploy new key to
-Platform, verify calls, revoke old key. Browser never receives this key.
-
-Current C++ Compute does **not** expose idempotent submission, a result manifest, SHA-256 checksums,
-or service-key authentication. Production implementation is blocked until it implements
-[`compute-openapi.yaml`](compute-openapi.yaml): `Authorization: Bearer`, `clientJobId` uniqueness,
-standard error body/status enum, request limits and exactly one cancel route. Platform ignores C++
-`localPath`, calculates SHA-256 after download, and allowlists extensions/purposes from saved
-`RenderJob.outputSpec`.
+Compute v1 requires `Authorization: Bearer <service-key>` for every route except health. The
+browser never receives this key. Every durable request uses
+`idempotencyKey=platform-job:{renderJobId}`; retry returns the same `computeRunId`. Platform uses
+the completed v1 manifest as the only artifact allowlist, verifies its SHA-256/size while streaming,
+and never reads a local path or sends a C++ artifact URL to browser code. Legacy `/api/*` routes are
+not part of Platform transport.
 
 MVP output rules are strict: `image → png`, `video → mp4`, `hs_mesh/transition_mesh → glb | stl`.
 No generic conversion layer exists. A mesh may stay in private library but is not publishable until
@@ -708,7 +690,7 @@ classDiagram
     +createDownloadUrl()
   }
   class AssetIngestionPort_M3 {
-    +createFromCompletedRender(renderJobId, artifactIds)
+    +createFromCompletedRender(renderJobId)
   }
   class AssetReader_M3 {
     +findOwnedAsset(assetId, ownerId)
@@ -716,8 +698,7 @@ classDiagram
     +findPublishableAsset(assetId, ownerId)
   }
   class ComputeArtifactReader {
-    +listRunArtifacts()
-    +downloadArtifactContent()
+    +downloadVerified()
     +calculateSha256()
   }
   class MediaWorker {
@@ -778,7 +759,7 @@ M5 owns entitlement data; M3 asks it through a narrow read port for a download.
 |---|---|---|---|
 | `AssetRouter` | Thin HTTP boundary for library, hide and download URL endpoints. | FastAPI, Pydantic v2 | `AccessMiddleware`, `AssetService` |
 | `AssetService` | One application service for asset metadata, ingest, hide and signed master URL. It implements M2 `AssetIngestionPort`: first creates a `processing` asset, then receives completed job plus selected artifacts, verifies/uploads master and atomically makes asset `ready`. | SQLAlchemy 2 async, `hashlib`, `pathlib`, Pydantic | `AssetRepository`, `ComputeArtifactReader`, `ObjectStorage`, M5 `EntitlementReader`, M7 `OutboxService`, PostgreSQL |
-| `ComputeArtifactReader` | Private adapter over the verified Compute artifact routes. It lists `GET /api/artifacts?runId=...`, downloads only selected `GET /api/artifacts/content?artifactId=...` bytes, and calculates SHA-256 itself because current Compute has no artifact manifest/checksums. It may later switch to a read-only shared volume without changing its interface. | `httpx.AsyncClient` or standard I/O, `hashlib`, `pathlib` | C++ Compute artifact list/content endpoints or read-only private output volume; M2 completed run and selected artifact IDs |
+| `ComputeArtifactReader` | Private adapter over Compute v1 manifest/content routes. It accepts only M2-selected manifest artifact IDs, streams `GET /compute/v1/artifacts?artifactId=...`, and verifies Compute manifest SHA-256/size before S3 upload. | `httpx.AsyncClient`, `hashlib`, `pathlib` | C++ Compute v1 manifest/content endpoints; M2 completed run and selected artifact IDs |
 | `MediaWorker` | Async follow-up after master ingest. Makes thumbnail, watermarked preview and video poster, then adds derivative `asset_files`. | Pillow, `subprocess` wrapper for ffmpeg | M7 PostgreSQL-outbox worker, worker temp directory, `AssetRepository`, `ObjectStorage` |
 | `ObjectStorage` | One S3/MinIO adapter for upload, delete and short-lived signed GET URL. It contains no marketplace rules. | `boto3`, app config | S3/MinIO bucket and encryption config |
 | `AssetRepository` | One M3-owned repository for both `assets` and `asset_files`. It provides safe `findOwnedAsset()`/`findPublicPreview()`/`findPublishableAsset()` reads through M3 port. | SQLAlchemy 2 ORM/Core, `asyncpg`, Alembic | PostgreSQL `assets`, `asset_files` tables |
@@ -1361,7 +1342,7 @@ classDiagram
   class RenderWorker_M2 {
     +submitImageVideoOrMeshRun()
     +pollRunStatus()
-    +ingestRunArtifacts()
+    +ingestCompletedRender()
     +forwardCancellation()
   }
   class MediaWorker_M3 {
@@ -1400,7 +1381,7 @@ Event routing reuses existing module methods:
 | Event type | Invoked method | Owner |
 |---|---|---|
 | `render.created.v1` | `RenderWorker.submitImageVideoOrMeshRun()` | M2 |
-| `render.poll.v1` | `RenderWorker.pollRunStatus()`, then `ingestRunArtifacts()` on success | M2 |
+| `render.poll.v1` | `RenderWorker.pollRunStatus()`, then M3 `AssetIngestionPort.createFromCompletedRender()` on success | M2/M3 |
 | `render.cancel_requested.v1` | `RenderWorker.forwardCancellation()` | M2 |
 | `media.create_derivatives.v1` | `MediaWorker.createThumbnail()`, `createWatermarkedPreview()`, `createVideoPoster()` | M3 |
 | `payment.reconcile.v1` | `CommerceService.reconcilePendingPayment()` | M5 |
@@ -1411,16 +1392,18 @@ Operational rules:
 - Producer business transaction and `outbox_events` insert commit together. No request handler
   calls Compute or ffmpeg inline. Checkout uses Alipay form creation inline; reconciliation calls
   Alipay only after event/scheduled sweep commit.
-- Worker claims a short lease. Success marks event done. Failure increments attempt count and
-  reschedules with exponential backoff. Expired lease becomes claimable again.
+- Worker claims a short lease. `attempt_count` records deliveries/observability only. Failure
+  increments separate `retry_count` and reschedules with exponential backoff; normal poll deferral
+  never consumes retry budget. Expired lease becomes claimable again.
 - Delivery is **at least once**, never claimed as exactly once. Each invoked M2/M3/M5 method
   must lock its entity and be idempotent by entity state or `out_trade_no`.
-- `render.created.v1` submits with `clientJobId=render_job.id`, stores returned `runId`, appends
+- `render.created.v1` submits with `idempotencyKey=platform-job:{render_job.id}`, stores returned `computeRunId`, appends
   exactly one `render.poll.v1`, then completes. `render.poll.v1` keeps same row/key and changes its
   own `status` back to `pending` plus later `available_at` until terminal Compute state. It never
   inserts another poll event, so outbox uniqueness remains valid.
 - Long render does not hold a lease while waiting. After `max_attempts`, event becomes `dead` with
-  last error data and is visible to operations; it is never silently discarded.
+  last error data and is visible to operations; M2 dead-letter handling terminalizes its render and
+  releases quota, so it is never silently discarded or left consuming quota.
 - Start one worker container in `docker-compose.dev.yml`. Scale later by adding identical
   workers; PostgreSQL row locks prevent double claims. Add Redis only when polling load or
   throughput proves PostgreSQL outbox insufficient.
@@ -2367,14 +2350,16 @@ sequenceDiagram
   A-->>C: 202 RenderJobView
   W->>DB: claim render.created.v1
   W->>W: map canonicalSpec plus outputSpec with versioned ComputeRequestMapper
-  W->>F: create durable run with clientJobId=renderJobId
-  F-->>W: runId
-  W->>DB: save runId and append one render.poll.v1
+  W->>F: POST /compute/v1/runs with stable idempotencyKey
+  F-->>W: 202 computeRunId
+  W->>DB: save computeRunId and append one render.poll.v1
   W->>DB: claim/reschedule same render.poll.v1 row
-  W->>F: GET /api/runs/status?runId
-  F-->>W: completed status and artifact IDs
+  W->>F: GET /compute/v1/runs/{computeRunId}
+  F-->>W: completed status
+  W->>F: GET /compute/v1/runs/{computeRunId}/manifest
+  F-->>W: SHA-256, size and artifact allowlist
   W->>DB: save compute result; create Asset processing row
-  W->>F: GET /api/artifacts/content?artifactId
+  W->>F: GET /compute/v1/artifacts?artifactId
   F-->>W: master image or video bytes
   W->>W: allowlist artifact and calculate SHA-256
   W->>S: upload verified master
@@ -2460,7 +2445,7 @@ sequenceDiagram
   alt no computeRunId
     W->>DB: mark RenderJob cancelled and release quota
   else computeRunId exists
-    W->>F: POST /api/runs/cancel
+    W->>F: POST /compute/v1/runs/{computeRunId}/cancel
     F-->>W: cancellation accepted
     W->>DB: mark RenderJob cancelled and release quota
   end

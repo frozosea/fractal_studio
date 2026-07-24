@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from app.auth import service
+from app.auth.rate_limit import AuthRateLimitUnavailable, AuthRateLimiter
 from app.auth.models import AccessPrincipal, CreatorProfileInput, CredentialsInput
 from app.core.access_middleware import (
     csrf_token,
@@ -45,6 +46,10 @@ def _clear_session_cookie(response: Response) -> None:
 @router.post("/auth/register", status_code=status.HTTP_201_CREATED)
 async def register(payload: CredentialsInput, request: Request, response: Response) -> dict[str, object]:
     enforce_same_origin_or_no_origin(request)
+    try:
+        await AuthRateLimiter().enforce(action="register", email=payload.email, request=request)
+    except AuthRateLimitUnavailable as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth_rate_limit_unavailable") from error
     user, session_token = await service.register(payload.email, payload.password, request)
     _set_session_cookie(response, session_token)
     return {"data": user.model_dump(mode="json", by_alias=True)}
@@ -53,6 +58,10 @@ async def register(payload: CredentialsInput, request: Request, response: Respon
 @router.post("/auth/login")
 async def login(payload: CredentialsInput, request: Request, response: Response) -> dict[str, object]:
     enforce_same_origin_or_no_origin(request)
+    try:
+        await AuthRateLimiter().enforce(action="login", email=payload.email, request=request)
+    except AuthRateLimitUnavailable as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth_rate_limit_unavailable") from error
     user, session_token = await service.login(payload.email, payload.password, request)
     _set_session_cookie(response, session_token)
     return {"data": user.model_dump(mode="json", by_alias=True)}

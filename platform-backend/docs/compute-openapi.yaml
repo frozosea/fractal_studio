@@ -1,282 +1,200 @@
 openapi: 3.1.0
 info:
-  title: Fractal Compute private API
+  title: Fractal Compute private v1 API
   version: 1.0.0
   description: |
-    Required production contract between Platform worker and C++ Compute.
-    Current C++ server must implement service authentication and clientJobId idempotency
-    before Platform M2/M7 is built against this contract.
+    Authoritative Platform Worker contract for the current C++ Compute v1 server.
+    Legacy /api/* routes are explicitly outside this contract.
 servers:
   - url: http://compute.internal
 security:
   - ComputeServiceKey: []
 paths:
-  /api/map/render-inline:
+  /compute/v1/previews:
     post:
-      operationId: renderMapInline
-      summary: Bounded non-persistent RGBA8 map preview
+      operationId: renderMapPreview
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/MapRequest' }
+            schema: { $ref: '#/components/schemas/PreviewRequest' }
       responses:
         '200':
-          description: Raw RGBA8 pixels, exactly width * height * 4 bytes
+          description: RGBA8 preview frame
           headers:
-            X-FSD-Width: { schema: { type: integer, minimum: 1, maximum: 1024 } }
-            X-FSD-Height: { schema: { type: integer, minimum: 1, maximum: 1024 } }
+            X-FSD-Width: { schema: { type: integer } }
+            X-FSD-Height: { schema: { type: integer } }
             X-FSD-Pixel-Format: { schema: { type: string, const: rgba8 } }
           content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
-        '204': { description: Preview was preempted or cancelled; empty body }
-        '400': { $ref: '#/components/responses/Problem400' }
-        '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
-        '413': { $ref: '#/components/responses/Problem413' }
-        '429': { $ref: '#/components/responses/Problem429' }
-        '500': { $ref: '#/components/responses/Problem500' }
-  /api/map/render:
+            application/octet-stream: { schema: { type: string, format: binary } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /compute/v1/runs:
     post:
-      operationId: createMapRender
-      summary: Create durable PNG render
+      operationId: createRun
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              allOf:
-                - $ref: '#/components/schemas/MapRequest'
-                - type: object
-                  required: [clientJobId, stillExport, background]
-                  properties:
-                    clientJobId: { $ref: '#/components/schemas/ClientJobId' }
-                    stillExport: { type: boolean, const: true }
-                    background: { type: boolean, const: true }
+            schema: { $ref: '#/components/schemas/CreateRunRequest' }
       responses:
-        '200': { $ref: '#/components/responses/RunAccepted' }
-        '400': { $ref: '#/components/responses/Problem400' }
-        '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
-        '409': { $ref: '#/components/responses/Problem409' }
-        '413': { $ref: '#/components/responses/Problem413' }
-        '429': { $ref: '#/components/responses/Problem429' }
-        '500': { $ref: '#/components/responses/Problem500' }
-  /api/video/export:
-    post:
-      operationId: createVideoExport
-      summary: Create durable MP4 video render
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              allOf:
-                - $ref: '#/components/schemas/VideoRequest'
-                - type: object
-                  required: [clientJobId]
-                  properties: { clientJobId: { $ref: '#/components/schemas/ClientJobId' } }
-      responses:
-        '200': { $ref: '#/components/responses/RunAccepted' }
-        '400': { $ref: '#/components/responses/Problem400' }
-        '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
-        '409': { $ref: '#/components/responses/Problem409' }
-        '413': { $ref: '#/components/responses/Problem413' }
-        '429': { $ref: '#/components/responses/Problem429' }
-        '500': { $ref: '#/components/responses/Problem500' }
-  /api/hs/mesh:
-    post:
-      operationId: createHsMesh
-      summary: Create durable GLB and STL mesh render
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              allOf:
-                - $ref: '#/components/schemas/MeshRequest'
-                - type: object
-                  required: [clientJobId]
-                  properties: { clientJobId: { $ref: '#/components/schemas/ClientJobId' } }
-      responses:
-        '200': { $ref: '#/components/responses/RunAccepted' }
-        '400': { $ref: '#/components/responses/Problem400' }
-        '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
-        '409': { $ref: '#/components/responses/Problem409' }
-        '413': { $ref: '#/components/responses/Problem413' }
-        '429': { $ref: '#/components/responses/Problem429' }
-        '500': { $ref: '#/components/responses/Problem500' }
-  /api/transition/mesh:
-    post:
-      operationId: createTransitionMesh
-      summary: Create durable GLB and STL transition mesh render
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              allOf:
-                - $ref: '#/components/schemas/TransitionMeshRequest'
-                - type: object
-                  required: [clientJobId]
-                  properties: { clientJobId: { $ref: '#/components/schemas/ClientJobId' } }
-      responses:
-        '200': { $ref: '#/components/responses/RunAccepted' }
-        '400': { $ref: '#/components/responses/Problem400' }
-        '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
-        '409': { $ref: '#/components/responses/Problem409' }
-        '413': { $ref: '#/components/responses/Problem413' }
-        '429': { $ref: '#/components/responses/Problem429' }
-        '500': { $ref: '#/components/responses/Problem500' }
-  /api/runs/status:
+        '202':
+          description: Created or idempotently reused Compute run
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /compute/v1/runs/{computeRunId}:
     get:
-      operationId: getRunStatus
+      operationId: getRun
       parameters:
-        - name: runId
-          in: query
-          required: true
-          schema: { type: string, minLength: 1, maxLength: 128 }
+        - $ref: '#/components/parameters/ComputeRunId'
       responses:
         '200':
-          description: Current durable run state
+          description: Current run state; HTTP success does not mean render success
           content:
-            application/json: { schema: { $ref: '#/components/schemas/RunStatus' } }
-        '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
-        '404': { $ref: '#/components/responses/Problem404' }
-  /api/runs/cancel:
+            application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /compute/v1/runs/{computeRunId}/cancel:
     post:
       operationId: cancelRun
-      summary: Only supported production cancellation endpoint
+      parameters:
+        - $ref: '#/components/parameters/ComputeRunId'
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [runId]
-              properties: { runId: { type: string, minLength: 1, maxLength: 128 } }
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '202':
+          description: Cancellation intent accepted; caller continues polling
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /compute/v1/runs/{computeRunId}/manifest:
+    get:
+      operationId: getCompletedManifest
+      parameters:
+        - $ref: '#/components/parameters/ComputeRunId'
       responses:
         '200':
-          description: Cancellation request accepted; polling determines terminal state
+          description: Manifest; accept artifacts only when status is completed
           content:
-            application/json:
-              schema:
-                type: object
-                required: [runId, status]
-                properties:
-                  runId: { type: string }
-                  status: { type: string, const: cancel_requested }
-        '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
-        '404': { $ref: '#/components/responses/Problem404' }
+            application/json: { schema: { $ref: '#/components/schemas/Manifest' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /compute/v1/artifacts:
+    get:
+      operationId: streamArtifact
+      parameters:
+        - name: artifactId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 512 }
+      responses:
+        '200':
+          description: Private artifact bytes
+          content:
+            application/octet-stream: { schema: { type: string, format: binary } }
+        '206':
+          description: Optional single-range response
+          content:
+            application/octet-stream: { schema: { type: string, format: binary } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     ComputeServiceKey:
       type: http
       scheme: bearer
       bearerFormat: opaque-service-key
+  parameters:
+    ComputeRunId:
+      name: computeRunId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
-    ClientJobId: { type: string, format: uuid, description: Platform render_jobs.id; repeat returns same runId }
-    MapRequest:
+    ComputeEnvelope:
       type: object
-      required: [width, height, iterations, variant, centerRe, centerIm, scale]
+      additionalProperties: false
+      required: [schemaVersion, kind, payload]
       properties:
-        centerRe: { type: number, finite: true }
-        centerIm: { type: number, finite: true }
-        scale: { type: number, exclusiveMinimum: 0 }
-        width: { type: integer, minimum: 1, maximum: 4096 }
-        height: { type: integer, minimum: 1, maximum: 4096 }
-        iterations: { type: integer, minimum: 1, maximum: 1000000 }
-        variant: { type: string, maxLength: 64 }
-        colorMap: { type: string, maxLength: 64 }
-        julia: { type: boolean }
-        juliaRe: { type: number }
-        juliaIm: { type: number }
-        bailout: { type: number, exclusiveMinimum: 0 }
-        engine: { type: string, enum: [auto, cpu, cuda] }
-        scalarType: { type: string, enum: [auto, float, double, long_double] }
-        requestId: { type: string, format: uuid }
-    VideoRequest:
+        schemaVersion: { type: integer, const: 1 }
+        kind: { type: string, minLength: 1, maxLength: 80 }
+        payload: { type: object }
+    PreviewRequest:
       allOf:
-        - $ref: '#/components/schemas/MapRequest'
+        - $ref: '#/components/schemas/ComputeEnvelope'
         - type: object
-          required: [fps, durationSeconds]
           properties:
-            fps: { type: integer, minimum: 1, maximum: 60 }
-            durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 30 }
-    MeshRequest:
-      type: object
-      required: [centerRe, centerIm, scale, resolution, iterations, variant]
-      properties:
-        centerRe: { type: number }
-        centerIm: { type: number }
-        scale: { type: number, exclusiveMinimum: 0 }
-        resolution: { type: integer, minimum: 8, maximum: 1024 }
-        iterations: { type: integer, minimum: 1, maximum: 1000000 }
-        variant: { type: string, maxLength: 64 }
-        heightScale: { type: number }
-        heightClamp: { type: number, exclusiveMinimum: 0 }
-        bailout: { type: number, exclusiveMinimum: 0 }
-    TransitionMeshRequest:
-      type: object
-      required: [centerX, centerY, centerZ, extent, resolution, iterations, transitionFrom, transitionTo]
-      properties:
-        centerX: { type: number }
-        centerY: { type: number }
-        centerZ: { type: number }
-        extent: { type: number, exclusiveMinimum: 0 }
-        resolution: { type: integer, minimum: 8, maximum: 1024 }
-        iterations: { type: integer, minimum: 1, maximum: 10000 }
-        bailout: { type: number, exclusiveMinimum: 0 }
-        transitionFrom: { type: string, maxLength: 64 }
-        transitionTo: { type: string, maxLength: 64 }
-        iso: { type: number }
-        engine: { type: string, enum: [auto, cpu, cuda] }
-        scalarType: { type: string, enum: [fp32, fp64] }
-    RunAccepted:
-      type: object
-      required: [runId, clientJobId, status]
-      properties:
-        runId: { type: string }
-        clientJobId: { $ref: '#/components/schemas/ClientJobId' }
-        status: { type: string, enum: [queued, running, completed, failed, cancelled] }
-    RunStatus:
+            kind: { const: map_image }
+    CreateRunRequest:
       allOf:
-        - $ref: '#/components/schemas/RunAccepted'
+        - $ref: '#/components/schemas/ComputeEnvelope'
         - type: object
-          required: [progressPercent, artifacts]
+          required: [idempotencyKey]
           properties:
-            progressPercent: { type: integer, minimum: 0, maximum: 100 }
-            error: { type: string, maxLength: 512 }
+            idempotencyKey:
+              type: string
+              minLength: 1
+              maxLength: 200
+              description: Stable platform-job UUID key; same kind/payload returns same run.
+    RunEnvelope:
+      type: object
+      required: [schemaVersion, data]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        data:
+          type: object
+          required: [computeRunId, status]
+          properties:
+            computeRunId: { type: string }
+            kind: { type: string }
+            status: { type: string, enum: [queued, running, completed, failed, cancelled] }
+            progress: { type: object, additionalProperties: true }
             artifacts:
               type: array
-              items:
-                type: object
-                required: [artifactId, purpose, mediaType, sizeBytes]
-                properties:
-                  artifactId: { type: string }
-                  purpose: { type: string, enum: [master, preview_source] }
-                  mediaType: { type: string, enum: [image/png, video/mp4, model/gltf-binary, model/stl] }
-                  sizeBytes: { type: integer, minimum: 1, maximum: 524288000 }
+              items: { $ref: '#/components/schemas/ArtifactSummary' }
+    Manifest:
+      type: object
+      required: [schemaVersion, computeRunId, status, artifacts]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        computeRunId: { type: string }
+        rendererVersion: { type: string }
+        status: { type: string, enum: [queued, running, completed, failed, cancelled] }
+        artifacts:
+          type: array
+          items: { $ref: '#/components/schemas/ArtifactSummary' }
+    ArtifactSummary:
+      type: object
+      required: [artifactId, mediaType, sizeBytes]
+      properties:
+        artifactId: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        mediaType: { type: string }
+        sizeBytes: { type: integer, minimum: 1, maximum: 524288000 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
     Problem:
       type: object
-      required: [code, message, requestId]
+      required: [error]
       properties:
-        code: { type: string }
-        message: { type: string }
-        requestId: { type: string, format: uuid }
+        error:
+          type: object
+          required: [code, message, details]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object }
   responses:
-    Problem400: { description: Invalid request, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    Problem401: { description: Missing or invalid service key, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    Problem403: { description: Service key has insufficient scope, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    Problem404: { description: Run not found, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    Problem409: { description: Invalid run state or saturated Compute resource, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    Problem413: { description: Request or artifact limit exceeded, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    Problem429: { description: Compute rate limit exceeded, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    Problem500: { description: Compute failure, content: { application/json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Problem:
+      description: Stable Compute error envelope
+      content:
+        application/json: { schema: { $ref: '#/components/schemas/Problem' } }
