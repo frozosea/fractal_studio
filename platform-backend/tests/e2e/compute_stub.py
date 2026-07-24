@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Response
+from PIL import Image
 
 
 app = FastAPI()
@@ -23,8 +28,7 @@ class _Run:
 _runs: dict[str, _Run] = {}
 _run_by_idempotency_key: dict[str, str] = {}
 _transient_attempts: dict[str, int] = {}
-_MASTER_BYTES = b"fractal-compute-stub-master" * 3
-_MASTER_SHA256 = hashlib.sha256(_MASTER_BYTES).hexdigest()
+_VIDEO_BYTES: bytes | None = None
 
 
 def _require_service_key(authorization: str | None) -> None:
@@ -48,6 +52,39 @@ def _master_filename(run: _Run) -> str:
         "hs_mesh": "master.glb",
         "transition_mesh": "master.glb",
     }[run.compute_kind]
+
+
+def _master_bytes(run: _Run) -> bytes:
+    if run.compute_kind == "map_image":
+        image = Image.new("RGB", (64, 64), (32, 128, 255))
+        output = io.BytesIO()
+        image.save(output, "PNG")
+        return output.getvalue()
+    if run.compute_kind == "zoom_video":
+        return _video_bytes()
+    # Mesh derivative generation is intentionally no-op in T08, but the master stays byte-safe.
+    return b"glTF\x00\x00\x00\x00"
+
+
+def _video_bytes() -> bytes:
+    global _VIDEO_BYTES
+    if _VIDEO_BYTES is not None:
+        return _VIDEO_BYTES
+    with tempfile.TemporaryDirectory(prefix="fractal-compute-stub-") as directory:
+        target = Path(directory) / "master.mp4"
+        completed = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                "color=c=blue:s=64x64:r=24", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                str(target),
+            ],
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError("ffmpeg failed while creating Compute stub video")
+        _VIDEO_BYTES = target.read_bytes()
+    return _VIDEO_BYTES
 
 
 @app.post("/compute/v1/previews")
@@ -126,6 +163,7 @@ async def manifest(run_id: str, authorization: str | None = Header(default=None)
         "transition_mesh": "model/gltf-binary",
     }[run.compute_kind]
     filename = _master_filename(run)
+    body = _master_bytes(run)
     return {
         "schemaVersion": 1,
         "computeRunId": run_id,
@@ -137,8 +175,8 @@ async def manifest(run_id: str, authorization: str | None = Header(default=None)
                 "name": filename,
                 "kind": "image" if media_type == "image/png" else "video" if media_type == "video/mp4" else "mesh",
                 "mediaType": media_type,
-                "sizeBytes": len(_MASTER_BYTES),
-                "sha256": _MASTER_SHA256,
+                "sizeBytes": len(body),
+                "sha256": hashlib.sha256(body).hexdigest(),
                 "contentPath": f"/compute/v1/artifacts?artifactId={run_id}:{filename}",
             }
         ],
@@ -151,7 +189,7 @@ async def artifact(artifactId: str, authorization: str | None = Header(default=N
     run_id, separator, name = artifactId.partition(":")
     if not separator or run_id not in _runs or name != _master_filename(_runs[run_id]):
         raise HTTPException(status_code=404)
-    return Response(content=_MASTER_BYTES, media_type="application/octet-stream")
+    return Response(content=_master_bytes(_runs[run_id]), media_type="application/octet-stream")
 
 
 @app.post("/compute/v1/runs/{run_id}/cancel", status_code=202)

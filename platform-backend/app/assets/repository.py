@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -21,6 +21,31 @@ class AssetRecord:
     visibility: str
     created_at: datetime
     files: list[dict[str, object]]
+
+
+@dataclass(frozen=True, slots=True)
+class MediaSource:
+    asset_id: UUID
+    media_type: str
+    status: str
+    master_object_key: str
+    master_media_type: str
+    existing_purposes: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadAsset:
+    asset_id: UUID
+    owner_id: UUID
+    status: str
+    master_object_key: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MutationResult:
+    asset: AssetRecord | None
+    code: str
+    cleanup_keys: list[str]
 
 
 async def create_or_get_processing(
@@ -214,7 +239,7 @@ async def find_owned(connection: AsyncConnection, *, asset_id: UUID, owner_id: U
                    COALESCE(jsonb_agg(jsonb_build_object(
                      'purpose', f.purpose::text, 'mediaType', f.media_type, 'sizeBytes', f.size_bytes
                    )) FILTER (WHERE f.id IS NOT NULL), '[]'::jsonb) AS files
-            FROM assets a LEFT JOIN asset_files f ON f.asset_id = a.id
+            FROM assets a LEFT JOIN asset_files f ON f.asset_id = a.id AND f.purpose <> 'render_manifest'
             WHERE a.id = :asset_id AND a.owner_id = :owner_id
             GROUP BY a.id
             """
@@ -226,10 +251,25 @@ async def find_owned(connection: AsyncConnection, *, asset_id: UUID, owner_id: U
 
 
 async def list_owned(
-    connection: AsyncConnection, *, owner_id: UUID, limit: int, before_created_at: datetime | None = None, before_id: UUID | None = None
+    connection: AsyncConnection,
+    *,
+    owner_id: UUID,
+    limit: int,
+    status: str | None = None,
+    media_type: str | None = None,
+    before_created_at: datetime | None = None,
+    before_id: UUID | None = None,
 ) -> list[AssetRecord]:
     predicate = "a.owner_id = :owner_id"
     params: dict[str, object] = {"owner_id": owner_id, "limit": limit}
+    if status is None:
+        predicate += " AND a.status <> 'deleted'"
+    else:
+        predicate += " AND a.status::text = :status"
+        params["status"] = status
+    if media_type is not None:
+        predicate += " AND a.media_type::text = :media_type"
+        params["media_type"] = media_type
     if before_created_at is not None and before_id is not None:
         predicate += " AND (a.created_at, a.id) < (:before_created_at, :before_id)"
         params.update({"before_created_at": before_created_at, "before_id": before_id})
@@ -241,7 +281,7 @@ async def list_owned(
                    COALESCE(jsonb_agg(jsonb_build_object(
                      'purpose', f.purpose::text, 'mediaType', f.media_type, 'sizeBytes', f.size_bytes
                    )) FILTER (WHERE f.id IS NOT NULL), '[]'::jsonb) AS files
-            FROM assets a LEFT JOIN asset_files f ON f.asset_id = a.id
+            FROM assets a LEFT JOIN asset_files f ON f.asset_id = a.id AND f.purpose <> 'render_manifest'
             WHERE {predicate}
             GROUP BY a.id ORDER BY a.created_at DESC, a.id DESC LIMIT :limit
             """
@@ -249,6 +289,165 @@ async def list_owned(
         params,
     )
     return [_asset_record(row) for row in result.mappings().all()]
+
+
+async def find_media_source(connection: AsyncConnection, *, asset_id: UUID) -> MediaSource | None:
+    asset_row = await connection.execute(
+        text(
+            """
+            SELECT a.id, a.media_type::text AS media_type, a.status::text AS status,
+              m.object_key AS master_object_key, m.media_type AS master_media_type
+            FROM assets a
+            JOIN asset_files m ON m.asset_id = a.id AND m.purpose = 'master'
+            WHERE a.id = :asset_id
+            """
+        ),
+        {"asset_id": asset_id},
+    )
+    row = asset_row.mappings().one_or_none()
+    if row is None:
+        return None
+    purpose_rows = await connection.execute(
+        text("SELECT purpose::text FROM asset_files WHERE asset_id = :asset_id"), {"asset_id": asset_id}
+    )
+    return MediaSource(
+        asset_id=row["id"],
+        media_type=str(row["media_type"]),
+        status=str(row["status"]),
+        master_object_key=str(row["master_object_key"]),
+        master_media_type=str(row["master_media_type"]),
+        existing_purposes=frozenset(str(value) for value in purpose_rows.scalars()),
+    )
+
+
+async def add_derivative(
+    connection: AsyncConnection,
+    *,
+    asset_id: UUID,
+    purpose: str,
+    file_id: UUID,
+    object_key: str,
+    sha256: str,
+    size_bytes: int,
+    media_type: str,
+) -> None:
+    await connection.execute(
+        text("SELECT id FROM assets WHERE id = :asset_id AND status = 'ready' FOR UPDATE"),
+        {"asset_id": asset_id},
+    )
+    await connection.execute(
+        text(
+            """
+            INSERT INTO asset_files (id, asset_id, purpose, object_key, sha256, size_bytes, media_type)
+            VALUES (:id, :asset_id, CAST(:purpose AS asset_file_purpose), :object_key,
+                    :sha256, :size_bytes, :media_type)
+            ON CONFLICT (asset_id, purpose) DO NOTHING
+            """
+        ),
+        {
+            "id": file_id,
+            "asset_id": asset_id,
+            "purpose": purpose,
+            "object_key": object_key,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+            "media_type": media_type,
+        },
+    )
+
+
+async def find_download_asset(connection: AsyncConnection, *, asset_id: UUID) -> DownloadAsset | None:
+    result = await connection.execute(
+        text(
+            """
+            SELECT a.id, a.owner_id, a.status::text AS status, m.object_key AS master_object_key
+            FROM assets a LEFT JOIN asset_files m ON m.asset_id = a.id AND m.purpose = 'master'
+            WHERE a.id = :asset_id
+            """
+        ),
+        {"asset_id": asset_id},
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        return None
+    return DownloadAsset(
+        asset_id=row["id"], owner_id=row["owner_id"], status=str(row["status"]), master_object_key=row["master_object_key"]
+    )
+
+
+async def change_visibility(
+    connection: AsyncConnection, *, asset_id: UUID, owner_id: UUID, visibility: str
+) -> MutationResult:
+    asset = await find_owned_locked(connection, asset_id=asset_id, owner_id=owner_id)
+    if asset is None:
+        return MutationResult(asset=None, code="not_found", cleanup_keys=[])
+    if await _has_non_archived_listing(connection, asset_id=asset_id):
+        return MutationResult(asset=None, code="listed", cleanup_keys=[])
+    if asset.status == "deleted":
+        return MutationResult(asset=None, code="deleted", cleanup_keys=[])
+    await connection.execute(
+        text("UPDATE assets SET visibility = CAST(:visibility AS asset_visibility) WHERE id = :asset_id"),
+        {"visibility": visibility, "asset_id": asset_id},
+    )
+    return MutationResult(asset=replace(asset, visibility=visibility), code="ok", cleanup_keys=[])
+
+
+async def soft_delete(connection: AsyncConnection, *, asset_id: UUID, owner_id: UUID) -> MutationResult:
+    asset = await find_owned_locked(connection, asset_id=asset_id, owner_id=owner_id)
+    if asset is None:
+        return MutationResult(asset=None, code="not_found", cleanup_keys=[])
+    if asset.status == "deleted":
+        return MutationResult(asset=asset, code="ok", cleanup_keys=[])
+    if asset.status not in {"ready", "failed"}:
+        return MutationResult(asset=None, code="invalid_state", cleanup_keys=[])
+    if await _has_non_archived_listing(connection, asset_id=asset_id):
+        return MutationResult(asset=None, code="listed", cleanup_keys=[])
+    await connection.execute(
+        text("UPDATE assets SET status = 'deleted', visibility = 'hidden' WHERE id = :asset_id"),
+        {"asset_id": asset_id},
+    )
+    retained = await _requires_master_retention(connection, asset_id=asset_id)
+    cleanup_keys: list[str] = []
+    if not retained:
+        deleted_files = await connection.execute(
+            text("DELETE FROM asset_files WHERE asset_id = :asset_id RETURNING object_key"),
+            {"asset_id": asset_id},
+        )
+        cleanup_keys = [str(key) for key in deleted_files.scalars()]
+    return MutationResult(asset=asset, code="ok", cleanup_keys=cleanup_keys)
+
+
+async def find_owned_locked(
+    connection: AsyncConnection, *, asset_id: UUID, owner_id: UUID
+) -> AssetRecord | None:
+    await connection.execute(
+        text("SELECT id FROM assets WHERE id = :asset_id AND owner_id = :owner_id FOR UPDATE"),
+        {"asset_id": asset_id, "owner_id": owner_id},
+    )
+    return await find_owned(connection, asset_id=asset_id, owner_id=owner_id)
+
+
+async def _has_non_archived_listing(connection: AsyncConnection, *, asset_id: UUID) -> bool:
+    return bool(
+        await connection.scalar(
+            text("SELECT EXISTS (SELECT 1 FROM listings WHERE asset_id = :asset_id AND status <> 'archived')"),
+            {"asset_id": asset_id},
+        )
+    )
+
+
+async def _requires_master_retention(connection: AsyncConnection, *, asset_id: UUID) -> bool:
+    return bool(
+        await connection.scalar(
+            text(
+                """
+                SELECT EXISTS (SELECT 1 FROM order_items WHERE asset_id = :asset_id)
+                    OR EXISTS (SELECT 1 FROM entitlements WHERE asset_id = :asset_id AND status = 'active')
+                """
+            ),
+            {"asset_id": asset_id},
+        )
+    )
 
 
 def _asset_record(row: object) -> AssetRecord:

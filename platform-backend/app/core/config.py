@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     compute_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     compute_read_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     s3_endpoint_url: str = ""
+    s3_public_endpoint_url: str = ""
     s3_bucket: str = "fractal-platform"
     s3_region: str = "us-east-1"
     s3_access_key_id: str = ""
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
     preview_max_pixels: int = Field(default=1_048_576, ge=1, le=1_048_576)
     preview_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
     render_quota_max_active: int = Field(default=3, ge=1, le=100)
+    master_download_ttl_seconds: int = Field(default=300, ge=60, le=900)
     render_poll_interval_seconds: int = Field(default=3, ge=1, le=60)
     outbox_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
     outbox_lease_seconds: int = Field(default=30, ge=1, le=300)

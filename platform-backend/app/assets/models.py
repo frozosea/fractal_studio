@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class AssetFileView(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    purpose: Literal["master", "thumbnail", "watermarked_preview", "video_poster", "render_manifest"]
+    purpose: Literal["master", "thumbnail", "watermarked_preview", "video_poster"]
     media_type: str = Field(alias="mediaType")
     size_bytes: int = Field(alias="sizeBytes")
 
@@ -27,3 +27,12 @@ class AssetView(BaseModel):
     visibility: Literal["private", "hidden"]
     created_at: datetime = Field(alias="createdAt")
     files: list[AssetFileView]
+
+
+class AssetVisibilityInput(BaseModel):
+    visibility: Literal["private", "hidden"]
+
+
+class DownloadUrlView(BaseModel):
+    url: str
+    expires_at: datetime = Field(alias="expiresAt")

@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException, Request, status
+
 from app.assets import repository
+from app.assets.models import AssetFileView, AssetView, DownloadUrlView
+from app.assets.ports import DenyEntitlementReader, EntitlementReader
+from app.auth.models import AccessPrincipal
 from app.core import audit_writer
+from app.core.config import get_settings
 from app.core.db import get_engine
+from app.core import idempotency_service
+from app.core.request_context import request_id
 from app.infrastructure.compute.compute_artifact_reader import ArtifactIntegrityError, ComputeArtifactReader
 from app.infrastructure.storage.object_storage import ObjectStorage
 from app.outbox.models import NewOutboxEvent
@@ -233,3 +242,158 @@ class AssetIngestionService:
         )
         if changed:
             await render_job_repository.release_reservation(connection, job_id=job_id)
+
+
+def asset_view(record: repository.AssetRecord) -> AssetView:
+    """Single safe mapping: neither storage keys nor Compute provenance leave M3."""
+    return AssetView(
+        id=record.id,
+        recipeId=record.recipe_id,
+        mediaType=record.media_type,
+        status=record.status,
+        visibility=record.visibility,
+        createdAt=record.created_at,
+        files=[
+            AssetFileView.model_validate(item)
+            for item in record.files
+            if item.get("purpose") != "render_manifest"
+        ],
+    )
+
+
+class AssetLibraryService:
+    def __init__(
+        self,
+        *,
+        object_storage: ObjectStorage | None = None,
+        entitlement_reader: EntitlementReader | None = None,
+    ) -> None:
+        self._storage = object_storage or ObjectStorage()
+        self._entitlements = entitlement_reader or DenyEntitlementReader()
+
+    async def change_visibility(
+        self,
+        *,
+        principal: AccessPrincipal,
+        asset_id: UUID,
+        visibility: str,
+        idempotency_key: str,
+        request: Request,
+    ) -> tuple[dict[str, object], int, dict[str, str]]:
+        async with get_engine().begin() as connection:
+            claim = await idempotency_service.claim(
+                connection,
+                user_id=principal.user_id,
+                scope="assets.visibility",
+                key=idempotency_key,
+                body={"assetId": str(asset_id), "visibility": visibility},
+            )
+            if claim.is_replay:
+                return claim.replay_body or {}, claim.replay_status or 200, claim.replay_headers or {}
+            result = await repository.change_visibility(
+                connection,
+                asset_id=asset_id,
+                owner_id=principal.user_id,
+                visibility=visibility,
+            )
+            self._raise_mutation_error(result.code)
+            assert result.asset is not None
+            body: dict[str, object] = {"data": asset_view(result.asset).model_dump(mode="json", by_alias=True)}
+            headers = {"Cache-Control": "no-store"}
+            await audit_writer.record_user_action(
+                connection,
+                actor_user_id=principal.user_id,
+                action="asset.visibility_changed",
+                subject_type="asset",
+                subject_id=asset_id,
+                request_id_value=request_id(request),
+                metadata={"visibility": visibility},
+            )
+            await idempotency_service.complete(
+                connection,
+                claim,
+                response_status=status.HTTP_200_OK,
+                response_body=body,
+                response_headers=headers,
+            )
+        return body, status.HTTP_200_OK, headers
+
+    async def soft_delete(
+        self,
+        *,
+        principal: AccessPrincipal,
+        asset_id: UUID,
+        idempotency_key: str,
+        request: Request,
+    ) -> tuple[int, dict[str, str]]:
+        async with get_engine().begin() as connection:
+            claim = await idempotency_service.claim(
+                connection,
+                user_id=principal.user_id,
+                scope="assets.delete",
+                key=idempotency_key,
+                body={"assetId": str(asset_id)},
+            )
+            if claim.is_replay:
+                return claim.replay_status or status.HTTP_204_NO_CONTENT, claim.replay_headers or {}
+            result = await repository.soft_delete(connection, asset_id=asset_id, owner_id=principal.user_id)
+            self._raise_mutation_error(result.code)
+            if result.cleanup_keys:
+                cleanup_task_id = await repository.create_orphan_cleanup_task(
+                    connection, object_keys=result.cleanup_keys
+                )
+                await TransactionalOutboxService(connection).append(
+                    NewOutboxEvent(
+                        event_type="asset.cleanup_orphan.v1",
+                        aggregate_type="storage_cleanup_task",
+                        aggregate_id=cleanup_task_id,
+                        idempotency_key="delete",
+                        payload={"cleanupTaskId": str(cleanup_task_id)},
+                        causation_request_id=request_id(request),
+                    )
+                )
+            await audit_writer.record_user_action(
+                connection,
+                actor_user_id=principal.user_id,
+                action="asset.soft_deleted",
+                subject_type="asset",
+                subject_id=asset_id,
+                request_id_value=request_id(request),
+                metadata={"masterRetained": not bool(result.cleanup_keys)},
+            )
+            headers = {"Cache-Control": "no-store"}
+            await idempotency_service.complete(
+                connection,
+                claim,
+                response_status=status.HTTP_204_NO_CONTENT,
+                response_body=None,
+                response_headers=headers,
+            )
+        return status.HTTP_204_NO_CONTENT, headers
+
+    async def create_download_url(self, *, principal: AccessPrincipal, asset_id: UUID) -> DownloadUrlView:
+        async with get_engine().connect() as connection:
+            asset = await repository.find_download_asset(connection, asset_id=asset_id)
+        if asset is None or asset.master_object_key is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset_not_found")
+        if asset.owner_id != principal.user_id and not await self._entitlements.has_active_entitlement(
+            user_id=principal.user_id, asset_id=asset_id
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+        settings = get_settings()
+        url = await self._storage.create_signed_get_url(
+            object_key=asset.master_object_key, expires_seconds=settings.master_download_ttl_seconds
+        )
+        return DownloadUrlView(
+            url=url, expiresAt=datetime.now(UTC) + timedelta(seconds=settings.master_download_ttl_seconds)
+        )
+
+    @staticmethod
+    def _raise_mutation_error(code: str) -> None:
+        if code == "ok":
+            return
+        if code == "not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset_not_found")
+        if code in {"listed", "deleted", "invalid_state"}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="invalid_state")
+        raise RuntimeError(f"unknown asset mutation result: {code}")

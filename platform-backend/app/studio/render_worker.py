@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.assets.ports import AssetIngestionPort
 from app.assets.cleanup_service import AssetCleanupService
+from app.assets.media_worker import MediaWorker
 from app.assets.service import AssetIngestionService
 from app.core import audit_writer
 from app.core.config import Settings, get_settings
@@ -244,6 +245,7 @@ def build_render_handler_registry(
     registry.register("render.cancel_requested.v1", render_worker.forward_cancellation)
     registry.register("render.quota_expired.v1", render_worker.expire_quota)
     registry.register("asset.cleanup_orphan.v1", AssetCleanupService().delete_orphan)
+    registry.register("media.create_derivatives.v1", MediaWorker().create_derivatives)
     for event_type in ("render.created.v1", "render.poll.v1", "render.cancel_requested.v1"):
         registry.register_dead_letter(event_type, render_worker.fail_dead_letter)
     return registry
