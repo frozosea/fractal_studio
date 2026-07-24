@@ -20,7 +20,7 @@ class PostgresEntitlementReader:
                         """
                         SELECT EXISTS (
                           SELECT 1 FROM entitlements
-                          WHERE buyer_id = :user_id AND asset_id = :asset_id AND status = 'active'
+                          WHERE user_id = :user_id AND asset_id = :asset_id AND status = 'active'
                         )
                         """
                     ),
