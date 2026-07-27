@@ -81,29 +81,33 @@ and the public object-storage origin in the root `.env`:
 
 ```dotenv
 FSD_API_ORIGIN=https://ai.example.com
-FSD_S3_PUBLIC_ENDPOINT_URL=https://assets.ai.example.com
+FSD_S3_PUBLIC_ENDPOINT_URL=https://ai.example.com
 ```
 
-The first hostname proxies to the frontend on port `3010`. The second hostname
-must proxy to MinIO's S3 port `19010`; preserve the incoming `Host` header or
-S3 signatures will fail. For nginx, the relevant server is:
+The same hostname can serve both the frontend and signed MinIO objects. Route
+the bucket path `/fractal-platform/` to MinIO's S3 port `19010`, and route all
+other paths to the frontend on `3010`. Preserve both the path and incoming
+`Host` header or S3 signatures will fail. For nginx, the relevant locations in
+the existing HTTPS server are:
 
 ```nginx
-server {
-    listen 443 ssl http2;
-    server_name assets.ai.example.com;
+location ^~ /fractal-platform/ {
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_pass http://127.0.0.1:19010;
+}
 
-    location / {
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_pass http://127.0.0.1:19010;
-    }
+location / {
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_pass http://127.0.0.1:3010;
 }
 ```
 
-Use a dedicated storage hostname rather than a path such as `/minio`: the URL
-path is part of the S3 signature. Restart `api` after changing the public S3
-origin; newly requested preview and download URLs will then use the domain.
+Do not add or strip a synthetic prefix such as `/minio`: the URL path is part
+of the S3 signature. The real bucket prefix `/fractal-platform/` must reach
+MinIO unchanged. Restart `api` after changing the public S3 origin; newly
+requested preview and download URLs will then use the domain.
 
 ## Legacy Compute API
 
