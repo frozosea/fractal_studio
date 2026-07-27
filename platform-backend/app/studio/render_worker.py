@@ -94,7 +94,7 @@ class RenderWorker:
     async def poll_run_status(self, event: OutboxEvent) -> None:
         job_id = self._job_id(event)
         async with get_engine().connect() as connection:
-            job = await render_job_repository.lock_for_worker(connection, job_id=job_id)
+            job = await render_job_repository.read_snapshot(connection, job_id=job_id)
         if job is None or job.status in render_job_repository.TERMINAL_STATUSES:
             return
         if job.status == "compute_succeeded":
@@ -163,7 +163,7 @@ class RenderWorker:
     async def forward_cancellation(self, event: OutboxEvent) -> None:
         job_id = self._job_id(event)
         async with get_engine().connect() as connection:
-            job = await render_job_repository.lock_for_worker(connection, job_id=job_id)
+            job = await render_job_repository.read_snapshot(connection, job_id=job_id)
         if job is None or job.status in render_job_repository.TERMINAL_STATUSES:
             return
         if job.status != "cancel_requested":

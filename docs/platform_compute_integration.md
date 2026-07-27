@@ -83,7 +83,9 @@ Compute 幂等键。相同 ID + 相同规范 body 返回同一 `runId`；相同 
 直接透传。四类映射：
 
 - image：map 字段 + `clientJobId` + `stillExport=true` + `background=true`。
-- video：map 字段 + `clientJobId/fps/durationSeconds`；C++ 内部转成 `durationSec`。
+- video：map 字段 + `clientJobId/fps/durationSeconds/depthOctaves`；C++ 内部转成 `durationSec`。
+  `depthOctaves` 由 `VideoOutputSpec` 提供（默认 20，范围 0.05..1024）；`colorProgram` 在此分支
+  被显式拒绝（`color_program_unsupported_for_output`），见 coloring_contract.md。
 - HS：`centerRe/centerIm/scale/resolution/iterations/variant/bailout` 加可选高度参数。
 - transition：`centerX/Y/Z/extent/resolution/iterations/transitionFrom/To` 加可选 mesh 参数。
 

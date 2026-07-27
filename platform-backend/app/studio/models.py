@@ -129,6 +129,8 @@ class VideoOutputSpec(BaseModel):
     height: int = Field(ge=128, le=1080)
     duration_seconds: Annotated[float, Field(gt=0, le=30)] = Field(alias="durationSeconds")
     fps: int = Field(ge=1, le=60)
+    # Compute zoom_video accepts 0.05..1024; keep the public range inside it.
+    depth_octaves: Annotated[float, Field(ge=0.05, le=1024.0)] = Field(default=20.0, alias="depthOctaves")
 
 
 class HsMeshSpec(BaseModel):

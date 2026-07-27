@@ -183,6 +183,22 @@ async def lock_for_worker(connection: AsyncConnection, *, job_id: UUID) -> Rende
     return _record(row) if row is not None else None
 
 
+async def read_snapshot(connection: AsyncConnection, *, job_id: UUID) -> RenderJobRecord | None:
+    """Lock-free read for worker steps that re-check status on their own write."""
+    result = await connection.execute(
+        text(
+            f"""
+            SELECT {_JOB_COLUMNS}, r.canonical_spec
+            FROM render_jobs j JOIN fractal_recipes r ON r.id = j.recipe_id
+            WHERE j.id = :job_id
+            """
+        ),
+        {"job_id": job_id},
+    )
+    row = result.mappings().one_or_none()
+    return _record(row) if row is not None else None
+
+
 async def set_status(
     connection: AsyncConnection,
     *,

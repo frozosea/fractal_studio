@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+import pytest
+
 from app.studio.compute_request_mapper import RENDER_MAPPING_VERSION, map_durable_v1
 from app.studio.models import FractalSpec
 from app.studio.recipe_service import canonicalize_spec
@@ -29,6 +31,65 @@ def test_durable_image_mapper_binds_job_id_before_worker_submission() -> None:
     assert body["kind"] == "map_image"
     assert body["idempotencyKey"] == f"platform-job:{JOB_ID}"
     assert body["payload"]["width"] == 512
+
+
+def test_incomplete_canonical_spec_is_a_structured_error() -> None:
+    spec = _canonical()
+    del spec["iterations"]
+
+    with pytest.raises(ValueError, match="incomplete_canonical_spec"):
+        map_durable_v1(
+            spec,
+            output_spec={"kind": "image", "format": "png", "width": 512, "height": 256},
+            client_job_id=JOB_ID,
+        )
+
+
+def test_video_rejects_custom_gradient_per_coloring_contract() -> None:
+    spec = canonicalize_spec(
+        FractalSpec.model_validate(
+            {
+                "version": 1,
+                "colorMap": None,
+                "colorProgram": {
+                    "stops": [{"at": 0.0, "color": "#000000"}, {"at": 1.0, "color": "#ffffff"}]
+                },
+            }
+        )
+    ).spec
+
+    with pytest.raises(ValueError, match="color_program_unsupported_for_output"):
+        map_durable_v1(
+            spec,
+            output_spec={
+                "kind": "video",
+                "format": "mp4",
+                "width": 1920,
+                "height": 1080,
+                "durationSeconds": 30.0,
+                "fps": 60,
+                "depthOctaves": 12.5,
+            },
+            client_job_id=JOB_ID,
+        )
+
+
+def test_video_depth_octaves_comes_from_the_output_spec() -> None:
+    _route, body = map_durable_v1(
+        _canonical(),
+        output_spec={
+            "kind": "video",
+            "format": "mp4",
+            "width": 1920,
+            "height": 1080,
+            "durationSeconds": 30.0,
+            "fps": 60,
+            "depthOctaves": 12.5,
+        },
+        client_job_id=JOB_ID,
+    )
+
+    assert body["payload"]["depthOctaves"] == 12.5
 
 
 def test_durable_video_and_mesh_mappers_allow_only_contract_routes() -> None:

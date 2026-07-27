@@ -12,7 +12,7 @@ from app.core.request_context import request_id
 from app.outbox.models import NewOutboxEvent
 from app.outbox.service import TransactionalOutboxService
 from app.studio import render_job_repository
-from app.studio.compute_request_mapper import RENDER_MAPPING_VERSION, map_durable_v1
+from app.studio.compute_request_mapper import PUBLIC_MAPPING_ERRORS, RENDER_MAPPING_VERSION, map_durable_v1
 from app.studio.models import RenderJobCreateInput, RenderJobView
 from app.studio.quota_service import RenderQuotaService
 
@@ -54,7 +54,8 @@ async def create(
                 recipe["canonical_spec"], output_spec=output_spec, client_job_id=job_id  # type: ignore[arg-type]
             )
         except (KeyError, TypeError, ValueError) as error:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="unsupported_render_output") from error
+            detail = str(error) if str(error) in PUBLIC_MAPPING_ERRORS else "unsupported_render_output"
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail) from error
         job = await render_job_repository.create(
             connection,
             job_id=job_id,

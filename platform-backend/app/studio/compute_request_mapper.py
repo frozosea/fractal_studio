@@ -10,6 +10,15 @@ PREVIEW_MAPPING_VERSION = "compute-v1-preview-v1"
 RENDER_MAPPING_VERSION = "compute-v1-render-v1"
 COMPUTE_RUNS_ROUTE = "/compute/v1/runs"
 COMPUTE_PREVIEWS_ROUTE = "/compute/v1/previews"
+# Mapper failures safe to echo back to the caller as a 422 detail.
+PUBLIC_MAPPING_ERRORS = frozenset(
+    {
+        "unsupported_recipe_version",
+        "unsupported_output_kind",
+        "incomplete_canonical_spec",
+        "color_program_unsupported_for_output",
+    }
+)
 
 
 def _compute_engine(value: object) -> str:
@@ -26,9 +35,28 @@ def _compute_scalar(value: object) -> str:
     }.get(str(value), str(value))
 
 
+_REQUIRED_2D_KEYS = (
+    "iterations",
+    "variant",
+    "centerRe",
+    "centerIm",
+    "scale",
+    "julia",
+    "bailout",
+    "metric",
+    "smooth",
+    "rotationDeg",
+    "pairwiseCap",
+    "engine",
+    "scalarType",
+)
+
+
 def _map_2d(canonical_spec: dict[str, object], *, width: int, height: int) -> dict[str, object]:
     if canonical_spec.get("version") != 1:
         raise ValueError("unsupported_recipe_version")
+    if any(key not in canonical_spec for key in _REQUIRED_2D_KEYS):
+        raise ValueError("incomplete_canonical_spec")
     result: dict[str, object] = {
         "width": width,
         "height": height,
@@ -84,12 +112,15 @@ def map_durable_v1(
     elif kind == "video":
         compute_kind = "zoom_video"
         payload = _map_2d(canonical_spec, width=int(output_spec["width"]), height=int(output_spec["height"]))
+        # Custom gradients ship for 2D preview/PNG only, see docs/coloring_contract.md.
+        if "colorProgram" in payload:
+            raise ValueError("color_program_unsupported_for_output")
         payload.update(
             {
                 "fps": output_spec["fps"],
                 "durationSec": output_spec["durationSeconds"],
-                # Product MVP controls duration, while Compute requires a zoom path too.
-                "depthOctaves": 20.0,
+                # Jobs stored before depthOctaves existed keep the historical constant.
+                "depthOctaves": output_spec.get("depthOctaves", 20.0),
             }
         )
     elif kind == "hs_mesh":
