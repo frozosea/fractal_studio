@@ -66,7 +66,7 @@ const initialState = {
   julia: false,
   juliaRe: 0,
   juliaIm: 0,
-  smooth: true,
+  smooth: false,
   engine: DEFAULT_ENGINE,
   scalarType: DEFAULT_SCALAR_TYPE,
   rotationDeg: 0,

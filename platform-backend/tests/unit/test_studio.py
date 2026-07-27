@@ -75,7 +75,7 @@ def test_preview_mapper_is_pure_and_versioned() -> None:
             "centerIm": 0.0,
             "scale": 4.0,
             "julia": False,
-            "bailout": 4.0,
+            "bailout": 2.0,
             "metric": "escape",
             "smooth": False,
             "colorMode": "direct",
@@ -111,6 +111,16 @@ def test_mapper_preserves_advanced_2d_controls_and_gradient() -> None:
     assert request["payload"]["pairwiseCap"] == 128
     assert request["payload"]["colorProgram"]["stops"][1]["color"] == "#ffffff"
     assert request["payload"]["engine"] == "avx2"
+
+
+def test_escape_metric_canonicalizes_smooth_coloring_off() -> None:
+    canonical = canonicalize_spec(FractalSpec.model_validate({
+        "version": 1, "metric": "escape", "smooth": True,
+    }))
+    request = map_preview_v1(canonical.spec, width=64, height=64, request_id=UUID(int=1))
+
+    assert canonical.spec["smooth"] is False
+    assert request["payload"]["smooth"] is False
 
 
 def test_preview_mapper_selects_transition_image_and_preserves_axis_payload() -> None:

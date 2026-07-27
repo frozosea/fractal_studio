@@ -123,7 +123,7 @@ class FractalSpec(BaseModel):
     julia: bool = False
     julia_re: float | None = Field(default=None, alias="juliaRe")
     julia_im: float | None = Field(default=None, alias="juliaIm")
-    bailout: Annotated[float, Field(gt=0.0, le=1_000_000_000.0)] = 4.0
+    bailout: Annotated[float, Field(gt=0.0, le=1_000_000_000.0)] = 2.0
     engine: Literal["auto", "cpu", "cuda", "openmp", "avx2", "avx512", "hybrid"] = "auto"
     scalar_type: Literal["auto", "float", "double", "long_double", "fp32", "fp64", "fx64", "fp80", "fp128"] = Field(
         default="auto", alias="scalarType"
@@ -144,6 +144,11 @@ class FractalSpec(BaseModel):
 
     @model_validator(mode="after")
     def require_julia_constant(self) -> "FractalSpec":
+        # The static escape-time view deliberately uses discrete iteration
+        # bands.  Continuous smoothing belongs to scalar/height fields; keep
+        # old escape recipes deterministic by canonicalising it away.
+        if self.metric == "escape":
+            self.smooth = False
         if self.julia and (self.julia_re is None or self.julia_im is None):
             raise ValueError("juliaRe and juliaIm are required when julia is true")
         if self.color_program is not None and self.color_map is not None:

@@ -51,13 +51,13 @@ const defaults: FractalSpec = {
   variant: "mandelbrot",
   colorMap: "classic_cos",
   metric: "escape",
-  smooth: true,
+  smooth: false,
   colorMode: "direct",
   cyclesPerOctave: 1,
   rotationDeg: 0,
   pairwiseCap: 64,
   julia: false,
-  bailout: 4,
+  bailout: 2,
   engine: "auto",
   scalarType: "auto",
   orbitProgram: null,
@@ -147,7 +147,8 @@ export default function StudioPage() {
       centerIm: Number.isFinite(centerIm) ? centerIm : Number(spec.centerIm ?? 0),
       scale: Math.max(minScale, Number(spec.scale ?? 3)),
       iterations: Math.max(1, Math.round(Number(spec.iterations ?? 512))),
-      bailout: Math.max(0.01, Number(spec.bailout ?? 4)),
+      smooth: spec.metric === "escape" ? false : Boolean(spec.smooth),
+      bailout: Math.max(0.01, Number(spec.bailout ?? 2)),
       cyclesPerOctave: Math.max(0.01, Math.min(64, Number(spec.cyclesPerOctave ?? 1))),
       rotationDeg: Number(spec.rotationDeg ?? 0),
       pairwiseCap: Math.max(1, Math.round(Number(spec.pairwiseCap ?? 64))),
@@ -545,7 +546,7 @@ export default function StudioPage() {
               <NumberControl label={t("cyclesPerOctave")} disabled={Boolean(spec.colorProgram)} min="0.01" max="64" step="0.1" value={spec.cyclesPerOctave ?? 1} onChange={(value) => update({ cyclesPerOctave: value })} />
             </div>
             <p className="instrument-note">{t(`colorModes.${spec.colorMode ?? "direct"}.description`)}</p>
-            <label className="instrument-check mt-3"><span>{t("smooth")}</span><input checked={Boolean(spec.smooth)} onChange={(event) => update({ smooth: event.target.checked })} type="checkbox" /></label>
+            {spec.metric !== "escape" && <label className="instrument-check mt-3"><span>{t("smooth")}</span><input checked={Boolean(spec.smooth)} onChange={(event) => update({ smooth: event.target.checked })} type="checkbox" /></label>}
             <label className="instrument-check mt-2"><span>{t("customGradient")}</span><input checked={Boolean(spec.colorProgram)} disabled={!capabilities.customGradient.enabled} onChange={(event) => toggleGradient(event.target.checked)} type="checkbox" /></label>
             {spec.colorProgram && (
               <GradientEditor
@@ -565,7 +566,7 @@ export default function StudioPage() {
             <div className="border-t border-white/10 p-3">
               <div className="grid grid-cols-2 gap-2">
                 <NumberControl label={t("iterations")} min="1" max="1000000" step="16" value={spec.iterations ?? 512} onChange={(value) => update({ iterations: Math.round(value) })} />
-                <NumberControl label={t("bailout")} min="0.01" step="0.5" value={spec.bailout ?? 4} onChange={(value) => update({ bailout: value })} />
+                <NumberControl label={t("bailout")} min="0.01" step="0.5" value={spec.bailout ?? 2} onChange={(value) => update({ bailout: value })} />
                 <NumberControl label={t("rotation")} min="-360" max="360" step="1" value={spec.rotationDeg ?? 0} onChange={(value) => update({ rotationDeg: value })} />
                 <Control label={t("metric")}>
                   <select className={selectClass} disabled={mode === "formula" || mode === "sequence"} value={spec.metric} onChange={(event) => update({ metric: event.target.value as NonNullable<FractalSpec["metric"]> })}>{activeMetrics.map((item) => <option key={item} value={item}>{t(`metrics.${item}.name`)}</option>)}</select>

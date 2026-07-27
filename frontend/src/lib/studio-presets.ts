@@ -4,11 +4,11 @@ export type StudioPreset = { id: string; name: string; spec: Partial<FractalSpec
 
 export const STUDIO_PRESETS: StudioPreset[] = [
   { id: "classic", name: "Classic coast", spec: { centerRe: -0.75, centerIm: 0, scale: 3, iterations: 256, variant: "mandelbrot", colorMap: "classic_cos" } },
-  { id: "seahorse", name: "Seahorse valley", spec: { centerRe: -0.743643887, centerIm: 0.131825904, scale: 0.003, iterations: 900, variant: "mandelbrot", colorMap: "viridis", smooth: true } },
-  { id: "spiral", name: "Spiral", spec: { centerRe: -0.761574, centerIm: -0.0847596, scale: 0.0017, iterations: 1200, variant: "mandelbrot", colorMap: "inferno", smooth: true } },
-  { id: "elephant", name: "Elephant", spec: { centerRe: 0.285, centerIm: 0.01, scale: 0.08, iterations: 800, variant: "mandelbrot", colorMap: "twilight", smooth: true } },
+  { id: "seahorse", name: "Seahorse valley", spec: { centerRe: -0.743643887, centerIm: 0.131825904, scale: 0.003, iterations: 900, variant: "mandelbrot", colorMap: "viridis" } },
+  { id: "spiral", name: "Spiral", spec: { centerRe: -0.761574, centerIm: -0.0847596, scale: 0.0017, iterations: 1200, variant: "mandelbrot", colorMap: "inferno" } },
+  { id: "elephant", name: "Elephant", spec: { centerRe: 0.285, centerIm: 0.01, scale: 0.08, iterations: 800, variant: "mandelbrot", colorMap: "twilight" } },
   { id: "tricorn", name: "Tricorn bloom", spec: { centerRe: -0.4, centerIm: 0, scale: 3.2, iterations: 420, variant: "tricorn", colorMap: "spectral1530" } },
-  { id: "ship", name: "Burning ship", spec: { centerRe: -1.75, centerIm: -0.03, scale: 2.1, iterations: 640, variant: "burning_ship", colorMap: "ember_blue", smooth: true } },
+  { id: "ship", name: "Burning ship", spec: { centerRe: -1.75, centerIm: -0.03, scale: 2.1, iterations: 640, variant: "burning_ship", colorMap: "ember_blue" } },
   { id: "celtic", name: "Celtic knots", spec: { centerRe: -0.1, centerIm: 0.65, scale: 2.8, iterations: 512, variant: "celtic", colorMap: "hsv_wheel" } },
   { id: "heart", name: "Heart", spec: { centerRe: -0.2, centerIm: 0, scale: 3.2, iterations: 384, variant: "heart", colorMap: "hs_rainbow" } },
   { id: "buffalo", name: "Buffalo", spec: { centerRe: -0.5, centerIm: 0, scale: 3.5, iterations: 512, variant: "buffalo", colorMap: "mod17" } },
