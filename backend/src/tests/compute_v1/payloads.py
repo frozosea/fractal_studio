@@ -121,6 +121,26 @@ def transition_video_payload() -> dict[str, Any]:
     }
 
 
+def transition_image_payload(*, multi: bool = False) -> dict[str, Any]:
+    payload = {
+        **map_payload(size=64, iterations=24),
+        "transitionThetaMilliDeg": 45000,
+        "colorMap": "viridis",
+        "colorMode": "eq_center",
+        "cyclesPerOctave": 1.5,
+    }
+    if multi:
+        payload["transitionLegs"] = [
+            {"variant": "mandelbrot", "weight": 1.0},
+            {"variant": "burning_ship", "weight": 0.75},
+            {"variant": "tricorn", "weight": 0.5},
+        ]
+    else:
+        payload["transitionFrom"] = "mandelbrot"
+        payload["transitionTo"] = "burning_ship"
+    return payload
+
+
 def special_points_enumerate_payload() -> dict[str, Any]:
     return {
         "kind": "center", "periodMin": 1, "periodMax": 1,

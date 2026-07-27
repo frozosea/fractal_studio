@@ -21,7 +21,7 @@ def test_capabilities_advertise_bounded_custom_gradient(client: ComputeClient) -
     coloring = client.request("/compute/v1/capabilities").json()["coloring"]
 
     assert coloring["customGradient"] is True
-    assert coloring["customGradientKinds"] == ["map_image"]
+    assert coloring["customGradientKinds"] == ["map_image", "transition_image"]
     assert coloring["customGradientMaxStops"] == 16
 
 

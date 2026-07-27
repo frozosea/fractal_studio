@@ -158,7 +158,8 @@ std::string HttpServer::handleRequest(const std::string& request) const {
     if (method == "POST" && path == "/compute/v1/previews") {
         const Json envelope = Json::parse(body);
         if (envelope.value("schemaVersion", 0) == 1 &&
-            envelope.value("kind", std::string()) == "map_image" &&
+            (envelope.value("kind", std::string()) == "map_image" ||
+             envelope.value("kind", std::string()) == "transition_image") &&
             envelope.contains("payload") && envelope["payload"].is_object()) {
             computeV1ValidateOrbitRequest(body, false);
             int status = 200;

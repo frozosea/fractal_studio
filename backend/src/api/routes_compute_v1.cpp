@@ -9,6 +9,7 @@
 #include <openssl/evp.h>
 
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -40,8 +41,9 @@ struct ComputeCapability {
     const char* outputMediaTypes;
 };
 
-constexpr std::array<ComputeCapability, 18> COMPUTE_CAPABILITIES = {{
+constexpr std::array<ComputeCapability, 19> COMPUTE_CAPABILITIES = {{
     {"map_image", true, true, true, "builtin_2d_or_safe_dsl", "escape,min_abs,max_abs,envelope,min_pairwise_dist,mandel_ship_agree", "auto,openmp,avx2,avx512,cuda,hybrid", "auto,fp32,fp64,fx64,fp80,fp128", "image/png,application/octet-stream"},
+    {"transition_image", true, true, false, "axis_pair_or_multi", "escape,min_abs,max_abs,envelope", "auto,openmp,avx2,cuda", "auto,fp32,fp64,fx64,fp80,fp128", "image/png,application/octet-stream"},
     {"raw_field", false, true, true, "builtin_2d_or_safe_dsl", "escape,min_abs,max_abs,envelope,min_pairwise_dist", "auto,openmp,avx2,avx512,cuda,hybrid", "auto,fp32,fp64,fx64,fp80,fp128", "application/json"},
     {"ln_map", true, false, true, "builtin_2d_or_safe_dsl", "escape", "auto,openmp,avx2,avx512,cuda", "auto,fp32,fp64,fx64,fp80,fp128", "image/png,application/json"},
     {"zoom_video", true, false, true, "builtin_2d_or_safe_dsl", "escape", "auto,openmp,avx2,avx512,cuda,hybrid", "auto,fp32,fp64,fx64,fp80,fp128", "video/mp4,image/png,application/json"},
@@ -212,6 +214,45 @@ void validateAxisVariants(const std::string& kind, const Json& payload) {
     }
 }
 
+void validateTransitionImagePayload(const std::string& kind, const Json& payload) {
+    if (!payload.contains("transitionThetaMilliDeg") ||
+        !payload["transitionThetaMilliDeg"].is_number_integer()) {
+        badRequest("INVALID_REQUEST", "transitionThetaMilliDeg must be an integer",
+                   Json{{"kind", kind}, {"field", "transitionThetaMilliDeg"}});
+    }
+    const long long theta = payload["transitionThetaMilliDeg"].get<long long>();
+    if (theta < -180000 || theta > 180000) {
+        badRequest("INVALID_REQUEST", "transitionThetaMilliDeg must be within -180000..180000",
+                   Json{{"kind", kind}, {"field", "transitionThetaMilliDeg"}});
+    }
+    const bool multi = payload.contains("transitionLegs") && !payload["transitionLegs"].is_null();
+    if (multi) {
+        const Json& legs = payload["transitionLegs"];
+        if (!legs.is_array() || legs.empty() || legs.size() > 4) {
+            badRequest("INVALID_REQUEST", "transitionLegs must contain 1..4 entries",
+                       Json{{"kind", kind}, {"field", "transitionLegs"}});
+        }
+        for (const Json& leg : legs) {
+            if (!leg.is_object() || !leg.contains("weight") || !leg["weight"].is_number()) {
+                badRequest("INVALID_REQUEST", "each transition leg requires a numeric weight",
+                           Json{{"kind", kind}, {"field", "transitionLegs.weight"}});
+            }
+            const double weight = leg["weight"].get<double>();
+            if (!(weight > 0.0) || !std::isfinite(weight)) {
+                badRequest("INVALID_REQUEST", "transition leg weight must be finite and positive",
+                           Json{{"kind", kind}, {"field", "transitionLegs.weight"}});
+            }
+        }
+        return;
+    }
+    for (const char* field : {"transitionFrom", "transitionTo"}) {
+        if (!payload.contains(field) || payload[field].is_null()) {
+            badRequest("INVALID_REQUEST", std::string(field) + " is required for pair transition",
+                       Json{{"kind", kind}, {"field", field}});
+        }
+    }
+}
+
 void validateCapabilityPayload(const std::string& kind, const Json& payload,
                                const ComputeCapability& capability) {
     validateAdvertisedValue(kind, payload, "metric", capability.metrics);
@@ -223,8 +264,18 @@ void validateCapabilityPayload(const std::string& kind, const Json& payload,
         if (payload.contains("variant") && !payload["variant"].is_null()) {
             validateBuiltinVariantValue(kind, payload["variant"], "variant", false);
         }
+        if (kind == "map_image" &&
+            (payload.contains("transitionTheta") ||
+             payload.contains("transitionThetaMilliDeg") ||
+             payload.contains("transitionFrom") ||
+             payload.contains("transitionTo") ||
+             payload.contains("transitionVariants") ||
+             payload.contains("transitionLegs"))) {
+            unsupported(kind, "axis transition fields require kind=transition_image");
+        }
     } else if (profile == "axis_pair_or_multi") {
         validateAxisVariants(kind, payload);
+        if (kind == "transition_image") validateTransitionImagePayload(kind, payload);
     }
 }
 
@@ -243,8 +294,8 @@ void validateColorPayload(const std::string& kind, const Json& payload) {
         }
     }
     if (!payload.contains("colorProgram") || payload["colorProgram"].is_null()) return;
-    if (kind != "map_image") {
-        unsupported(kind, "colorProgram v1 is currently supported only by map_image");
+    if (kind != "map_image" && kind != "transition_image") {
+        unsupported(kind, "colorProgram v1 is currently supported only by static 2D images");
     }
     if (payload.contains("colorMap") && !payload["colorMap"].is_null()) {
         badRequest("INVALID_COLOR_PROGRAM",
@@ -482,7 +533,7 @@ Json hardwareExecutionJson(const std::string& status, const Json& progress,
 
 Json runPayload(Json payload, const std::string& kind,
                 const std::filesystem::path& repoRoot, JobRunner& runner) {
-    if (kind == "map_image") {
+    if (kind == "map_image" || kind == "transition_image") {
         payload["taskType"] = "still_export";
         payload["background"] = true;
         return parseLegacyResponse(mapRenderRoute(repoRoot, runner, payload.dump()), kind);
@@ -567,12 +618,16 @@ std::string computeV1CapabilitiesRoute() {
         {"persistentKinds", std::move(persistentKinds)},
         {"previewKinds", std::move(previewKinds)},
         {"jobs", std::move(jobs)},
+        {"builtInVariants", commaSeparatedArray(
+            "mandelbrot,tricorn,burning_ship,celtic,heart,buffalo,perp_buffalo,celtic_ship,mandelceltic,perp_ship,sin_z,cos_z,exp_z,sinh_z,cosh_z,tan_z")},
+        {"axisTransitionVariants", commaSeparatedArray(
+            "mandelbrot,tricorn,burning_ship,celtic,heart,buffalo,perp_buffalo,celtic_ship,mandelceltic,perp_ship")},
         {"orbitPrograms", {
             {"formula", true}, {"sequence", true}, {"weightedSchedule", false},
             {"outputBlend", false}, {"axisTransition", true}, {"axisMulti", true},
         }},
         {"orbitCompatibility", {
-            {"mapImage", true}, {"rawField", true}, {"julia", true},
+            {"mapImage", true}, {"transitionImage", false}, {"rawField", true}, {"julia", true},
             {"lnMap", true}, {"hsField", true}, {"hsMesh", true},
             {"zoomVideo", true}, {"transitionVideo", false},
             {"transitionMesh", false}, {"transitionVoxels", false},
@@ -586,8 +641,10 @@ std::string computeV1CapabilitiesRoute() {
                 "classic_cos,mod17,hsv_wheel,tri765,grayscale,hs_rainbow,inferno,viridis,twilight,ember_blue,spectral1530")},
             {"customGradient", true},
             {"customGradientSchemaVersion", 1},
-            {"customGradientKinds", Json::array({"map_image"})},
+            {"customGradientKinds", Json::array({"map_image", "transition_image"})},
             {"customGradientMaxStops", 16},
+            {"staticImageColorModes", Json::array({"direct", "eq_full", "eq_center"})},
+            {"cyclesPerOctave", { {"minimumExclusive", 0.0}, {"maximum", 64.0} }},
         }},
         {"escapeSemantics", {{"certifiedRadius", true}, {"strictUnverified", true}}},
         {"hardware", hardwareCapabilitiesJson()},
@@ -613,7 +670,7 @@ std::string computeV1PreviewJsonRoute(const std::filesystem::path& repoRoot,
     else if (kind == "special_points_auto") legacy = parseLegacyResponse(specialPointsAutoRoute(repoRoot, payload.dump()), kind);
     else if (kind == "special_points_seed") legacy = parseLegacyResponse(specialPointsSeedRoute(repoRoot, payload.dump()), kind);
     else if (kind == "special_points_snap") legacy = parseLegacyResponse(specialPointsSnapRoute(payload.dump()), kind);
-    else if (kind == "map_image") unsupported(kind, "map_image preview uses the binary HTTP adapter");
+    else if (kind == "map_image" || kind == "transition_image") unsupported(kind, "static image preview uses the binary HTTP adapter");
     else unsupported(kind, "unknown preview Compute kind");
     return Json{{"schemaVersion", COMPUTE_SCHEMA_VERSION}, {"data", std::move(legacy)}}.dump();
 }

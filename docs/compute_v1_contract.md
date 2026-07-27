@@ -122,7 +122,7 @@ Compute v1 调用方应在自己的日志上下文中同时记录 request ID、�
 Platform 节点登记时保存完整响应；每次调度前至少检查目标 kind、persistent/preview、Orbit 兼容性以及所需运行时。不得在 Python 中维护一份声称比节点更强的静态矩阵。
 
 当前 `coloring.customGradient=true`、`customGradientSchemaVersion=1`、
-`customGradientKinds=["map_image"]`、`customGradientMaxStops=16`。完整请求 schema 和管线兼容性见
+`customGradientKinds=["map_image","transition_image"]`、`customGradientMaxStops=16`。完整请求 schema 和管线兼容性见
 [染色合同](coloring_contract.md)。
 
 ## 5. 请求包络与幂等性

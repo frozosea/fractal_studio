@@ -78,6 +78,8 @@ def test_preview_mapper_is_pure_and_versioned() -> None:
             "bailout": 4.0,
             "metric": "escape",
             "smooth": False,
+            "colorMode": "direct",
+            "cyclesPerOctave": 1.0,
             "rotationDeg": 0.0,
             "pairwiseCap": 64,
             "engine": "auto",
@@ -109,6 +111,39 @@ def test_mapper_preserves_advanced_2d_controls_and_gradient() -> None:
     assert request["payload"]["pairwiseCap"] == 128
     assert request["payload"]["colorProgram"]["stops"][1]["color"] == "#ffffff"
     assert request["payload"]["engine"] == "avx2"
+
+
+def test_preview_mapper_selects_transition_image_and_preserves_axis_payload() -> None:
+    canonical = canonicalize_spec(FractalSpec.model_validate({
+        "version": 1,
+        "transitionMode": "multi",
+        "transitionThetaMilliDeg": 45000,
+        "transitionLegs": [
+            {"variant": "mandelbrot", "weight": 1},
+            {"variant": "burning_ship", "weight": 0.75},
+        ],
+        "colorMode": "eq_center",
+        "cyclesPerOctave": 2.5,
+    }))
+
+    request = map_preview_v1(canonical.spec, width=128, height=64, request_id=UUID(int=1))
+
+    assert request["kind"] == "transition_image"
+    assert request["payload"]["transitionThetaMilliDeg"] == 45000
+    assert request["payload"]["transitionLegs"][1] == {"variant": "burning_ship", "weight": 0.75}
+    assert request["payload"]["colorMode"] == "eq_center"
+
+
+def test_recipe_rejects_transition_orbit_program_combination() -> None:
+    with pytest.raises(ValueError, match="orbitProgram cannot be combined"):
+        FractalSpec.model_validate({
+            "version": 1,
+            "transitionMode": "pair",
+            "orbitProgram": {
+                "type": "formula",
+                "formula": {"type": "dsl", "source": "z*z+c"},
+            },
+        })
 
 
 @pytest.mark.asyncio

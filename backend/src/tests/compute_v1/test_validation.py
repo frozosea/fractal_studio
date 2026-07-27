@@ -45,8 +45,8 @@ def validation_cases() -> list[pytest.ParameterSet]:
     strict = strict_dsl_payload()
     invalid_metric = deepcopy(strict)
     invalid_metric["metric"] = "min_abs"
-    invalid_axis = map_payload(orbit=True)
-    invalid_axis["transitionTheta"] = 45.0
+    invalid_axis = map_payload()
+    invalid_axis["transitionThetaMilliDeg"] = 45000
     unknown_variant = {**map_payload(), "variant": "not_a_formula"}
     unknown_metric = {**map_payload(), "metric": "not_a_metric"}
     unknown_engine = {**map_payload(), "engine": "magic_gpu"}
@@ -90,6 +90,13 @@ def validation_cases() -> list[pytest.ParameterSet]:
                 "transitionFrom": "sin_z", "transitionTo": "burning_ship",
             }},
             422, "UNSUPPORTED_CAPABILITY", id="axis-variant-without-lift",
+        ),
+        pytest.param(
+            {"schemaVersion": 1, "kind": "transition_image", "payload": {
+                **map_payload(), "transitionThetaMilliDeg": 0,
+                "transitionFrom": "mandelbrot", "transitionTo": "sin_z",
+            }},
+            422, "UNSUPPORTED_CAPABILITY", id="transition-image-axis-variant",
         ),
     ]
 

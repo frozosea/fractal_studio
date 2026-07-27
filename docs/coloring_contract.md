@@ -130,6 +130,7 @@ JSON
 | `/api/map/render-inline` | yes | yes |
 | `/api/map/render` PNG | yes | yes |
 | `/compute/v1` map preview/run | yes | yes |
+| `/compute/v1` transition image preview/run | yes | yes |
 | 2D axis transition slice 经 map route | yes | yes |
 | raw field 数值输出 | n/a | n/a；由消费者重染色 |
 | interactive field snapshot / WebGL | yes | pending |

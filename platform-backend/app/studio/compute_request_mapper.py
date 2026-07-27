@@ -45,10 +45,13 @@ _REQUIRED_2D_KEYS = (
     "bailout",
     "metric",
     "smooth",
+    "colorMode",
+    "cyclesPerOctave",
     "rotationDeg",
     "pairwiseCap",
     "engine",
     "scalarType",
+    "transitionMode",
 )
 
 
@@ -69,15 +72,40 @@ def _map_2d(canonical_spec: dict[str, object], *, width: int, height: int) -> di
         "bailout": canonical_spec["bailout"],
         "metric": canonical_spec["metric"],
         "smooth": canonical_spec["smooth"],
+        "colorMode": canonical_spec["colorMode"],
+        "cyclesPerOctave": canonical_spec["cyclesPerOctave"],
         "rotationDeg": canonical_spec["rotationDeg"],
         "pairwiseCap": canonical_spec["pairwiseCap"],
         "engine": _compute_engine(canonical_spec["engine"]),
         "scalarType": _compute_scalar(canonical_spec["scalarType"]),
     }
-    for optional in ("juliaRe", "juliaIm", "colorMap", "colorProgram"):
+    for optional in (
+        "centerReStr", "centerImStr", "juliaRe", "juliaIm", "colorMap",
+        "colorProgram", "orbitProgram",
+    ):
         if optional in canonical_spec:
             result[optional] = canonical_spec[optional]
+    transition_mode = canonical_spec["transitionMode"]
+    if transition_mode == "pair":
+        result.update(
+            {
+                "transitionThetaMilliDeg": canonical_spec["transitionThetaMilliDeg"],
+                "transitionFrom": canonical_spec["transitionFrom"],
+                "transitionTo": canonical_spec["transitionTo"],
+            }
+        )
+    elif transition_mode == "multi":
+        result.update(
+            {
+                "transitionThetaMilliDeg": canonical_spec["transitionThetaMilliDeg"],
+                "transitionLegs": canonical_spec["transitionLegs"],
+            }
+        )
     return result
+
+
+def _static_image_kind(canonical_spec: dict[str, object]) -> str:
+    return "transition_image" if canonical_spec.get("transitionMode") in {"pair", "multi"} else "map_image"
 
 
 def _envelope(*, kind: str, payload: dict[str, object], idempotency_key: str | None = None) -> dict[str, object]:
@@ -96,7 +124,7 @@ def map_preview_v1(
 ) -> dict[str, object]:
     """Map bounded map preview; request_id stays Platform correlation metadata only."""
     del request_id
-    return _envelope(kind="map_image", payload=_map_2d(canonical_spec, width=width, height=height))
+    return _envelope(kind=_static_image_kind(canonical_spec), payload=_map_2d(canonical_spec, width=width, height=height))
 
 
 def map_durable_v1(
@@ -107,7 +135,7 @@ def map_durable_v1(
     payload: dict[str, object]
     compute_kind: str
     if kind == "image":
-        compute_kind = "map_image"
+        compute_kind = _static_image_kind(canonical_spec)
         payload = _map_2d(canonical_spec, width=int(output_spec["width"]), height=int(output_spec["height"]))
     elif kind == "video":
         compute_kind = "zoom_video"

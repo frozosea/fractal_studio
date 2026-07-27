@@ -33,6 +33,26 @@ def test_durable_image_mapper_binds_job_id_before_worker_submission() -> None:
     assert body["payload"]["width"] == 512
 
 
+def test_durable_transition_image_uses_dedicated_compute_kind() -> None:
+    spec = canonicalize_spec(FractalSpec.model_validate({
+        "version": 1,
+        "transitionMode": "pair",
+        "transitionThetaMilliDeg": -90000,
+        "transitionFrom": "mandelbrot",
+        "transitionTo": "burning_ship",
+    })).spec
+
+    _route, body = map_durable_v1(
+        spec,
+        output_spec={"kind": "image", "format": "png", "width": 512, "height": 512},
+        client_job_id=JOB_ID,
+    )
+
+    assert body["kind"] == "transition_image"
+    assert body["payload"]["transitionThetaMilliDeg"] == -90000
+    assert body["payload"]["transitionTo"] == "burning_ship"
+
+
 def test_incomplete_canonical_spec_is_a_structured_error() -> None:
     spec = _canonical()
     del spec["iterations"]

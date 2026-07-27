@@ -1,6 +1,6 @@
 # Compute v1 Job Reference / 任务参考
 
-本文逐项定义 Compute v1 当前注册的 18 个 `kind`。如果尚不清楚应该选择哪个 kind，或不知道如何请求 DSL、sequence 和 transition，请先看[从零调用手册](compute_v1_cookbook.md)。公共包络、鉴权、状态、manifest、错误和下载规则见 [compute_v1_contract.md](compute_v1_contract.md)。这里的默认值是 **Compute v1 当前实际默认值**；Platform 可以施加更严格的产品限制，但不能放宽 Compute 限制。
+本文逐项定义 Compute v1 当前注册的 19 个 `kind`。如果尚不清楚应该选择哪个 kind，或不知道如何请求 DSL、sequence 和 transition，请先看[从零调用手册](compute_v1_cookbook.md)。公共包络、鉴权、状态、manifest、错误和下载规则见 [compute_v1_contract.md](compute_v1_contract.md)。这里的默认值是 **Compute v1 当前实际默认值**；Platform 可以施加更严格的产品限制，但不能放宽 Compute 限制。
 
 表中“必需产物”表示 `completed` manifest 必须出现的文件。名称按 artifact 文件名判断，MIME 还应与表中一致。所有数值必须为有限值，除非字段另有说明。
 
@@ -30,7 +30,7 @@
 | `metric` | enum | kind-specific | `escape`, `min_abs`, `max_abs`, `envelope`, `min_pairwise_dist`；map 另支持 `mandel_ship_agree`。 |
 | `pairwiseCap` | integer | `64`, 1..1,000,000 | `min_pairwise_dist` 的 orbit 缓冲上限。 |
 | `colorMap` | enum | `classic_cos` | `classic_cos`, `mod17`, `hsv_wheel`, `tri765`, `grayscale`, `hs_rainbow`, `inferno`, `viridis`, `twilight`, `ember_blue`, `spectral1530`。 |
-| `colorProgram` | object | omitted | 安全声明式 gradient v1；与 `colorMap` 互斥，完整 schema 见 [染色合同](coloring_contract.md)。当前仅 `map_image`。 |
+| `colorProgram` | object | omitted | 安全声明式 gradient v1；与 `colorMap` 互斥，完整 schema 见 [染色合同](coloring_contract.md)。当前用于 `map_image` 与 `transition_image`。 |
 | `engine` | string | kind-specific | 只可从运行时 `jobs[].engines` 选择。 |
 | `scalarType` | string | kind-specific | 只可从运行时 `jobs[].scalars` 选择。 |
 
@@ -88,6 +88,18 @@ persistent 必需产物：
 | `map.png` | `image` | `image/png` |
 
 完成进度必须给出实际 `engine`, `scalar`, `kernelReported=true`。
+
+## kind: transition_image
+
+调用模式：preview 与 persistent。输出与 `map_image` 相同，但数学输入为 axis transition
+二维切片，且不接受 `orbitProgram`。必须提供 `transitionThetaMilliDeg`（-180000..180000）以及：
+
+- pair：`transitionFrom` 与 `transitionTo`；
+- multi：`transitionLegs`，1..4 个 `{variant, weight}`，weight 必须为有限正数。
+
+仅支持具备 axis lift 的十个 quadratic/folded variant。支持 `direct`、`eq_full`、
+`eq_center`、内置色表及声明式 `colorProgram`；自定义 gradient 仍要求 `colorMode=direct`。
+persistent 必需产物为 `map.png` (`image/png`, kind `image`)。
 
 ## kind: raw_field
 
@@ -416,6 +428,7 @@ Misiurewicz 要求 `preperiod+period<=10`，预计点总数不超过 3000。必�
 | kind | preview | persistent | Orbit | completed 必需输出 |
 |---|:---:|:---:|:---:|---|
 | `map_image` | yes | yes | yes | preview RGBA8；run `map.png` |
+| `transition_image` | yes | yes | no | preview RGBA8；run `map.png` |
 | `raw_field` | yes | no | yes | JSON/base64 raw arrays |
 | `ln_map` | no | yes | yes | `ln_map.png`, `ln_map.json` |
 | `video_preview` | yes | no | yes | JSON + 临时 preview images |
