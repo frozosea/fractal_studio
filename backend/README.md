@@ -2,7 +2,7 @@
 
 `backend/` 是私有 C++ Compute 服务。它负责分形数学、CPU/GPU 执行、Compute run 生命周期和临时产物；用户、订单、配额、资产与市场数据属于 `platform-backend/`。
 
-第一次接入先看 [Compute v1 从零调用手册](../docs/compute_v1_cookbook.md)，它包含 Key、workload、curl、DSL/sequence 和 transition 示例。规范协议见 [Compute v1 Contract](../docs/compute_v1_contract.md)，逐任务字段和产物见 [Compute v1 Jobs](../docs/compute_v1_jobs.md)，Worker 实现流程见 [Platform–Compute Integration](../docs/platform_compute_integration.md)。商业化实施状态见 [Commercialization Implementation](../docs/commercialization_implementation.md)。
+第一次接入先看 [Compute v1 从零调用手册](../docs/compute_v1_cookbook.md)，它包含 Key、workload、curl、DSL/sequence、transition 和自定义染色示例。规范协议见 [Compute v1 Contract](../docs/compute_v1_contract.md)，逐任务字段和产物见 [Compute v1 Jobs](../docs/compute_v1_jobs.md)，染色 schema 与支持矩阵见 [Coloring Contract](../docs/coloring_contract.md)，Worker 实现流程见 [Platform–Compute Integration](../docs/platform_compute_integration.md)。商业化实施状态见 [Commercialization Implementation](../docs/commercialization_implementation.md)。
 
 ## Build
 
@@ -23,13 +23,15 @@ export FSD_STARTUP_BENCHMARK=off
 backend/build/fractal_studio_backend 18080
 ```
 
-进程工作目录必须是仓库根目录，运行数据库和产物写入 `runtime/`。`GET /compute/v1/health` 不鉴权；其余 `/compute/v1/*` 请求必须携带 `Authorization: Bearer <service-key>`。
+进程工作目录必须是仓库根目录，运行数据库和产物写入 `runtime/`。`GET /compute/v1/health` 不鉴权；其余 `/compute/v1/*` 以及 Platform 使用的生产 `/api/*` 合同必须携带 `Authorization: Bearer <service-key>`。
+
+本地同时启动旧前端时直接运行仓库根目录 `./dev.sh`。脚本会为 C++ 与 Vite 生成并注入同一个临时密钥，不落盘、不打印。`VITE_COMPUTE_SERVICE_KEY` 只用于本地迁移，禁止进入商业前端构建。
 
 ## Configuration
 
 | Variable | Commercial value | Meaning |
 |---|---|---|
-| `FSD_COMPUTE_SERVICE_KEY` | required secret | Compute v1 服务间 Bearer 密钥；未设置时所有受保护路由拒绝访问。 |
+| `FSD_COMPUTE_SERVICE_KEY` | required secret | Compute 私有服务间 Bearer 密钥；未设置时所有受保护路由拒绝访问。 |
 | `FSD_ENABLE_LEGACY_API` | `0` | 是否开放浏览器历史 `/api/*`。开发迁移期可设为 `1`。 |
 | `FSD_ENABLE_LEGACY_FORMULA_COMPILER` | `0` | 旧 `g++ + dlopen` 开关；只有 legacy API 也开启时才可能启用。商业环境必须为 `0`。 |
 | `FSD_RENDERER_VERSION` | image/git version | 写入 health、capabilities 与 manifest 的渲染器版本。 |

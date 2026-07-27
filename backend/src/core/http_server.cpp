@@ -95,10 +95,12 @@ std::string HttpServer::makeHttpResponse(int status, const std::string& body, co
     if (status == 204) statusText = "No Content";
     if (status == 400) statusText = "Bad Request";
     if (status == 401) statusText = "Unauthorized";
+    if (status == 403) statusText = "Forbidden";
     if (status == 404) statusText = "Not Found";
     if (status == 405) statusText = "Method Not Allowed";
     if (status == 409) statusText = "Conflict";
     if (status == 410) statusText = "Gone";
+    if (status == 413) statusText = "Payload Too Large";
     if (status == 422) statusText = "Unprocessable Entity";
     if (status == 429) statusText = "Too Many Requests";
     if (status == 500) statusText = "Internal Server Error";
@@ -109,7 +111,7 @@ std::string HttpServer::makeHttpResponse(int status, const std::string& body, co
        << "Content-Type: " << contentType << "\r\n"
        << "Access-Control-Allow-Origin: *\r\n"
        << "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-       << "Access-Control-Allow-Headers: Content-Type, Authorization, Range, If-Range\r\n"
+       << "Access-Control-Allow-Headers: Content-Type, Authorization, Range, If-Range, X-Request-Id\r\n"
        << "Access-Control-Expose-Headers: "
        << "X-FSD-Status, X-FSD-Request-Id, X-FSD-Generated-Ms, X-FSD-Engine, "
        << "X-FSD-Scalar, X-FSD-Width, X-FSD-Height, X-FSD-Pixel-Format\r\n"
@@ -190,7 +192,43 @@ std::string HttpServer::handleRequest(const std::string& request) const {
         }
     }
 
-    if (path.rfind("/api/", 0) == 0 && !envEnabled("FSD_ENABLE_LEGACY_API", true)) {
+    // Production contract consumed by platform-backend. During the local
+    // migration, a valid service key plus the production DTO shape selects
+    // this adapter; authenticated legacy-shaped requests continue below. In a
+    // hosted build (legacy disabled), these paths always select this contract.
+    const bool legacyApiEnabled = envEnabled("FSD_ENABLE_LEGACY_API", true);
+    if (isPlatformComputeApiPath(path)) {
+        const std::string authorization = requestHeaderValue(request, "Authorization");
+        const bool hasAuthorization = !authorization.empty();
+        const bool productionRequest = !legacyApiEnabled ||
+            platformComputeRequestUsesProductionContract(repoRoot_, path, query, body);
+        if (productionRequest || hasAuthorization) {
+            std::string requestIdCandidate = requestHeaderValue(request, "X-Request-Id");
+            if (requestIdCandidate.empty() && !body.empty()) {
+                const Json parsedBody = parseJsonBody(body);
+                if (parsedBody.is_object() && parsedBody.contains("requestId") &&
+                    parsedBody["requestId"].is_string()) {
+                    requestIdCandidate = parsedBody["requestId"].get<std::string>();
+                }
+            }
+            const std::string requestId = platformComputeRequestId(requestIdCandidate);
+            if (!computeAuthorized(request)) {
+                return makeHttpResponse(401, platformComputeProblemBody(
+                    "compute_unauthorized",
+                    "valid Compute service credential required", requestId));
+            }
+            if (productionRequest) {
+                const PlatformComputeResponse response = platformComputeApiRoute(
+                    repoRoot_, runner_, method, path, query, body, requestId);
+                return makeHttpResponse(response.status, response.body,
+                    response.contentType, response.extraHeaders);
+            }
+            // A valid key on a legacy-shaped request authenticates the local
+            // frontend, but does not silently reinterpret its response DTO.
+        }
+    }
+
+    if (path.rfind("/api/", 0) == 0 && !legacyApiEnabled) {
         return makeHttpResponse(404, "{\"error\":\"legacy API disabled\"}");
     }
 

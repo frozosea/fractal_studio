@@ -2,7 +2,13 @@
 
 本文是 Fractal Studio 商业化重构的执行依据与进度事实来源。实施过程中每个功能只有在代码、自动测试和文档三者都完成后，才标记为 `completed`。
 
-最后更新：2026-07-23
+最后更新：2026-07-24
+
+2026-07-24 补充：Platform 协作者的实际 ComputeClient 以 C++ 私有 `/api/*` 为准。当前适配工作从 `platform_backend@81bc3fc` 派生，已完成 7 条生产路由、真实 HTTP/跨端客户端验证和本地前端临时密钥接入；实施状态见 [C++ Compute `/api` 生产合同实施记录](compute_api_contract_implementation.md)。本批次未修改 Platform Backend。
+
+2026-07-24 染色扩展：内置 `colorMap/smooth/colorMode/lnMapColorMode` 和安全声明式
+`colorProgram` v1 的接口、能力矩阵及 Platform/前端任务见 [染色合同](coloring_contract.md)。首批只在
+二维 preview/PNG 启用自定义 gradient，其他输出必须显式拒绝。
 
 ## Status Legend / 状态说明
 
@@ -21,7 +27,7 @@ Vue 3 frontend
      -> PostgreSQL product state
      -> Redis quotas and rate limits
      -> PostgreSQL Outbox Worker
-        -> private C++ Compute v1
+        -> private C++ Compute `/api` contract
         -> OSS / MinIO assets
 ```
 
@@ -29,7 +35,7 @@ Vue 3 frontend
 
 1. C++ 只拥有分形数学、硬件执行、Compute run 和临时产物。
 2. FastAPI 是商业浏览器唯一后端，拥有账户、配方、平台任务、资产、市场、交易和账本。
-3. 迁移期间旧 `/api/*` 保持可用；新增 `/compute/v1/*` 供 Platform 私网调用。
+3. Platform Worker 按协作者生产 OpenAPI 调用 C++ 私有 `/api/*`；现有 `/compute/v1/*` 暂时保留给计算工具和回归测试，待实际迁移完成后再决定删除。
 4. 自定义公式使用安全 DSL/AST/字节码；生产环境禁止运行时 `g++ + dlopen`。
 5. Orbit Program 统一承载单公式、周期序列和后续组合玩法；现有 axis transition 保持原数学语义。
 6. 无法证明有限逃逸半径时，`certifiedRadius=null`，不得用有限阈值宣称数学逃逸。
@@ -134,6 +140,16 @@ Vue 3 frontend
 - [ ] 已审核热门 AST 的 SIMD/CUDA kernel 生成；不得改变 DSL 语义或规范化 hash。
 - [ ] 原生 `repeat_block` 仅在扁平展开无法满足规模/调试需求时进入 Compute 新 IR；首期由 Platform 编辑 IR 编译为现有 sequence。
 
+### Coloring / 染色
+
+- [x] 枚举 11 个内置 `colorMap`，记录 `smooth`、`colorMode`、`cyclesPerOctave` 与 ln-map 映射模式。
+- [x] 实现安全声明式 `colorProgram` v1：2..16 个 RGB stop、clamp/repeat/mirror、cycles/phase、interior/invalid color。
+- [x] 接入二维同步 RGBA preview 与异步 PNG；未知色表、字段冲突、非法 program 和视频组合显式失败。
+- [x] capabilities 公布 schema version、支持 kind 和 stop 上限；前端领域 DTO 已定义。
+- [x] 发布 Compute 请求 schema、归一化语义、能力矩阵，以及服务后端/前端任务清单，见 [染色合同](coloring_contract.md)。
+- [ ] Platform Recipe/OpenAPI/mapper 保存并转发不可变 `colorProgram`；该项由服务后端协作者实施。
+- [ ] 前端实现可视 stop 编辑器和本地 WebGL 重染色；完成前通过 Compute preview 展示。
+
 ### Orbit 配方产品任务
 
 - [x] 定义 repeat block 的有限重复、不重置 `z/c/n` 语义，以及展开到扁平 Compute v1 sequence 的兼容策略。
@@ -181,7 +197,7 @@ Vue 3 frontend
 | 2026-07-23 | Artifact integrity ingestion | Platform ComputeClient streams artifact bytes and rejects size/SHA-256 mismatch before Worker completion | 5/5 focused client tests passed |
 | 2026-07-23 | Orbit product handoff | repeat block semantics, flat v1 compiler boundary, recipe/revision/saved-view ownership and backend/frontend task lists | documented; implementation remains pending |
 | 2026-07-23 | Platform migration | `alembic upgrade head --sql` using PostgreSQL dialect | passed; 73 lines generated |
-| 2026-07-23 | Platform preview integration | Uvicorn -> Compute v1 -> OpenMP 64×64 RGBA; propagated engine/scalar/request headers | passed |
+| 2026-07-23 | Platform preview integration | Uvicorn -> private `/api/map/render-inline` -> OpenMP 64×64 RGBA; propagated engine/scalar/request headers | passed |
 | 2026-07-23 | Compose validation | `docker compose -f docker-compose.dev.yml config -q` | passed; daemon start unavailable to current user |
 | 2026-07-23 | Safe DSL/Orbit unit contract | `orbit_program_smoke` covers parser, constants/parameters, canonical hash, limits and M/B deterministic sequence | passed |
 | 2026-07-23 | Strict escape regression | `compute_path_diff` covers certified escape, unverified run-to-limit and numerical-divergence classification | passed |
@@ -225,6 +241,8 @@ Vue 3 frontend
 | 2026-07-23 | Compute cookbook usability | Key/workload/DSL/sequence/transition cookbook; parse every complete JSON block; real HTTP parameterized DSL preview | 8/8 JSON examples valid; 4/4 documentation checks; focused HTTP passed |
 | 2026-07-23 | Post-cookbook Compute regression | full Compute pytest and CTest | 65/65 pytest in 26.91s; 9/9 CTest in 25.31s |
 | 2026-07-23 | Progress/rotation/PNG details | real HTTP rotated map export, PNG signature/name, terminal map progress, documentation coverage | focused 15/15; full Compute 67/67 in 22.76s; CTest 9/9 in 26.12s |
+| 2026-07-24 | Safe custom coloring | C++ bounded gradient parser/colorizer; real `/api` preview + persistent PNG; validation and unsupported combinations | 7/7 focused HTTP passed; exact interior RGBA verified |
+| 2026-07-24 | Coloring full regression | `pytest -q backend/src/tests/compute_v1 ...`; full CTest; frontend production build | 93/93 HTTP; 10/10 CTest; Vite build passed |
 
 ## Commit Log / 提交记录
 
@@ -266,6 +284,8 @@ Vue 3 frontend
 | `aa54144` | status/manifest/cancel 对不存在 run 返回结构化 Compute 404，并增加独立 HTTP 回归。 |
 | `3bc8ed4` | Platform Worker 流式读取 Compute artifact，严格验证大小/SHA-256；增强客户端错误映射。 |
 | `cd16639` | 定义 repeat block 编译语义、配方/视角存档边界，并发布服务后端与前端任务清单。 |
+| `f7f3e7b` | 定义内置染色字段、自定义 gradient v1 schema、能力矩阵和跨端任务边界。 |
+| `6647578` | C++ 实现有界自定义 gradient，接入私有 `/api`/Compute v1、能力声明、真实 HTTP 回归和前端 DTO。 |
 
 ## Delivery Rules / 交付规则
 

@@ -1,36 +1,64 @@
+"""Versioned, secret-free durable event DTOs and worker ports."""
+
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone
-from typing import Any
-
-from sqlalchemy import DateTime, Index, Integer, String, Uuid
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
-
-from app.core.db import Base
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Awaitable, Callable, Protocol
+from uuid import UUID
 
 
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+@dataclass(frozen=True, slots=True)
+class NewOutboxEvent:
+    event_type: str
+    aggregate_type: str
+    aggregate_id: UUID
+    idempotency_key: str
+    payload: dict[str, Any]
+    schema_version: int = 1
+    available_at: datetime | None = None
+    causation_request_id: str | None = None
 
 
-class OutboxEvent(Base):
-    __tablename__ = "outbox_events"
-    __table_args__ = (Index("ix_outbox_claim", "status", "available_at", "lease_until"),)
+@dataclass(frozen=True, slots=True)
+class OutboxEvent:
+    id: UUID
+    event_type: str
+    aggregate_type: str
+    aggregate_id: UUID
+    idempotency_key: str
+    payload: dict[str, Any]
+    schema_version: int
+    attempt_count: int
+    retry_count: int
+    available_at: datetime
+    causation_request_id: str | None
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    aggregate_type: Mapped[str] = mapped_column(String(80), nullable=False)
-    aggregate_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
-    payload_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
-    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_error: Mapped[str | None] = mapped_column(String(2000))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
+class RetryableOutboxError(Exception):
+    """Handler signals a bounded retry using a stable, non-secret error code."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+class RescheduleOutboxEvent(Exception):
+    """Normal deferred work: reuse the same event row without consuming retry attempts."""
+
+    def __init__(self, *, delay_seconds: int) -> None:
+        self.delay_seconds = delay_seconds
+        super().__init__("reschedule")
+
+
+OutboxHandler = Callable[[OutboxEvent], Awaitable[None]]
+
+
+class DueWorkReader(Protocol):
+    """Domain-owned selector; worker calls it periodically but does not know domain predicates."""
+
+    async def schedule_due_work(self, service: "OutboxService") -> int: ...
+
+
+class OutboxService(Protocol):
+    async def append(self, event: NewOutboxEvent) -> UUID: ...

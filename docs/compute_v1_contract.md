@@ -1,6 +1,6 @@
 # Compute v1 私有 HTTP 合同
 
-本文是 Platform API/Worker 与 C++ Compute v1 之间的**规范性合同**。第一次接入请先阅读 [从零调用手册](compute_v1_cookbook.md)，其中解释 Key 的生成方式、workload 选择、自定义公式、Orbit sequence、transition 和可复制的 `curl`。各 `kind` 的完整 payload、默认值、限制和产物见 [compute_v1_jobs.md](compute_v1_jobs.md)，推荐的 Worker 实现流程见 [platform_compute_integration.md](platform_compute_integration.md)。
+本文是 C++ `/compute/v1/*` 的版本化工具与扩展合同，覆盖完整 workload、Orbit/DSL、manifest 和 artifact 流。当前 `platform_backend@81bc3fc` 的 Worker **不调用本合同**，而是调用生产私有 `/api/*`；服务后端接入必须先读 [Platform–Compute 对接指南](platform_compute_integration.md) 和 [`compute-openapi.yaml`](../platform-backend/docs/compute-openapi.yaml)。手动使用 Compute v1 时再阅读 [从零调用手册](compute_v1_cookbook.md) 与 [compute_v1_jobs.md](compute_v1_jobs.md)。
 
 合同版本为 `schemaVersion: 1`。除明确标为“仅供观测”的字段外，本文出现的字段均为 v1 合同的一部分。JSON 字段名区分大小写；未说明可为 `null` 的字段不得发送 `null`。
 
@@ -35,7 +35,7 @@ Content-Type: application/json
 {"error":{"code":"COMPUTE_UNAUTHORIZED","message":"valid Compute service credential required","details":{}}}
 ```
 
-Platform 应在自己的日志上下文中同时记录 request ID、platform job ID、compute node ID 和 `computeRunId`。Compute v1 当前不回显 Platform request ID，因此不得依赖响应头做关联。
+Compute v1 调用方应在自己的日志上下文中同时记录 request ID、调用方 job ID、compute node ID 和 `computeRunId`。Compute v1 当前不回显外部 request ID，因此不得依赖响应头做关联。
 
 ## 3. 端点总表
 
@@ -81,6 +81,7 @@ Platform 应在自己的日志上下文中同时记录 request ID、platform job
 | `orbitPrograms` | object | 当前 IR 节点开关。camelCase 键：`formula`, `sequence`, `weightedSchedule`, `outputBlend`, `axisTransition`, `axisMulti`。 |
 | `orbitCompatibility` | object | Orbit Program 与产物管线的兼容快照。 |
 | `customFormula` | object | `safeDsl` 与 `legacyNativeCompile` 开关。商业节点要求后者为 `false`。 |
+| `coloring` | object | 内置色表与声明式 custom gradient 的版本、kind 和 stop 上限。 |
 | `escapeSemantics` | object | 当前必须为 `certifiedRadius=true`, `strictUnverified=true`。 |
 | `hardware` | object | CPU/CUDA 编译与运行时快照。 |
 
@@ -119,6 +120,10 @@ Platform 应在自己的日志上下文中同时记录 request ID、platform job
 ```
 
 Platform 节点登记时保存完整响应；每次调度前至少检查目标 kind、persistent/preview、Orbit 兼容性以及所需运行时。不得在 Python 中维护一份声称比节点更强的静态矩阵。
+
+当前 `coloring.customGradient=true`、`customGradientSchemaVersion=1`、
+`customGradientKinds=["map_image"]`、`customGradientMaxStops=16`。完整请求 schema 和管线兼容性见
+[染色合同](coloring_contract.md)。
 
 ## 5. 请求包络与幂等性
 

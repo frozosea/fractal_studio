@@ -1,6 +1,6 @@
 # Fractal Studio / 分形工作室
 
-Fractal Studio is a local fractal exploration app with a native C++ compute backend and a Vue 3/Vite frontend.
+Fractal Studio is a Platform product: Next.js browser UI, FastAPI Platform API, private C++ Compute, PostgreSQL, Redis and MinIO.
 
 Fractal Studio 是一个本地运行的交互式分形实验室：后端负责原生 C++ 计算、产物管理和 HTTP API，前端提供地图探索、Julia、3D、视频导出和系统诊断界面。
 
@@ -14,39 +14,21 @@ Recommended local development start:
 
 Default URLs:
 
-- Frontend: `http://localhost:5174`
-- Backend: `http://localhost:18080`
+- Frontend: `http://localhost:3010`
+- Platform API: `http://localhost:18100`
+- Private Compute: `http://localhost:18101`
 
 Manual backend/frontend commands, dependencies, runtime directories, and troubleshooting are in [docs/development.md](docs/development.md). Test and QA flow is in [docs/testing.md](docs/testing.md).
 
-## Startup Benchmark / 启动校准
+## Product path
 
-In server mode, the backend synchronously calibrates its compute engines before opening the HTTP port. The default `quick` mode measures two scheduler workloads: an interactive `256×256`, 1000-iteration map and a batch `512×512`, 2000-iteration map. Each engine/scalar pair gets one warmup and two measured samples; `full` uses three measured samples. The local `export-map` and `export-video` CLI commands skip startup calibration.
-
-后端在服务模式下会先同步校准计算引擎，再开放 HTTP 端口。默认的 `quick` 模式包含交互地图和批处理地图两档，使自动调度有当前机器上的实测速率作为参考。可通过环境变量选择模式：
-
-```bash
-# Default: one warmup + two samples per engine/scalar pair
-FSD_STARTUP_BENCHMARK=quick ./dev.sh
-
-# One warmup + three samples for a steadier reference
-FSD_STARTUP_BENCHMARK=full ./dev.sh
-
-# Start immediately and use capability-based fallback scheduling
-FSD_STARTUP_BENCHMARK=off ./dev.sh
+```text
+Browser -> Next.js (/platform/v1) -> FastAPI Platform -> private C++ Compute (/compute/v1)
 ```
 
-`0` and `false` are aliases for `off`. An empty value uses `quick`; an unsupported value prints a warning and also falls back to `quick`. A failed or partially unavailable calibration is reported in the backend log, but it does not prevent the service from starting: missing measurements use the capability-based fallback.
-
-`POST /api/benchmark` can refresh the in-process scheduler reference while the service is running. `replaceCache: true` atomically replaces the current reference with the submitted profile; `replaceCache: false` merges results by compute family, workload, work size, engine, and scalar. For example:
-
-```bash
-curl -X POST http://localhost:18080/api/benchmark \
-  -H 'Content-Type: application/json' \
-  -d '{"workload":"interactive","width":256,"height":256,"iterations":1000,"warmup":1,"samples":3,"replaceCache":true}'
-```
-
-The active reference is observable at `GET /api/system/capabilities` under `benchmarkCache` (`available` plus the measured `results`). The startup log also reports each workload's duration, the total calibration time, and any fallback reason.
+Platform owns authentication, CSRF, assets, listings, orders, entitlements and
+payouts. Compute is reachable only by the Platform worker with its service key.
+Legacy C++ `/api/*` routes are not a browser dependency.
 
 ## Documentation / 文档
 
@@ -59,6 +41,7 @@ The active reference is observable at `GET /api/system/capabilities` under `benc
 - [Compute Backend / 计算后端](backend/README.md): 私有服务构建、配置、测试、运行目录和生产安全边界。
 - [Compute v1 Contract / 私有计算合同](docs/compute_v1_contract.md): 服务后端实现所需的鉴权、transport DTO、状态机、manifest、下载、硬件证据和错误合同。
 - [Compute v1 Cookbook / 从零调用手册](docs/compute_v1_cookbook.md): Key 生成、workload 选择、curl、DSL/Orbit sequence 和 transition 请求示例。
+- [Coloring Contract / 染色合同](docs/coloring_contract.md): 内置染色字段、自定义 gradient schema、支持矩阵及 Platform/前端接入任务。
 - [Compute v1 Jobs / 任务参数与产物](docs/compute_v1_jobs.md): 18 个 kind 的 payload 默认值、限制、preview 结构和必需 artifact。
 - [Platform–Compute Integration / 服务后端对接指南](docs/platform_compute_integration.md): FastAPI ComputeClient、PostgreSQL Outbox、轮询/取消、产物摄取和硬件策略。
 - [Special Points / 特殊点链路](docs/special_points.md): center/Misiurewicz solving, search, classification, progress, and artifacts.
@@ -72,7 +55,7 @@ The active reference is observable at `GET /api/system/capabilities` under `benc
 
 ```text
 backend/   Native C++ HTTP API and compute kernels
-frontend/  Vue 3/Vite user interface
+frontend/  Next.js browser user interface
 docs/      Architecture, development, pipeline, frontend, and QA docs
 runtime/   Local build output, logs, run artifacts, and SQLite DB
 scripts/   System and legacy integrity checks

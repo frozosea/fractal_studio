@@ -1,85 +1,238 @@
+"""Generic at-least-once dispatcher; event business rules stay in owning modules."""
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import re
 import signal
 import uuid
+from collections.abc import Awaitable, Callable, Iterable
 
-from app.core.config import get_settings
-from app.core.db import SessionFactory
-from app.infrastructure.compute.compute_client import ComputeClient
-from app.studio.render_worker import RenderWorker
+from app.core.config import Settings, get_settings
+from app.core.db import get_engine
+from app.core.logging import worker_log
+from app.core.request_context import request_id_var
+from app.outbox import repository
+from app.outbox.models import (
+    DueWorkReader,
+    OutboxEvent,
+    OutboxHandler,
+    RescheduleOutboxEvent,
+    RetryableOutboxError,
+)
+from app.outbox.service import TransactionalOutboxService
 
-from .repository import ClaimedEvent, OutboxRepository
+
+_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,119}$")
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-log = logging.getLogger("outbox-worker")
+class HandlerRegistry:
+    """Explicit registry prevents workers from importing or owning domain transitions."""
 
-
-class Worker:
     def __init__(self) -> None:
-        self.settings = get_settings()
-        self.repository = OutboxRepository()
-        self.compute = ComputeClient(self.settings)
-        self.render = RenderWorker(self.settings, self.compute)
-        self.stopping = asyncio.Event()
+        self._handlers: dict[str, OutboxHandler] = {}
+        self._dead_handlers: dict[str, Callable[[OutboxEvent, str], Awaitable[None]]] = {}
+
+    def register(self, event_type: str, handler: OutboxHandler) -> None:
+        if event_type in self._handlers:
+            raise ValueError(f"handler already registered for {event_type}")
+        self._handlers[event_type] = handler
+
+    async def dispatch(self, event: OutboxEvent) -> None:
+        handler = self._handlers.get(event.event_type)
+        if handler is None:
+            raise RetryableOutboxError("handler_not_registered")
+        await handler(event)
+
+    def register_dead_letter(
+        self, event_type: str, handler: Callable[[OutboxEvent, str], Awaitable[None]]
+    ) -> None:
+        self._dead_handlers[event_type] = handler
+
+    async def handle_dead_letter(self, event: OutboxEvent, error_code: str) -> None:
+        handler = self._dead_handlers.get(event.event_type)
+        if handler is not None:
+            await handler(event, error_code)
+
+
+class OutboxWorker:
+    def __init__(
+        self,
+        *,
+        worker_id: str | None = None,
+        handlers: HandlerRegistry | None = None,
+        due_work_readers: Iterable[DueWorkReader] = (),
+        settings: Settings | None = None,
+    ) -> None:
+        self._settings = settings or get_settings()
+        self._worker_id = worker_id or f"outbox-{uuid.uuid4()}"
+        self._handlers = handlers or HandlerRegistry()
+        self._due_work_readers = tuple(due_work_readers)
+        self._last_schedule_at = 0.0
+
+    def _backoff_seconds(self, retry_count: int) -> int:
+        delay = self._settings.outbox_backoff_base_seconds * (2 ** max(0, retry_count))
+        return min(delay, self._settings.outbox_backoff_max_seconds)
+
+    async def run_scheduler_once(self) -> int:
+        """Run domain readers in short transactions; readers own all due-work predicates."""
+        scheduled = 0
+        for reader in self._due_work_readers:
+            async with get_engine().begin() as connection:
+                scheduled += await reader.schedule_due_work(TransactionalOutboxService(connection))
+        return scheduled
 
     async def poll_once(self) -> int:
-        async with SessionFactory() as session:
-            async with session.begin():
-                events = await self.repository.claim_due_batch(
-                    session,
-                    limit=self.settings.outbox_batch_size,
-                    lease_seconds=self.settings.outbox_lease_seconds,
-                )
+        loop = asyncio.get_running_loop()
+        if loop.time() - self._last_schedule_at >= self._settings.outbox_schedule_interval_seconds:
+            scheduled = await self.run_scheduler_once()
+            self._last_schedule_at = loop.time()
+            if scheduled:
+                worker_log(logging.INFO, "outbox scheduler appended events", count=scheduled)
+        async with get_engine().begin() as connection:
+            events = await repository.claim_due_batch(
+                connection,
+                worker_id=self._worker_id,
+                lease_seconds=self._settings.outbox_lease_seconds,
+                batch_size=self._settings.outbox_claim_batch_size,
+            )
         for event in events:
-            await self._process(event)
+            await self._dispatch_claimed(event)
         return len(events)
 
-    async def _process(self, event: ClaimedEvent) -> None:
+    async def _dispatch_claimed(self, event: OutboxEvent) -> None:
+        token = request_id_var.set(event.causation_request_id or f"outbox:{event.id}")
+        heartbeat = asyncio.create_task(self._renew_lease_until_cancelled(event))
         try:
-            async with SessionFactory() as session:
-                async with session.begin():
-                    if event.event_type == "render.created":
-                        await self.render.submit(session, event.aggregate_id)
-                    elif event.event_type == "render.poll":
-                        await self.render.poll(
-                            session, event.aggregate_id, int(event.payload.get("sequence", 0))
-                        )
-                    elif event.event_type == "render.cancel_requested":
-                        await self.render.cancel(session, event.aggregate_id)
-                    else:
-                        raise RuntimeError(f"unknown outbox event: {event.event_type}")
-                    await self.repository.mark_done(session, event.id)
-        except Exception as error:
-            log.exception("outbox event failed", extra={"event_id": str(event.id)})
-            async with SessionFactory() as session:
-                async with session.begin():
-                    await self.repository.reschedule(session, event.id, str(error), event.attempt_count)
-
-    async def run(self) -> None:
-        loop = asyncio.get_running_loop()
-        for name in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(name, self.stopping.set)
-        try:
-            while not self.stopping.is_set():
-                count = await self.poll_once()
-                if count == 0:
-                    try:
-                        await asyncio.wait_for(
-                            self.stopping.wait(), timeout=self.settings.outbox_poll_seconds
-                        )
-                    except asyncio.TimeoutError:
-                        pass
+            await self._handlers.dispatch(event)
+        except RescheduleOutboxEvent as deferred:
+            async with get_engine().begin() as connection:
+                rescheduled = await repository.defer_same_event(
+                    connection,
+                    event_id=event.id,
+                    worker_id=self._worker_id,
+                    delay_seconds=deferred.delay_seconds,
+                )
+            worker_log(
+                logging.INFO if rescheduled else logging.WARNING,
+                "outbox event deferred" if rescheduled else "outbox lease lost before deferral",
+                event_id=event.id,
+                event_type=event.event_type,
+            )
+        except RetryableOutboxError as error:
+            await self._fail(event, error.code)
+        except Exception:
+            await self._fail(event, "handler_unexpected_error")
+        else:
+            async with get_engine().begin() as connection:
+                marked = await repository.mark_done(
+                    connection, event_id=event.id, worker_id=self._worker_id
+                )
+            worker_log(
+                logging.INFO if marked else logging.WARNING,
+                "outbox event completed" if marked else "outbox lease lost before completion",
+                event_id=event.id,
+                event_type=event.event_type,
+            )
         finally:
-            await self.compute.close()
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+            request_id_var.reset(token)
+
+    async def _renew_lease_until_cancelled(self, event: OutboxEvent) -> None:
+        interval = max(0.25, self._settings.outbox_lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            async with get_engine().begin() as connection:
+                renewed = await repository.renew_lease(
+                    connection,
+                    event_id=event.id,
+                    worker_id=self._worker_id,
+                    lease_seconds=self._settings.outbox_lease_seconds,
+                )
+            if not renewed:
+                worker_log(
+                    logging.WARNING,
+                    "outbox lease lost during handler execution",
+                    event_id=event.id,
+                    event_type=event.event_type,
+                )
+                return
+
+    async def _fail(self, event: OutboxEvent, error_code: str) -> None:
+        if not _ERROR_CODE.fullmatch(error_code):
+            error_code = "handler_retry_failed"
+        async with get_engine().begin() as connection:
+            next_status = await repository.reschedule_or_dead_letter(
+                connection,
+                event_id=event.id,
+                worker_id=self._worker_id,
+                error_code=error_code,
+                max_attempts=self._settings.outbox_max_attempts,
+                backoff_seconds=self._backoff_seconds(event.retry_count),
+            )
+        if next_status == "dead":
+            try:
+                await self._handlers.handle_dead_letter(event, error_code)
+            except Exception:
+                worker_log(logging.ERROR, "outbox dead-letter handler failed", event_id=event.id)
+        worker_log(
+            logging.ERROR if next_status == "dead" else logging.WARNING,
+            "outbox event dead-lettered" if next_status == "dead" else "outbox event rescheduled",
+            event_id=event.id,
+            event_type=event.event_type,
+            error_code=error_code,
+            next_status=next_status or "lease_lost",
+        )
+
+    async def run(self, stop_event: asyncio.Event) -> None:
+        while not stop_event.is_set():
+            claimed = await self.poll_once()
+            if claimed == 0:
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=self._settings.outbox_poll_interval_seconds)
+                except TimeoutError:
+                    pass
 
 
-def main() -> None:
-    asyncio.run(Worker().run())
+async def run() -> None:
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signal_name in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(signal_name, stop_event.set)
+        except NotImplementedError:
+            pass
+    from app.studio.quota_expiry_scheduler import RenderQuotaExpiryScheduler
+    from app.core.idempotency_cleanup import IdempotencyExpiryScheduler
+    from app.assets.cleanup_service import AssetCleanupScheduler
+    from app.commerce.service import CommerceService
+    from app.finance.cleanup_service import PayoutQrCleanupService
+    from app.studio.render_worker import build_render_handler_registry
+
+    commerce = CommerceService()
+    handlers = build_render_handler_registry()
+    handlers.register("payment.reconcile.v1", commerce.reconcile_event)
+    handlers.register_dead_letter("payment.reconcile.v1", commerce.on_reconcile_dead_letter)
+    payout_cleanup = PayoutQrCleanupService()
+    handlers.register("payout.qr_cleanup.v1", payout_cleanup.cleanup_qr)
+    handlers.register_dead_letter("payout.qr_cleanup.v1", payout_cleanup.dead_letter)
+    worker = OutboxWorker(
+        handlers=handlers,
+        due_work_readers=(
+            RenderQuotaExpiryScheduler(),
+            AssetCleanupScheduler(),
+            IdempotencyExpiryScheduler(),
+            commerce,
+        ),
+    )
+    worker_log(logging.INFO, "outbox worker started", worker_id=worker._worker_id)
+    await worker.run(stop_event)
+    worker_log(logging.INFO, "outbox worker stopped", worker_id=worker._worker_id)
 
 
 if __name__ == "__main__":
-    main()
-
+    asyncio.run(run())

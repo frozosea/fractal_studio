@@ -1,14 +1,14 @@
+name: fractal-studio-dev
+
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: fractal_platform
       POSTGRES_USER: fractal
-      POSTGRES_PASSWORD: fractal
-    ports:
-      - "5432:5432"
-    volumes:
-      - platform-postgres:/var/lib/postgresql/data
+      POSTGRES_PASSWORD: fractal_dev_password
+    ports: ["${POSTGRES_PORT:-15442}:5432"]
+    volumes: [platform-postgres:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fractal -d fractal_platform"]
       interval: 2s
@@ -17,8 +17,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    ports: ["${REDIS_PORT:-16389}:6379"]
+    volumes: [platform-redis:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -26,16 +26,23 @@ services:
       retries: 30
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: server /data --console-address :9001
     environment:
-      MINIO_ROOT_USER: fractal
-      MINIO_ROOT_PASSWORD: fractal-development-only
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - platform-minio:/data
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio_dev_password
+    ports: ["${MINIO_PORT:-19010}:9000", "${MINIO_CONSOLE_PORT:-19011}:9001"]
+    volumes: [platform-minio:/data]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on: [minio]
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio_dev_password
+      S3_BUCKET: fractal-platform
+    entrypoint: >-
+      /bin/sh -ec 'until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done; mc mb --ignore-existing "local/$$S3_BUCKET";'
 
   compute:
     build:
@@ -43,47 +50,67 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       FSD_STARTUP_BENCHMARK: "off"
-      FSD_COMPUTE_SERVICE_KEY: development-compute-key
+      FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
       FSD_RENDERER_VERSION: compose-dev
-      FSD_ENABLE_LEGACY_API: "1"
+      FSD_ENABLE_LEGACY_API: "0"
       FSD_ENABLE_LEGACY_FORMULA_COMPILER: "0"
-    ports:
-      - "18080:18080"
-    volumes:
-      - compute-runtime:/workspace/fractal_studio/runtime
+    ports: ["${COMPUTE_PORT:-18101}:18080"]
+    volumes: [compute-runtime:/workspace/fractal_studio/runtime]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18080/compute/v1/health"]
       interval: 2s
       timeout: 2s
       retries: 60
 
+  alipay-stub:
+    build:
+      context: ./platform-backend
+    command: ["uv", "run", "--no-sync", "uvicorn", "tests.e2e.fixtures.alipay_stub:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["${ALIPAY_STUB_PORT:-18102}:8000"]
+
   migrate:
     build:
-      context: .
-      dockerfile: platform-backend/Dockerfile
-    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
-    working_dir: /app
-    environment: &platform-environment
+      context: ./platform-backend
+    command: ["uv", "run", "--no-sync", "alembic", "-c", "alembic.ini", "upgrade", "head"]
+    environment: &platform-env
       APP_ENV: development
-      DATABASE_URL: postgresql+asyncpg://fractal:fractal@postgres:5432/fractal_platform
+      DATABASE_URL: postgresql+asyncpg://fractal:fractal_dev_password@postgres:5432/fractal_platform
+      MIGRATION_DATABASE_URL: postgresql+psycopg://fractal:fractal_dev_password@postgres:5432/fractal_platform
       REDIS_URL: redis://redis:6379/0
+      SESSION_SECRET: dev-session-secret-change-me-32-bytes-minimum
+      SESSION_COOKIE_SECURE: "false"
+      API_ORIGIN: http://localhost:${FRONTEND_PORT:-3010}
+      CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3010}
       COMPUTE_BASE_URL: http://compute:18080
-      COMPUTE_SERVICE_KEY: development-compute-key
-      COMPUTE_NODE_ID: compose-compute-1
-      FOUNDATION_ROUTES_ENABLED: "1"
+      COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_PUBLIC_ENDPOINT_URL: http://localhost:${MINIO_PORT:-19010}
+      S3_BUCKET: fractal-platform
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY_ID: minio
+      S3_SECRET_ACCESS_KEY: minio_dev_password
+      ALIPAY_STUB_MODE: "true"
+      ALIPAY_APP_ID: dev-stub
+      ALIPAY_SELLER_ID: dev-stub
+      ALIPAY_STUB_PUBLIC_KEY_URL: http://alipay-stub:8000/test/public-key
+      ALIPAY_GATEWAY_URL: http://localhost:${ALIPAY_STUB_PORT:-18102}/gateway.do
+      PAYMENT_RECONCILE_DELAY_SECONDS: "1"
+      OUTBOX_POLL_INTERVAL_SECONDS: "0.5"
+      OUTBOX_SCHEDULE_INTERVAL_SECONDS: "1"
     depends_on:
       postgres:
         condition: service_healthy
 
   api:
     build:
-      context: .
-      dockerfile: platform-backend/Dockerfile
-    environment: *platform-environment
-    ports:
-      - "8000:8000"
+      context: ./platform-backend
+    command: ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *platform-env
+    ports: ["${PLATFORM_PORT:-18100}:8000"]
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
       compute:
         condition: service_healthy
@@ -92,18 +119,40 @@ services:
 
   worker:
     build:
-      context: .
-      dockerfile: platform-backend/Dockerfile
-    command: ["python", "-m", "app.outbox.worker"]
-    environment: *platform-environment
+      context: ./platform-backend
+    command: ["uv", "run", "--no-sync", "python", "-m", "app.outbox.worker"]
+    environment: *platform-env
     depends_on:
       migrate:
         condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
       compute:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      NEXT_PUBLIC_PLATFORM_API_URL: /platform
+      PLATFORM_INTERNAL_URL: http://api:8000
+    command: ["/bin/sh", "/app/scripts/dev-frontend.sh"]
+    ports: ["${FRONTEND_PORT:-3010}:3000"]
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+      - frontend-next-cache:/app/.next
+    depends_on:
+      api:
+        condition: service_started
 
 volumes:
   platform-postgres:
+  platform-redis:
   platform-minio:
   compute-runtime:
-
+  frontend-node-modules:
+  frontend-next-cache:

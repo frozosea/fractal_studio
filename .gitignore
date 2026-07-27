@@ -44,3 +44,18 @@ HS_legacy_guide_zh.md
 CODE_REVIEW_REPORT.md
 PERFORMANCE_OPTIMIZATION_REPORT.md
 EXPLORATION_REPORT.md
+
+# Local credentials and browser-test artifacts
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.DS_Store
+auth.json
+frontend/test-results/
+frontend/playwright-report/
+frontend/.pnpm-store/

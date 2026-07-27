@@ -1,2 +1,2 @@
-"""PostgreSQL outbox and worker."""
+"""M7 PostgreSQL transactional outbox."""
 

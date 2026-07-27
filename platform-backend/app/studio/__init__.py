@@ -1,2 +1,2 @@
-"""M2 studio preview and render job foundation."""
+"""M2 recipes, preview and durable Compute jobs."""
 

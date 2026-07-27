@@ -1,2 +1,2 @@
-"""External service adapters."""
+"""External adapters; no product-domain policy."""
 

@@ -1,2 +1,2 @@
-"""Fractal Studio commercial platform backend."""
+"""Platform backend application package."""
 

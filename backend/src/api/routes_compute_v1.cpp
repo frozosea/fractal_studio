@@ -3,6 +3,7 @@
 
 #include "../include/db.hpp"
 #include "../compute/engine_select.hpp"
+#include "../compute/color_program_json.hpp"
 #include "../compute/orbit_program_json.hpp"
 
 #include <openssl/evp.h>
@@ -227,6 +228,42 @@ void validateCapabilityPayload(const std::string& kind, const Json& payload,
     }
 }
 
+void validateColorPayload(const std::string& kind, const Json& payload) {
+    if (payload.contains("colorMap") && !payload["colorMap"].is_null()) {
+        if (!payload["colorMap"].is_string()) {
+            badRequest("INVALID_COLOR_MAP", "colorMap must be a string",
+                       Json{{"kind", kind}, {"field", "colorMap"}});
+        }
+        compute::Colormap colormap;
+        const std::string name = payload["colorMap"].get<std::string>();
+        if (!compute::colormap_from_name(name.c_str(), colormap)) {
+            throw HttpError(422, computeError(
+                "UNSUPPORTED_CAPABILITY", "unknown built-in colorMap",
+                Json{{"kind", kind}, {"field", "colorMap"}, {"value", name}}).dump());
+        }
+    }
+    if (!payload.contains("colorProgram") || payload["colorProgram"].is_null()) return;
+    if (kind != "map_image") {
+        unsupported(kind, "colorProgram v1 is currently supported only by map_image");
+    }
+    if (payload.contains("colorMap") && !payload["colorMap"].is_null()) {
+        badRequest("INVALID_COLOR_PROGRAM",
+                   "colorMap and colorProgram are mutually exclusive");
+    }
+    if (payload.contains("colorMode") && !payload["colorMode"].is_string()) {
+        badRequest("INVALID_COLOR_PROGRAM", "colorMode must be a string");
+    }
+    if (payload.value("colorMode", std::string("direct")) != "direct") {
+        unsupported(kind, "colorProgram v1 requires colorMode=direct");
+    }
+    try {
+        (void)compute::parse_color_program_json(payload["colorProgram"]);
+    } catch (const std::exception& error) {
+        badRequest("INVALID_COLOR_PROGRAM", error.what(),
+                   Json{{"kind", kind}, {"field", "colorProgram"}});
+    }
+}
+
 Json parseEnvelope(const std::string& body, std::string& kind,
                    std::string* idempotencyKey = nullptr) {
     const Json envelope = parseJsonBody(body);
@@ -269,6 +306,7 @@ std::shared_ptr<const compute::OrbitProgram> validateOrbitPayload(
         unsupported(kind, persistent ? "unknown persistent Compute kind" : "unknown preview Compute kind");
     }
     validateCapabilityPayload(kind, payload, *capability);
+    validateColorPayload(kind, payload);
     if (!payload.contains("orbitProgram") || payload["orbitProgram"].is_null()) return {};
     if (!capability->orbitPayload) {
         unsupported(kind, "this Compute build supports Orbit Program only for 2D/Julia map and HS outputs");
@@ -542,6 +580,14 @@ std::string computeV1CapabilitiesRoute() {
         {"customFormula", {
             {"legacyNativeCompile", legacyFormulaCompilerEnabled()},
             {"safeDsl", true},
+        }},
+        {"coloring", {
+            {"builtInColorMaps", commaSeparatedArray(
+                "classic_cos,mod17,hsv_wheel,tri765,grayscale,hs_rainbow,inferno,viridis,twilight,ember_blue,spectral1530")},
+            {"customGradient", true},
+            {"customGradientSchemaVersion", 1},
+            {"customGradientKinds", Json::array({"map_image"})},
+            {"customGradientMaxStops", 16},
         }},
         {"escapeSemantics", {{"certifiedRadius", true}, {"strictUnverified", true}}},
         {"hardware", hardwareCapabilitiesJson()},
