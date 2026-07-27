@@ -16,6 +16,20 @@
 | Artifact nested paths and streaming | Implemented / 已实现 | artifact ID 保存 run-relative path；download/content 支持流式发送和单 Range，不再整文件读入内存。 |
 | Multi-variant transition video | Deferred / 暂缓 | multi-kernel `theta` 尚无明确语义；先定义权重与路径动画、schema 和 tests。 |
 | Segmented ln-map reuse | Deferred / 暂缓 | 临时段默认清理，且尚无持久 manifest、兼容性约定与保留策略；现有 preview stats reuse 继续。 |
+| Commercial 2D Studio | Implemented / 已实现 | `map_image` 与 `transition_image` 覆盖普通图谱、Julia、pair/multi transition、Formula/Sequence、动态均衡染色和 PNG 导出。 |
+| Ln-map static PNG in Studio | Deferred / 暂缓 | 当前页面只接最终二维图像；ln-map 等到视频产品阶段按复用关系一并设计。 |
+
+## Commercial 2D Studio
+
+状态：已实现。
+
+浏览器只调用 Platform。Platform canonical recipe 与 Compute v1 现已贯通普通二维图谱、Julia、pair/multi
+轴向过渡、安全 Formula/Sequence Orbit Program、三种静态染色模式、全部内置色图、自定义渐变和 PNG
+持久导出。Studio 始终展示并保存中心点坐标，预览画布与导出画框共用宽高比，中英文文案由
+`next-intl` locale 驱动。
+
+本阶段明确不把视频、raw field、特殊点和三维输出塞入该页面。`ln_map` 静态 PNG 也暂缓，待视频与
+可复用条带生命周期一起设计。
 
 ## AVX2 `fp32` Raw Field
 

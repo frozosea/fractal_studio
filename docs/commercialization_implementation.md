@@ -104,8 +104,8 @@ Vue 3 frontend
 - [x] Benchmark 改为后台 run/取消；manifest 使用 `multi_path` 证据逐 candidate 保存 requested/actual engine/scalar、样本数、吞吐与回退原因，不虚构单一 engine。
 - [x] zoom/transition video 在 kernel 完成点报告 `kernelReported` 与实际 engine/scalar；真实 HTTP 合同验证 MP4 和硬件类别。
 - [x] `legacy_zoom_video` 在 Compute v1 下真正后台执行，创建立即返回 queued，保留旧 `/api/video/zoom` 默认同步行为，并支持协作取消。
-- [x] 将 Compute v1 文档提升为服务后端可独立实现的规范：公共 transport/状态/错误合同、18 个 kind 的 payload/默认值/限制/产物参考，以及 FastAPI ComputeClient、Outbox、轮询取消、artifact 摄取和硬件验收指南。
-- [x] 文档覆盖检查从 C++ 单一能力注册表提取 kind，要求 18 个任务章节一一对应，并检查全部私有端点与 Worker 安全不变量，避免新增能力后文档静默漏项。
+- [x] 将 Compute v1 文档提升为服务后端可独立实现的规范：公共 transport/状态/错误合同、19 个 kind 的 payload/默认值/限制/产物参考，以及 FastAPI ComputeClient、Outbox、轮询取消、artifact 摄取和硬件验收指南。
+- [x] 文档覆盖检查从 C++ 单一能力注册表提取 kind，要求 19 个任务章节一一对应，并检查全部私有端点与 Worker 安全不变量，避免新增能力后文档静默漏项。
 - [x] 补齐从零调用手册：明确服务 Key 由部署方生成并双端注入，不存在用户申请端点；解释 job kind 与 benchmark workload 的区别，并给出 preview/run/poll/cancel/download、参数化 DSL、M/B sequence、transition rotation/zoom/mesh、HS、special points 和 benchmark 的可复制请求。
 - [x] 修正 DSL 文档中 `parameters` 被误写成数组的问题；规范为 object，并用真实 HTTP 验证实数及 `{re,im}` 复数参数。
 - [x] 补齐 UI/导出细节合同：progress 字段 optional、stage-local 百分比与主要 stage；二维 `rotationDeg` 的精确坐标公式及其与 transition theta 的区别；RGBA preview 与异步 `map.png` 商业导出的完整分流和校验流程。

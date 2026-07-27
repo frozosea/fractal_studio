@@ -2,7 +2,7 @@
 
 这份手册回答三个实际问题：服务密钥从哪里来、每种 workload 是做什么的、怎样用真实 HTTP 请求公式/组合/transition。它面向本地联调和 Platform 服务后端开发；浏览器不得直接调用 Compute。
 
-规范字段仍以 [HTTP 合同](compute_v1_contract.md) 和 [18 类任务参考](compute_v1_jobs.md) 为准。
+规范字段仍以 [HTTP 合同](compute_v1_contract.md) 和 [19 类任务参考](compute_v1_jobs.md) 为准。
 
 ## 1. Key 不是“申请”的
 
@@ -55,7 +55,7 @@ health 不需要 Key；capabilities 返回 401 说明两边密钥不一致或 Au
 
 ### 1.2 Docker Compose
 
-仓库的 `docker-compose.dev.yml` 使用固定的 `development-compute-key`，只适合本机开发。生产部署应把两个位置同时替换为 Secret Manager/Kubernetes Secret/容器平台注入的同一个随机值：
+仓库的 `docker-compose.dev.yml` 使用固定的开发密钥，只适合本机开发。生产部署应把两个位置同时替换为 Secret Manager/Kubernetes Secret/容器平台注入的同一个随机值：
 
 ```yaml
 compute:

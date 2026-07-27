@@ -62,7 +62,8 @@ uv run pytest -q tests/unit/test_studio.py tests/unit/test_render_mapper.py
 ```
 
 `frontend/tests/e2e/platform-smoke.spec.ts` proves a real browser registration,
-cookie session, Platform proxy call and Compute PNG preview. The Platform real
+cookie session, Chinese/English Studio routing, map/Julia/transition/formula
+preview requests, dynamic coloring and the browser-to-Platform boundary. The Platform real
 Compute test covers preview plus image, video, HS mesh and transition mesh
 artifacts.
 

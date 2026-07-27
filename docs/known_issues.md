@@ -1,7 +1,8 @@
 # Known Issues / 问题清单
 
 盘点日期：2026-07-27。基线：`master@222bbb1`。
-修复批次一（2026-07-27）：问题 3/4/5/8/9/11 已改，逐条结论写在各自章节末尾。
+修复批次一（2026-07-27）：问题 3/4/5/8/9/11 已改。修复批次二：二维 `transition_image`、
+Formula/Sequence、动态染色、完整内置色图与中英文 Studio 已接入；问题 1/2/6 的当前结论写在各自章节末尾。
 
 本文只记录**当前代码里可验证的问题**，不记录路线图愿望。每条给出证据位置、影响和建议。
 与 [feature_status.md](feature_status.md) 的分工：那里记录**已决策**的实现/暂缓结论，这里记录**尚未决策或已偏离决策**的缺口。
@@ -10,12 +11,12 @@
 
 | # | 问题 | 层 | 严重度 | 状态 |
 |---|---|---|---|---|
-| 1 | Compute 18 个 kind 只接入 4 个 | Platform | 高 | 待决策 |
-| 2 | 后端已支持的 video / hs_mesh / transition_mesh 在前端无入口 | 前端 | 高 | 待办 |
+| 1 | Compute 19 个 kind 只接入 5 个 | Platform | 高 | 当前二维阶段已决策 |
+| 2 | video / hs_mesh / transition_mesh 在前端无入口 | 前端 | 高 | 暂缓（当前聚焦二维） |
 | 3 | `zoom_video` 的 `depthOctaves` 硬编码 20.0 | Platform | 高 | **已修** |
 | 4 | 前端预览节流(420ms)超出后端限流(30/min) | 前后端 | 高 | **已修** |
 | 5 | `colorProgram` 可能随 `zoom_video` 下传，违反染色合同 | Platform | 中 | **已修** |
-| 6 | capabilities 只投影 `map_image` 一个 job | Platform | 中 | 待办 |
+| 6 | capabilities 未投影非二维 job | Platform | 中 | 二维部分已修 |
 | 7 | hs_mesh/transition_mesh 双产物被丢弃一个 | Platform | 中 | 待决策 |
 | 8 | `poll_run_status` 在非事务连接上取行锁 | Platform | 中 | **已修** |
 | 9 | `_map_2d` 直接下标取键，规范化漂移即 500 | Platform | 中 | **已修** |
@@ -25,19 +26,24 @@
 
 ---
 
-## 1. Compute 18 个 kind 只接入 4 个
+## 1. Compute 19 个 kind 只接入 5 个
 
 证据：[compute_request_mapper.py:78-121](../platform-backend/app/studio/compute_request_mapper.py#L78-L121)。
 
-`map_durable_v1` 只映射 `image→map_image`、`video→zoom_video`、`hs_mesh`、`transition_mesh`，其余走 `raise ValueError("unsupported_output_kind")`。预览侧 [:66-71](../platform-backend/app/studio/compute_request_mapper.py#L66-L71) 只有 `map_image`。
+`map_durable_v1` 当前映射 `image→map_image/transition_image`、`video→zoom_video`、`hs_mesh`、
+`transition_mesh`，其余走 `raise ValueError("unsupported_output_kind")`。预览侧也会按 canonical spec 在
+`map_image` 与 `transition_image` 之间选择。
 
 未接入的 14 个（对照 [compute_v1_jobs.md](compute_v1_jobs.md)）：
 
-`raw_field`、`ln_map`、`video_preview`、`legacy_zoom_video`、`transition_image`、`transition_video`、`transition_video_preview`、`hs_field`、`transition_voxels`、`special_points_enumerate`、`special_points_search`、`special_points_snap`、`special_points_auto`、`special_points_seed`、`benchmark`。
+`raw_field`、`ln_map`、`video_preview`、`legacy_zoom_video`、`transition_video`、
+`transition_video_preview`、`hs_field`、`transition_voxels`、`special_points_enumerate`、
+`special_points_search`、`special_points_snap`、`special_points_auto`、`special_points_seed`、`benchmark`。
 
 影响：C++ 侧 C1/C2 已标记 100% 完成并有完整合同文档，但这些能力对浏览器完全不可达。README 宣传的 3D、视频、特殊点、系统诊断在 Platform 产品线上不存在。
 
-建议：逐个决策——排期接入，或在 [feature_status.md](feature_status.md) 里显式标注「Platform 暂缓」。**不要让它们继续悬空**：现在既不在待办里，也不在暂缓决策里。
+**当前决策**：本阶段只接最终结果为二维图像的工作负载；`ln_map` 静态 PNG 等视频阶段再做，raw field、
+特殊点、视频与三维不进入当前 Studio 页面。当前二维范围内的 `map_image`/`transition_image` 已完成。
 
 ## 2. 后端已支持的三种 output 在前端无入口
 
@@ -47,7 +53,8 @@
 
 影响：video / hs_mesh / transition_mesh 三条链路的后端代码和测试是死代码。这是当前**投入产出比最高**的缺口——纯前端工作。
 
-建议：优先补 UI。同时把 116 行的单文件 studio 页面拆分（现在是超长单行风格，`frontend/src/components/studio/` 下只有一个 73 行 canvas 组件），否则加三个输出面板后难以维护。
+**当前决策**：这三类输出本阶段暂缓，不混入二维 Studio；后续产品阶段应分别建立视频/三维工作区，
+不能因为 Compute 已有接口就挤进当前图像页面。
 
 ## 3. `zoom_video` 的 `depthOctaves` 硬编码
 
@@ -95,13 +102,15 @@ mapper 改读 output spec，历史 job（spec 里没有该键）回落到 20.0�
 （新增 `PUBLIC_MAPPING_ERRORS` 白名单，其余映射异常仍是笼统的 `unsupported_render_output`）。
 单元测试见 `tests/unit/test_render_mapper.py`。
 
-## 6. capabilities 只投影 `map_image`
+## 6. capabilities 未投影非二维 job
 
-证据：[capability_service.py](../platform-backend/app/studio/capability_service.py) 只从 `jobs[]` 里 `next(... kind == "map_image")`，取它的 metrics/engines/scalars。
+证据：[capability_service.py](../platform-backend/app/studio/capability_service.py) 已按 kind 建表并投影
+`map_image`、`transition_image` 的 metrics/engines/scalars、内置变体、轴向变体、Orbit Program 和染色能力；
+但 video/mesh 等非二维 job 尚未投影。
 
 影响：mesh / video 的可用 engine、scalar、分辨率上限全部对前端不可见。前端只能靠硬编码猜（见问题 10）。一旦接入问题 1 里的新 kind，这个投影必然要重写。
 
-建议：改成按 kind 分组返回完整能力矩阵，前端按当前输出类型取对应子集。
+**二维部分已修**：当前页面不再猜测 map/transition 的能力。完整能力矩阵留到视频/三维接入阶段扩展。
 
 ## 7. 双产物被丢弃一个
 
@@ -175,6 +184,6 @@ mesh 分支仍直接下标取 `centerRe/centerIm/scale/...`，键集是 2D 的�
 
 ## 附：核对方法
 
-- kind 覆盖：`grep -oE '"(map_image|raw_field|ln_map|...)"' platform-backend/app` 对照 `docs/compute_v1_jobs.md` 的 18 个章节。
+- kind 覆盖：`grep -oE '"(map_image|raw_field|ln_map|...)"' platform-backend/app` 对照 `docs/compute_v1_jobs.md` 的 19 个章节。
 - 路由覆盖：`grep -rn "@router\." platform-backend/app/*/router.py`。
 - 前端调用面：`frontend/src/lib/api/platform.ts`。

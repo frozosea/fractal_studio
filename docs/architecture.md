@@ -72,7 +72,7 @@ Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件
 - [compute_v1_contract.md](compute_v1_contract.md): C++ `/compute/v1/*` 工具/扩展合同；当前 Platform Worker 不使用。
 - [compute_v1_cookbook.md](compute_v1_cookbook.md): Key、workload、curl、DSL/sequence 与 transition 的上手手册。
 - [orbit_recipe_product_tasks.md](orbit_recipe_product_tasks.md): repeat block、公式编排、不可变配方/视角存档和服务后端/前端任务清单。
-- [compute_v1_jobs.md](compute_v1_jobs.md): 18 个 Compute kind 的 payload、限制、响应与产物合同。
+- [compute_v1_jobs.md](compute_v1_jobs.md): 19 个 Compute kind 的 payload、限制、响应与产物合同。
 - [platform_compute_integration.md](platform_compute_integration.md): 实际 FastAPI ComputeClient、7 条 `/api` 路由、Outbox Worker 和已知缺口。
 - [testing.md](testing.md): 自动测试、构建检查、手动 QA 和提交前检查。
 

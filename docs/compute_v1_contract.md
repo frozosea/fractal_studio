@@ -435,4 +435,4 @@ Compute v1 自身错误采用：
 - 保存 rendererVersion、capability snapshot、effective engine/scalar、hardwareExecution、escapeAnalysis。
 - 对特定硬件产品校验 kernel 执行证据，而非只看设备存在。
 - `422` 不降级数学；`4xx` 不盲重试；内部错误不泄漏给浏览器。
-- 18 个 kind 的 payload 与产物均按 [任务参考](compute_v1_jobs.md) 建模或安全透传。
+- 19 个 kind 的 payload 与产物均按 [任务参考](compute_v1_jobs.md) 建模或安全透传。
