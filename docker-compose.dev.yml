@@ -79,8 +79,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       SESSION_SECRET: dev-session-secret-change-me-32-bytes-minimum
       SESSION_COOKIE_SECURE: "false"
-      API_ORIGIN: http://localhost:${FRONTEND_PORT:-3010}
-      CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3010}
+      API_ORIGIN: ${FSD_API_ORIGIN:-http://localhost:3010}
+      CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3010},${FSD_API_ORIGIN:-http://localhost:3010}
       COMPUTE_BASE_URL: http://compute:18080
       COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
       S3_ENDPOINT_URL: http://minio:9000
