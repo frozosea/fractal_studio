@@ -2,53 +2,134 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { ChevronDown, Heart, Redo2, Save, Sparkles, Undo2, WandSparkles, X } from "lucide-react";
+import {
+  Braces,
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  ImageDown,
+  Layers3,
+  Plus,
+  Save,
+  Trash2,
+} from "lucide-react";
+import { useTranslations } from "next-intl";
 import { InteractiveFractalCanvas } from "@/components/studio/interactive-fractal-canvas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { platform, PlatformApiError, type FractalSpec, type Recipe, type RenderJob, type StudioCapabilities } from "@/lib/api/platform";
-import { jitterPreset, randomPreset, STUDIO_PRESETS } from "@/lib/studio-presets";
+import { Link } from "@/i18n/navigation";
+import {
+  platform,
+  PlatformApiError,
+  type FractalSpec,
+  type OrbitProgram,
+  type RenderJob,
+  type StudioCapabilities,
+} from "@/lib/api/platform";
+import {
+  AXIS_TRANSITION_VARIANTS,
+  BUILTIN_VARIANTS,
+  COLOR_MAPS,
+  LOCATION_PRESETS,
+  METRICS,
+  OUTPUT_PRESETS,
+  TRANSITION_METRICS,
+  previewDimensions,
+} from "@/lib/studio-catalog";
 
-const defaults: FractalSpec = { version: 1, centerRe: -0.75, centerIm: 0, scale: 3, iterations: 256, variant: "mandelbrot", colorMap: "classic_cos", metric: "escape", smooth: false, rotationDeg: 0, pairwiseCap: 64, julia: false, bailout: 4, engine: "auto", scalarType: "auto" };
-const fallbackCapabilities: StudioCapabilities = { metrics: ["escape", "min_abs", "max_abs", "envelope", "min_pairwise_dist", "mandel_ship_agree"], engines: ["auto", "openmp"], scalars: ["auto", "fp32", "fp64"], colorMaps: ["classic_cos", "mod17", "hsv_wheel", "tri765", "grayscale", "hs_rainbow", "inferno", "viridis", "twilight", "ember_blue", "spectral1530"], customGradient: { enabled: false, maxStops: 0 } };
-// Slider range and the zoom() floor must agree, otherwise dragging the slider
-// jumps a deeply zoomed view back to a shallower position.
-const zoomMaxLevel = 41;
-const minScale = 3 / 2 ** zoomMaxLevel;
-// Backend allows 30 previews/min; keep client requests just inside that budget.
+type ImageMode = "map" | "julia" | "transitionPair" | "transitionMulti" | "formula" | "sequence";
+type SequenceOrbit = Extract<OrbitProgram, { type: "sequence" }>;
+
+const defaults: FractalSpec = {
+  version: 1,
+  centerRe: -0.75,
+  centerIm: 0,
+  centerReStr: "-0.75",
+  centerImStr: "0",
+  scale: 3,
+  iterations: 512,
+  variant: "mandelbrot",
+  colorMap: "classic_cos",
+  metric: "escape",
+  smooth: true,
+  colorMode: "direct",
+  cyclesPerOctave: 1,
+  rotationDeg: 0,
+  pairwiseCap: 64,
+  julia: false,
+  bailout: 4,
+  engine: "auto",
+  scalarType: "auto",
+  orbitProgram: null,
+  transitionMode: "off",
+  transitionThetaMilliDeg: 0,
+  transitionFrom: "mandelbrot",
+  transitionTo: "burning_ship",
+  transitionLegs: [
+    { variant: "mandelbrot", weight: 1 },
+    { variant: "burning_ship", weight: 1 },
+  ],
+};
+
+const fallbackCapabilities: StudioCapabilities = {
+  metrics: [...METRICS],
+  engines: ["auto", "openmp"],
+  scalars: ["auto", "fp32", "fp64"],
+  colorMaps: COLOR_MAPS.map((item) => item.id),
+  colorModes: ["direct", "eq_full", "eq_center"],
+  variants: [...BUILTIN_VARIANTS],
+  axisTransitionVariants: [...AXIS_TRANSITION_VARIANTS],
+  imageKinds: {
+    map: { enabled: true, metrics: [...METRICS], engines: ["auto", "openmp"], scalars: ["auto", "fp32", "fp64"], orbitProgram: true },
+    transition: { enabled: false, metrics: [...TRANSITION_METRICS], engines: ["auto", "openmp"], scalars: ["auto", "fp32", "fp64"], orbitProgram: false },
+  },
+  orbitPrograms: { formula: true, sequence: true },
+  customGradient: { enabled: false, maxStops: 0, kinds: [] },
+};
+
 const previewMinIntervalMs = 2100;
 const previewDebounceMs = 600;
-const previewSizes = [{ name: "Square", width: 640, height: 640 }, { name: "Landscape", width: 768, height: 576 }, { name: "Wide", width: 768, height: 432 }, { name: "Portrait", width: 576, height: 768 }];
-const renderSizes = [{ name: "Standard · 1024²", width: 1024, height: 1024 }, { name: "Large · 2048²", width: 2048, height: 2048 }, { name: "Wide · 1920×1080", width: 1920, height: 1080 }];
-const quickPresets = STUDIO_PRESETS.slice(0, 6);
-const quickPalettes = [
-  { name: "Ocean", value: "viridis", color: "from-[#440154] via-[#21918c] to-[#fde725]" },
-  { name: "Fire", value: "inferno", color: "from-[#000004] via-[#bc3754] to-[#fcffa4]" },
-  { name: "Sunset", value: "ember_blue", color: "from-[#050820] via-[#37b4c3] to-[#fff6d2]" },
-  { name: "Rainbow", value: "hsv_wheel", color: "from-red-500 via-emerald-400 to-violet-500" },
-  { name: "Mono", value: "grayscale", color: "from-black to-white" },
-];
-const variantNames = [...new Set(STUDIO_PRESETS.map((item) => item.spec.variant).filter((item): item is string => Boolean(item)))];
-const selectClass = "h-10 w-full rounded-lg border border-deep-slate bg-deep-slate/50 px-3 text-sm text-foreground focus:border-fractal-500 focus:outline-none";
-type SavedView = { id: string; name: string; spec: FractalSpec };
-function message(error: unknown): string { return error instanceof Error ? error.message : "Request failed"; }
-function load<T>(key: string): T[] { try { return JSON.parse(localStorage.getItem(key) ?? "[]") as T[]; } catch { return []; } }
-function selectValue<T extends string>(event: React.ChangeEvent<HTMLSelectElement>): T { return event.target.value as T; }
+const minScale = 3 / 2 ** 41;
+const selectClass = "instrument-control h-9 w-full px-2 text-sm";
+const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+
+function errorCode(error: unknown): string | null {
+  return error instanceof PlatformApiError ? error.code : null;
+}
+
+function isTransitionMode(mode: ImageMode): boolean {
+  return mode === "transitionPair" || mode === "transitionMulti";
+}
+
+function formulaProgram(source = "z*z+c"): OrbitProgram {
+  return { type: "formula", formula: { type: "dsl", source } };
+}
+
+function sequenceProgram(): SequenceOrbit {
+  return {
+    type: "sequence",
+    repeat: true,
+    steps: [
+      { span: 2, program: { type: "formula", formula: { type: "dsl", source: "z*z+c" } } },
+      { span: 1, program: { type: "formula", formula: { type: "dsl", source: "conj(z)*conj(z)+c" } } },
+    ],
+  };
+}
+
+function modeLabelKey(mode: ImageMode): string {
+  return `modes.${mode}`;
+}
 
 export default function StudioPage() {
+  const t = useTranslations("studio");
   const [spec, setSpec] = useState<FractalSpec>(defaults);
+  const [mode, setMode] = useState<ImageMode>("map");
   const [preview, setPreview] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [job, setJob] = useState<RenderJob | null>(null);
   const [capabilities, setCapabilities] = useState<StudioCapabilities>(fallbackCapabilities);
-  const [previewSize, setPreviewSize] = useState(0);
-  const [renderSize, setRenderSize] = useState(0);
-  const [randomIntensity, setRandomIntensity] = useState(2);
-  const [saved, setSaved] = useState<SavedView[]>([]);
-  const [history, setHistory] = useState<SavedView[]>([]);
-  const [undoStack, setUndoStack] = useState<FractalSpec[]>([]);
-  const [redoStack, setRedoStack] = useState<FractalSpec[]>([]);
+  const [output, setOutput] = useState({ preset: "square", width: 1024, height: 1024 });
+  const [job, setJob] = useState<RenderJob | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
@@ -56,76 +137,619 @@ export default function StudioPage() {
   const previewRef = useRef<string | null>(null);
   const lastPreviewAtRef = useRef(0);
 
-  const canonical = useMemo<FractalSpec>(() => ({ ...spec, centerRe: Number(spec.centerRe), centerIm: Number(spec.centerIm), scale: Number(spec.scale), iterations: Math.max(1, Math.round(Number(spec.iterations))), bailout: Number(spec.bailout), rotationDeg: Number(spec.rotationDeg ?? 0), pairwiseCap: Math.max(1, Math.round(Number(spec.pairwiseCap ?? 64))) }), [spec]);
+  const previewSize = useMemo(() => previewDimensions(output.width, output.height), [output.height, output.width]);
+  const canonical = useMemo<FractalSpec>(() => {
+    const centerRe = Number(spec.centerReStr ?? spec.centerRe ?? 0);
+    const centerIm = Number(spec.centerImStr ?? spec.centerIm ?? 0);
+    return {
+      ...spec,
+      centerRe: Number.isFinite(centerRe) ? centerRe : Number(spec.centerRe ?? 0),
+      centerIm: Number.isFinite(centerIm) ? centerIm : Number(spec.centerIm ?? 0),
+      scale: Math.max(minScale, Number(spec.scale ?? 3)),
+      iterations: Math.max(1, Math.round(Number(spec.iterations ?? 512))),
+      bailout: Math.max(0.01, Number(spec.bailout ?? 4)),
+      cyclesPerOctave: Math.max(0.01, Math.min(64, Number(spec.cyclesPerOctave ?? 1))),
+      rotationDeg: Number(spec.rotationDeg ?? 0),
+      pairwiseCap: Math.max(1, Math.round(Number(spec.pairwiseCap ?? 64))),
+      transitionThetaMilliDeg: Math.round(Number(spec.transitionThetaMilliDeg ?? 0)),
+    };
+  }, [spec]);
   const specKey = JSON.stringify(canonical);
-  const activePreviewSize = previewSizes[previewSize]!;
-  const zoomLevel = Math.max(0, Math.min(zoomMaxLevel, Math.round(Math.log2(3 / Number(spec.scale ?? 3)))));
+  const zoomLevel = Math.max(0, Math.log2(3 / Number(canonical.scale ?? 3)));
+  const availableVariants = capabilities.variants.length ? capabilities.variants : [...BUILTIN_VARIANTS];
+  const axisVariants = capabilities.axisTransitionVariants.length ? capabilities.axisTransitionVariants : [...AXIS_TRANSITION_VARIANTS];
+  const activeMetrics = isTransitionMode(mode)
+    ? (capabilities.imageKinds.transition.metrics.length ? capabilities.imageKinds.transition.metrics : [...TRANSITION_METRICS])
+    : (capabilities.imageKinds.map.metrics.length ? capabilities.imageKinds.map.metrics : [...METRICS]);
+  const selectedColor = COLOR_MAPS.find((item) => item.id === spec.colorMap) ?? COLOR_MAPS[0];
 
   useEffect(() => {
-    setSaved(load<SavedView>("fractal-studio-saved-v1")); setHistory(load<SavedView>("fractal-studio-history-v1"));
-    void Promise.all([platform.studio.recipes(), platform.studio.capabilities()]).then(([recipePage, caps]) => { setRecipes(recipePage.data); setCapabilities(caps); }).catch((reason: unknown) => setError(message(reason)));
-    return () => { abortRef.current?.abort(); if (previewRef.current) URL.revokeObjectURL(previewRef.current); };
-  }, []);
+    void platform.studio.capabilities().then(setCapabilities).catch((reason: unknown) => {
+      setError(`${t("errors.capabilities")} (${errorCode(reason) ?? "request_failed"})`);
+    });
+    return () => {
+      abortRef.current?.abort();
+      if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+    };
+  }, [t]);
+
   useEffect(() => {
-    if (!job || ["completed", "failed", "cancelled"].includes(job.status)) return;
-    const timer = window.setInterval(() => void platform.studio.job(job.id).then(setJob).catch((reason: unknown) => setError(message(reason))), 1500);
+    if (!job || terminalStatuses.has(job.status)) return;
+    const timer = window.setInterval(() => {
+      void platform.studio.job(job.id).then(setJob).catch((reason: unknown) => {
+        setError(`${t("errors.job")} (${errorCode(reason) ?? "request_failed"})`);
+      });
+    }, 1500);
     return () => window.clearInterval(timer);
-  }, [job]);
+  }, [job, t]);
+
   useEffect(() => {
-    abortRef.current?.abort(); const controller = new AbortController(); abortRef.current = controller;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     const wait = Math.max(previewDebounceMs, lastPreviewAtRef.current + previewMinIntervalMs - Date.now());
     const timer = window.setTimeout(async () => {
-      setPreviewing(true); setError(null); setNotice(null); lastPreviewAtRef.current = Date.now();
+      setPreviewing(true);
+      setError(null);
+      setNotice(null);
+      lastPreviewAtRef.current = Date.now();
       try {
-        const blob = await platform.studio.preview(canonical, activePreviewSize.width, activePreviewSize.height, controller.signal);
+        const blob = await platform.studio.preview(canonical, previewSize.width, previewSize.height, controller.signal);
         if (controller.signal.aborted) return;
-        const url = URL.createObjectURL(blob); if (previewRef.current) URL.revokeObjectURL(previewRef.current); previewRef.current = url; setPreview(url);
-        const entry = { id: crypto.randomUUID(), name: `${canonical.variant} · ${new Date().toLocaleTimeString()}`, spec: canonical };
-        setHistory((current) => { const next = [entry, ...current.filter((item) => JSON.stringify(item.spec) !== specKey)].slice(0, 20); localStorage.setItem("fractal-studio-history-v1", JSON.stringify(next)); return next; });
+        const url = URL.createObjectURL(blob);
+        if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+        previewRef.current = url;
+        setPreview(url);
       } catch (reason) {
         if (controller.signal.aborted) return;
-        if (reason instanceof PlatformApiError && reason.status === 429) { lastPreviewAtRef.current = Date.now() + previewMinIntervalMs; setNotice("Preview is catching up — hold on a moment."); setRetryTick((current) => current + 1); }
-        else setError(message(reason));
-      } finally { if (!controller.signal.aborted) setPreviewing(false); }
+        if (reason instanceof PlatformApiError && reason.status === 429) {
+          lastPreviewAtRef.current = Date.now() + previewMinIntervalMs;
+          setNotice(t("errors.previewRate"));
+          setRetryTick((current) => current + 1);
+        } else {
+          setError(`${t("errors.preview")} (${errorCode(reason) ?? "request_failed"})`);
+        }
+      } finally {
+        if (!controller.signal.aborted) setPreviewing(false);
+      }
     }, wait);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [specKey, previewSize, retryTick]);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [canonical, previewSize.height, previewSize.width, retryTick, specKey, t]);
 
   const update = (patch: Partial<FractalSpec>) => setSpec((current) => ({ ...current, ...patch }));
-  const rememberView = () => {
-    setUndoStack((current) => JSON.stringify(current.at(-1)) === specKey ? current : [...current, canonical].slice(-40));
-    setRedoStack([]);
+  const updateViewport = (patch: Partial<FractalSpec>) => {
+    setSpec((current) => ({
+      ...current,
+      ...patch,
+      ...(patch.centerRe === undefined ? {} : { centerReStr: String(patch.centerRe) }),
+      ...(patch.centerIm === undefined ? {} : { centerImStr: String(patch.centerIm) }),
+    }));
   };
-  const reset = () => { rememberView(); setSpec(defaults); };
-  const zoom = (factor: number) => { rememberView(); update({ scale: Math.min(1e9, Math.max(minScale, Number(spec.scale ?? 3) * factor)), iterations: Math.min(4000, Math.ceil(Number(spec.iterations ?? 256) * (factor < 1 ? 1.14 : 1))) }); };
-  const setZoomLevel = (level: number) => { rememberView(); update({ scale: 3 / 2 ** level, iterations: Math.min(4000, Math.round(256 + level * 26)) }); };
-  const undo = () => setUndoStack((current) => { const previous = current.at(-1); if (!previous) return current; setRedoStack((next) => [canonical, ...next].slice(0, 40)); setSpec(previous); return current.slice(0, -1); });
-  const redo = () => setRedoStack((current) => { const next = current[0]; if (!next) return current; setUndoStack((previous) => [...previous, canonical].slice(-40)); setSpec(next); return current.slice(1); });
-  const usePreset = (id: string) => { const preset = STUDIO_PRESETS.find((item) => item.id === id); if (preset) { rememberView(); setSpec({ ...defaults, ...preset.spec, version: 1 }); } };
-  const randomize = () => { const preset = randomPreset(); rememberView(); setSpec({ ...defaults, ...jitterPreset(preset.spec, randomIntensity), version: 1 }); };
-  const saveView = () => setSaved((current) => { const next = [{ id: crypto.randomUUID(), name: `View ${current.length + 1} · ${canonical.variant}`, spec: canonical }, ...current].slice(0, 20); localStorage.setItem("fractal-studio-saved-v1", JSON.stringify(next)); return next; });
-  const dropSaved = (id: string) => setSaved((current) => { const next = current.filter((item) => item.id !== id); localStorage.setItem("fractal-studio-saved-v1", JSON.stringify(next)); return next; });
-  const toggleGradient = (enabled: boolean) => update(enabled ? { colorMap: null, colorProgram: { schemaVersion: 1, type: "gradient", interpolation: "rgb", wrap: "repeat", cycles: 1, phase: 0, interiorColor: "#080b14", invalidColor: "#ff00ff", stops: [{ at: 0, color: "#16002d" }, { at: 0.45, color: "#00d4ff" }, { at: 1, color: "#ffe66d" }] } } : { colorProgram: null, colorMap: capabilities.colorMaps[0] ?? "classic_cos" });
-  const updateStop = (index: number, color: string) => { const colorProgram = spec.colorProgram; if (colorProgram) update({ colorProgram: { ...colorProgram, stops: colorProgram.stops.map((stop, item) => item === index ? { ...stop, color } : stop) } }); };
-  const saveAndRender = async () => { setError(null); try { const recipe = await platform.studio.createRecipe(canonical); setRecipes((current) => [recipe, ...current.filter((item) => item.id !== recipe.id)]); const size = renderSizes[renderSize]!; setJob(await platform.studio.createRender(recipe.id, { kind: "image", format: "png", width: size.width, height: size.height })); } catch (reason) { setError(message(reason)); } };
 
-  return <div className="mx-auto max-w-[1500px] space-y-5">
-    <header className="flex flex-wrap items-end justify-between gap-3"><div><p className="mb-1 text-xs font-medium uppercase tracking-[0.18em] text-fractal-300">Create a fractal</p><h1 className="text-3xl font-semibold">Explore, don’t configure.</h1><p className="mt-1 text-sm text-muted-foreground">Pick a look, zoom into details, drag image around. Every move makes a new picture.</p></div><div className="flex gap-2"><Button variant="outline" onClick={saveView}><Heart className="mr-2 h-4 w-4" />Save this view</Button><Button onClick={() => void saveAndRender()}><Save className="mr-2 h-4 w-4" />Make PNG</Button></div></header>
-    <div className="grid gap-5 xl:grid-cols-[20rem_minmax(0,1fr)]">
-      <aside className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.025] p-4 xl:sticky xl:top-4 xl:self-start">
-        <section><p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">1 · Start with a look</p><div className="grid grid-cols-2 gap-2">{quickPresets.map((item) => <Button key={item.id} size="sm" variant="outline" className="h-auto min-h-12 justify-start whitespace-normal text-left" onClick={() => usePreset(item.id)}>{item.name}</Button>)}</div><label className="mt-2 block text-xs text-muted-foreground"><span className="mb-1 block">More looks</span><select className={selectClass} defaultValue="" onChange={(e) => usePreset(e.target.value)}><option value="" disabled>Choose another look</option>{STUDIO_PRESETS.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label></section>
-        <section><p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">2 · Change the mood</p><div className="grid grid-cols-5 gap-1">{quickPalettes.map((palette) => <button aria-label={`Use ${palette.name} colors`} className={`group h-9 rounded-md bg-gradient-to-r ${palette.color} ring-offset-2 transition hover:scale-105 focus:outline-none focus:ring-2 focus:ring-fractal-400`} key={palette.value} title={palette.name} onClick={() => { rememberView(); update({ colorProgram: null, colorMap: palette.value }); }}><span className="sr-only">{palette.name}</span></button>)}</div><p className="mt-1 text-xs text-muted-foreground">Color mood</p></section>
-        <section><p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">3 · Add detail</p><div className="grid grid-cols-3 gap-1">{[{ name: "Soft", value: 160 }, { name: "Detailed", value: 512 }, { name: "Sharp", value: 1200 }].map((detail) => <Button key={detail.name} size="sm" variant={Number(spec.iterations) === detail.value ? "default" : "outline"} className="px-1" onClick={() => { rememberView(); update({ iterations: detail.value }); }}>{detail.name}</Button>)}</div><p className="mt-1 text-xs text-muted-foreground">More detail reveals finer edges.</p></section>
-        <section className="rounded-xl border border-fractal-500/25 bg-fractal-500/5 p-3"><p className="mb-2 flex items-center gap-2 text-sm font-medium"><WandSparkles className="h-4 w-4 text-fractal-300" />2 · Surprise me</p><label className="mb-2 flex justify-between text-xs text-muted-foreground"><span>Variation</span><span>{["Subtle", "Light", "Playful", "Wild", "Chaos"][randomIntensity - 1]}</span></label><div className="flex items-center gap-2"><input aria-label="Randomize intensity" className="min-w-0 flex-1 accent-fractal-400" type="range" min="1" max="5" value={randomIntensity} onChange={(e) => setRandomIntensity(Number(e.target.value))} /><Button size="sm" onClick={randomize}><Sparkles className="mr-1 h-3.5 w-3.5" />Try</Button></div></section>
-        <section className="rounded-xl border border-white/10 bg-black/15 p-3"><p className="font-medium">4 · Explore canvas</p><div className="mt-2 flex items-center gap-2"><Button aria-label="Go back" size="sm" variant="outline" disabled={!undoStack.length} onClick={undo}><Undo2 className="h-3.5 w-3.5" /></Button><Button aria-label="Go forward" size="sm" variant="outline" disabled={!redoStack.length} onClick={redo}><Redo2 className="h-3.5 w-3.5" /></Button><Button size="sm" variant="outline" onClick={() => zoom(2)}>Zoom out</Button><Button size="sm" onClick={() => zoom(0.35)}>Zoom in</Button></div><label className="mt-3 block text-xs text-muted-foreground"><span className="mb-1 flex justify-between"><span>Zoom depth</span><span>{zoomLevel}×</span></span><input aria-label="Zoom depth" className="w-full accent-fractal-400" type="range" min="0" max={zoomMaxLevel} value={zoomLevel} onChange={(event) => setZoomLevel(Number(event.target.value))} /></label><p className="mt-2 text-xs text-muted-foreground">Scroll, double-click or press +/−. Drag image to move.</p></section>
-        <details className="rounded-xl border border-white/10 p-3"><summary className="flex cursor-pointer items-center justify-between text-sm font-medium">Fine tuning <ChevronDown className="h-4 w-4" /></summary><div className="mt-4 space-y-4"><section><p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">Look</p><Control label="Shape"><select className={selectClass} value={spec.variant} onChange={(e) => update({ variant: e.target.value })}>{variantNames.map((item) => <option key={item} value={item}>{item}</option>)}</select></Control><Control label="Colors"><select className={selectClass} value={spec.colorMap ?? ""} disabled={Boolean(spec.colorProgram)} onChange={(e) => update({ colorMap: e.target.value })}>{capabilities.colorMaps.map((item) => <option key={item}>{item}</option>)}</select></Control><label className="mt-2 flex items-center justify-between text-sm">Smooth colors <input type="checkbox" checked={Boolean(spec.smooth)} onChange={(e) => update({ smooth: e.target.checked })} /></label></section><section><p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">Canvas</p><div className="grid grid-cols-2 gap-2"><Control label="Frame"><select className={selectClass} value={previewSize} onChange={(e) => setPreviewSize(Number(e.target.value))}>{previewSizes.map((item, index) => <option value={index} key={item.name}>{item.name}</option>)}</select></Control><Control label="PNG size"><select className={selectClass} value={renderSize} onChange={(e) => setRenderSize(Number(e.target.value))}>{renderSizes.map((item, index) => <option value={index} key={item.name}>{item.name}</option>)}</select></Control></div></section><details className="rounded-lg bg-black/20 p-2"><summary className="cursor-pointer text-sm">Expert controls</summary><div className="mt-3 grid grid-cols-2 gap-2"><NumberControl label="Real" value={spec.centerRe ?? 0} step="0.000001" onChange={(value) => update({ centerRe: value })} /><NumberControl label="Imaginary" value={spec.centerIm ?? 0} step="0.000001" onChange={(value) => update({ centerIm: value })} /><NumberControl label="Scale" value={spec.scale ?? 3} min="0.000000000001" step="0.01" onChange={(value) => update({ scale: value })} /><NumberControl label="Iterations" value={spec.iterations ?? 256} min="1" max="4000" step="1" onChange={(value) => update({ iterations: value })} /><NumberControl label="Bailout" value={spec.bailout ?? 4} min="0.01" step="0.5" onChange={(value) => update({ bailout: value })} /><NumberControl label="Rotation°" value={spec.rotationDeg ?? 0} min="-360" max="360" step="1" onChange={(value) => update({ rotationDeg: value })} /><NumberControl label="Pair cap" value={spec.pairwiseCap ?? 64} min="1" max="1000000" step="1" onChange={(value) => update({ pairwiseCap: value })} /><Control label="Metric"><select className={selectClass} value={spec.metric} onChange={(e) => update({ metric: selectValue<NonNullable<FractalSpec["metric"]>>(e) })}>{capabilities.metrics.map((item) => <option key={item}>{item}</option>)}</select></Control><Control label="Engine"><select className={selectClass} value={spec.engine} onChange={(e) => update({ engine: selectValue<NonNullable<FractalSpec["engine"]>>(e) })}>{capabilities.engines.map((item) => <option key={item}>{item}</option>)}</select></Control><Control label="Scalar"><select className={selectClass} value={spec.scalarType} onChange={(e) => update({ scalarType: selectValue<NonNullable<FractalSpec["scalarType"]>>(e) })}>{capabilities.scalars.map((item) => <option key={item}>{item}</option>)}</select></Control><label className="col-span-2 flex items-center justify-between text-sm">Custom gradient <input type="checkbox" disabled={!capabilities.customGradient.enabled} checked={Boolean(spec.colorProgram)} onChange={(e) => toggleGradient(e.target.checked)} /></label>{spec.colorProgram && <div className="col-span-2"><GradientEditor program={spec.colorProgram} onChange={updateStop} /></div>}<label className="col-span-2 flex items-center justify-between text-sm">Julia mode <input type="checkbox" checked={Boolean(spec.julia)} onChange={(e) => update(e.target.checked ? { julia: true, juliaRe: spec.juliaRe ?? -0.8, juliaIm: spec.juliaIm ?? 0.156 } : { julia: false })} /></label>{spec.julia && <><NumberControl label="Julia real" value={spec.juliaRe ?? -0.8} step="0.0001" onChange={(value) => update({ juliaRe: value })} /><NumberControl label="Julia imaginary" value={spec.juliaIm ?? 0.156} step="0.0001" onChange={(value) => update({ juliaIm: value })} /></>}</div></details></div></details>
-      </aside>
-      <main className="min-w-0 space-y-4"><InteractiveFractalCanvas spec={canonical} preview={preview} previewing={previewing} width={activePreviewSize.width} height={activePreviewSize.height} onChange={update} onReset={reset} onZoom={zoom} onNavigationStart={rememberView} />{error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</p>}{notice && <p className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-200">{notice}</p>}{job && <div className="flex items-center justify-between rounded-xl border border-white/10 p-3 text-sm"><span>PNG: <b>{job.status}</b> · {job.progressPercent}%{job.assetId ? " · ready in Library" : ""}</span>{!["completed", "failed", "cancelled"].includes(job.status) && <Button size="sm" variant="outline" onClick={() => void platform.studio.cancel(job.id).then(setJob).catch((reason: unknown) => setError(message(reason)))}>Cancel</Button>}</div>}<div className="grid gap-4 lg:grid-cols-2"><ViewList title="Saved views" items={saved} onLoad={(item) => setSpec(item.spec)} onDrop={dropSaved} /><ViewList title="Recent explorations" items={history} onLoad={(item) => setSpec(item.spec)} /></div>{recipes.length > 0 && <section className="rounded-xl border border-white/10 p-4"><h2 className="mb-2 font-medium">Your rendered recipes</h2><div className="flex flex-wrap gap-2">{recipes.slice(0, 8).map((recipe) => <Button key={recipe.id} size="sm" variant="outline" onClick={() => setSpec(recipe.canonicalSpec)}>{String(recipe.canonicalSpec.variant)} · {String(recipe.canonicalSpec.colorMap ?? "custom colors")}</Button>)}</div></section>}</main>
+  const selectMode = (next: ImageMode) => {
+    setMode(next);
+    if (next === "map") update({ julia: false, transitionMode: "off", orbitProgram: null, metric: "escape" });
+    if (next === "julia") update({ julia: true, juliaRe: spec.juliaRe ?? -0.8, juliaIm: spec.juliaIm ?? 0.156, transitionMode: "off", orbitProgram: null, metric: "escape" });
+    if (next === "transitionPair") update({ julia: false, transitionMode: "pair", orbitProgram: null, metric: "escape" });
+    if (next === "transitionMulti") update({ julia: false, transitionMode: "multi", orbitProgram: null, metric: "escape" });
+    if (next === "formula") update({ julia: false, transitionMode: "off", orbitProgram: formulaProgram(), metric: "escape" });
+    if (next === "sequence") update({ julia: false, transitionMode: "off", orbitProgram: sequenceProgram(), metric: "escape" });
+  };
+
+  const reset = () => {
+    setMode("map");
+    setSpec(defaults);
+  };
+  const zoom = (factor: number) => updateViewport({
+    scale: Math.min(1e9, Math.max(minScale, Number(spec.scale ?? 3) * factor)),
+    iterations: Math.min(20_000, Math.ceil(Number(spec.iterations ?? 512) * (factor < 1 ? 1.12 : 1))),
+  });
+  const useLocation = (id: string) => {
+    const location = LOCATION_PRESETS.find((item) => item.id === id);
+    if (!location) return;
+    const centerRe = Number(location.spec.centerRe ?? -0.75);
+    const centerIm = Number(location.spec.centerIm ?? 0);
+    update({ ...location.spec, centerReStr: String(centerRe), centerImStr: String(centerIm) });
+  };
+
+  const setFormulaSource = (source: string) => update({ orbitProgram: formulaProgram(source) });
+  const sequence = spec.orbitProgram?.type === "sequence" ? spec.orbitProgram : sequenceProgram();
+  const updateSequenceStep = (index: number, patch: { source?: string; span?: number }) => {
+    const steps = sequence.steps.map((step, item) => item === index ? {
+      ...step,
+      span: patch.span ?? step.span,
+      program: patch.source === undefined ? step.program : {
+        type: "formula" as const,
+        formula: { type: "dsl" as const, source: patch.source },
+      },
+    } : step);
+    update({ orbitProgram: { ...sequence, steps } });
+  };
+  const addSequenceStep = () => {
+    if (sequence.steps.length >= 4) return;
+    update({ orbitProgram: { ...sequence, steps: [...sequence.steps, { span: 1, program: { type: "formula", formula: { type: "dsl", source: "z*z+c" } } }] } });
+  };
+  const removeSequenceStep = (index: number) => {
+    if (sequence.steps.length <= 1) return;
+    update({ orbitProgram: { ...sequence, steps: sequence.steps.filter((_, item) => item !== index) } });
+  };
+
+  const updateTransitionLeg = (index: number, patch: Partial<{ variant: string; weight: number }>) => {
+    const legs = (spec.transitionLegs ?? defaults.transitionLegs ?? []).map((leg, item) => item === index ? { ...leg, ...patch } : leg);
+    update({ transitionLegs: legs });
+  };
+  const addTransitionLeg = () => {
+    const legs = spec.transitionLegs ?? [];
+    if (legs.length >= 4) return;
+    update({ transitionLegs: [...legs, { variant: axisVariants[legs.length % axisVariants.length] ?? "mandelbrot", weight: 1 }] });
+  };
+  const removeTransitionLeg = (index: number) => {
+    const legs = spec.transitionLegs ?? [];
+    if (legs.length <= 1) return;
+    update({ transitionLegs: legs.filter((_, item) => item !== index) });
+  };
+
+  const toggleGradient = (enabled: boolean) => update(enabled ? {
+    colorMap: null,
+    colorMode: "direct",
+    colorProgram: {
+      schemaVersion: 1,
+      type: "gradient",
+      interpolation: "rgb",
+      wrap: "repeat",
+      cycles: 1,
+      phase: 0,
+      interiorColor: "#050505",
+      invalidColor: "#ff00ff",
+      stops: [
+        { at: 0, color: "#071426" },
+        { at: 0.5, color: "#2a7193" },
+        { at: 1, color: "#f0a030" },
+      ],
+    },
+  } : { colorProgram: null, colorMap: capabilities.colorMaps[0] ?? "classic_cos" });
+  const updateGradient = (patch: Partial<NonNullable<FractalSpec["colorProgram"]>>) => {
+    if (spec.colorProgram) update({ colorProgram: { ...spec.colorProgram, ...patch } });
+  };
+  const updateGradientStop = (index: number, patch: Partial<{ at: number; color: string }>) => {
+    if (!spec.colorProgram) return;
+    const stops = spec.colorProgram.stops.map((stop, item) => item === index ? { ...stop, ...patch } : stop);
+    updateGradient({ stops });
+  };
+  const addGradientStop = () => {
+    if (!spec.colorProgram || spec.colorProgram.stops.length >= capabilities.customGradient.maxStops) return;
+    let gapIndex = 0;
+    for (let index = 1; index < spec.colorProgram.stops.length; index += 1) {
+      const gap = spec.colorProgram.stops[index]!.at - spec.colorProgram.stops[index - 1]!.at;
+      const largest = spec.colorProgram.stops[gapIndex + 1]!.at - spec.colorProgram.stops[gapIndex]!.at;
+      if (gap > largest) gapIndex = index - 1;
+    }
+    const left = spec.colorProgram.stops[gapIndex]!;
+    const right = spec.colorProgram.stops[gapIndex + 1]!;
+    const stops = [
+      ...spec.colorProgram.stops.slice(0, gapIndex + 1),
+      { at: (left.at + right.at) / 2, color: "#f0a030" },
+      ...spec.colorProgram.stops.slice(gapIndex + 1),
+    ];
+    updateGradient({ stops });
+  };
+  const removeGradientStop = (index: number) => {
+    if (!spec.colorProgram || spec.colorProgram.stops.length <= 2) return;
+    updateGradient({ stops: spec.colorProgram.stops.filter((_, item) => item !== index) });
+  };
+
+  const chooseOutputPreset = (id: string) => {
+    const preset = OUTPUT_PRESETS.find((item) => item.id === id);
+    if (preset) setOutput({ preset: id, width: preset.width, height: preset.height });
+    else setOutput((current) => ({ ...current, preset: "custom" }));
+  };
+  const updateOutputDimension = (field: "width" | "height", value: number) => {
+    setOutput((current) => ({ ...current, preset: "custom", [field]: Math.max(64, Math.min(4096, Math.round(value))) }));
+  };
+  const saveAndRender = async () => {
+    setError(null);
+    setExporting(true);
+    try {
+      const recipe = await platform.studio.createRecipe(canonical);
+      setJob(await platform.studio.createRender(recipe.id, {
+        kind: "image",
+        format: "png",
+        width: output.width,
+        height: output.height,
+      }));
+    } catch (reason) {
+      setError(`${t("errors.export")} (${errorCode(reason) ?? "request_failed"})`);
+    } finally {
+      setExporting(false);
+    }
+  };
+  const cancelJob = async () => {
+    if (!job) return;
+    try {
+      setJob(await platform.studio.cancel(job.id));
+    } catch (reason) {
+      setError(`${t("errors.cancel")} (${errorCode(reason) ?? "request_failed"})`);
+    }
+  };
+  const downloadAsset = async () => {
+    if (!job?.assetId) return;
+    try {
+      window.open((await platform.assets.downloadUrl(job.assetId)).url, "_blank", "noopener,noreferrer");
+    } catch (reason) {
+      setError(`${t("errors.download")} (${errorCode(reason) ?? "request_failed"})`);
+    }
+  };
+
+  return (
+    <div className="scientific-studio mx-auto max-w-[1560px] space-y-4">
+      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-white/10 pb-4">
+        <div>
+          <p className="instrument-kicker">{t("eyebrow")}</p>
+          <h1 className="mt-1 text-2xl font-medium tracking-tight text-white">{t("title")}</h1>
+          <p className="mt-1 max-w-3xl text-sm text-white/50">{t("subtitle")}</p>
+        </div>
+        <div className="flex items-center gap-2 font-mono text-[11px] text-white/45">
+          <span className="h-1.5 w-1.5 bg-emerald-400" />
+          {t("renderer")}: {capabilities.rendererVersion ?? t("loadingCapabilities")}
+        </div>
+      </header>
+
+      <div className="grid gap-4 xl:grid-cols-[23rem_minmax(0,1fr)]">
+        <aside className="space-y-3 xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto xl:pr-1">
+          <Panel index="01" title={t("sections.imageMode")}>
+            <div className="grid grid-cols-2 gap-1.5">
+              {(["map", "julia", "transitionPair", "transitionMulti", "formula", "sequence"] as const).map((item) => {
+                const disabled = (item.startsWith("transition") && !capabilities.imageKinds.transition.enabled)
+                  || (item === "formula" && capabilities.orbitPrograms.formula === false)
+                  || (item === "sequence" && capabilities.orbitPrograms.sequence === false);
+                return (
+                  <button
+                    className="instrument-mode"
+                    data-active={mode === item}
+                    disabled={disabled}
+                    key={item}
+                    onClick={() => selectMode(item)}
+                    type="button"
+                  >
+                    {item === "formula" ? <Braces className="h-3.5 w-3.5" /> : item === "sequence" ? <Layers3 className="h-3.5 w-3.5" /> : null}
+                    {t(modeLabelKey(item))}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-white/40">{t(`modeNotes.${mode}`)}</p>
+          </Panel>
+
+          <Panel index="02" title={t("sections.geometry")}>
+            {(mode === "map" || mode === "julia") && (
+              <>
+                <Control label={t("variant")}>
+                  <select className={selectClass} value={spec.variant} onChange={(event) => update({ variant: event.target.value })}>
+                    {availableVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}
+                  </select>
+                </Control>
+                <p className="instrument-note">{t(`variants.${spec.variant ?? "mandelbrot"}.description`)}</p>
+                {mode === "map" && (
+                  <Control label={t("locationPreset")}>
+                    <select className={selectClass} defaultValue="" onChange={(event) => useLocation(event.target.value)}>
+                      <option disabled value="">{t("chooseLocation")}</option>
+                      {LOCATION_PRESETS.map((item) => <option key={item.id} value={item.id}>{t(`locations.${item.id}`)}</option>)}
+                    </select>
+                  </Control>
+                )}
+              </>
+            )}
+
+            {mode === "julia" && (
+              <div className="grid grid-cols-2 gap-2">
+                <NumberControl label={t("juliaRe")} value={spec.juliaRe ?? -0.8} step="0.0001" onChange={(value) => update({ juliaRe: value })} />
+                <NumberControl label={t("juliaIm")} value={spec.juliaIm ?? 0.156} step="0.0001" onChange={(value) => update({ juliaIm: value })} />
+              </div>
+            )}
+
+            {mode === "formula" && (
+              <>
+                <Control label={t("formulaSource")}>
+                  <textarea
+                    className="instrument-control min-h-24 w-full resize-y p-2 font-mono text-xs"
+                    spellCheck={false}
+                    value={spec.orbitProgram?.type === "formula" && spec.orbitProgram.formula.type === "dsl" ? spec.orbitProgram.formula.source : "z*z+c"}
+                    onChange={(event) => setFormulaSource(event.target.value)}
+                  />
+                </Control>
+                <p className="instrument-note">{t("formulaHint")}</p>
+              </>
+            )}
+
+            {mode === "sequence" && (
+              <div className="space-y-2">
+                {sequence.steps.map((step, index) => (
+                  <div className="border border-white/10 bg-black/20 p-2" key={index}>
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-amber-200/70">{t("sequenceStep", { index: index + 1 })}</span>
+                      <button aria-label={t("removeStep")} className="text-white/35 hover:text-red-300 disabled:opacity-20" disabled={sequence.steps.length <= 1} onClick={() => removeSequenceStep(index)} type="button"><Trash2 className="h-3.5 w-3.5" /></button>
+                    </div>
+                    <textarea
+                      className="instrument-control min-h-16 w-full resize-y p-2 font-mono text-xs"
+                      spellCheck={false}
+                      value={step.program.formula.type === "dsl" ? step.program.formula.source : "z*z+c"}
+                      onChange={(event) => updateSequenceStep(index, { source: event.target.value })}
+                    />
+                    <div className="mt-2 w-28">
+                      <NumberControl label={t("sequenceSpan")} min="1" max="1000000" step="1" value={step.span} onChange={(value) => updateSequenceStep(index, { span: Math.max(1, Math.round(value)) })} />
+                    </div>
+                  </div>
+                ))}
+                <Button className="w-full rounded-none" disabled={sequence.steps.length >= 4} size="sm" variant="outline" onClick={addSequenceStep}><Plus className="h-3.5 w-3.5" />{t("addStep")}</Button>
+                <p className="instrument-note">{t("sequenceHint")}</p>
+              </div>
+            )}
+
+            {isTransitionMode(mode) && (
+              <>
+                <div className="mb-3">
+                  <label className="mb-1 flex justify-between text-xs text-white/50"><span>{t("transitionAngle")}</span><span className="font-mono text-amber-200/80">{((spec.transitionThetaMilliDeg ?? 0) / 1000).toFixed(1)}°</span></label>
+                  <input className="w-full accent-amber-500" max="180000" min="-180000" step="1000" type="range" value={spec.transitionThetaMilliDeg ?? 0} onChange={(event) => update({ transitionThetaMilliDeg: Number(event.target.value) })} />
+                </div>
+                {mode === "transitionPair" ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Control label={t("transitionFrom")}>
+                      <select className={selectClass} value={spec.transitionFrom} onChange={(event) => update({ transitionFrom: event.target.value })}>{axisVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}</select>
+                    </Control>
+                    <Control label={t("transitionTo")}>
+                      <select className={selectClass} value={spec.transitionTo} onChange={(event) => update({ transitionTo: event.target.value })}>{axisVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}</select>
+                    </Control>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {(spec.transitionLegs ?? []).map((leg, index) => (
+                      <div className="grid grid-cols-[minmax(0,1fr)_5.5rem_1.5rem] items-end gap-1.5" key={index}>
+                        <Control label={t("transitionLeg", { index: index + 1 })}>
+                          <select className={selectClass} value={leg.variant} onChange={(event) => updateTransitionLeg(index, { variant: event.target.value })}>{axisVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}</select>
+                        </Control>
+                        <NumberControl label={t("weight")} min="0.01" max="1000000" step="0.05" value={leg.weight} onChange={(value) => updateTransitionLeg(index, { weight: Math.max(0.01, value) })} />
+                        <button aria-label={t("removeLeg")} className="mb-2 h-9 text-white/35 hover:text-red-300 disabled:opacity-20" disabled={(spec.transitionLegs?.length ?? 0) <= 1} onClick={() => removeTransitionLeg(index)} type="button"><Trash2 className="mx-auto h-3.5 w-3.5" /></button>
+                      </div>
+                    ))}
+                    <Button className="w-full rounded-none" disabled={(spec.transitionLegs?.length ?? 0) >= 4} size="sm" variant="outline" onClick={addTransitionLeg}><Plus className="h-3.5 w-3.5" />{t("addLeg")}</Button>
+                  </div>
+                )}
+                <p className="instrument-note">{t("transitionHint")}</p>
+              </>
+            )}
+          </Panel>
+
+          <Panel index="03" title={t("sections.coloring")}>
+            <Control label={t("colorMap")}>
+              <select className={selectClass} disabled={Boolean(spec.colorProgram)} value={spec.colorMap ?? ""} onChange={(event) => update({ colorMap: event.target.value })}>
+                {capabilities.colorMaps.map((item) => <option key={item} value={item}>{t(`colorMaps.${item}.name`)}</option>)}
+              </select>
+            </Control>
+            {!spec.colorProgram && selectedColor && (
+              <div className="mb-3 border border-white/10 bg-black/20 p-2">
+                <div className="h-4" style={{ background: selectedColor.preview }} />
+                <p className="mt-2 text-xs leading-relaxed text-white/60">{t(`colorMaps.${selectedColor.id}.description`)}</p>
+                <p className="mt-1 text-[11px] text-white/35"><span className="text-amber-200/60">{t("bestFor")}</span> {t(`colorMaps.${selectedColor.id}.bestFor`)}</p>
+                <p className="mt-1 text-[11px] text-white/35"><span className="text-amber-200/60">{t("cost")}</span> {t(`colorMaps.${selectedColor.id}.cost`)}</p>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <Control label={t("colorMode")}>
+                <select className={selectClass} disabled={Boolean(spec.colorProgram)} value={spec.colorMode ?? "direct"} onChange={(event) => update({ colorMode: event.target.value as NonNullable<FractalSpec["colorMode"]> })}>
+                  {capabilities.colorModes.map((item) => <option key={item} value={item}>{t(`colorModes.${item}.name`)}</option>)}
+                </select>
+              </Control>
+              <NumberControl label={t("cyclesPerOctave")} disabled={Boolean(spec.colorProgram)} min="0.01" max="64" step="0.1" value={spec.cyclesPerOctave ?? 1} onChange={(value) => update({ cyclesPerOctave: value })} />
+            </div>
+            <p className="instrument-note">{t(`colorModes.${spec.colorMode ?? "direct"}.description`)}</p>
+            <label className="instrument-check mt-3"><span>{t("smooth")}</span><input checked={Boolean(spec.smooth)} onChange={(event) => update({ smooth: event.target.checked })} type="checkbox" /></label>
+            <label className="instrument-check mt-2"><span>{t("customGradient")}</span><input checked={Boolean(spec.colorProgram)} disabled={!capabilities.customGradient.enabled} onChange={(event) => toggleGradient(event.target.checked)} type="checkbox" /></label>
+            {spec.colorProgram && (
+              <GradientEditor
+                maxStops={capabilities.customGradient.maxStops}
+                onAdd={addGradientStop}
+                onChange={updateGradient}
+                onRemove={removeGradientStop}
+                onStopChange={updateGradientStop}
+                program={spec.colorProgram}
+                t={t}
+              />
+            )}
+          </Panel>
+
+          <details className="instrument-panel group">
+            <summary className="cursor-pointer list-none px-3 py-2 text-xs uppercase tracking-[0.14em] text-white/55">04 · {t("sections.compute")}</summary>
+            <div className="border-t border-white/10 p-3">
+              <div className="grid grid-cols-2 gap-2">
+                <NumberControl label={t("iterations")} min="1" max="1000000" step="16" value={spec.iterations ?? 512} onChange={(value) => update({ iterations: Math.round(value) })} />
+                <NumberControl label={t("bailout")} min="0.01" step="0.5" value={spec.bailout ?? 4} onChange={(value) => update({ bailout: value })} />
+                <NumberControl label={t("rotation")} min="-360" max="360" step="1" value={spec.rotationDeg ?? 0} onChange={(value) => update({ rotationDeg: value })} />
+                <Control label={t("metric")}>
+                  <select className={selectClass} disabled={mode === "formula" || mode === "sequence"} value={spec.metric} onChange={(event) => update({ metric: event.target.value as NonNullable<FractalSpec["metric"]> })}>{activeMetrics.map((item) => <option key={item} value={item}>{t(`metrics.${item}.name`)}</option>)}</select>
+                </Control>
+                {spec.metric === "min_pairwise_dist" && <NumberControl label={t("pairwiseCap")} min="1" max="1000000" step="1" value={spec.pairwiseCap ?? 64} onChange={(value) => update({ pairwiseCap: Math.round(value) })} />}
+                <Control label={t("engine")}>
+                  <select className={selectClass} value={spec.engine} onChange={(event) => update({ engine: event.target.value as NonNullable<FractalSpec["engine"]> })}>{capabilities.engines.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+                </Control>
+                <Control label={t("scalar")}>
+                  <select className={selectClass} value={spec.scalarType} onChange={(event) => update({ scalarType: event.target.value as NonNullable<FractalSpec["scalarType"]> })}>{capabilities.scalars.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+                </Control>
+              </div>
+              <p className="instrument-note">{t(`metrics.${spec.metric ?? "escape"}.description`)}</p>
+            </div>
+          </details>
+        </aside>
+
+        <main className="min-w-0 space-y-3">
+          <section className="instrument-panel p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="instrument-kicker">{t("viewport")}</span>
+                <span className="font-mono text-[11px] text-white/35">{t(modeLabelKey(mode))} · {zoomLevel.toFixed(2)} oct</span>
+              </div>
+              <span className="font-mono text-[10px] text-white/30">{t("centerAlwaysVisible")}</span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem]">
+              <PreciseControl label={t("centerRe")} value={spec.centerReStr ?? String(spec.centerRe ?? 0)} onCommit={(value) => update({ centerReStr: value, centerRe: Number(value) })} />
+              <PreciseControl label={t("centerIm")} value={spec.centerImStr ?? String(spec.centerIm ?? 0)} onCommit={(value) => update({ centerImStr: value, centerIm: Number(value) })} />
+              <NumberControl label={t("scale")} min={String(minScale)} step="0.000001" value={spec.scale ?? 3} onChange={(value) => update({ scale: Math.max(minScale, value) })} />
+            </div>
+          </section>
+
+          <InteractiveFractalCanvas
+            exportHeight={output.height}
+            exportWidth={output.width}
+            height={previewSize.height}
+            labels={{
+              alt: t("canvas.alt"),
+              empty: t("canvas.empty"),
+              hint: t("canvas.hint"),
+              detail: t("canvas.detail"),
+              rendering: t("canvas.rendering"),
+              zoomOut: t("canvas.zoomOut"),
+              zoomIn: t("canvas.zoomIn"),
+              reset: t("reset"),
+              frame: t("canvas.frame"),
+            }}
+            onChange={updateViewport}
+            onNavigationStart={() => undefined}
+            onReset={reset}
+            onZoom={zoom}
+            preview={preview}
+            previewing={previewing}
+            spec={canonical}
+            width={previewSize.width}
+          />
+
+          {error && <p className="border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</p>}
+          {notice && <p className="border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{notice}</p>}
+
+          <section className="instrument-panel p-3">
+            <div className="mb-3 flex items-center gap-2">
+              <ImageDown className="h-4 w-4 text-amber-300/80" />
+              <h2 className="text-sm font-medium text-white/80">{t("sections.export")}</h2>
+              <span className="ml-auto font-mono text-[10px] uppercase tracking-wider text-white/30">PNG · sRGB</span>
+            </div>
+            <div className="grid gap-2 md:grid-cols-[minmax(12rem,1fr)_8rem_8rem_auto] md:items-end">
+              <Control label={t("outputPreset")}>
+                <select className={selectClass} value={output.preset} onChange={(event) => chooseOutputPreset(event.target.value)}>
+                  {OUTPUT_PRESETS.map((item) => <option key={item.id} value={item.id}>{t(`outputPresets.${item.id}`)} · {item.width}×{item.height}</option>)}
+                  <option value="custom">{t("outputPresets.custom")}</option>
+                </select>
+              </Control>
+              <NumberControl label={t("width")} min="64" max="4096" step="1" value={output.width} onChange={(value) => updateOutputDimension("width", value)} />
+              <NumberControl label={t("height")} min="64" max="4096" step="1" value={output.height} onChange={(value) => updateOutputDimension("height", value)} />
+              <Button className="h-9 rounded-none border-amber-300/30 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25" disabled={exporting} onClick={() => void saveAndRender()}>
+                <Save className="h-4 w-4" />{exporting ? t("creatingExport") : t("exportPng")}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-white/35">{t("compositionHint")}</p>
+
+            {job && (
+              <div className="mt-3 border-t border-white/10 pt-3">
+                <div className="flex flex-wrap items-center gap-3 text-sm">
+                  {job.status === "completed" ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <span className="h-2 w-2 bg-amber-400" />}
+                  <span>{t("exportJob")}: <b className="font-mono font-normal text-white/80">{job.status}</b></span>
+                  <span className="font-mono text-white/45">{job.progressPercent}%</span>
+                  <div className="h-1.5 min-w-28 flex-1 overflow-hidden bg-white/10"><div className="h-full bg-amber-400 transition-[width]" style={{ width: `${job.progressPercent}%` }} /></div>
+                  {!terminalStatuses.has(job.status) && <Button className="rounded-none" size="sm" variant="outline" onClick={() => void cancelJob()}>{t("cancelExport")}</Button>}
+                  {job.status === "completed" && job.assetId && (
+                    <>
+                      <Button className="rounded-none" size="sm" onClick={() => void downloadAsset()}><Download className="h-3.5 w-3.5" />{t("downloadPng")}</Button>
+                      <Button asChild className="rounded-none" size="sm" variant="outline"><Link href="/assets"><ExternalLink className="h-3.5 w-3.5" />{t("openLibrary")}</Link></Button>
+                    </>
+                  )}
+                </div>
+                {job.errorCode && <p className="mt-2 font-mono text-xs text-red-300">{job.errorCode}</p>}
+              </div>
+            )}
+          </section>
+        </main>
+      </div>
     </div>
-  </div>;
+  );
 }
 
-function Control({ label, children }: { label: string; children: React.ReactNode }) { return <label className="mb-2 block text-xs text-muted-foreground"><span className="mb-1 block">{label}</span>{children}</label>; }
-function NumberControl({ label, value, onChange, ...props }: { label: string; value: number; onChange: (value: number) => void } & Omit<React.ComponentProps<typeof Input>, "value" | "onChange">) { return <Control label={label}><Input value={Number.isFinite(value) ? value : 0} type="number" onChange={(e) => onChange(Number(e.target.value))} {...props} /></Control>; }
-function GradientEditor({ program, onChange }: { program: NonNullable<FractalSpec["colorProgram"]>; onChange: (index: number, color: string) => void }) { return <div className="space-y-2"><div className="h-5 rounded" style={{ background: `linear-gradient(90deg, ${program.stops.map((stop) => `${stop.color} ${stop.at * 100}%`).join(", ")})` }} />{program.stops.map((stop, index) => <label className="flex items-center justify-between text-xs" key={stop.at}><span>{Math.round(stop.at * 100)}%</span><input type="color" value={stop.color} onChange={(e) => onChange(index, e.target.value)} /></label>)}</div>; }
-function ViewList({ title, items, onLoad, onDrop }: { title: string; items: SavedView[]; onLoad: (item: SavedView) => void; onDrop?: (id: string) => void }) { return <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-4"><h2 className="mb-2 font-medium">{title}</h2><div className="space-y-2">{items.length ? items.map((item) => <div className="flex gap-1" key={item.id}><Button className="min-w-0 flex-1 justify-start truncate" size="sm" variant="outline" onClick={() => onLoad(item)}>{item.name}</Button>{onDrop && <Button aria-label={`Remove ${item.name}`} size="icon" variant="ghost" onClick={() => onDrop(item.id)}><X className="h-3.5 w-3.5" /></Button>}</div>) : <p className="text-sm text-muted-foreground">Save a view you want to revisit.</p>}</div></section>; }
+function Panel({ index, title, children }: { index: string; title: string; children: React.ReactNode }) {
+  return (
+    <section className="instrument-panel">
+      <h2 className="border-b border-white/10 px-3 py-2 text-xs uppercase tracking-[0.14em] text-white/55"><span className="mr-2 font-mono text-amber-300/65">{index}</span>{title}</h2>
+      <div className="p-3">{children}</div>
+    </section>
+  );
+}
+
+function Control({ label, children }: { label: string; children: React.ReactNode }) {
+  return <label className="mb-2 block text-[11px] text-white/45"><span className="mb-1 block uppercase tracking-wider">{label}</span>{children}</label>;
+}
+
+function NumberControl({ label, value, onChange, ...props }: { label: string; value: number; onChange: (value: number) => void } & Omit<React.ComponentProps<typeof Input>, "value" | "onChange">) {
+  return <Control label={label}><Input className="instrument-control h-9 rounded-none font-mono text-xs" value={Number.isFinite(value) ? value : 0} type="number" onChange={(event) => onChange(Number(event.target.value))} {...props} /></Control>;
+}
+
+function PreciseControl({ label, value, onCommit }: { label: string; value: string; onCommit: (value: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed && Number.isFinite(Number(trimmed))) onCommit(trimmed);
+    else setDraft(value);
+  };
+  return (
+    <Control label={label}>
+      <Input className="instrument-control h-9 rounded-none font-mono text-xs" inputMode="decimal" value={draft} onBlur={commit} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+    </Control>
+  );
+}
+
+function GradientEditor({ program, maxStops, onChange, onStopChange, onAdd, onRemove, t }: {
+  program: NonNullable<FractalSpec["colorProgram"]>;
+  maxStops: number;
+  onChange: (patch: Partial<NonNullable<FractalSpec["colorProgram"]>>) => void;
+  onStopChange: (index: number, patch: Partial<{ at: number; color: string }>) => void;
+  onAdd: () => void;
+  onRemove: (index: number) => void;
+  t: ReturnType<typeof useTranslations<"studio">>;
+}) {
+  return (
+    <div className="mt-3 border-t border-white/10 pt-3">
+      <div className="mb-3 h-5 border border-white/15" style={{ background: `linear-gradient(90deg, ${program.stops.map((stop) => `${stop.color} ${stop.at * 100}%`).join(", ")})` }} />
+      <div className="space-y-1.5">
+        {program.stops.map((stop, index) => (
+          <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_2rem_1.5rem] items-center gap-1.5" key={index}>
+            <input aria-label={t("gradientColor")} className="h-7 w-10 bg-transparent" type="color" value={stop.color} onChange={(event) => onStopChange(index, { color: event.target.value })} />
+            <input
+              aria-label={t("gradientPosition")}
+              className="accent-amber-500 disabled:opacity-30"
+              disabled={index === 0 || index === program.stops.length - 1}
+              max={index === program.stops.length - 1 ? 1 : program.stops[index + 1]!.at - 0.001}
+              min={index === 0 ? 0 : program.stops[index - 1]!.at + 0.001}
+              step="0.001"
+              type="range"
+              value={stop.at}
+              onChange={(event) => onStopChange(index, { at: Number(event.target.value) })}
+            />
+            <span className="font-mono text-[10px] text-white/45">{Math.round(stop.at * 100)}</span>
+            <button aria-label={t("removeColor")} className="text-white/30 hover:text-red-300 disabled:opacity-20" disabled={program.stops.length <= 2} onClick={() => onRemove(index)} type="button"><Trash2 className="h-3.5 w-3.5" /></button>
+          </div>
+        ))}
+      </div>
+      <Button className="mt-2 w-full rounded-none" disabled={program.stops.length >= maxStops} size="sm" variant="outline" onClick={onAdd}><Plus className="h-3.5 w-3.5" />{t("addColor")}</Button>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <NumberControl label={t("gradientCycles")} min="0.01" max="64" step="0.1" value={program.cycles ?? 1} onChange={(value) => onChange({ cycles: value })} />
+        <NumberControl label={t("gradientPhase")} min="-1000" max="1000" step="0.05" value={program.phase ?? 0} onChange={(value) => onChange({ phase: value })} />
+        <Control label={t("gradientWrap")}>
+          <select className={selectClass} value={program.wrap ?? "repeat"} onChange={(event) => onChange({ wrap: event.target.value as "clamp" | "repeat" | "mirror" })}><option value="repeat">{t("wrap.repeat")}</option><option value="clamp">{t("wrap.clamp")}</option><option value="mirror">{t("wrap.mirror")}</option></select>
+        </Control>
+        <div className="grid grid-cols-2 gap-2">
+          <Control label={t("interiorColor")}><input aria-label={t("interiorColor")} className="h-9 w-full bg-transparent" type="color" value={program.interiorColor ?? "#050505"} onChange={(event) => onChange({ interiorColor: event.target.value })} /></Control>
+          <Control label={t("invalidColor")}><input aria-label={t("invalidColor")} className="h-9 w-full bg-transparent" type="color" value={program.invalidColor ?? "#ff00ff"} onChange={(event) => onChange({ invalidColor: event.target.value })} /></Control>
+        </div>
+      </div>
+      <p className="instrument-note">{t("customGradientHint")}</p>
+    </div>
+  );
+}

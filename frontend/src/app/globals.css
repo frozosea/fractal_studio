@@ -310,6 +310,108 @@
   scrollbar-color: hsl(226 22% 20%) transparent;
 }
 
+/* Studio keeps the original project character: a compact scientific instrument. */
+.scientific-studio {
+  --instrument-bg: #0a0b0d;
+  --instrument-panel: #111318;
+  --instrument-panel-raised: #15181e;
+  --instrument-rule: #2b2f36;
+  --instrument-amber: #f0a030;
+  color: #d6d8db;
+}
+
+.instrument-panel {
+  border: 1px solid var(--instrument-rule);
+  border-radius: 2px;
+  background: var(--instrument-panel);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.025) inset;
+}
+
+.instrument-kicker {
+  color: rgb(240 160 48 / 0.78);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.67rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.instrument-control {
+  border: 1px solid #31353d !important;
+  border-radius: 1px !important;
+  background: var(--instrument-bg) !important;
+  color: #d6d8db !important;
+  outline: none;
+}
+
+.instrument-control:focus {
+  border-color: rgb(240 160 48 / 0.7) !important;
+  box-shadow: 0 0 0 1px rgb(240 160 48 / 0.16);
+}
+
+.instrument-control:disabled {
+  color: rgb(214 216 219 / 0.3) !important;
+}
+
+.instrument-mode {
+  display: flex;
+  min-height: 2.35rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid var(--instrument-rule);
+  border-radius: 1px;
+  background: #0d0f12;
+  color: rgb(214 216 219 / 0.58);
+  font-size: 0.72rem;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.instrument-mode:hover:not(:disabled) {
+  border-color: rgb(240 160 48 / 0.45);
+  color: #f0e4d3;
+}
+
+.instrument-mode[data-active="true"] {
+  border-color: rgb(240 160 48 / 0.7);
+  background: rgb(240 160 48 / 0.09);
+  color: #f5c884;
+  box-shadow: 2px 0 0 var(--instrument-amber) inset;
+}
+
+.instrument-mode:disabled {
+  cursor: not-allowed;
+  opacity: 0.25;
+}
+
+.instrument-note {
+  margin-top: 0.45rem;
+  border-left: 1px solid rgb(240 160 48 / 0.35);
+  padding-left: 0.55rem;
+  color: rgb(214 216 219 / 0.38);
+  font-size: 0.68rem;
+  line-height: 1.55;
+}
+
+.instrument-check {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid rgb(255 255 255 / 0.06);
+  padding-top: 0.45rem;
+  color: rgb(214 216 219 / 0.58);
+  font-size: 0.75rem;
+}
+
+.instrument-check input {
+  accent-color: var(--instrument-amber);
+}
+
+.scientific-canvas {
+  border: 1px solid #373b43;
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px #08090b, 0 18px 40px rgb(0 0 0 / 0.3);
+}
+
 /* ─── Selection: soft purple wash ─── */
 ::selection {
   background: hsl(271 85% 55% / 0.25);

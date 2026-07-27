@@ -30,12 +30,16 @@ export interface FractalSpec {
   version: 1;
   centerRe?: number;
   centerIm?: number;
+  centerReStr?: string;
+  centerImStr?: string;
   scale?: number;
   iterations?: number;
   variant?: string;
   colorMap?: string | null;
   metric?: "escape" | "min_abs" | "max_abs" | "envelope" | "min_pairwise_dist" | "mandel_ship_agree";
   smooth?: boolean;
+  colorMode?: "direct" | "eq_full" | "eq_center";
+  cyclesPerOctave?: number;
   rotationDeg?: number;
   pairwiseCap?: number;
   colorProgram?: {
@@ -49,13 +53,37 @@ export interface FractalSpec {
     invalidColor?: string;
     stops: Array<{ at: number; color: string }>;
   } | null;
+  orbitProgram?: OrbitProgram | null;
   julia?: boolean;
   juliaRe?: number;
   juliaIm?: number;
   bailout?: number;
   engine?: "auto" | "cpu" | "cuda" | "openmp" | "avx2" | "avx512" | "hybrid";
   scalarType?: "auto" | "float" | "double" | "long_double" | "fp32" | "fp64" | "fx64" | "fp80" | "fp128";
+  transitionMode?: "off" | "pair" | "multi";
+  transitionThetaMilliDeg?: number;
+  transitionFrom?: string;
+  transitionTo?: string;
+  transitionLegs?: Array<{ variant: string; weight: number }>;
 }
+
+export type FormulaDefinition =
+  | { type: "builtin"; id: string }
+  | {
+      type: "dsl";
+      source: string;
+      parameters?: Record<string, number | { re: number; im: number }>;
+    };
+
+export type FormulaProgram = { type: "formula"; formula: FormulaDefinition };
+
+export type OrbitProgram =
+  | FormulaProgram
+  | {
+      type: "sequence";
+      repeat: true;
+      steps: Array<{ span: number; program: FormulaProgram }>;
+    };
 
 export interface StudioCapabilities {
   rendererVersion?: string;
@@ -63,7 +91,23 @@ export interface StudioCapabilities {
   engines: string[];
   scalars: string[];
   colorMaps: string[];
-  customGradient: { enabled: boolean; maxStops: number };
+  colorModes: string[];
+  variants: string[];
+  axisTransitionVariants: string[];
+  imageKinds: {
+    map: StudioImageKindCapabilities;
+    transition: StudioImageKindCapabilities;
+  };
+  orbitPrograms: Record<string, boolean>;
+  customGradient: { enabled: boolean; maxStops: number; kinds: string[] };
+}
+
+export interface StudioImageKindCapabilities {
+  enabled: boolean;
+  metrics: string[];
+  engines: string[];
+  scalars: string[];
+  orbitProgram: boolean;
 }
 
 export interface RenderJob {

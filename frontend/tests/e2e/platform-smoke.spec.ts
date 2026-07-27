@@ -4,6 +4,7 @@ test("browser registers through Platform and explores an interactive real Comput
   const forbiddenApiRequests: string[] = [];
   const favoriteRequests: string[] = [];
   const previewScales: number[] = [];
+  const previewSpecs: Array<Record<string, unknown>> = [];
   page.on("request", (request) => {
     const { pathname } = new URL(request.url());
     if (pathname.startsWith("/api/")) forbiddenApiRequests.push(request.url());
@@ -11,12 +12,13 @@ test("browser registers through Platform and explores an interactive real Comput
   });
   page.on("response", async (response) => {
     if (new URL(response.url()).pathname === "/platform/v1/studio/preview" && response.request().method() === "POST") {
-      const spec = (await response.request().postDataJSON()).canonicalSpec as { scale: number; colorProgram?: unknown };
-      previewScales.push(spec.scale);
+      const spec = (await response.request().postDataJSON()).canonicalSpec as Record<string, unknown>;
+      previewSpecs.push(spec);
+      previewScales.push(Number(spec.scale));
     }
   });
 
-  await page.goto("/register");
+  await page.goto("/en/register");
   await page.getByPlaceholder("Email").fill(`browser-${Date.now()}@example.test`);
   await page.getByPlaceholder("Password", { exact: true }).fill("browser-test-password");
   await page.getByPlaceholder("Confirm password").fill("browser-test-password");
@@ -34,30 +36,36 @@ test("browser registers through Platform and explores an interactive real Comput
   await expect(page.getByRole("button", { name: "Request payout" })).toBeDisabled();
   await page.getByRole("link", { name: "Studio" }).click();
   await page.waitForURL(/\/studio$/, { timeout: 30_000 });
-  await expect(page.locator("main").getByRole("heading", { name: "Explore, don’t configure." })).toBeVisible();
+  await expect(page.locator("main").getByRole("heading", { name: "Fractal Studio" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Finance" })).toHaveCount(0);
   await page.goto("/finance");
   await page.waitForURL(/\/studio$/, { timeout: 30_000 });
-  await expect(page.getByText("Scroll, double-click or press +/−.")).toBeVisible();
-  await expect(page.getByAltText("Fractal preview")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("drag: pan · wheel/double-click: zoom")).toBeVisible();
+  await expect(page.getByAltText("Fractal map preview")).toBeVisible({ timeout: 30_000 });
 
   await expect.poll(() => previewScales.length).toBeGreaterThan(0);
   const initialScale = previewScales.at(-1)!;
-  await page.getByRole("button", { name: "Zoom in", exact: true }).last().click();
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
   await expect.poll(() => previewScales.some((scale) => scale < initialScale)).toBe(true);
-  await expect(page.getByLabel("Go back")).toBeEnabled();
-  const previewsBeforeBack = previewScales.length;
-  await page.getByLabel("Go back").click();
-  await expect.poll(() => previewScales.slice(previewsBeforeBack).some((scale) => Math.abs(scale - initialScale) < 0.000_001)).toBe(true);
-  await expect(page.getByLabel("Go forward")).toBeEnabled();
-  await page.getByRole("button", { name: "Try", exact: true }).click();
-  await expect(page.getByText("Recent explorations")).toBeVisible();
-  await page.getByRole("button", { name: "Save this view" }).click();
-  await expect(page.getByText("View 1", { exact: false })).toBeVisible();
-  await page.getByText("Fine tuning", { exact: true }).click();
-  await page.getByText("Expert controls", { exact: true }).click();
+
+  await page.getByRole("button", { name: "Julia", exact: true }).click();
+  await expect.poll(() => previewSpecs.some((spec) => spec.julia === true)).toBe(true);
+  await page.getByRole("button", { name: "Pair transition", exact: true }).click();
+  await expect.poll(() => previewSpecs.some((spec) => spec.transitionMode === "pair")).toBe(true);
+  await page.getByRole("button", { name: "Formula", exact: true }).click();
+  await page.getByLabel("Orbit formula").fill("z*z*z+c");
+  await expect.poll(() => previewSpecs.some((spec) => (spec.orbitProgram as { type?: string } | undefined)?.type === "formula")).toBe(true);
+  await page.getByRole("button", { name: "Map", exact: true }).click();
+  await page.getByLabel("Dynamic coloring").selectOption("eq_full");
+  await expect.poll(() => previewSpecs.some((spec) => spec.colorMode === "eq_full")).toBe(true);
   await page.getByLabel("Custom gradient").check();
-  await expect(page.locator('input[type="color"]')).toHaveCount(3);
+  await expect(page.locator('input[type="color"]')).toHaveCount(5);
+
+  await page.goto("/zh/studio");
+  await expect(page.locator("main").getByRole("heading", { name: "分形工作室" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "图谱工作室" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "双公式过渡" })).toBeVisible();
+  await page.goto("/en/studio");
 
   await page.route("**/platform/v1/me/assets?limit=48", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 300));

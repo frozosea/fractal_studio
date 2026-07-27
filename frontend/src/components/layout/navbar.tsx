@@ -5,31 +5,33 @@ import { PanelLeft, LogOut, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LocaleSwitcher } from "@/components/layout/locale-switcher";
 import { useAuth } from "@/providers/auth-provider";
+import { useTranslations } from "next-intl";
 
 interface NavbarProps {
   title?: string;
   onToggleSidebar?: () => void;
 }
 
-export function Navbar({ title = "Fractal Studio", onToggleSidebar }: NavbarProps) {
+export function Navbar({ title, onToggleSidebar }: NavbarProps) {
+  const t = useTranslations("workbench");
   const { user, logout } = useAuth();
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-white/5 bg-deep-void/80 backdrop-blur-xl px-4">
+    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-[#2b2f36] bg-[#0a0b0d] px-4">
       {/* Left: Sidebar toggle */}
       <Button
         variant="ghost"
         size="icon"
         onClick={onToggleSidebar}
         className="shrink-0"
-        aria-label="Toggle sidebar"
+        aria-label={t("toggleSidebar")}
       >
         <PanelLeft className="h-4 w-4" />
       </Button>
 
       {/* Center: Page title */}
       <div className="flex flex-1 items-center justify-center">
-        <h1 className="text-sm font-medium text-foreground truncate">{title}</h1>
+        <h1 className="text-sm font-medium text-foreground truncate">{title ?? t("title")}</h1>
       </div>
 
       {/* Right: Status + Locale */}
@@ -56,7 +58,7 @@ export function Navbar({ title = "Fractal Studio", onToggleSidebar }: NavbarProp
             />
           </span>
           <span className="text-xs text-muted-foreground hidden sm:inline">
-            Platform API
+            {t("platformApi")}
           </span>
         </div>
 
@@ -72,7 +74,7 @@ export function Navbar({ title = "Fractal Studio", onToggleSidebar }: NavbarProp
               size="icon"
               className="h-6 w-6"
               onClick={() => logout()}
-              title="Logout"
+              title={t("logout")}
             >
               <LogOut className="h-3 w-3" />
             </Button>
