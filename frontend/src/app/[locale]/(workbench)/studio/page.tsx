@@ -88,6 +88,7 @@ const fallbackCapabilities: StudioCapabilities = {
 };
 
 const previewMinIntervalMs = 2100;
+const juliaPreviewMinIntervalMs = 4300;
 const previewDebounceMs = 600;
 const minScale = 3 / 2 ** 41;
 const selectClass = "instrument-control h-9 w-full px-2 text-sm";
@@ -120,11 +121,22 @@ function modeLabelKey(mode: ImageMode): string {
   return `modes.${mode}`;
 }
 
+function defaultBailoutForVariant(variant: string): number {
+  return ["sin_z", "cos_z", "exp_z", "sinh_z", "cosh_z", "tan_z"].includes(variant) ? 64 : 2;
+}
+
+function formatCoordinate(value: number | undefined): string {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? numeric.toPrecision(12).replace(/(?:\.0+|(?:(\.\d*?)0+))(?=e|$)/, "$1") : "0";
+}
+
 export default function StudioPage() {
   const t = useTranslations("studio");
   const [spec, setSpec] = useState<FractalSpec>(defaults);
+  const [juliaPickerSpec, setJuliaPickerSpec] = useState<FractalSpec>(defaults);
   const [mode, setMode] = useState<ImageMode>("map");
   const [preview, setPreview] = useState<string | null>(null);
+  const [juliaPickerPreview, setJuliaPickerPreview] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [capabilities, setCapabilities] = useState<StudioCapabilities>(fallbackCapabilities);
   const [output, setOutput] = useState({ preset: "square", width: 1024, height: 1024 });
@@ -135,6 +147,7 @@ export default function StudioPage() {
   const [retryTick, setRetryTick] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const previewRef = useRef<string | null>(null);
+  const juliaPickerPreviewRef = useRef<string | null>(null);
   const lastPreviewAtRef = useRef(0);
 
   const previewSize = useMemo(() => previewDimensions(output.width, output.height), [output.height, output.width]);
@@ -155,7 +168,26 @@ export default function StudioPage() {
       transitionThetaMilliDeg: Math.round(Number(spec.transitionThetaMilliDeg ?? 0)),
     };
   }, [spec]);
+  const juliaPickerCanonical = useMemo<FractalSpec>(() => {
+    const { juliaRe: _juliaRe, juliaIm: _juliaIm, ...shared } = canonical;
+    const centerRe = Number(juliaPickerSpec.centerReStr ?? juliaPickerSpec.centerRe ?? 0);
+    const centerIm = Number(juliaPickerSpec.centerImStr ?? juliaPickerSpec.centerIm ?? 0);
+    return {
+      ...shared,
+      centerRe: Number.isFinite(centerRe) ? centerRe : Number(juliaPickerSpec.centerRe ?? 0),
+      centerIm: Number.isFinite(centerIm) ? centerIm : Number(juliaPickerSpec.centerIm ?? 0),
+      centerReStr: juliaPickerSpec.centerReStr ?? String(juliaPickerSpec.centerRe ?? 0),
+      centerImStr: juliaPickerSpec.centerImStr ?? String(juliaPickerSpec.centerIm ?? 0),
+      scale: Math.max(minScale, Number(juliaPickerSpec.scale ?? 3)),
+      julia: false,
+      transitionMode: "off",
+      orbitProgram: null,
+      metric: "escape",
+      smooth: false,
+    };
+  }, [canonical, juliaPickerSpec]);
   const specKey = JSON.stringify(canonical);
+  const juliaPickerSpecKey = JSON.stringify(juliaPickerCanonical);
   const zoomLevel = Math.max(0, Math.log2(3 / Number(canonical.scale ?? 3)));
   const availableVariants = capabilities.variants.length ? capabilities.variants : [...BUILTIN_VARIANTS];
   const axisVariants = capabilities.axisTransitionVariants.length ? capabilities.axisTransitionVariants : [...AXIS_TRANSITION_VARIANTS];
@@ -171,6 +203,7 @@ export default function StudioPage() {
     return () => {
       abortRef.current?.abort();
       if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+      if (juliaPickerPreviewRef.current) URL.revokeObjectURL(juliaPickerPreviewRef.current);
     };
   }, [t]);
 
@@ -188,23 +221,33 @@ export default function StudioPage() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    const wait = Math.max(previewDebounceMs, lastPreviewAtRef.current + previewMinIntervalMs - Date.now());
+    const minimumInterval = mode === "julia" ? juliaPreviewMinIntervalMs : previewMinIntervalMs;
+    const wait = Math.max(previewDebounceMs, lastPreviewAtRef.current + minimumInterval - Date.now());
     const timer = window.setTimeout(async () => {
       setPreviewing(true);
       setError(null);
       setNotice(null);
       lastPreviewAtRef.current = Date.now();
       try {
-        const blob = await platform.studio.preview(canonical, previewSize.width, previewSize.height, controller.signal);
+        const [blob, pickerBlob] = await Promise.all([
+          platform.studio.preview(canonical, previewSize.width, previewSize.height, controller.signal),
+          ...(mode === "julia" ? [platform.studio.preview(juliaPickerCanonical, previewSize.width, previewSize.height, controller.signal)] : []),
+        ]);
         if (controller.signal.aborted) return;
         const url = URL.createObjectURL(blob);
         if (previewRef.current) URL.revokeObjectURL(previewRef.current);
         previewRef.current = url;
         setPreview(url);
+        if (pickerBlob) {
+          const pickerUrl = URL.createObjectURL(pickerBlob);
+          if (juliaPickerPreviewRef.current) URL.revokeObjectURL(juliaPickerPreviewRef.current);
+          juliaPickerPreviewRef.current = pickerUrl;
+          setJuliaPickerPreview(pickerUrl);
+        }
       } catch (reason) {
         if (controller.signal.aborted) return;
         if (reason instanceof PlatformApiError && reason.status === 429) {
-          lastPreviewAtRef.current = Date.now() + previewMinIntervalMs;
+          lastPreviewAtRef.current = Date.now() + minimumInterval;
           setNotice(t("errors.previewRate"));
           setRetryTick((current) => current + 1);
         } else {
@@ -218,7 +261,7 @@ export default function StudioPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [canonical, previewSize.height, previewSize.width, retryTick, specKey, t]);
+  }, [canonical, juliaPickerCanonical, juliaPickerSpecKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
 
   const update = (patch: Partial<FractalSpec>) => setSpec((current) => ({ ...current, ...patch }));
   const updateViewport = (patch: Partial<FractalSpec>) => {
@@ -229,11 +272,54 @@ export default function StudioPage() {
       ...(patch.centerIm === undefined ? {} : { centerImStr: String(patch.centerIm) }),
     }));
   };
+  const updateJuliaPickerViewport = (patch: Partial<FractalSpec>) => {
+    setJuliaPickerSpec((current) => ({
+      ...current,
+      ...patch,
+      ...(patch.centerRe === undefined ? {} : { centerReStr: String(patch.centerRe) }),
+      ...(patch.centerIm === undefined ? {} : { centerImStr: String(patch.centerIm) }),
+    }));
+  };
 
   const selectMode = (next: ImageMode) => {
     setMode(next);
-    if (next === "map") update({ julia: false, transitionMode: "off", orbitProgram: null, metric: "escape" });
-    if (next === "julia") update({ julia: true, juliaRe: spec.juliaRe ?? -0.8, juliaIm: spec.juliaIm ?? 0.156, transitionMode: "off", orbitProgram: null, metric: "escape" });
+    if (next === "map") {
+      if (mode === "julia") {
+        setSpec((current) => ({
+          ...current,
+          centerRe: juliaPickerSpec.centerRe,
+          centerIm: juliaPickerSpec.centerIm,
+          centerReStr: juliaPickerSpec.centerReStr,
+          centerImStr: juliaPickerSpec.centerImStr,
+          scale: juliaPickerSpec.scale,
+          julia: false,
+          transitionMode: "off",
+          orbitProgram: null,
+          metric: "escape",
+          smooth: false,
+        }));
+      } else update({ julia: false, transitionMode: "off", orbitProgram: null, metric: "escape", smooth: false });
+    }
+    if (next === "julia" && mode !== "julia") {
+      const selectedRe = spec.juliaRe ?? Number(spec.centerReStr ?? spec.centerRe ?? -0.8);
+      const selectedIm = spec.juliaIm ?? Number(spec.centerImStr ?? spec.centerIm ?? 0.156);
+      setJuliaPickerSpec({ ...spec, julia: false, transitionMode: "off", orbitProgram: null, metric: "escape", smooth: false });
+      setSpec((current) => ({
+        ...current,
+        centerRe: 0,
+        centerIm: 0,
+        centerReStr: "0",
+        centerImStr: "0",
+        scale: 3,
+        julia: true,
+        juliaRe: selectedRe,
+        juliaIm: selectedIm,
+        transitionMode: "off",
+        orbitProgram: null,
+        metric: "escape",
+        smooth: false,
+      }));
+    }
     if (next === "transitionPair") update({ julia: false, transitionMode: "pair", orbitProgram: null, metric: "escape" });
     if (next === "transitionMulti") update({ julia: false, transitionMode: "multi", orbitProgram: null, metric: "escape" });
     if (next === "formula") update({ julia: false, transitionMode: "off", orbitProgram: formulaProgram(), metric: "escape" });
@@ -243,11 +329,17 @@ export default function StudioPage() {
   const reset = () => {
     setMode("map");
     setSpec(defaults);
+    setJuliaPickerSpec(defaults);
   };
   const zoom = (factor: number) => updateViewport({
     scale: Math.min(1e9, Math.max(minScale, Number(spec.scale ?? 3) * factor)),
     iterations: Math.min(20_000, Math.ceil(Number(spec.iterations ?? 512) * (factor < 1 ? 1.12 : 1))),
   });
+  const zoomJuliaPicker = (factor: number) => updateJuliaPickerViewport({
+    scale: Math.min(1e9, Math.max(minScale, Number(juliaPickerSpec.scale ?? 3) * factor)),
+  });
+  const resetJuliaViewport = () => updateViewport({ centerRe: 0, centerIm: 0, scale: 3 });
+  const resetJuliaPickerViewport = () => updateJuliaPickerViewport({ centerRe: -0.75, centerIm: 0, scale: 3 });
   const useLocation = (id: string) => {
     const location = LOCATION_PRESETS.find((item) => item.id === id);
     if (!location) return;
@@ -428,7 +520,7 @@ export default function StudioPage() {
             {(mode === "map" || mode === "julia") && (
               <>
                 <Control label={t("variant")}>
-                  <select className={selectClass} value={spec.variant} onChange={(event) => update({ variant: event.target.value })}>
+                  <select className={selectClass} value={spec.variant} onChange={(event) => update({ variant: event.target.value, bailout: defaultBailoutForVariant(event.target.value) })}>
                     {availableVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}
                   </select>
                 </Control>
@@ -445,10 +537,13 @@ export default function StudioPage() {
             )}
 
             {mode === "julia" && (
-              <div className="grid grid-cols-2 gap-2">
-                <NumberControl label={t("juliaRe")} value={spec.juliaRe ?? -0.8} step="0.0001" onChange={(value) => update({ juliaRe: value })} />
-                <NumberControl label={t("juliaIm")} value={spec.juliaIm ?? 0.156} step="0.0001" onChange={(value) => update({ juliaIm: value })} />
-              </div>
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberControl label={t("juliaRe")} value={spec.juliaRe ?? -0.8} step="0.0001" onChange={(value) => update({ juliaRe: value })} />
+                  <NumberControl label={t("juliaIm")} value={spec.juliaIm ?? 0.156} step="0.0001" onChange={(value) => update({ juliaIm: value })} />
+                </div>
+                <p className="instrument-note">{t("juliaSelectInstruction")}</p>
+              </>
             )}
 
             {mode === "formula" && (
@@ -593,37 +688,92 @@ export default function StudioPage() {
               </div>
               <span className="font-mono text-[10px] text-white/30">{t("centerAlwaysVisible")}</span>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem]">
-              <PreciseControl label={t("centerRe")} value={spec.centerReStr ?? String(spec.centerRe ?? 0)} onCommit={(value) => update({ centerReStr: value, centerRe: Number(value) })} />
-              <PreciseControl label={t("centerIm")} value={spec.centerImStr ?? String(spec.centerIm ?? 0)} onCommit={(value) => update({ centerImStr: value, centerIm: Number(value) })} />
-              <NumberControl label={t("scale")} min={String(minScale)} step="0.000001" value={spec.scale ?? 3} onChange={(value) => update({ scale: Math.max(minScale, value) })} />
-            </div>
+            {mode === "julia" ? (
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="border-l border-amber-300/35 pl-3">
+                  <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-amber-200/65">A · {t("juliaParameterPlane")}</p>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem]">
+                    <PreciseControl label={t("centerRe")} value={juliaPickerSpec.centerReStr ?? String(juliaPickerSpec.centerRe ?? 0)} onCommit={(value) => setJuliaPickerSpec((current) => ({ ...current, centerReStr: value, centerRe: Number(value) }))} />
+                    <PreciseControl label={t("centerIm")} value={juliaPickerSpec.centerImStr ?? String(juliaPickerSpec.centerIm ?? 0)} onCommit={(value) => setJuliaPickerSpec((current) => ({ ...current, centerImStr: value, centerIm: Number(value) }))} />
+                    <NumberControl label={t("scale")} min={String(minScale)} step="0.000001" value={juliaPickerSpec.scale ?? 3} onChange={(value) => setJuliaPickerSpec((current) => ({ ...current, scale: Math.max(minScale, value) }))} />
+                  </div>
+                </div>
+                <div className="border-l border-white/15 pl-3">
+                  <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-white/50">B · {t("juliaDynamicalPlane")}</p>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem]">
+                    <PreciseControl label={t("centerRe")} value={spec.centerReStr ?? String(spec.centerRe ?? 0)} onCommit={(value) => update({ centerReStr: value, centerRe: Number(value) })} />
+                    <PreciseControl label={t("centerIm")} value={spec.centerImStr ?? String(spec.centerIm ?? 0)} onCommit={(value) => update({ centerImStr: value, centerIm: Number(value) })} />
+                    <NumberControl label={t("scale")} min={String(minScale)} step="0.000001" value={spec.scale ?? 3} onChange={(value) => update({ scale: Math.max(minScale, value) })} />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem]">
+                <PreciseControl label={t("centerRe")} value={spec.centerReStr ?? String(spec.centerRe ?? 0)} onCommit={(value) => update({ centerReStr: value, centerRe: Number(value) })} />
+                <PreciseControl label={t("centerIm")} value={spec.centerImStr ?? String(spec.centerIm ?? 0)} onCommit={(value) => update({ centerImStr: value, centerIm: Number(value) })} />
+                <NumberControl label={t("scale")} min={String(minScale)} step="0.000001" value={spec.scale ?? 3} onChange={(value) => update({ scale: Math.max(minScale, value) })} />
+              </div>
+            )}
           </section>
 
-          <InteractiveFractalCanvas
-            exportHeight={output.height}
-            exportWidth={output.width}
-            height={previewSize.height}
-            labels={{
-              alt: t("canvas.alt"),
-              empty: t("canvas.empty"),
-              hint: t("canvas.hint"),
-              detail: t("canvas.detail"),
-              rendering: t("canvas.rendering"),
-              zoomOut: t("canvas.zoomOut"),
-              zoomIn: t("canvas.zoomIn"),
-              reset: t("reset"),
-              frame: t("canvas.frame"),
-            }}
-            onChange={updateViewport}
-            onNavigationStart={() => undefined}
-            onReset={reset}
-            onZoom={zoom}
-            preview={preview}
-            previewing={previewing}
-            spec={canonical}
-            width={previewSize.width}
-          />
+          {mode === "julia" ? (
+            <section className="grid gap-3 lg:grid-cols-2">
+              <div className="instrument-panel overflow-hidden p-2">
+                <div className="mb-2 flex items-start justify-between gap-3 px-1">
+                  <div><p className="instrument-kicker">A · {t("juliaParameterPlane")}</p><p className="mt-1 text-xs text-white/40">{t("juliaPickerHint")}</p></div>
+                  <span className="shrink-0 font-mono text-[10px] text-amber-200/70">c = {formatCoordinate(spec.juliaRe)} {Number(spec.juliaIm ?? 0) < 0 ? "−" : "+"} {formatCoordinate(Math.abs(Number(spec.juliaIm ?? 0)))}i</span>
+                </div>
+                <InteractiveFractalCanvas
+                  exportHeight={previewSize.height}
+                  exportWidth={previewSize.width}
+                  height={previewSize.height}
+                  labels={{ alt: t("canvas.parameterAlt"), empty: t("canvas.empty"), hint: t("canvas.selectHint"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetParameter"), frame: t("canvas.parameterFrame") }}
+                  onChange={updateJuliaPickerViewport}
+                  onNavigationStart={() => undefined}
+                  onPointSelect={({ re, im }) => update({ juliaRe: re, juliaIm: im })}
+                  onReset={resetJuliaPickerViewport}
+                  onZoom={zoomJuliaPicker}
+                  preview={juliaPickerPreview}
+                  previewing={previewing}
+                  selection={{ re: Number(spec.juliaRe ?? -0.8), im: Number(spec.juliaIm ?? 0.156) }}
+                  spec={juliaPickerCanonical}
+                  width={previewSize.width}
+                />
+              </div>
+              <div className="instrument-panel overflow-hidden p-2">
+                <div className="mb-2 px-1"><p className="instrument-kicker">B · {t("juliaDynamicalPlane")}</p><p className="mt-1 text-xs text-white/40">{t("juliaOutputHint")}</p></div>
+                <InteractiveFractalCanvas
+                  exportHeight={output.height}
+                  exportWidth={output.width}
+                  height={previewSize.height}
+                  labels={{ alt: t("canvas.juliaAlt"), empty: t("canvas.empty"), hint: t("canvas.hint"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetJulia"), frame: t("canvas.frame") }}
+                  onChange={updateViewport}
+                  onNavigationStart={() => undefined}
+                  onReset={resetJuliaViewport}
+                  onZoom={zoom}
+                  preview={preview}
+                  previewing={previewing}
+                  spec={canonical}
+                  width={previewSize.width}
+                />
+              </div>
+            </section>
+          ) : (
+            <InteractiveFractalCanvas
+              exportHeight={output.height}
+              exportWidth={output.width}
+              height={previewSize.height}
+              labels={{ alt: t("canvas.alt"), empty: t("canvas.empty"), hint: t("canvas.hint"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("reset"), frame: t("canvas.frame") }}
+              onChange={updateViewport}
+              onNavigationStart={() => undefined}
+              onReset={reset}
+              onZoom={zoom}
+              preview={preview}
+              previewing={previewing}
+              spec={canonical}
+              width={previewSize.width}
+            />
+          )}
 
           {error && <p className="border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</p>}
           {notice && <p className="border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{notice}</p>}

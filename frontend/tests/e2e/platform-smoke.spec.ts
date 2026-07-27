@@ -18,6 +18,9 @@ test("browser registers through Platform and explores an interactive real Comput
     }
   });
 
+  await page.goto("/zh/login");
+  await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
+  await expect(page.getByPlaceholder("电子邮箱")).toBeVisible();
   await page.goto("/en/register");
   await page.getByPlaceholder("Email").fill(`browser-${Date.now()}@example.test`);
   await page.getByPlaceholder("Password", { exact: true }).fill("browser-test-password");
@@ -44,12 +47,22 @@ test("browser registers through Platform and explores an interactive real Comput
   await expect(page.getByAltText("Fractal map preview")).toBeVisible({ timeout: 30_000 });
 
   await expect.poll(() => previewScales.length).toBeGreaterThan(0);
+  await expect.poll(() => previewSpecs.at(-1)?.bailout).toBe(2);
+  await expect.poll(() => previewSpecs.at(-1)?.smooth).toBe(false);
   const initialScale = previewScales.at(-1)!;
   await page.getByRole("button", { name: "Zoom in", exact: true }).click();
   await expect.poll(() => previewScales.some((scale) => scale < initialScale)).toBe(true);
 
   await page.getByRole("button", { name: "Julia", exact: true }).click();
   await expect.poll(() => previewSpecs.some((spec) => spec.julia === true)).toBe(true);
+  await expect(page.getByAltText("Julia parameter-plane preview")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByAltText("Julia dynamical-plane preview")).toBeVisible({ timeout: 30_000 });
+  const juliaScales = page.getByLabel("Viewport height / scale");
+  await expect(juliaScales).toHaveCount(2);
+  const rightScale = await juliaScales.nth(1).inputValue();
+  await page.getByRole("button", { name: "Zoom in" }).first().click();
+  await expect(juliaScales.nth(0)).not.toHaveValue("3");
+  await expect(juliaScales.nth(1)).toHaveValue(rightScale);
   await page.getByRole("button", { name: "Pair transition", exact: true }).click();
   await expect.poll(() => previewSpecs.some((spec) => spec.transitionMode === "pair")).toBe(true);
   await page.getByRole("button", { name: "Formula", exact: true }).click();

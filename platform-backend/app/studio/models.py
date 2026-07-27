@@ -144,6 +144,10 @@ class FractalSpec(BaseModel):
 
     @model_validator(mode="after")
     def require_julia_constant(self) -> "FractalSpec":
+        if "bailout" not in self.model_fields_set and self.variant in {
+            "sin_z", "cos_z", "exp_z", "sinh_z", "cosh_z", "tan_z",
+        }:
+            self.bailout = 64.0
         # The static escape-time view deliberately uses discrete iteration
         # bands.  Continuous smoothing belongs to scalar/height fields; keep
         # old escape recipes deterministic by canonicalising it away.

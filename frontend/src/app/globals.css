@@ -412,6 +412,48 @@
   box-shadow: 0 0 0 1px #08090b, 0 18px 40px rgb(0 0 0 / 0.3);
 }
 
+/* Authentication uses the same compact laboratory language as the 2D studio. */
+.auth-instrument {
+  --instrument-bg: #090a0c;
+  --instrument-panel: #101217;
+  --instrument-rule: #2b2f36;
+  --instrument-amber: #f0a030;
+  color: #d6d8db;
+  background-color: #090a0c;
+  background-image:
+    linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.auth-instrument::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent 0, rgb(240 160 48 / 0.06) 50%, transparent 100%) 50% 50% / 100% 1px no-repeat,
+    linear-gradient(transparent 0, rgb(240 160 48 / 0.04) 50%, transparent 100%) 50% 50% / 1px 100% no-repeat;
+}
+
+.auth-panel {
+  border: 1px solid var(--instrument-rule);
+  border-radius: 2px;
+  background: rgb(16 18 23 / 0.96);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.025) inset, 0 24px 70px rgb(0 0 0 / 0.35);
+}
+
+.auth-control {
+  border: 1px solid #31353d !important;
+  background: #090a0c !important;
+  color: #d6d8db !important;
+}
+
+.auth-control:focus {
+  border-color: rgb(240 160 48 / 0.7) !important;
+  box-shadow: 0 0 0 1px rgb(240 160 48 / 0.15) !important;
+}
+
 /* ─── Selection: soft purple wash ─── */
 ::selection {
   background: hsl(271 85% 55% / 0.25);

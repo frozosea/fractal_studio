@@ -123,6 +123,12 @@ def test_escape_metric_canonicalizes_smooth_coloring_off() -> None:
     assert request["payload"]["smooth"] is False
 
 
+def test_transcendental_variant_uses_its_native_default_radius() -> None:
+    canonical = canonicalize_spec(FractalSpec.model_validate({"version": 1, "variant": "sin_z"}))
+
+    assert canonical.spec["bailout"] == 64.0
+
+
 def test_preview_mapper_selects_transition_image_and_preserves_axis_payload() -> None:
     canonical = canonicalize_spec(FractalSpec.model_validate({
         "version": 1,

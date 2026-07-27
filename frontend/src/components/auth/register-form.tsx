@@ -1,39 +1,33 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { ArrowRight, LockKeyhole, Mail, UserPlus } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Link } from "@/i18n/navigation";
 import { PlatformApiError } from "@/lib/api/platform";
-import { UserPlus, Mail, Lock } from "lucide-react";
 
-const registerSchema = z
-  .object({
-    email: z.string().email("Invalid email"),
-  password: z.string().min(12, "Password must be at least 12 characters"),
-    confirmPassword: z.string(),
-  })
-  .refine((data) => data.password === data.confirmPassword, {
-    message: "Passwords do not match",
-    path: ["confirmPassword"],
-  });
-
-type RegisterFormData = z.infer<typeof registerSchema>;
+type RegisterFormData = { email: string; password: string; confirmPassword: string };
 
 export function RegisterForm() {
+  const t = useTranslations("auth");
   const { register: registerUser } = useAuth();
   const [serverError, setServerError] = useState<string | null>(null);
-
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<RegisterFormData>({
-    resolver: zodResolver(registerSchema),
+  const schema = useMemo(() => z.object({
+    email: z.string().email(t("errors.invalidEmail")),
+    password: z.string().min(12, t("errors.passwordLength")),
+    confirmPassword: z.string(),
+  }).refine((data) => data.password === data.confirmPassword, {
+    message: t("errors.passwordMismatch"),
+    path: ["confirmPassword"],
+  }), [t]);
+  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<RegisterFormData>({
+    resolver: zodResolver(schema),
   });
 
   const onSubmit = async (data: RegisterFormData) => {
@@ -41,126 +35,56 @@ export function RegisterForm() {
       setServerError(null);
       await registerUser({ email: data.email, password: data.password });
     } catch (error) {
-      setServerError(
-        error instanceof PlatformApiError && error.code === "email_already_registered"
-          ? "This email already has an account. Sign in instead."
-          : "Registration failed. Please try again.",
-      );
+      setServerError(error instanceof PlatformApiError && error.code === "email_already_registered" ? t("errors.emailExists") : t("errors.registerFailed"));
     }
   };
 
   return (
-    <div className="w-full max-w-md">
-      {/* Gradient header */}
-      <div className="mb-8 text-center">
-        <div
-          className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl"
-          style={{
-            background:
-              "linear-gradient(135deg, hsl(178 75% 45%) 0%, hsl(271 85% 40%) 100%)",
-            boxShadow:
-              "0 0 30px hsl(178 75% 50% / 0.2), 0 0 60px hsl(271 85% 50% / 0.06)",
-          }}
-        >
-          <UserPlus className="h-6 w-6 text-white" />
+    <div className="w-full max-w-[30rem]">
+      <header className="mb-5 border-b border-white/10 pb-5">
+        <div className="mb-5 flex items-center justify-between">
+          <span className="instrument-kicker">AUTH / 02</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-white/25">c ∈ ℂ</span>
         </div>
-        <h1 className="gradient-text text-2xl font-semibold tracking-wide">
-          Fractal Studio
-        </h1>
-        <p
-          className="mt-2 text-sm tracking-wide"
-          style={{ color: "hsl(220 16% 45%)" }}
-        >
-          Berkeley · Fractal Relaxation
-        </p>
-      </div>
+        <h1 className="text-2xl font-medium tracking-tight text-white">{t("registerTitle")}</h1>
+        <p className="mt-2 text-sm leading-6 text-white/45">{t("registerSubtitle")}</p>
+      </header>
 
-      {/* Glass card with cyan tint */}
-      <div className="glass-panel-cyan p-8">
-        <h2 className="mb-6 text-center text-sm font-medium tracking-wide text-white/60">
-          Create account
-        </h2>
+      <section className="auth-panel p-5 sm:p-7">
+        <div className="mb-6 flex items-center gap-3 border-b border-white/[0.07] pb-4">
+          <span className="grid h-9 w-9 place-items-center border border-amber-300/40 bg-amber-400/[0.07]"><UserPlus className="h-4 w-4 text-amber-200/75" /></span>
+          <div><p className="text-sm text-white/80">{t("newWorkspace")}</p><p className="mt-0.5 font-mono text-[10px] uppercase tracking-wider text-white/30">{t("recipeReady")}</p></div>
+        </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div className="space-y-2">
-            <div className="relative">
-              <Mail className="absolute left-3 top-2.5 h-4 w-4 text-white/20" />
-              <Input
-                {...register("email")}
-                type="email"
-                placeholder="Email"
-                className="pl-10"
-                autoComplete="email"
-              />
-            </div>
-            {errors.email && (
-              <p className="text-xs text-red-400/70">{errors.email.message}</p>
-            )}
-          </div>
+          <AuthField error={errors.email?.message} icon={<Mail className="h-3.5 w-3.5" />} label={t("emailLabel")}>
+            <Input {...register("email")} type="email" placeholder={t("emailPlaceholder")} className="auth-control h-10 rounded-none pl-10 font-mono text-sm" autoComplete="email" />
+          </AuthField>
+          <AuthField error={errors.password?.message} icon={<LockKeyhole className="h-3.5 w-3.5" />} label={t("passwordLabel")}>
+            <Input {...register("password")} type="password" placeholder={t("passwordPlaceholder")} className="auth-control h-10 rounded-none pl-10 font-mono text-sm" autoComplete="new-password" />
+          </AuthField>
+          <AuthField error={errors.confirmPassword?.message} icon={<LockKeyhole className="h-3.5 w-3.5" />} label={t("confirmPasswordLabel")}>
+            <Input {...register("confirmPassword")} type="password" placeholder={t("confirmPasswordPlaceholder")} className="auth-control h-10 rounded-none pl-10 font-mono text-sm" autoComplete="new-password" />
+          </AuthField>
 
-          <div className="space-y-2">
-            <div className="relative">
-              <Lock className="absolute left-3 top-2.5 h-4 w-4 text-white/20" />
-              <Input
-                {...register("password")}
-                type="password"
-                placeholder="Password"
-                className="pl-10"
-                autoComplete="new-password"
-              />
-            </div>
-            {errors.password && (
-              <p className="text-xs text-red-400/70">
-                {errors.password.message}
-              </p>
-            )}
-          </div>
+          {serverError && <p className="border-l-2 border-red-400/60 bg-red-400/[0.06] px-3 py-2 text-sm text-red-200/80">{serverError}</p>}
 
-          <div className="space-y-2">
-            <div className="relative">
-              <Lock className="absolute left-3 top-2.5 h-4 w-4 text-white/20" />
-              <Input
-                {...register("confirmPassword")}
-                type="password"
-                placeholder="Confirm password"
-                className="pl-10"
-                autoComplete="new-password"
-              />
-            </div>
-            {errors.confirmPassword && (
-              <p className="text-xs text-red-400/70">
-                {errors.confirmPassword.message}
-              </p>
-            )}
-          </div>
-
-          {serverError && (
-            <p className="text-center text-sm text-red-400/70">
-              {serverError}
-            </p>
-          )}
-
-          <Button
-            type="submit"
-            variant="fractal"
-            className="w-full btn-glow"
-            disabled={isSubmitting}
-            loading={isSubmitting}
-          >
-            Create account
+          <Button type="submit" className="h-10 w-full rounded-none border border-amber-300/35 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25" disabled={isSubmitting} loading={isSubmitting}>
+            {t("createAccount")}<ArrowRight className="h-4 w-4" />
           </Button>
-
-          <p className="text-center text-sm text-white/25">
-            Already have an account?{" "}
-            <Link
-              href="/login"
-              className="text-primary/70 hover:text-primary transition-colors"
-            >
-              Sign in
-            </Link>
-          </p>
+          <p className="text-center text-sm text-white/35">{t("haveAccount")} <Link href="/login" className="text-amber-200/75 transition-colors hover:text-amber-100">{t("signIn")}</Link></p>
         </form>
-      </div>
+      </section>
     </div>
+  );
+}
+
+function AuthField({ label, icon, error, children }: { label: string; icon: React.ReactNode; error?: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">{label}</span>
+      <span className="relative block"><span className="pointer-events-none absolute left-3 top-3 text-white/25">{icon}</span>{children}</span>
+      {error && <span className="mt-1.5 block text-xs text-red-300/75">{error}</span>}
+    </label>
   );
 }
