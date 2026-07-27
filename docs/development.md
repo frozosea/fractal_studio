@@ -74,6 +74,37 @@ Never commit `.env`, Alipay keys, session secrets, database dumps, or MinIO
 data. Production requires HTTPS origins and real Alipay credentials; the
 Compose development stack deliberately uses the payment stub.
 
+### HTTPS reverse proxy
+
+When the stack is reached through a domain, configure both the browser origin
+and the public object-storage origin in the root `.env`:
+
+```dotenv
+FSD_API_ORIGIN=https://ai.example.com
+FSD_S3_PUBLIC_ENDPOINT_URL=https://assets.ai.example.com
+```
+
+The first hostname proxies to the frontend on port `3010`. The second hostname
+must proxy to MinIO's S3 port `19010`; preserve the incoming `Host` header or
+S3 signatures will fail. For nginx, the relevant server is:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name assets.ai.example.com;
+
+    location / {
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://127.0.0.1:19010;
+    }
+}
+```
+
+Use a dedicated storage hostname rather than a path such as `/minio`: the URL
+path is part of the S3 signature. Restart `api` after changing the public S3
+origin; newly requested preview and download URLs will then use the domain.
+
 ## Legacy Compute API
 
 The repository retains historical C++ `/api/*` material for migration and

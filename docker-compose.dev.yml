@@ -84,7 +84,7 @@ services:
       COMPUTE_BASE_URL: http://compute:18080
       COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
       S3_ENDPOINT_URL: http://minio:9000
-      S3_PUBLIC_ENDPOINT_URL: http://localhost:${MINIO_PORT:-19010}
+      S3_PUBLIC_ENDPOINT_URL: ${FSD_S3_PUBLIC_ENDPOINT_URL:-http://localhost:19010}
       S3_BUCKET: fractal-platform
       S3_REGION: us-east-1
       S3_ACCESS_KEY_ID: minio
