@@ -46,6 +46,10 @@ class AssetReader(Protocol):
 
     async def find_owned_asset(self, *, asset_id: UUID, owner_id: UUID) -> OwnedAsset | None: ...
 
+    async def find_owned_preview(
+        self, *, asset_id: UUID, owner_id: UUID
+    ) -> AssetPreview | None: ...
+
     async def find_public_preview(self, *, asset_id: UUID) -> AssetPreview | None: ...
 
     async def find_publishable_asset(

@@ -16,6 +16,7 @@ from PIL import Image
 from app.assets.media_worker import MediaWorker
 from app.assets import repository
 from app.assets.reader import AssetReadService
+from app.assets.ports import AssetPreview
 from app.assets.repository import AssetReadRecord, AssetRecord
 from app.assets.service import asset_view
 from app.core.config import Settings
@@ -39,6 +40,25 @@ def test_safe_asset_view_hides_manifest_and_storage_internals() -> None:
     assert payload["files"] == [{"purpose": "master", "mediaType": "image/png", "sizeBytes": 123}]
     assert "objectKey" not in str(payload)
     assert "runId" not in str(payload)
+
+
+def test_safe_asset_view_exposes_only_signed_preview_urls() -> None:
+    record = AssetRecord(
+        id=uuid4(), owner_id=uuid4(), recipe_id=uuid4(), media_type="image",
+        status="ready", visibility="private", created_at=datetime.now(UTC), files=[],
+    )
+    preview = AssetPreview(
+        asset_id=record.id,
+        media_type="image",
+        thumbnail_url="https://cdn.example.test/thumb.png?signature=opaque",
+        watermarked_preview_url=None,
+        video_poster_url=None,
+    )
+
+    payload = asset_view(record, preview).model_dump(mode="json", by_alias=True)
+
+    assert payload["preview"]["thumbnailUrl"].endswith("signature=opaque")
+    assert "objectKey" not in str(payload)
 
 
 def test_image_derivatives_are_png_and_watermarked(tmp_path: Path) -> None:

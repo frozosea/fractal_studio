@@ -13,7 +13,8 @@ from fastapi import HTTPException, Request, status
 
 from app.assets import repository
 from app.assets.cleanup_service import queue_object_cleanup
-from app.assets.models import AssetFileView, AssetView, DownloadUrlView
+from app.assets.models import AssetFileView, AssetPreviewView, AssetView, DownloadUrlView
+from app.assets.ports import AssetPreview
 from app.assets.ports import EntitlementReader
 from app.auth.models import AccessPrincipal
 from app.core import audit_writer
@@ -234,7 +235,7 @@ class AssetIngestionService:
             await render_job_repository.release_reservation(connection, job_id=job_id)
 
 
-def asset_view(record: repository.AssetRecord) -> AssetView:
+def asset_view(record: repository.AssetRecord, preview: AssetPreview | None = None) -> AssetView:
     """Single safe mapping: neither storage keys nor Compute provenance leave M3."""
     return AssetView(
         id=record.id,
@@ -244,6 +245,11 @@ def asset_view(record: repository.AssetRecord) -> AssetView:
         visibility=record.visibility,
         derivativeStatus=record.derivative_status,
         derivativeErrorCode=record.derivative_error_code,
+        preview=AssetPreviewView(
+            thumbnailUrl=preview.thumbnail_url,
+            watermarkedPreviewUrl=preview.watermarked_preview_url,
+            videoPosterUrl=preview.video_poster_url,
+        ) if preview is not None else None,
         createdAt=record.created_at,
         files=[
             AssetFileView.model_validate(item)

@@ -128,6 +128,7 @@ export interface Asset {
   visibility: "private" | "hidden";
   derivativeStatus: "pending" | "ready" | "failed";
   derivativeErrorCode?: string | null;
+  preview?: { thumbnailUrl?: string | null; watermarkedPreviewUrl?: string | null; videoPosterUrl?: string | null } | null;
   createdAt: string;
   files: Array<{ purpose: string; mediaType: string; sizeBytes: number }>;
 }

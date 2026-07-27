@@ -17,6 +17,14 @@ class AssetFileView(BaseModel):
     size_bytes: int = Field(alias="sizeBytes")
 
 
+class AssetPreviewView(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    thumbnail_url: str | None = Field(default=None, alias="thumbnailUrl")
+    watermarked_preview_url: str | None = Field(default=None, alias="watermarkedPreviewUrl")
+    video_poster_url: str | None = Field(default=None, alias="videoPosterUrl")
+
+
 class AssetView(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -27,6 +35,7 @@ class AssetView(BaseModel):
     visibility: Literal["private", "hidden"]
     derivative_status: Literal["pending", "ready", "failed"] = Field(alias="derivativeStatus")
     derivative_error_code: str | None = Field(default=None, alias="derivativeErrorCode")
+    preview: AssetPreviewView | None = None
     created_at: datetime = Field(alias="createdAt")
     files: list[AssetFileView]
 

@@ -36,6 +36,15 @@ class AssetReadService(AssetReader):
             )
         return self._owned(record) if record is not None else None
 
+    async def find_owned_preview(
+        self, *, asset_id: UUID, owner_id: UUID
+    ) -> AssetPreview | None:
+        async with get_engine().connect() as connection:
+            record = await repository.find_owned_read_record(
+                connection, asset_id=asset_id, owner_id=owner_id
+            )
+        return await self._preview(record) if record is not None else None
+
     async def find_public_preview(self, *, asset_id: UUID) -> AssetPreview | None:
         async with get_engine().connect() as connection:
             record = await repository.find_ready_preview_record(connection, asset_id=asset_id)

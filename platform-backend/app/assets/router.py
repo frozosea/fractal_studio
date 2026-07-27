@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -12,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from app.assets import repository
 from app.assets.models import AssetView, AssetVisibilityInput
+from app.assets.reader import AssetReadService
 from app.assets.service import AssetLibraryService, asset_view
 from app.auth.models import AccessPrincipal
 from app.core.access_middleware import enforce_origin_and_csrf, require_principal
@@ -60,7 +62,13 @@ async def list_my_assets(
             before_created_at=before[0] if before else None,
             before_id=before[1] if before else None,
         )
-    page = [asset_view(record) for record in records[:limit]]
+    page_records = records[:limit]
+    reader = AssetReadService()
+    previews = await asyncio.gather(*(
+        reader.find_owned_preview(asset_id=record.id, owner_id=principal.user_id)
+        for record in page_records
+    ))
+    page = [asset_view(record, preview) for record, preview in zip(page_records, previews, strict=True)]
     next_cursor = _encode_cursor(page[-1]) if len(records) > limit and page else None
     return {
         "data": [view.model_dump(mode="json", by_alias=True) for view in page],
@@ -76,7 +84,10 @@ async def get_my_asset(
         record = await repository.find_owned(connection, asset_id=asset_id, owner_id=principal.user_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset_not_found")
-    return {"data": asset_view(record).model_dump(mode="json", by_alias=True)}
+    preview = await AssetReadService().find_owned_preview(
+        asset_id=record.id, owner_id=principal.user_id
+    )
+    return {"data": asset_view(record, preview).model_dump(mode="json", by_alias=True)}
 
 
 @router.patch("/me/assets/{asset_id}")

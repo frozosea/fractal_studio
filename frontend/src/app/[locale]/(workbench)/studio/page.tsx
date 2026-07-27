@@ -49,11 +49,11 @@ const defaults: FractalSpec = {
   scale: 3,
   iterations: 512,
   variant: "mandelbrot",
-  colorMap: "classic_cos",
+  colorMap: "spectral1530",
   metric: "escape",
   smooth: false,
-  colorMode: "direct",
-  cyclesPerOctave: 1,
+  colorMode: "eq_full",
+  cyclesPerOctave: 0.01,
   rotationDeg: 0,
   pairwiseCap: 64,
   julia: false,
@@ -102,8 +102,21 @@ function isTransitionMode(mode: ImageMode): boolean {
   return mode === "transitionPair" || mode === "transitionMulti";
 }
 
-function formulaProgram(source = "z*z+c"): OrbitProgram {
+function formulaProgram(source = "z*z+c"): Extract<OrbitProgram, { type: "formula" }> {
+  const normalized = source.replace(/\s+/g, "").toLowerCase();
+  if (normalized === "z*z+c" || normalized === "z^2+c" || normalized === "pow(z,2)+c") {
+    return { type: "formula", formula: { type: "builtin", id: "mandelbrot" } };
+  }
+  if (normalized === "conj(z)*conj(z)+c" || normalized === "conj(z)^2+c" || normalized === "pow(conj(z),2)+c") {
+    return { type: "formula", formula: { type: "builtin", id: "tricorn" } };
+  }
   return { type: "formula", formula: { type: "dsl", source } };
+}
+
+function formulaSource(program: Extract<OrbitProgram, { type: "formula" }>): string {
+  if (program.formula.type === "dsl") return program.formula.source;
+  if (program.formula.id === "tricorn") return "conj(z)*conj(z)+c";
+  return "z*z+c";
 }
 
 function sequenceProgram(): SequenceOrbit {
@@ -111,8 +124,8 @@ function sequenceProgram(): SequenceOrbit {
     type: "sequence",
     repeat: true,
     steps: [
-      { span: 2, program: { type: "formula", formula: { type: "dsl", source: "z*z+c" } } },
-      { span: 1, program: { type: "formula", formula: { type: "dsl", source: "conj(z)*conj(z)+c" } } },
+      { span: 2, program: formulaProgram("z*z+c") },
+      { span: 1, program: formulaProgram("conj(z)*conj(z)+c") },
     ],
   };
 }
@@ -321,7 +334,7 @@ export default function StudioPage() {
       }));
     }
     if (next === "transitionPair") update({ julia: false, transitionMode: "pair", orbitProgram: null, metric: "escape" });
-    if (next === "transitionMulti") update({ julia: false, transitionMode: "multi", orbitProgram: null, metric: "escape" });
+    if (next === "transitionMulti") update({ julia: false, transitionMode: "multi", transitionThetaMilliDeg: 0, orbitProgram: null, metric: "escape" });
     if (next === "formula") update({ julia: false, transitionMode: "off", orbitProgram: formulaProgram(), metric: "escape" });
     if (next === "sequence") update({ julia: false, transitionMode: "off", orbitProgram: sequenceProgram(), metric: "escape" });
   };
@@ -354,16 +367,13 @@ export default function StudioPage() {
     const steps = sequence.steps.map((step, item) => item === index ? {
       ...step,
       span: patch.span ?? step.span,
-      program: patch.source === undefined ? step.program : {
-        type: "formula" as const,
-        formula: { type: "dsl" as const, source: patch.source },
-      },
+      program: patch.source === undefined ? step.program : formulaProgram(patch.source),
     } : step);
     update({ orbitProgram: { ...sequence, steps } });
   };
   const addSequenceStep = () => {
     if (sequence.steps.length >= 4) return;
-    update({ orbitProgram: { ...sequence, steps: [...sequence.steps, { span: 1, program: { type: "formula", formula: { type: "dsl", source: "z*z+c" } } }] } });
+    update({ orbitProgram: { ...sequence, steps: [...sequence.steps, { span: 1, program: formulaProgram() }] } });
   };
   const removeSequenceStep = (index: number) => {
     if (sequence.steps.length <= 1) return;
@@ -403,7 +413,7 @@ export default function StudioPage() {
         { at: 1, color: "#f0a030" },
       ],
     },
-  } : { colorProgram: null, colorMap: capabilities.colorMaps[0] ?? "classic_cos" });
+  } : { colorProgram: null, colorMap: capabilities.colorMaps.includes("spectral1530") ? "spectral1530" : capabilities.colorMaps[0] ?? "classic_cos" });
   const updateGradient = (patch: Partial<NonNullable<FractalSpec["colorProgram"]>>) => {
     if (spec.colorProgram) update({ colorProgram: { ...spec.colorProgram, ...patch } });
   };
@@ -552,7 +562,7 @@ export default function StudioPage() {
                   <textarea
                     className="instrument-control min-h-24 w-full resize-y p-2 font-mono text-xs"
                     spellCheck={false}
-                    value={spec.orbitProgram?.type === "formula" && spec.orbitProgram.formula.type === "dsl" ? spec.orbitProgram.formula.source : "z*z+c"}
+                    value={spec.orbitProgram?.type === "formula" ? formulaSource(spec.orbitProgram) : "z*z+c"}
                     onChange={(event) => setFormulaSource(event.target.value)}
                   />
                 </Control>
@@ -571,7 +581,7 @@ export default function StudioPage() {
                     <textarea
                       className="instrument-control min-h-16 w-full resize-y p-2 font-mono text-xs"
                       spellCheck={false}
-                      value={step.program.formula.type === "dsl" ? step.program.formula.source : "z*z+c"}
+                      value={formulaSource(step.program)}
                       onChange={(event) => updateSequenceStep(index, { source: event.target.value })}
                     />
                     <div className="mt-2 w-28">
@@ -586,10 +596,27 @@ export default function StudioPage() {
 
             {isTransitionMode(mode) && (
               <>
-                <div className="mb-3">
-                  <label className="mb-1 flex justify-between text-xs text-white/50"><span>{t("transitionAngle")}</span><span className="font-mono text-amber-200/80">{((spec.transitionThetaMilliDeg ?? 0) / 1000).toFixed(1)}°</span></label>
-                  <input className="w-full accent-amber-500" max="180000" min="-180000" step="1000" type="range" value={spec.transitionThetaMilliDeg ?? 0} onChange={(event) => update({ transitionThetaMilliDeg: Number(event.target.value) })} />
-                </div>
+                {mode === "transitionPair" && (
+                  <div className="mb-3">
+                    <label className="mb-1 flex justify-between text-xs text-white/50"><span>{t("transitionAngle")}</span><span className="font-mono text-amber-200/80">{((spec.transitionThetaMilliDeg ?? 0) / 1000).toFixed(1)}°</span></label>
+                    <div className="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-2">
+                      <input className="w-full accent-amber-500" max="180000" min="-180000" step="1000" type="range" value={spec.transitionThetaMilliDeg ?? 0} onChange={(event) => update({ transitionThetaMilliDeg: Number(event.target.value) })} />
+                      <Input
+                        aria-label={t("transitionAngleInput")}
+                        className="h-9 rounded-none font-mono text-xs"
+                        max="180"
+                        min="-180"
+                        step="0.1"
+                        type="number"
+                        value={(spec.transitionThetaMilliDeg ?? 0) / 1000}
+                        onChange={(event) => {
+                          const degrees = Number(event.target.value);
+                          if (Number.isFinite(degrees)) update({ transitionThetaMilliDeg: Math.round(Math.max(-180, Math.min(180, degrees)) * 1000) });
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
                 {mode === "transitionPair" ? (
                   <div className="grid grid-cols-2 gap-2">
                     <Control label={t("transitionFrom")}>

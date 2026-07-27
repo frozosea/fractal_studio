@@ -64,6 +64,13 @@ async def test_asset_library_derivatives_and_owner_download(e2e_api_url: str) ->
         assert {"master", "thumbnail", "watermarked_preview"}.issubset(purposes)
         assert asset is not None
         assert "objectKey" not in asset.text and "runId" not in asset.text
+        assert asset.json()["data"]["preview"]["thumbnailUrl"]
+
+        library = await owner.get("/v1/me/assets?limit=24")
+        assert library.status_code == 200
+        listed = next(item for item in library.json()["data"] if item["id"] == asset_id)
+        assert listed["preview"]["thumbnailUrl"]
+        assert "objectKey" not in library.text
 
         download = await owner.post(f"/v1/assets/{asset_id}/download-url")
         assert download.status_code == 200

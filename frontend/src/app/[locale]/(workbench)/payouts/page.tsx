@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
@@ -9,9 +10,7 @@ import { useAuth } from "@/providers/auth-provider";
 import { authKeys } from "@/lib/hooks/use-auth";
 import { platform, PlatformApiError, type CreatorBalance, type PayoutRequest } from "@/lib/api/platform";
 
-const statusLabels: Record<PayoutRequest["status"], string> = {
-  pending: "Pending review", paid: "Paid", rejected: "Rejected", cancelled: "Cancelled",
-};
+const payoutStatuses: PayoutRequest["status"][] = ["pending", "paid", "rejected", "cancelled"];
 const statusClass: Record<PayoutRequest["status"], string> = {
   pending: "border-amber-400/25 bg-amber-400/10 text-amber-200",
   paid: "border-emerald-400/25 bg-emerald-400/10 text-emerald-200",
@@ -19,11 +18,9 @@ const statusClass: Record<PayoutRequest["status"], string> = {
   cancelled: "border-white/10 bg-white/[0.04] text-muted-foreground",
 };
 
-function text(error: unknown): string {
-  return error instanceof Error ? error.message : "Request failed";
-}
-
 export default function PayoutsPage() {
+  const t = useTranslations("commerce");
+  const locale = useLocale();
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const [rows, setRows] = useState<PayoutRequest[]>([]);
@@ -41,10 +38,15 @@ export default function PayoutsPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  const errorText = (reason: unknown) => reason instanceof PlatformApiError
+    ? t("errors.requestWithCode", { code: reason.code })
+    : t("errors.requestFailed");
+  const formatDate = (value: string) => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+
   const refresh = () =>
     void Promise.all([platform.payouts.list(), platform.payouts.balance()])
       .then(([requests, creatorBalance]) => { setRows(requests.data); setBalance(creatorBalance); })
-      .catch((reason: unknown) => setError(text(reason)));
+      .catch((reason: unknown) => setError(errorText(reason)));
 
   const isCreator = user?.roles.includes("creator") ?? false;
   useEffect(() => { if (isCreator) refresh(); }, [isCreator]);
@@ -66,11 +68,11 @@ export default function PayoutsPage() {
     const normalizedHandle = handle.trim();
     const normalizedDisplayName = displayName.trim();
     if (!/^[a-z0-9_]{3,32}$/.test(normalizedHandle)) {
-      setError("Handle: 3–32 lowercase letters, numbers, or underscores.");
+      setError(t("payouts.invalidHandle"));
       return;
     }
     if (!normalizedDisplayName) {
-      setError("Enter a display name.");
+      setError(t("payouts.displayNameRequired"));
       return;
     }
     setSavingProfile(true);
@@ -79,13 +81,13 @@ export default function PayoutsPage() {
       const user = await platform.auth.creatorProfile(normalizedHandle, normalizedDisplayName);
       queryClient.setQueryData(authKeys.me, user);
       toast({
-        title: "Creator profile created",
-        description: `You can now publish listings as @${user.creatorProfile?.handle ?? normalizedHandle}.`,
+        title: t("payouts.profileCreated"),
+        description: t("payouts.profileCreatedDescription", { handle: user.creatorProfile?.handle ?? normalizedHandle }),
         variant: "success",
       });
       refresh();
     } catch (reason) {
-      setError(text(reason));
+      setError(errorText(reason));
     } finally {
       setSavingProfile(false);
     }
@@ -93,11 +95,11 @@ export default function PayoutsPage() {
 
   const request = async () => {
     if (pendingRequest) {
-      setError("You already have a payout request pending. Cancel it before creating another one.");
+      setError(t("payouts.pendingExists"));
       return;
     }
     if (!file) {
-      setError("Choose payout QR code");
+      setError(t("payouts.chooseQr"));
       return;
     }
     setRequestingPayout(true);
@@ -107,11 +109,11 @@ export default function PayoutsPage() {
       refresh();
     } catch (reason) {
       if (reason instanceof PlatformApiError && reason.code === "payout_request_pending") {
-        setError("You already have a payout request pending. Cancel it before creating another one.");
+        setError(t("payouts.pendingExists"));
       } else if (reason instanceof PlatformApiError && reason.code === "insufficient_creator_balance") {
-        setError("Payout amount exceeds your available creator balance.");
+        setError(t("payouts.insufficientBalance"));
       } else {
-        setError(text(reason));
+        setError(errorText(reason));
       }
       refresh();
     } finally {
@@ -122,36 +124,36 @@ export default function PayoutsPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-semibold">Creator payouts</h1>
-        <p className="text-muted-foreground">Upload Alipay receiving QR. Finance operator sends manual transfer.</p>
+        <h1 className="text-2xl font-semibold">{t("payouts.title")}</h1>
+        <p className="text-muted-foreground">{t("payouts.subtitle")}</p>
       </div>
       {!isCreator && <section className="max-w-lg space-y-3 rounded-xl border border-white/10 p-4">
-        <h2 className="font-medium">Become creator</h2>
+        <h2 className="font-medium">{t("payouts.becomeCreator")}</h2>
         <Input
           value={handle}
-          placeholder="handle (lowercase, e.g. fractal_artist)"
+          placeholder={t("payouts.handlePlaceholder")}
           maxLength={32}
           onChange={(event) => setHandle(event.target.value.toLowerCase())}
         />
-        <Input value={displayName} placeholder="display name" maxLength={120} onChange={(event) => setDisplayName(event.target.value)} />
+        <Input value={displayName} placeholder={t("payouts.displayNamePlaceholder")} maxLength={120} onChange={(event) => setDisplayName(event.target.value)} />
         <Button variant="outline" loading={savingProfile} disabled={!handle || !displayName} onClick={() => void saveCreatorProfile()}>
-          Save creator profile
+          {t("payouts.saveProfile")}
         </Button>
       </section>}
       {isCreator && <div className="grid items-start gap-5 xl:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1.2fr)]">
         <section className="space-y-3 rounded-xl border border-white/10 p-4">
-          <h2 className="font-medium">Request a payout</h2>
-          <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm"><span className="text-muted-foreground">Available to withdraw</span><p className="mt-1 text-lg font-medium">{balance ? `${balance.availableAmount} ${balance.currency}` : "Loading balance…"}</p>{balance && availableBalance <= 0 && <p className="mt-1 text-xs text-muted-foreground">Funds appear here after a buyer pays for one of your listings.</p>}</div>
-          <Input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Amount CNY" disabled={!balance || availableBalance <= 0} />
+          <h2 className="font-medium">{t("payouts.requestTitle")}</h2>
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-sm"><span className="text-muted-foreground">{t("payouts.available")}</span><p className="mt-1 text-lg font-medium">{balance ? `${balance.availableAmount} ${balance.currency}` : t("payouts.loadingBalance")}</p>{balance && availableBalance <= 0 && <p className="mt-1 text-xs text-muted-foreground">{t("payouts.balanceHint")}</p>}</div>
+          <Input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("payouts.amountPlaceholder")} disabled={!balance || availableBalance <= 0} />
           <input type="file" accept="image/png,image/jpeg" onChange={(event: ChangeEvent<HTMLInputElement>) => setFile(event.target.files?.[0] ?? null)} />
-          {pendingRequest && <p className="rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-sm text-amber-200">A payout request is already pending. Cancel it in the history if you need to submit a new one.</p>}
-          {balance && insufficientBalance && !pendingRequest && <p className="text-sm text-amber-200">Enter an amount no greater than your available balance.</p>}
-          <Button loading={requestingPayout} disabled={!file || Boolean(pendingRequest) || !balance || insufficientBalance} onClick={() => void request()}>{pendingRequest ? "Payout pending" : "Request payout"}</Button>
+          {pendingRequest && <p className="rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-sm text-amber-200">{t("payouts.pendingHint")}</p>}
+          {balance && insufficientBalance && !pendingRequest && <p className="text-sm text-amber-200">{t("payouts.amountLimit")}</p>}
+          <Button loading={requestingPayout} disabled={!file || Boolean(pendingRequest) || !balance || insufficientBalance} onClick={() => void request()}>{pendingRequest ? t("payouts.pendingButton") : t("payouts.requestButton")}</Button>
         </section>
         <section className="rounded-xl border border-white/10 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">Payout history</h2><p className="text-sm text-muted-foreground">{filteredRows.length} of {rows.length} transactions</p></div><Button size="sm" variant="outline" onClick={resetFilters}>Clear filters</Button></div>
-          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3"><label className="text-xs text-muted-foreground">Status<select className="mt-1 h-10 w-full rounded-lg border border-deep-slate bg-deep-slate/50 px-3 text-sm text-foreground" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}><option value="all">All statuses</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-xs text-muted-foreground">Minimum CNY<Input className="mt-1" type="number" min="0" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} /></label><label className="text-xs text-muted-foreground">Maximum CNY<Input className="mt-1" type="number" min="0" value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} /></label><label className="text-xs text-muted-foreground">From<Input className="mt-1" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label className="text-xs text-muted-foreground">To<Input className="mt-1" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label></div>
-          <div className="mt-4 space-y-2">{filteredRows.length ? filteredRows.map((row) => <article key={row.id} className="rounded-lg border border-white/10 bg-white/[0.02] p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-medium">{row.amount} {row.currency}</p><p className="mt-1 text-xs text-muted-foreground">Requested {new Date(row.createdAt).toLocaleString()}</p>{row.paidAt && <p className="mt-1 text-xs text-emerald-300">Paid {new Date(row.paidAt).toLocaleString()}</p>}{row.rejectionReason && <p className="mt-1 text-xs text-red-300">Reason: {row.rejectionReason}</p>}</div><div className="flex items-center gap-2"><span className={`rounded-full border px-2 py-1 text-xs ${statusClass[row.status]}`}>{statusLabels[row.status]}</span>{row.status === "pending" && <Button size="sm" variant="outline" onClick={() => void platform.payouts.cancel(row.id).then(refresh).catch((reason: unknown) => setError(text(reason)))}>Cancel</Button>}</div></div></article>) : <p className="rounded-lg border border-dashed border-white/10 p-6 text-center text-sm text-muted-foreground">No payouts match these filters.</p>}</div>
+          <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">{t("payouts.history")}</h2><p className="text-sm text-muted-foreground">{t("payouts.transactionCount", { shown: filteredRows.length, total: rows.length })}</p></div><Button size="sm" variant="outline" onClick={resetFilters}>{t("actions.clearFilters")}</Button></div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3"><label className="text-xs text-muted-foreground">{t("payouts.status")}<select className="mt-1 h-10 w-full rounded-lg border border-deep-slate bg-deep-slate/50 px-3 text-sm text-foreground" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}><option value="all">{t("payouts.allStatuses")}</option>{payoutStatuses.map((value) => <option key={value} value={value}>{t(`payoutStatus.${value}`)}</option>)}</select></label><label className="text-xs text-muted-foreground">{t("payouts.minimumCny")}<Input className="mt-1" type="number" min="0" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} /></label><label className="text-xs text-muted-foreground">{t("payouts.maximumCny")}<Input className="mt-1" type="number" min="0" value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} /></label><label className="text-xs text-muted-foreground">{t("payouts.from")}<Input className="mt-1" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label className="text-xs text-muted-foreground">{t("payouts.to")}<Input className="mt-1" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label></div>
+          <div className="mt-4 space-y-2">{filteredRows.length ? filteredRows.map((row) => <article key={row.id} className="rounded-lg border border-white/10 bg-white/[0.02] p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-medium">{row.amount} {row.currency}</p><p className="mt-1 text-xs text-muted-foreground">{t("payouts.requestedAt", { date: formatDate(row.createdAt) })}</p>{row.paidAt && <p className="mt-1 text-xs text-emerald-300">{t("payouts.paidAt", { date: formatDate(row.paidAt) })}</p>}{row.rejectionReason && <p className="mt-1 text-xs text-red-300">{t("payouts.reason", { reason: row.rejectionReason })}</p>}</div><div className="flex items-center gap-2"><span className={`rounded-full border px-2 py-1 text-xs ${statusClass[row.status]}`}>{t(`payoutStatus.${row.status}`)}</span>{row.status === "pending" && <Button size="sm" variant="outline" onClick={() => void platform.payouts.cancel(row.id).then(refresh).catch((reason: unknown) => setError(errorText(reason)))}>{t("actions.cancel")}</Button>}</div></div></article>) : <p className="rounded-lg border border-dashed border-white/10 p-6 text-center text-sm text-muted-foreground">{t("payouts.noMatches")}</p>}</div>
         </section>
       </div>}
       {error && <p className="text-red-400">{error}</p>}
