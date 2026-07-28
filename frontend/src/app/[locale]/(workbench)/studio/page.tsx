@@ -30,6 +30,7 @@ import {
   AXIS_TRANSITION_VARIANTS,
   BUILTIN_VARIANTS,
   COLOR_MAPS,
+  FORMULA_EXAMPLES,
   LOCATION_PRESETS,
   METRICS,
   OUTPUT_PRESETS,
@@ -104,7 +105,11 @@ function isTransitionMode(mode: ImageMode): boolean {
 
 function formulaProgram(source = "z*z+c"): Extract<OrbitProgram, { type: "formula" }> {
   const normalized = source.replace(/\s+/g, "").toLowerCase();
-  if (normalized === "z*z+c" || normalized === "z^2+c" || normalized === "pow(z,2)+c") {
+  const example = FORMULA_EXAMPLES.find((item) => item.source.replace(/\s+/g, "").toLowerCase() === normalized);
+  if (example) {
+    return { type: "formula", formula: { type: "builtin", id: example.id } };
+  }
+  if (normalized === "z^2+c" || normalized === "pow(z,2)+c") {
     return { type: "formula", formula: { type: "builtin", id: "mandelbrot" } };
   }
   if (normalized === "conj(z)*conj(z)+c" || normalized === "conj(z)^2+c" || normalized === "pow(conj(z),2)+c") {
@@ -114,9 +119,9 @@ function formulaProgram(source = "z*z+c"): Extract<OrbitProgram, { type: "formul
 }
 
 function formulaSource(program: Extract<OrbitProgram, { type: "formula" }>): string {
-  if (program.formula.type === "dsl") return program.formula.source;
-  if (program.formula.id === "tricorn") return "conj(z)*conj(z)+c";
-  return "z*z+c";
+  const formula = program.formula;
+  if (formula.type === "dsl") return formula.source;
+  return FORMULA_EXAMPLES.find((item) => item.id === formula.id)?.source ?? "z*z+c";
 }
 
 function sequenceProgram(): SequenceOrbit {
@@ -566,6 +571,30 @@ export default function StudioPage() {
                     onChange={(event) => setFormulaSource(event.target.value)}
                   />
                 </Control>
+                <details className="mb-2 border border-white/10 bg-black/15">
+                  <summary className="flex cursor-pointer list-none items-center justify-between px-2 py-1.5 text-[11px] uppercase tracking-wider text-white/50 hover:text-white/75">
+                    <span>{t("formulaExamples")}</span>
+                    <span className="font-mono text-amber-200/60">{FORMULA_EXAMPLES.length}</span>
+                  </summary>
+                  <div className="max-h-64 space-y-1 overflow-y-auto border-t border-white/10 p-1.5">
+                    {FORMULA_EXAMPLES.map((item) => {
+                      const name = t(`variants.${item.id}.name`);
+                      return (
+                        <button
+                          aria-label={t("useFormulaExample", { name })}
+                          className="block w-full border border-transparent px-2 py-1.5 text-left hover:border-amber-300/25 hover:bg-amber-400/5"
+                          key={item.id}
+                          onClick={() => setFormulaSource(item.source)}
+                          type="button"
+                        >
+                          <span className="block text-[11px] text-white/65">{name}</span>
+                          <code className="mt-0.5 block break-all text-[10px] leading-relaxed text-amber-100/65">{item.source}</code>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="border-t border-white/10 px-2 py-1.5 text-[10px] leading-relaxed text-white/35">{t("formulaExamplesHint")}</p>
+                </details>
                 <p className="instrument-note">{t("formulaHint")}</p>
               </>
             )}

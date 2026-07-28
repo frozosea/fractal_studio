@@ -1,6 +1,7 @@
 #include "compute/orbit_program.hpp"
 #include "compute/orbit_program_json.hpp"
 
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -16,6 +17,41 @@ void require(bool condition, const std::string& message) {
 
 bool close(Cx<double> a, Cx<double> b, double tolerance = 1e-12) {
     return std::abs(a.re - b.re) <= tolerance && std::abs(a.im - b.im) <= tolerance;
+}
+
+void verify_builtin_formula_examples() {
+    struct Example {
+        Variant variant;
+        const char* source;
+    };
+    constexpr std::array examples{
+        Example{Variant::Mandelbrot, "z*z+c"},
+        Example{Variant::Tri, "conj(z*z)+c"},
+        Example{Variant::Boat, "(abs(real(z))+i*abs(imag(z)))^2+c"},
+        Example{Variant::Duck, "(real(z)+i*abs(imag(z)))^2+c"},
+        Example{Variant::Bell, "(abs(real(z))-i*imag(z))^2+c"},
+        Example{Variant::Fish, "abs(real(z*z))+i*imag(z*z)+c"},
+        Example{Variant::Vase, "abs(real(z*z))-i*imag(z*z)+c"},
+        Example{Variant::Bird, "abs(real(z*z))+i*abs(imag(z*z))+c"},
+        Example{Variant::Mask, "abs(real((real(z)+i*abs(imag(z)))^2))+i*imag((real(z)+i*abs(imag(z)))^2)+c"},
+        Example{Variant::Ship, "abs(real((abs(real(z))+i*imag(z))^2))-i*imag((abs(real(z))+i*imag(z))^2)+c"},
+        Example{Variant::SinZ, "sin(z)+c"},
+        Example{Variant::CosZ, "cos(z)+c"},
+        Example{Variant::ExpZ, "exp(z)+c"},
+        Example{Variant::SinhZ, "sinh(z)+c"},
+        Example{Variant::CoshZ, "cosh(z)+c"},
+        Example{Variant::TanZ, "tan(z)+c"},
+    };
+    const std::array<Cx<double>, 2> samples{{{0.25, -0.75}, {-0.6, 0.3}}};
+    const Cx<double> c{-0.4, 0.2};
+    for (const auto& example : examples) {
+        const auto builtin = OrbitProgram::builtin(example.variant);
+        const auto dsl = OrbitProgram::formula(example.source);
+        for (const auto& z : samples) {
+            require(close(builtin->step(z, c, 7), dsl->step(z, c, 7), 1e-11),
+                    std::string("formula example does not match builtin: ") + example.source);
+        }
+    }
 }
 
 void verify_dsl() {
@@ -122,6 +158,7 @@ void verify_limits() {
 
 int main() {
     try {
+        verify_builtin_formula_examples();
         verify_dsl();
         verify_sequence();
         verify_output_blend_counterexample();

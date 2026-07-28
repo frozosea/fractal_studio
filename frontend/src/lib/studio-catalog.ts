@@ -19,6 +19,33 @@ export const BUILTIN_VARIANTS = [
   "tan_z",
 ] as const;
 
+export type BuiltinVariant = (typeof BUILTIN_VARIANTS)[number];
+
+// Input-ready equivalents of every built-in two-dimensional orbit. Studio
+// recognizes these exact expressions and keeps them on the corresponding
+// certified/optimized built-in path until the user edits the formula.
+export const FORMULA_EXAMPLES: ReadonlyArray<{
+  id: BuiltinVariant;
+  source: string;
+}> = [
+  { id: "mandelbrot", source: "z*z+c" },
+  { id: "tricorn", source: "conj(z*z)+c" },
+  { id: "burning_ship", source: "(abs(real(z))+i*abs(imag(z)))^2+c" },
+  { id: "celtic", source: "(real(z)+i*abs(imag(z)))^2+c" },
+  { id: "heart", source: "(abs(real(z))-i*imag(z))^2+c" },
+  { id: "buffalo", source: "abs(real(z*z))+i*imag(z*z)+c" },
+  { id: "perp_buffalo", source: "abs(real(z*z))-i*imag(z*z)+c" },
+  { id: "celtic_ship", source: "abs(real(z*z))+i*abs(imag(z*z))+c" },
+  { id: "mandelceltic", source: "abs(real((real(z)+i*abs(imag(z)))^2))+i*imag((real(z)+i*abs(imag(z)))^2)+c" },
+  { id: "perp_ship", source: "abs(real((abs(real(z))+i*imag(z))^2))-i*imag((abs(real(z))+i*imag(z))^2)+c" },
+  { id: "sin_z", source: "sin(z)+c" },
+  { id: "cos_z", source: "cos(z)+c" },
+  { id: "exp_z", source: "exp(z)+c" },
+  { id: "sinh_z", source: "sinh(z)+c" },
+  { id: "cosh_z", source: "cosh(z)+c" },
+  { id: "tan_z", source: "tan(z)+c" },
+];
+
 export const AXIS_TRANSITION_VARIANTS = BUILTIN_VARIANTS.slice(0, 10);
 
 export const METRICS = [
