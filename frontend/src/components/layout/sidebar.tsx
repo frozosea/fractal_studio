@@ -34,7 +34,7 @@ const navItems: NavItem[] = [
   { label: "favorites", href: "/favorites", icon: Heart },
   { label: "listings", href: "/listings", icon: List, requireMember: true },
   { label: "purchases", href: "/purchases", icon: ReceiptText },
-  { label: "payouts", href: "/payouts", icon: Landmark, requireMember: true },
+  { label: "payouts", href: "/payouts", icon: Landmark },
   { label: "finance", href: "/finance", icon: ShieldCheck, requiredRole: "finance_operator" },
   { label: "membership", href: "/membership", icon: Crown, hideForMember: true },
 ];

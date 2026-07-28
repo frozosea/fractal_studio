@@ -857,8 +857,8 @@ export default function StudioPage() {
                   <option value="custom">{t("outputPresets.custom")}</option>
                 </select>
               </Control>
-              <NumberControl label={t("width")} min="64" max="4096" step="1" value={output.width} onChange={(value) => updateOutputDimension("width", value)} />
-              <NumberControl label={t("height")} min="64" max="4096" step="1" value={output.height} onChange={(value) => updateOutputDimension("height", value)} />
+              <ClampedNumberControl label={t("width")} min={64} max={4096} step="1" value={output.width} onCommit={(value) => updateOutputDimension("width", value)} />
+              <ClampedNumberControl label={t("height")} min={64} max={4096} step="1" value={output.height} onCommit={(value) => updateOutputDimension("height", value)} />
               <Button className="h-9 rounded-none border-amber-300/30 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25" disabled={exporting} onClick={() => void saveAndRender()}>
                 <Save className="h-4 w-4" />{exporting ? t("creatingExport") : t("exportPng")}
               </Button>
@@ -905,6 +905,37 @@ function Control({ label, children }: { label: string; children: React.ReactNode
 
 function NumberControl({ label, value, onChange, ...props }: { label: string; value: number; onChange: (value: number) => void } & Omit<React.ComponentProps<typeof Input>, "value" | "onChange">) {
   return <Control label={label}><Input className="instrument-control h-9 rounded-none font-mono text-xs" value={Number.isFinite(value) ? value : 0} type="number" onChange={(event) => onChange(Number(event.target.value))} {...props} /></Control>;
+}
+
+function ClampedNumberControl({ label, value, min, max, onCommit, ...props }: { label: string; value: number; min: number; max: number; onCommit: (value: number) => void } & Omit<React.ComponentProps<typeof Input>, "value" | "onChange" | "min" | "max">) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const commit = () => {
+    const trimmed = draft.trim();
+    const parsed = Number(trimmed);
+    if (!trimmed || !Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const clamped = Math.max(min, Math.min(max, Math.round(parsed)));
+    setDraft(String(clamped));
+    onCommit(clamped);
+  };
+  return (
+    <Control label={label}>
+      <Input
+        className="instrument-control h-9 rounded-none font-mono text-xs"
+        max={max}
+        min={min}
+        type="number"
+        value={draft}
+        onBlur={commit}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+        {...props}
+      />
+    </Control>
+  );
 }
 
 function PreciseControl({ label, value, onCommit }: { label: string; value: string; onCommit: (value: string) => void }) {
