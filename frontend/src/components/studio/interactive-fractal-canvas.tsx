@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Minus, Plus, LoaderCircle, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { FractalSpec } from "@/lib/api/platform";
@@ -52,6 +52,7 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
   const drag = useRef<{ x: number; y: number; re: number; im: number; moved: boolean } | null>(null);
   const wheelActive = useRef(false);
   const wheelTimer = useRef<number | null>(null);
+  const wheelHandler = useRef<(event: WheelEvent) => void>(() => undefined);
 
   const move = (x: number, y: number, baseRe: number, baseIm: number, startX: number, startY: number) => {
     const box = element.current?.getBoundingClientRect();
@@ -83,7 +84,34 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
     };
   })();
 
-  return <div className="scientific-canvas relative overflow-hidden bg-black" ref={element}
+  wheelHandler.current = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!wheelActive.current) { wheelActive.current = true; onNavigationStart(); }
+    if (wheelTimer.current) window.clearTimeout(wheelTimer.current);
+    wheelTimer.current = window.setTimeout(() => { wheelActive.current = false; }, 180);
+    const box = element.current?.getBoundingClientRect();
+    if (!box) return;
+    const oldScale = Number(spec.scale ?? 3);
+    const nextScale = Math.min(1e9, Math.max(1e-12, oldScale * Math.exp(event.deltaY * 0.0015)));
+    const world = worldFromClient(spec, box, event.clientX, event.clientY);
+    const nextAtCursor = worldFromClient({ ...spec, centerRe: 0, centerIm: 0 }, box, event.clientX, event.clientY, nextScale);
+    onChange({ scale: nextScale, centerRe: world.re - nextAtCursor.re, centerIm: world.im - nextAtCursor.im });
+  };
+
+  useEffect(() => {
+    const canvas = element.current;
+    if (!canvas) return;
+    const handleWheel = (event: WheelEvent) => wheelHandler.current(event);
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  useEffect(() => () => {
+    if (wheelTimer.current) window.clearTimeout(wheelTimer.current);
+  }, []);
+
+  return <div className="scientific-canvas relative mx-auto max-w-full overflow-hidden bg-black" ref={element}
     onPointerDown={(event) => {
       if ((event.target as HTMLElement).closest("button")) return;
       onNavigationStart(); event.currentTarget.setPointerCapture(event.pointerId);
@@ -102,17 +130,6 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       if (value && !value.moved && box && onPointSelect) onPointSelect(worldFromClient(spec, box, event.clientX, event.clientY));
     }}
     onPointerCancel={() => { drag.current = null; }}
-    onWheel={(event) => {
-      event.preventDefault();
-      if (!wheelActive.current) { wheelActive.current = true; onNavigationStart(); }
-      if (wheelTimer.current) window.clearTimeout(wheelTimer.current);
-      wheelTimer.current = window.setTimeout(() => { wheelActive.current = false; }, 180);
-      const box = element.current?.getBoundingClientRect(); if (!box) return;
-      const oldScale = Number(spec.scale ?? 3); const nextScale = Math.min(1e9, Math.max(1e-12, oldScale * Math.exp(event.deltaY * 0.0015)));
-      const world = worldFromClient(spec, box, event.clientX, event.clientY);
-      const nextAtCursor = worldFromClient({ ...spec, centerRe: 0, centerIm: 0 }, box, event.clientX, event.clientY, nextScale);
-      onChange({ scale: nextScale, centerRe: world.re - nextAtCursor.re, centerIm: world.im - nextAtCursor.im });
-    }}
     onDoubleClick={(event) => {
       const box = element.current?.getBoundingClientRect(); if (!box) return;
       onNavigationStart();
@@ -121,7 +138,13 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       const nextAtCursor = worldFromClient({ ...spec, centerRe: 0, centerIm: 0 }, box, event.clientX, event.clientY, nextScale);
       onChange({ scale: nextScale, centerRe: world.re - nextAtCursor.re, centerIm: world.im - nextAtCursor.im });
     }}
-    style={{ touchAction: "none", aspectRatio: `${width}/${height}` }}>
+    style={{
+      touchAction: "none",
+      overscrollBehavior: "contain",
+      aspectRatio: `${width}/${height}`,
+      height: "min(64dvh, 52rem)",
+      width: "auto",
+    }}>
     {preview ? <img src={preview} alt={labels.alt} draggable={false} className="h-full w-full select-none object-contain" /> : <div className="grid h-full min-h-[26rem] place-items-center text-sm text-white/45">{labels.empty}</div>}
     <div className="pointer-events-none absolute inset-0" aria-hidden="true">
       <span className="absolute left-1/2 top-0 h-full w-px bg-amber-300/10" />
