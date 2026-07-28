@@ -8,5 +8,6 @@ export interface UserView {
   email: string;
   roles: string[];
   status: "active" | "disabled";
+  member?: boolean;
   creatorProfile?: { handle: string; displayName: string } | null;
 }

@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 from fastapi import HTTPException, Request, status
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -52,11 +53,15 @@ async def _user_view(connection: AsyncConnection, user_id: uuid.UUID) -> UserVie
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthenticated")
     profile = await creator_profile_repository.find(connection, user_id)
+    member = await connection.scalar(
+        text("SELECT status FROM memberships WHERE user_id = :uid"), {"uid": user_id}
+    )
     return UserView(
         id=user["id"],
         email=str(user["email"]),
         status=str(user["status"]),
         roles=await user_role_repository.list_roles(connection, user_id),
+        member=member == "active",
         creator_profile=(
             {"handle": str(profile["handle"]), "display_name": str(profile["display_name"])}
             if profile

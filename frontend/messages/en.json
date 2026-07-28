@@ -52,6 +52,7 @@
     "eyebrow": "2D map laboratory",
     "title": "Fractal Studio",
     "subtitle": "Explore mathematical maps, Julia sets, axis transitions and safe custom orbit programs; export the current composition as a reproducible PNG.",
+    "memberLocked": "Member exclusive — upgrade in Membership page",
     "renderer": "Renderer",
     "loadingCapabilities": "probing",
     "sections": {
@@ -517,6 +518,47 @@
       "subtitle": "Downloads are available while the purchase entitlement is active.",
       "empty": "No purchases yet."
     },
+    "paymentResult": {
+      "title": "Payment result",
+      "verifying": { "title": "Verifying payment", "description": "Checking with Alipay sandbox…", "badge": "Verifying" },
+      "success": { "title": "Payment successful", "description": "The asset has been added to your library. You can download it anytime.", "badge": "Paid" },
+      "pending": { "title": "Processing", "description": "The payment is still being processed. Check your purchases later.", "badge": "Processing" },
+      "closed": { "title": "Transaction closed", "description": "The payment was not completed or has timed out.", "badge": "Closed" },
+      "exception": { "title": "Payment exception", "description": "An error occurred during payment processing.", "badge": "Exception" },
+      "notFound": { "title": "Order not found", "description": "Could not locate the order. Check your purchase history.", "badge": "Not found" },
+      "downloadAssets": "Download assets",
+      "downloadStarted": "Download started",
+      "viewPurchases": "View purchases",
+      "backToExplore": "Back to marketplace",
+      "membershipTitle": "You are now a Fractal Studio Member!",
+      "membershipDescription": "All studio modes are unlocked. Start creating.",
+      "membershipWelcome": "You are now a Fractal Studio Member! Start creating!",
+      "goToStudio": "Go to Studio"
+    },
+    "order": {
+      "title": "Order details",
+      "id": "Order ID",
+      "createdAt": "Created",
+      "paidAt": "Paid at",
+      "awaitingPayment": "Complete payment on the Alipay sandbox page.",
+      "exceptionHint": "Payment has been flagged for manual review."
+    },
+    "membership": {
+      "title": "Become a Fractal Studio Member!",
+      "subtitle": "One payment. Lifetime access. Unlock the full power of fractal creation.",
+      "lifetime": "LIFETIME",
+      "oneTime": "One-time payment, lifetime membership",
+      "benefitMap": "Classic map rendering",
+      "benefitJulia": "Julia set exploration",
+      "benefitAll": "All transition modes",
+      "benefitExport": "Unlimited PNG export",
+      "payButton": "Pay ¥29 — Become a Member",
+      "activeTitle": "You are a Member",
+      "activeDescription": "All features unlocked. Enjoy the full fractal experience.",
+      "alreadyMemberToast": "You are already a member!",
+      "pendingToast": "You have a pending membership payment. Please complete or wait for it to expire.",
+      "membership": "Membership"
+    },
     "payouts": {
       "title": "Creator payouts",
       "subtitle": "Upload an Alipay receiving QR code; a finance operator completes the transfer manually.",
@@ -577,7 +619,8 @@
       "listings": "My listings",
       "purchases": "Purchases",
       "payouts": "Payouts",
-      "finance": "Finance"
+      "finance": "Finance",
+      "membership": "Membership"
     },
     "footer": "Mathematical image workbench",
     "toggleSidebar": "Toggle sidebar",

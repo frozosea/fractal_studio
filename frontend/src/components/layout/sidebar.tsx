@@ -14,6 +14,7 @@ import {
   Heart,
   ShieldCheck,
   Loader2,
+  Crown,
   type LucideIcon,
 } from "lucide-react";
 
@@ -22,6 +23,8 @@ interface NavItem {
   href: string;
   icon: LucideIcon;
   requiredRole?: string;
+  hideForMember?: boolean;
+  requireMember?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -29,10 +32,11 @@ const navItems: NavItem[] = [
   { label: "library", href: "/assets", icon: Images },
   { label: "marketplace", href: "/explore", icon: Store },
   { label: "favorites", href: "/favorites", icon: Heart },
-  { label: "listings", href: "/listings", icon: List },
+  { label: "listings", href: "/listings", icon: List, requireMember: true },
   { label: "purchases", href: "/purchases", icon: ReceiptText },
-  { label: "payouts", href: "/payouts", icon: Landmark },
+  { label: "payouts", href: "/payouts", icon: Landmark, requireMember: true },
   { label: "finance", href: "/finance", icon: ShieldCheck, requiredRole: "finance_operator" },
+  { label: "membership", href: "/membership", icon: Crown, hideForMember: true },
 ];
 
 export function Sidebar() {
@@ -83,7 +87,12 @@ export function Sidebar() {
 
       {/* Navigation — soft hover, no harsh highlights */}
       <nav className="flex-1 space-y-0.5 p-3" aria-label={t("navigation")}>
-        {navItems.filter((item) => !item.requiredRole || user?.roles.includes(item.requiredRole)).map((item) => {
+        {navItems.filter((item) => {
+          if (item.requiredRole && !user?.roles.includes(item.requiredRole)) return false;
+          if (item.hideForMember && user?.member) return false;
+          if (item.requireMember && !user?.member) return false;
+          return true;
+        }).map((item) => {
           const isActive = pathname.startsWith(item.href);
           const Icon = item.icon;
           return (

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { InteractiveFractalCanvas } from "@/components/studio/interactive-fractal-canvas";
+import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Link } from "@/i18n/navigation";
@@ -148,8 +149,13 @@ function formatCoordinate(value: number | undefined): string {
   return Number.isFinite(numeric) ? numeric.toPrecision(12).replace(/(?:\.0+|(?:(\.\d*?)0+))(?=e|$)/, "$1") : "0";
 }
 
+/** Modes that require membership — gated for non-members */
+const MEMBER_ONLY_MODES: ReadonlySet<ImageMode> = new Set(["transitionMulti", "formula", "sequence"]);
+
 export default function StudioPage() {
   const t = useTranslations("studio");
+  const { user } = useAuth();
+  const isMember = !!user?.member;
   const [spec, setSpec] = useState<FractalSpec>(defaults);
   const [juliaPickerSpec, setJuliaPickerSpec] = useState<FractalSpec>(defaults);
   const [mode, setMode] = useState<ImageMode>("map");
@@ -510,7 +516,9 @@ export default function StudioPage() {
           <Panel index="01" title={t("sections.imageMode")}>
             <div className="grid grid-cols-2 gap-1.5">
               {(["map", "julia", "transitionPair", "transitionMulti", "formula", "sequence"] as const).map((item) => {
-                const disabled = (item.startsWith("transition") && !capabilities.imageKinds.transition.enabled)
+                const locked = !isMember && MEMBER_ONLY_MODES.has(item);
+                const disabled = locked
+                  || (item.startsWith("transition") && !capabilities.imageKinds.transition.enabled)
                   || (item === "formula" && capabilities.orbitPrograms.formula === false)
                   || (item === "sequence" && capabilities.orbitPrograms.sequence === false);
                 return (
@@ -521,9 +529,11 @@ export default function StudioPage() {
                     key={item}
                     onClick={() => selectMode(item)}
                     type="button"
+                    title={locked ? t("memberLocked") : undefined}
                   >
                     {item === "formula" ? <Braces className="h-3.5 w-3.5" /> : item === "sequence" ? <Layers3 className="h-3.5 w-3.5" /> : null}
                     {t(modeLabelKey(item))}
+                    {locked && <span className="ml-1 text-[10px] opacity-60">🔒</span>}
                   </button>
                 );
               })}

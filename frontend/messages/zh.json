@@ -52,6 +52,7 @@
     "eyebrow": "二维图谱实验室",
     "title": "分形工作室",
     "subtitle": "探索数学图谱、Julia 集、轴向过渡和安全的自定义轨道程序，并把当前构图导出为可复现的 PNG。",
+    "memberLocked": "会员专属 — 请在会员页面升级",
     "renderer": "渲染器",
     "loadingCapabilities": "探测中",
     "sections": {
@@ -517,6 +518,47 @@
       "subtitle": "购买授权有效时可以下载对应素材。",
       "empty": "暂无购买记录。"
     },
+    "paymentResult": {
+      "title": "支付结果",
+      "verifying": { "title": "正在确认支付", "description": "正在向支付宝沙箱查询支付状态…", "badge": "验证中" },
+      "success": { "title": "支付成功", "description": "素材已加入素材库，可随时下载。", "badge": "已支付" },
+      "pending": { "title": "处理中", "description": "银行处理需要几分钟，请稍后查看购买记录。", "badge": "处理中" },
+      "closed": { "title": "交易已关闭", "description": "支付未完成或已超时。", "badge": "已关闭" },
+      "exception": { "title": "支付异常", "description": "支付过程中出现异常。", "badge": "异常" },
+      "notFound": { "title": "未找到订单", "description": "未找到对应订单，请查看购买记录。", "badge": "未找到" },
+      "downloadAssets": "下载素材",
+      "downloadStarted": "开始下载",
+      "viewPurchases": "查看已购",
+      "backToExplore": "返回市场",
+      "membershipTitle": "您已成为Fractal Studio会员！",
+      "membershipDescription": "所有工作室模式已解锁，开始您的创作吧。",
+      "membershipWelcome": "您已成为Fractal Studio会员！开始您的创作吧！",
+      "goToStudio": "进入图谱工作室"
+    },
+    "order": {
+      "title": "订单详情",
+      "id": "订单编号",
+      "createdAt": "创建时间",
+      "paidAt": "支付时间",
+      "awaitingPayment": "请在支付宝沙箱页面完成支付。",
+      "exceptionHint": "此订单已标记为需要人工处理。"
+    },
+    "membership": {
+      "title": "立刻成为Fractal Studio会员！",
+      "subtitle": "一次支付，终身会员，解锁全部分形创作功能。",
+      "lifetime": "终身",
+      "oneTime": "一次支付，终身有效",
+      "benefitMap": "经典图谱渲染",
+      "benefitJulia": "Julia 集探索",
+      "benefitAll": "全部过渡模式",
+      "benefitExport": "无限 PNG 导出",
+      "payButton": "支付 ¥29 — 立刻成为会员",
+      "activeTitle": "您已是会员",
+      "activeDescription": "所有功能已解锁，畅享完整分形创作体验。",
+      "alreadyMemberToast": "您已经是会员！",
+      "pendingToast": "您有一个待处理的会员支付，请完成或等待过期。",
+      "membership": "会员"
+    },
     "payouts": {
       "title": "创作者结算",
       "subtitle": "上传支付宝收款码，由财务人员人工完成转账。",
@@ -577,7 +619,8 @@
       "listings": "我的上架",
       "purchases": "购买记录",
       "payouts": "结算",
-      "finance": "财务管理"
+      "finance": "财务管理",
+      "membership": "会员"
     },
     "footer": "数学图像工作台",
     "toggleSidebar": "切换侧栏",
