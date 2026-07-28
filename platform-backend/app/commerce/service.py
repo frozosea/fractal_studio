@@ -251,9 +251,20 @@ class CommerceService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="alipay_trade_mismatch")
         if not await repository.mark_settled(connection, attempt=attempt, alipay_trade_no=trade.trade_no):
             return
-        await repository.grant_entitlements(connection, buyer_id=attempt.buyer_id, items=attempt.items)
-        for item in attempt.items:
-            await self._ledger.record_sale(connection, order_item_id=item.id, request_id_value=request_id_value)
+        # Grant entitlements only when order_items exist (not for membership-only orders)
+        if attempt.items:
+            await repository.grant_entitlements(connection, buyer_id=attempt.buyer_id, items=attempt.items)
+            for item in attempt.items:
+                await self._ledger.record_sale(connection, order_item_id=item.id, request_id_value=request_id_value)
+        # Auto-activate membership if this is a membership order
+        from sqlalchemy import text as sa_text
+        is_membership = await connection.scalar(sa_text(
+            "SELECT 1 FROM membership_orders WHERE order_id = :oid"
+        ), {"oid": attempt.order_id})
+        if is_membership:
+            await connection.execute(sa_text(
+                "INSERT INTO memberships (user_id, status) VALUES (:uid, 'active') ON CONFLICT (user_id) DO UPDATE SET status = 'active', granted_at = now()"
+            ), {"uid": attempt.buyer_id})
         await self._audit(connection, "payment.settled", attempt, request_id_value)
 
     async def _reverse_paid(self, *, payment_attempt_id: UUID, amount: Decimal, reference: str,

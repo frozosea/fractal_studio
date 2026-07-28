@@ -49,6 +49,7 @@ class UserView(BaseModel):
     status: Literal["active", "disabled"]
     roles: list[Literal["creator", "finance_operator"]]
     creator_profile: CreatorProfileView | None = Field(default=None, alias="creatorProfile")
+    member: bool = False
 
     model_config = ConfigDict(populate_by_name=True)
 

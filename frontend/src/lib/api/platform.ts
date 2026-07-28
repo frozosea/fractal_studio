@@ -9,6 +9,7 @@ export interface PlatformUser {
   email: string;
   roles: Role[];
   status: "active" | "disabled";
+  member?: boolean;
   creatorProfile?: { handle: string; displayName: string } | null;
 }
 
@@ -344,6 +345,11 @@ export const platform = {
     payouts: (status?: PayoutRequest["status"]) => collection<InternalPayoutRequest>(`/internal/v1/payout-requests?limit=48${status ? `&status=${status}` : ""}`),
     markPaid: (payoutId: string, externalReference: string) => request<InternalPayoutRequest>(`/internal/v1/payout-requests/${payoutId}/mark-paid`, { method: "POST", body: json({ externalReference }) }, { csrf: true, idempotency: true }),
     reject: (payoutId: string, reason: string) => request<InternalPayoutRequest>(`/internal/v1/payout-requests/${payoutId}/reject`, { method: "POST", body: json({ reason }) }, { csrf: true, idempotency: true }),
+  },
+  membership: {
+    status: () => request<{ member: boolean }>("/v1/me/membership"),
+    checkout: () => request<{ order: Order; paymentAttempt: { id: string; outTradeNo: string; status: string; expiresAt: string }; alipayForm: { action: string; method: "POST"; fields: Record<string, string> } }>("/v1/membership/checkout", { method: "POST" }, { csrf: true, idempotency: true }),
+    grant: (email: string) => request<{ member: boolean }>("/internal/membership/grant", { method: "POST", body: json({ email }) }, { csrf: true, idempotency: true }),
   },
 };
 

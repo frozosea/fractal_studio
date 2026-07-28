@@ -16,6 +16,7 @@ from app.commerce.router import router as commerce_router
 from app.finance.payout_operator_router import router as payout_operator_router
 from app.finance.payout_router import router as payout_router
 from app.marketplace.router import router as marketplace_router
+from app.membership.router import router as membership_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging, log_event
 from app.core.request_context import idempotency_key_var, request_id_var, user_id_var
@@ -38,6 +39,7 @@ app.include_router(marketplace_router)
 app.include_router(commerce_router)
 app.include_router(payout_router)
 app.include_router(payout_operator_router)
+app.include_router(membership_router)
 
 
 def _uuid7() -> str:

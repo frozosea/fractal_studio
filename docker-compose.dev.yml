@@ -89,11 +89,15 @@ services:
       S3_REGION: us-east-1
       S3_ACCESS_KEY_ID: minio
       S3_SECRET_ACCESS_KEY: minio_dev_password
-      ALIPAY_STUB_MODE: "true"
-      ALIPAY_APP_ID: dev-stub
-      ALIPAY_SELLER_ID: dev-stub
-      ALIPAY_STUB_PUBLIC_KEY_URL: http://alipay-stub:8000/test/public-key
-      ALIPAY_GATEWAY_URL: http://localhost:${ALIPAY_STUB_PORT:-18102}/gateway.do
+      ALIPAY_STUB_MODE: "false"
+      ALIPAY_APP_ID: "9021000166609768"
+      ALIPAY_SELLER_ID: "2088721106011274"
+      ALIPAY_STUB_PUBLIC_KEY_URL: ""
+      ALIPAY_GATEWAY_URL: https://openapi-sandbox.dl.alipaydev.com/gateway.do
+      ALIPAY_NOTIFY_URL: https://durable-eskimo-dweller.ngrok-free.dev/v1/webhooks/alipay
+      ALIPAY_RETURN_URL: http://localhost:3010/payment-result
+      ALIPAY_PRIVATE_KEY_PATH: /app/alipay_app_private.pem
+      ALIPAY_PUBLIC_KEY_PATH: /app/alipay_sandbox_public.pem
       PAYMENT_RECONCILE_DELAY_SECONDS: "1"
       OUTBOX_POLL_INTERVAL_SECONDS: "0.5"
       OUTBOX_SCHEDULE_INTERVAL_SECONDS: "1"
@@ -107,6 +111,9 @@ services:
     command: ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment: *platform-env
     ports: ["${PLATFORM_PORT:-18100}:8000"]
+    volumes:
+      - ./alipay_app_private.pem:/app/alipay_app_private.pem:ro
+      - ./alipay_sandbox_public.pem:/app/alipay_sandbox_public.pem:ro
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -122,6 +129,9 @@ services:
       context: ./platform-backend
     command: ["uv", "run", "--no-sync", "python", "-m", "app.outbox.worker"]
     environment: *platform-env
+    volumes:
+      - ./alipay_app_private.pem:/app/alipay_app_private.pem:ro
+      - ./alipay_sandbox_public.pem:/app/alipay_sandbox_public.pem:ro
     depends_on:
       migrate:
         condition: service_completed_successfully
