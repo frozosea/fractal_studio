@@ -103,14 +103,7 @@ async def membership_checkout(
                 VALUES (:id, :order_id, :out_trade_no, 'created', :amount, :expires_at)
             """), {"id": attempt_id, "order_id": order_id, "out_trade_no": out_trade_no,
                  "amount": MEMBERSHIP_PRICE, "expires_at": expires_at})
-            # Store membership intent as a separate table row (avoids order_items FK chain)
-            await connection.execute(text("""
-                CREATE TABLE IF NOT EXISTS membership_orders (
-                    order_id UUID PRIMARY KEY REFERENCES orders(id),
-                    user_id UUID NOT NULL REFERENCES users(id),
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-            """))
+            # Store membership intent separately from the marketplace order-item chain.
             await connection.execute(text("""
                 INSERT INTO membership_orders (order_id, user_id) VALUES (:oid, :uid)
             """), {"oid": order_id, "uid": principal.user_id})
