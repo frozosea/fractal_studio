@@ -346,7 +346,7 @@ Worker 接收算法：
 | `unverified` | `null` | 未证明。任何有限模长都不能仅凭阈值标为 escaped。 |
 | `no_finite_bound` | `null` | 已知没有适用的有限径向界。 |
 
-无证书轨道只运行到 `maxIterations` 或遇到非有限数值；溢出/NaN 是 `numerically_diverged/indeterminate`，不是数学逃逸。任意 DSL、transcendental、未来 output blend 默认无证书。Mandelbrot/Burning Ship 的离散周期 sequence 可组合共同证书；两者复数输出的 50% blend 反例必须保持 `certifiedRadius=null`。
+无证书轨道只运行到 `maxIterations` 或遇到非有限数值；溢出/NaN 是 `numerically_diverged/indeterminate`，不是数学逃逸。发生数值溢出时保留其迭代次数用于有限迭代着色，但 `orbitClassB64` 仍为类别 `2`，且不会改写为已证明逃逸。任意 DSL、transcendental、未来 output blend 默认无证书。Mandelbrot/Burning Ship 的离散周期 sequence 可组合共同证书；两者复数输出的 50% blend 反例必须保持 `certifiedRadius=null`。
 
 Platform 保存完整证明对象。面向用户时，无证书结果应称为“有限迭代轨道图”。
 

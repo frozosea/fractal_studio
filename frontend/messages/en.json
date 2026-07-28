@@ -98,7 +98,7 @@
     "resetParameter": "Reset parameter plane",
     "resetJulia": "Reset Julia plane",
     "formulaSource": "Orbit formula",
-    "formulaHint": "Variables z and c are complex. Supported functions include sin, cos, tan, exp, log, sqrt, abs, conj, sinh, cosh and tanh. Formula length and evaluation cost are bounded by Compute.",
+    "formulaHint": "Variables z and c are complex. Supported functions include sin, cos, tan, exp, log, sqrt, abs, conj, sinh, cosh and tanh. Unverified formulas are colored by the iteration where arithmetic overflows; finite pixels run to the iteration limit, so this remains a finite-iteration visualization rather than certified escape.",
     "sequenceStep": "Step {index}",
     "removeStep": "Remove sequence step",
     "sequenceSpan": "Iteration span",

@@ -33,3 +33,20 @@ def test_unverified_dsl_raw_field_runs_to_iteration_limit(client: ComputeClient)
     assert base64.b64decode(data["orbitClassB64"]) == b"\x00"
     assert data["escapeAnalysis"]["status"] == "unverified"
     assert data["escapeAnalysis"]["certifiedRadius"] is None
+
+
+def test_unverified_dsl_numerical_overflow_retains_iteration_for_coloring(
+    client: ComputeClient,
+) -> None:
+    payload = strict_dsl_payload()
+    payload["orbitProgram"]["formula"]["source"] = "z*z*z+c"
+
+    result = client.preview("raw_field", payload)
+
+    assert result.status == 200
+    data = result.json()["data"]
+    iteration = struct.unpack("<I", base64.b64decode(data["iterB64"]))[0]
+    assert iteration < payload["iterations"]
+    assert base64.b64decode(data["orbitClassB64"]) == b"\x02"
+    assert data["escapeAnalysis"]["status"] == "unverified"
+    assert data["escapeAnalysis"]["certifiedRadius"] is None

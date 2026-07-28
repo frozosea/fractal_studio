@@ -806,9 +806,10 @@ static MapStats render_custom_field_openmp(const MapParams& p, FieldOutput& fo) 
 }
 
 // Safe Orbit Program field renderer. A finite bailout is consulted only when
-// the program carries a proof certificate. Unverified programs deliberately
-// run to max iterations unless arithmetic becomes non-finite; numerical
-// divergence is recorded separately and is never encoded as escape.
+// the program carries a proof certificate. Unverified programs run to max
+// iterations or non-finite arithmetic; numerical divergence remains distinct
+// from certified escape, but retains the iteration where overflow occurred so
+// finite-iteration images can visualize it.
 static MapStats render_orbit_field_openmp(const MapParams& p, FieldOutput& fo) {
     if (!p.orbit_program) throw std::runtime_error("missing Orbit Program");
     if (p.metric != Metric::Escape) {
@@ -937,6 +938,7 @@ static MapStats render_orbit_field_openmp(const MapParams& p, FieldOutput& fo) {
                     fo.norm_f32[index] = static_cast<float>(norm2);
                     fo.orbit_class_u8[index] = 1u;
                 } else if (numerical_divergence) {
+                    fo.iter_u32[index] = static_cast<uint32_t>(iteration);
                     fo.orbit_class_u8[index] = 2u;
                 }
             }

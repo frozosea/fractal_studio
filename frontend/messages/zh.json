@@ -98,7 +98,7 @@
     "resetParameter": "重置参数平面",
     "resetJulia": "重置 Julia 平面",
     "formulaSource": "轨道公式",
-    "formulaHint": "z 与 c 是复数。支持 sin、cos、tan、exp、log、sqrt、abs、conj、sinh、cosh、tanh 等函数；公式长度与求值开销由 Compute 限制。",
+    "formulaHint": "z 与 c 是复数。支持 sin、cos、tan、exp、log、sqrt、abs、conj、sinh、cosh、tanh 等函数；未证明公式按数值发生溢出的迭代次数着色，始终保持有限的像素会运行到迭代上限，因此仍属于有限迭代可视化而非已证明逃逸。",
     "sequenceStep": "第 {index} 步",
     "removeStep": "删除序列步骤",
     "sequenceSpan": "持续迭代数",
