@@ -90,12 +90,12 @@ services:
       S3_ACCESS_KEY_ID: minio
       S3_SECRET_ACCESS_KEY: minio_dev_password
       ALIPAY_STUB_MODE: "false"
-      ALIPAY_APP_ID: "9021000166609768"
-      ALIPAY_SELLER_ID: "2088721106011274"
+      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-9021000166609768}
+      ALIPAY_SELLER_ID: ${ALIPAY_SELLER_ID:-2088721106011274}
       ALIPAY_STUB_PUBLIC_KEY_URL: ""
-      ALIPAY_GATEWAY_URL: https://openapi-sandbox.dl.alipaydev.com/gateway.do
-      ALIPAY_NOTIFY_URL: https://durable-eskimo-dweller.ngrok-free.dev/v1/webhooks/alipay
-      ALIPAY_RETURN_URL: http://localhost:3010/payment-result
+      ALIPAY_GATEWAY_URL: ${ALIPAY_GATEWAY_URL:-https://openapi-sandbox.dl.alipaydev.com/gateway.do}
+      ALIPAY_NOTIFY_URL: ${ALIPAY_NOTIFY_URL:-https://fractal.kevin0412.top/platform/v1/webhooks/alipay}
+      ALIPAY_RETURN_URL: ${ALIPAY_RETURN_URL:-https://fractal.kevin0412.top/payment-result}
       ALIPAY_PRIVATE_KEY_PATH: /app/alipay_app_private.pem
       ALIPAY_PUBLIC_KEY_PATH: /app/alipay_sandbox_public.pem
       PAYMENT_RECONCILE_DELAY_SECONDS: "1"
