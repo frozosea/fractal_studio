@@ -6,8 +6,10 @@ from uuid import UUID
 
 
 COMPUTE_SCHEMA_VERSION = 1
-PREVIEW_MAPPING_VERSION = "compute-v1-preview-v1"
+PREVIEW_MAPPING_VERSION = "compute-v1-preview-v2"
 RENDER_MAPPING_VERSION = "compute-v1-render-v1"
+PREVIEW_MAX_ITERATIONS = 4096
+PREVIEW_MAX_PAIRWISE_CAP = 128
 COMPUTE_RUNS_ROUTE = "/compute/v1/runs"
 COMPUTE_PREVIEWS_ROUTE = "/compute/v1/previews"
 # Mapper failures safe to echo back to the caller as a 422 detail.
@@ -124,7 +126,13 @@ def map_preview_v1(
 ) -> dict[str, object]:
     """Map bounded map preview; request_id stays Platform correlation metadata only."""
     del request_id
-    return _envelope(kind=_static_image_kind(canonical_spec), payload=_map_2d(canonical_spec, width=width, height=height))
+    payload = _map_2d(canonical_spec, width=width, height=height)
+    # A preview is interactive and must not inherit export-sized work limits.
+    # Keep the full recipe immutable for durable renders while bounding the two
+    # parameters that can otherwise turn a small preview into minutes of work.
+    payload["iterations"] = min(int(payload["iterations"]), PREVIEW_MAX_ITERATIONS)
+    payload["pairwiseCap"] = min(int(payload["pairwiseCap"]), PREVIEW_MAX_PAIRWISE_CAP)
+    return _envelope(kind=_static_image_kind(canonical_spec), payload=payload)
 
 
 def map_durable_v1(

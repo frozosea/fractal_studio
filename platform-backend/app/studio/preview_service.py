@@ -42,7 +42,7 @@ class PreviewService:
         )
         try:
             frame = await self._compute_client.render_map_inline(
-                compute_request, timeout_seconds=5.0
+                compute_request, timeout_seconds=8.0
             )
             if frame.width != width or frame.height != height:
                 raise InvalidRgbaFrame("compute_frame_dimensions_mismatch")

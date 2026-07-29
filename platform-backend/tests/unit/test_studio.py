@@ -28,7 +28,7 @@ class InlineFrameClient:
         self.requests: list[dict[str, object]] = []
 
     async def render_map_inline(self, request_body: dict[str, object], *, timeout_seconds: float) -> InlineComputeFrame:
-        assert timeout_seconds == 5.0
+        assert timeout_seconds == 8.0
         self.requests.append(request_body)
         return self.frame
 
@@ -62,7 +62,7 @@ def test_preview_mapper_is_pure_and_versioned() -> None:
 
     request = map_preview_v1(canonical.spec, width=64, height=64, request_id=request_id)
 
-    assert PREVIEW_MAPPING_VERSION == "compute-v1-preview-v1"
+    assert PREVIEW_MAPPING_VERSION == "compute-v1-preview-v2"
     assert request == {
         "schemaVersion": 1,
         "kind": "map_image",
@@ -94,6 +94,22 @@ def test_mapper_preserves_optional_color_map() -> None:
     request = map_preview_v1(canonical.spec, width=64, height=64, request_id=UUID(int=1))
 
     assert request["payload"]["colorMap"] == "viridis"
+
+
+def test_preview_mapper_bounds_export_sized_compute_work() -> None:
+    canonical = canonicalize_spec(FractalSpec.model_validate({
+        "version": 1,
+        "iterations": 1_000_000,
+        "pairwiseCap": 1_000_000,
+        "metric": "min_pairwise_dist",
+    }))
+
+    request = map_preview_v1(canonical.spec, width=64, height=64, request_id=UUID(int=1))
+
+    assert request["payload"]["iterations"] == 4096
+    assert request["payload"]["pairwiseCap"] == 128
+    assert canonical.spec["iterations"] == 1_000_000
+    assert canonical.spec["pairwiseCap"] == 1_000_000
 
 
 def test_mapper_preserves_advanced_2d_controls_and_gradient() -> None:
