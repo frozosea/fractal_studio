@@ -51,9 +51,13 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      additional_contexts:
+        cuda-toolkit: ./.cuda-toolkit
     restart: unless-stopped
+    runtime: nvidia
+    gpus: all
     environment:
-      FSD_STARTUP_BENCHMARK: "off"
+      FSD_STARTUP_BENCHMARK: "quick"
       FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
       FSD_RENDERER_VERSION: compose-dev
       FSD_ENABLE_LEGACY_API: "0"
