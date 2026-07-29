@@ -148,13 +148,50 @@ async def create_pending_order(
 async def find_active_order_for_listing(
     connection: AsyncConnection, *, buyer_id: UUID, listing_id: UUID
 ) -> UUID | None:
+    """Return a pending order only when its payment attempt is still within the expiry window."""
     return await connection.scalar(
         text("""
             SELECT o.id
-            FROM orders o JOIN order_items oi ON oi.order_id = o.id
-            WHERE o.buyer_id = :buyer_id AND oi.listing_id = :listing_id AND o.status = 'pending_payment'
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            JOIN payment_attempts pa ON pa.order_id = o.id
+            WHERE o.buyer_id = :buyer_id
+              AND oi.listing_id = :listing_id
+              AND o.status = 'pending_payment'
+              AND pa.status = 'created'
+              AND pa.expires_at > now()
             ORDER BY o.created_at DESC LIMIT 1
         """), {"buyer_id": buyer_id, "listing_id": listing_id},
+    )
+
+
+async def close_pending_orders_for_listing(
+    connection: AsyncConnection, *, buyer_id: UUID, listing_id: UUID
+) -> None:
+    """Close all pending orders and their payment attempts for a listing so the buyer can retry."""
+    await connection.execute(
+        text("""
+            UPDATE payment_attempts SET status = 'closed'
+            WHERE order_id IN (
+                SELECT o.id FROM orders o
+                JOIN order_items oi ON oi.order_id = o.id
+                WHERE o.buyer_id = :buyer_id AND oi.listing_id = :listing_id AND o.status = 'pending_payment'
+            ) AND status = 'created'
+        """),
+        {"buyer_id": buyer_id, "listing_id": listing_id},
+    )
+    await connection.execute(
+        text("""
+            UPDATE orders SET status = 'closed'
+            WHERE buyer_id = :buyer_id
+              AND id IN (
+                SELECT o.id FROM orders o
+                JOIN order_items oi ON oi.order_id = o.id
+                WHERE o.buyer_id = :buyer_id AND oi.listing_id = :listing_id
+              )
+              AND status = 'pending_payment'
+        """),
+        {"buyer_id": buyer_id, "listing_id": listing_id},
     )
 
 

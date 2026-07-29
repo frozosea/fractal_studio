@@ -92,10 +92,11 @@ class AlipayPaymentGateway:
         return self._trade(payload, expected_out_trade_no=out_trade_no)
 
     async def close_trade(self, *, out_trade_no: str) -> AlipayTrade | None:
-        payload = await self._call(method="alipay.trade.close", biz_content={"out_trade_no": out_trade_no})
-        if payload.get("code") != "10000":
+        try:
+            payload = await self._call(method="alipay.trade.close", biz_content={"out_trade_no": out_trade_no})
+            return self._trade(payload, expected_out_trade_no=out_trade_no)
+        except AlipayProtocolError:
             return None
-        return self._trade(payload, expected_out_trade_no=out_trade_no)
 
     async def _call(self, *, method: str, biz_content: dict[str, object]) -> dict[str, Any]:
         fields = self._request_fields(method=method, biz_content=biz_content, include_return_urls=False)
@@ -136,18 +137,33 @@ class AlipayPaymentGateway:
 
     async def _verified_gateway_response(self, body: str, *, method: str) -> dict[str, Any]:
         key = method.replace(".", "_") + "_response"
+        # ── 1. Parse JSON (may fail if gateway returns HTML) ──────────────────
         try:
             parsed = json.loads(body)
+        except (ValueError, TypeError) as error:
+            raise AlipayProtocolError("alipay_gateway_unexpected_body") from error
+        # ── 2. Alipay business error (e.g. isv.invalid-signature) ────────────
+        if "error_response" in parsed and isinstance(parsed["error_response"], dict):
+            err = parsed["error_response"]
+            sub_code = str(err.get("sub_code") or err.get("code") or "alipay_business_error")
+            raise AlipayProtocolError(sub_code)
+        # ── 3. Success path: locate signed payload, verify signature ──────────
+        if key not in parsed or not isinstance(parsed[key], dict):
+            raise AlipayProtocolError("alipay_response_structure_invalid")
+        try:
             signed_payload = self._raw_top_level_value(body, key)
             signature = base64.b64decode(str(parsed["sign"]), validate=True)
             (await self._provider_public_key()).verify(
                 signature, signed_payload.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256()
             )
-            payload = parsed[key]
-        except (KeyError, ValueError, TypeError, InvalidSignature) as error:
+        except (InvalidSignature, KeyError, ValueError, TypeError) as error:
             raise AlipayProtocolError("alipay_response_signature_invalid") from error
-        if not isinstance(payload, dict):
-            raise AlipayProtocolError("alipay_response_invalid")
+        payload = parsed[key]
+        # ── 4. Surface provider-level error codes from a signed 200 ───────────
+        code = str(payload.get("code") or "")
+        if code != "10000":
+            sub_code = str(payload.get("sub_code") or "")
+            raise AlipayProtocolError(sub_code or f"alipay_error_{code}")
         return payload
 
     async def _provider_public_key(self) -> rsa.RSAPublicKey:
@@ -228,7 +244,8 @@ class AlipayPaymentGateway:
 
     @staticmethod
     def _canonical(fields: dict[str, str]) -> str:
-        return "&".join(f"{key}={fields[key]}" for key in sorted(fields) if key not in {"sign"} and fields[key] != "")
+        # sign and sign_type are excluded from the canonical string per Alipay RSA2 rules.
+        return "&".join(f"{key}={fields[key]}" for key in sorted(fields) if key not in {"sign", "sign_type"} and fields[key] != "")
 
     @staticmethod
     def _charset(value: str) -> str:

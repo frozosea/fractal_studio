@@ -76,11 +76,11 @@ class CheckoutService:
                 )
                 if claim.is_replay:
                     return claim.replay_body or {}, claim.replay_status or 201, claim.replay_headers or {}
-                active = await repository.find_active_order_for_listing(
+                # Auto-close any previous pending order for this listing so the
+                # user can retry without hitting a hard 409.
+                await repository.close_pending_orders_for_listing(
                     connection, buyer_id=principal.user_id, listing_id=listing_id
                 )
-                if active is not None:
-                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="payment_already_pending")
                 order, attempt = await repository.create_pending_order(
                     connection, buyer_id=principal.user_id, offer=offer,
                     commission_policy_version=settings.commission_policy_version, creator_amount=creator_amount,
