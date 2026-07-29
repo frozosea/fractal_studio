@@ -1,0 +1,11 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.release
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_PLATFORM_API_URL: /platform
+      PLATFORM_INTERNAL_URL: http://api:8000
+    command: !reset null
+    volumes: !reset []

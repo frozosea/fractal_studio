@@ -12,6 +12,18 @@ Recommended local development start:
 ./dev.sh
 ```
 
+Docker development mode keeps Next.js hot reload and source mounts:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+Release mode prebuilds the frontend and runs `next start` without source mounts:
+
+```bash
+docker compose -f docker-compose.dev.yml -f docker-compose.release.yml up -d --build
+```
+
 Default URLs:
 
 - Frontend: `http://localhost:3010`

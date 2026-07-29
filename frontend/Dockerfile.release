@@ -3,15 +3,16 @@ FROM node:22-bookworm-slim
 WORKDIR /app
 RUN npm install --global pnpm@11.17.0 --registry=https://registry.npmmirror.com
 
-ENV NEXT_TELEMETRY_DISABLED=1 \
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
     NEXT_PUBLIC_PLATFORM_API_URL=/platform \
     PLATFORM_INTERNAL_URL=http://api:8000
 
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --registry=https://registry.npmmirror.com
-RUN sha256sum pnpm-lock.yaml | awk '{print $1}' > node_modules/.fractal-lock.sha256
 
 COPY frontend/ ./
+RUN pnpm build
 
 EXPOSE 3000
-CMD ["pnpm", "dev", "--hostname", "0.0.0.0", "--port", "3000"]
+CMD ["pnpm", "start", "--hostname", "0.0.0.0", "--port", "3000"]
