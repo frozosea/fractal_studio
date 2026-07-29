@@ -3,20 +3,25 @@
 import { useEffect, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
 import { Link, useRouter } from "@/i18n/navigation";
 import { platform, PlatformApiError, type Asset } from "@/lib/api/platform";
+import { useAuth } from "@/providers/auth-provider";
 
 export default function AssetsPage() {
   const t = useTranslations("commerce");
   const locale = useLocale();
   const router = useRouter();
+  const { user, isPending } = useAuth();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [listingAsset, setListingAsset] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [price, setPrice] = useState("19.90");
   const [error, setError] = useState<string | null>(null);
+  const [listingError, setListingError] = useState<string | null>(null);
+  const [creatingListing, setCreatingListing] = useState(false);
 
   const errorText = (reason: unknown): string => {
     if (reason instanceof PlatformApiError && reason.status === 403) return t("errors.creatorRequired");
@@ -60,15 +65,34 @@ export default function AssetsPage() {
 
   const createListing = async () => {
     if (!listingAsset) return;
+    setCreatingListing(true);
+    setListingError(null);
     try {
-      const listing = await platform.marketplace.create({ assetId: listingAsset, title, description: "", tags: ["fractal"], price, licenceOffer: { code: "personal", termsVersion: "v1" } });
+      const listing = await platform.marketplace.create({ assetId: listingAsset, title: title.trim(), description: "", tags: ["fractal"], price, licenceOffer: { code: "personal", termsVersion: "v1" } });
       toast({
         title: t("assets.draftCreated"),
         description: t("assets.draftCreatedDescription", { title: listing.title }),
         variant: "success",
       });
+      setListingAsset(null);
       router.push("/listings");
-    } catch (reason) { setError(errorText(reason)); }
+    } catch (reason) {
+      setListingError(errorText(reason));
+    } finally {
+      setCreatingListing(false);
+    }
+  };
+
+  const openListing = (assetId: string) => {
+    if (!user?.roles.includes("creator")) {
+      setError(t("errors.creatorRequired"));
+      router.push("/payouts");
+      return;
+    }
+    setTitle("");
+    setPrice("19.90");
+    setListingError(null);
+    setListingAsset(assetId);
   };
 
   return <div className="space-y-5">
@@ -90,13 +114,29 @@ export default function AssetsPage() {
           <p className="mt-1 text-xs text-muted-foreground">{t(`visibility.${asset.visibility}`)} · {t("assets.created", { date: new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(asset.createdAt)) })}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {asset.status === "ready" && <Button size="sm" onClick={() => void download(asset.id)}>{t("actions.download")}</Button>}
-            {asset.status === "ready" && asset.derivativeStatus === "ready" && !asset.listingStatus && <Button size="sm" variant="outline" onClick={() => setListingAsset(asset.id)}>{t("actions.createListing")}</Button>}
+            {asset.status === "ready" && asset.derivativeStatus === "ready" && !asset.listingStatus && <Button size="sm" variant="outline" disabled={isPending} onClick={() => openListing(asset.id)}>{t("actions.createListing")}</Button>}
             <Button size="sm" variant="outline" onClick={() => hide(asset)}>{t("actions.hide")}</Button>
             <Button size="sm" variant="outline" onClick={() => remove(asset)}>{t("actions.delete")}</Button>
           </div>
         </div>
       </article>;
     })}</div>
-    {listingAsset && <section className="max-w-lg rounded-xl border border-primary/30 p-4"><h2 className="mb-3 text-lg font-medium">{t("assets.createDraft")}</h2><p className="mb-3 text-sm text-muted-foreground">{t("assets.draftHint")}</p><Input placeholder={t("assets.listingTitle")} value={title} onChange={(event) => setTitle(event.target.value)} /><Input className="mt-2" placeholder={t("assets.priceCny")} value={price} onChange={(event) => setPrice(event.target.value)} /><div className="mt-3 flex gap-2"><Button onClick={() => void createListing()} disabled={!title}>{t("actions.createDraft")}</Button><Button variant="outline" onClick={() => setListingAsset(null)}>{t("actions.cancel")}</Button></div></section>}
+    <Dialog open={Boolean(listingAsset)} onOpenChange={(open) => { if (!open && !creatingListing) setListingAsset(null); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("assets.createDraft")}</DialogTitle>
+          <DialogDescription>{t("assets.draftHint")}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <Input autoFocus placeholder={t("assets.listingTitle")} value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} />
+          <Input placeholder={t("assets.priceCny")} type="number" min="0.01" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} />
+          {listingError && <p className="text-sm text-red-400">{listingError}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={creatingListing} onClick={() => setListingAsset(null)}>{t("actions.cancel")}</Button>
+          <Button loading={creatingListing} onClick={() => void createListing()} disabled={!title.trim() || !price}>{t("actions.createDraft")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>;
 }
