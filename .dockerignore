@@ -5,9 +5,11 @@
 **/.pytest_cache
 **/__pycache__
 **/*.pyc
+**/.venv
+**/.next
+**/.pnpm-store
 backend/build
 frontend/node_modules
 frontend/dist
 runtime
 platform-backend-spec.zh.pdf
-
