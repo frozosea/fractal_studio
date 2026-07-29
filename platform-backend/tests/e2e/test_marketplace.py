@@ -126,7 +126,13 @@ async def test_catalogue_listing_versions_and_favourites(e2e_api_url: str) -> No
         assert published.status_code == 200, published.text
         assert published.json()["data"]["status"] == "published"
         assert published.json()["data"]["preview"]["watermarkedPreviewUrl"]
-        assert (await owner.patch(f"/v1/listings/{listing_id}", headers={"Idempotency-Key": "published-edit"}, json={"title": "blocked"})).status_code == 409
+        assert (await owner.patch(f"/v1/listings/{listing_id}", headers={"Idempotency-Key": "published-price"}, json={"price": "21.90"})).status_code == 409
+        renamed = await owner.patch(
+            f"/v1/listings/{listing_id}", headers={"Idempotency-Key": "published-rename"}, json={"title": "Orbit Renamed"}
+        )
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["data"]["status"] == "published" and renamed.json()["data"]["title"] == "Orbit Renamed"
+        assert (await guest.get(f"/v1/listings/{listing_id}")).json()["data"]["title"] == "Orbit Renamed"
 
         public = await guest.get(f"/v1/listings/{listing_id}")
         assert public.status_code == 200, public.text
@@ -179,6 +185,7 @@ async def test_catalogue_listing_versions_and_favourites(e2e_api_url: str) -> No
         favorite = await buyer.post(f"/v1/assets/{first_asset}/favorite", headers={"Idempotency-Key": "favorite-one"})
         assert favorite.status_code == 201, favorite.text
         assert favorite.json()["data"]["listing"]["id"] == listing_id
+        assert favorite.json()["data"]["listing"]["title"] == "Orbit Renamed"
         assert (await buyer.post(f"/v1/assets/{first_asset}/favorite", headers={"Idempotency-Key": "favorite-one"})).status_code == 201
         assert (await buyer.post(f"/v1/assets/{second_asset}/favorite", headers={"Idempotency-Key": "favorite-two"})).status_code == 201
         favorites_page = await buyer.get("/v1/me/favorites", params={"limit": 1})

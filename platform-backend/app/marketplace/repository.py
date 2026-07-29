@@ -191,6 +191,30 @@ async def update_draft(
     return updated
 
 
+async def rename_published(
+    connection: AsyncConnection, *, listing: ListingRecord, title: str
+) -> ListingRecord:
+    # Title is the only field a published listing may change in place; the live row and the
+    # current published version snapshot move together so market, detail and favourites agree.
+    await connection.execute(
+        text("UPDATE listings SET title = :title WHERE id = :id AND status = 'published'"),
+        {"id": listing.id, "title": title},
+    )
+    await connection.execute(
+        text(
+            """
+            UPDATE listing_versions
+            SET snapshot_json = jsonb_set(snapshot_json, '{title}', to_jsonb(CAST(:title AS text)))
+            WHERE id = :version_id
+            """
+        ),
+        {"version_id": listing.current_published_version_id, "title": title},
+    )
+    renamed = await find_published(connection, listing_id=listing.id)
+    assert renamed is not None
+    return renamed
+
+
 async def publish(
     connection: AsyncConnection, *, listing: ListingRecord, snapshot: dict[str, object]
 ) -> ListingRecord:

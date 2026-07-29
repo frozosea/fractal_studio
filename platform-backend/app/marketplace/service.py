@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.assets.ports import AssetPreview, AssetReader
 from app.assets.reader import AssetReadService
@@ -126,17 +127,24 @@ class MarketplaceService:
             current = await repository.lock_owned(connection, listing_id=listing_id, creator_id=principal.user_id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="listing_not_found")
-            if current.status not in {"draft", "unpublished"}:
+            renamed_in_place = current.status == "published"
+            if renamed_in_place:
+                updated = await self._rename_published(
+                    connection, listing=current, payload=payload, licence=licence
+                )
+            elif current.status not in {"draft", "unpublished"}:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="listing_not_editable")
-            updated = await repository.update_draft(
-                connection, listing=current, title=payload.title, description=payload.description, tags=payload.tags,
-                price=payload.price, licence=licence,
-            )
+            else:
+                updated = await repository.update_draft(
+                    connection, listing=current, title=payload.title, description=payload.description,
+                    tags=payload.tags, price=payload.price, licence=licence,
+                )
             view = await _listing_view(updated, self._assets)
             body: dict[str, object] = {"data": view.model_dump(mode="json", by_alias=True)}
             headers = {"Cache-Control": "no-store"}
             await audit_writer.record_user_action(
-                connection, actor_user_id=principal.user_id, action="listing.draft_updated", subject_type="listing",
+                connection, actor_user_id=principal.user_id,
+                action="listing.renamed" if renamed_in_place else "listing.draft_updated", subject_type="listing",
                 subject_id=listing_id, request_id_value=request_id(request),
             )
             await idempotency_service.complete(connection, claim, response_status=200, response_body=body, response_headers=headers)
@@ -285,6 +293,19 @@ class MarketplaceService:
     ) -> PublishedOfferSnapshot | None:
         async with get_engine().connect() as connection:
             return await repository.find_published_offer(connection, listing_id=listing_id, licence_offer_id=licence_offer_id)
+
+    @staticmethod
+    async def _rename_published(
+        connection: AsyncConnection, *, listing: repository.ListingRecord, payload: ListingUpdateInput,
+        licence: tuple[str, str, dict[str, object]] | None,
+    ) -> repository.ListingRecord:
+        # A live listing may only be retitled; price, description, tags and licence stay pinned to
+        # the published version buyers already saw.
+        if payload.title is None or any(
+            value is not None for value in (payload.description, payload.tags, payload.price, licence)
+        ):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="listing_not_editable")
+        return await repository.rename_published(connection, listing=listing, title=payload.title)
 
     def _resolve_update_licence(
         self, offer: LicenceOfferInput | None
