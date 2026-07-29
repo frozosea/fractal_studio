@@ -81,7 +81,6 @@ auth.method = "token"
 auth.token = "${FRP_TOKEN}"
 
 transport.tls.enable = true
-transport.wireProtocol = "v2"
 
 log.to = "console"
 log.level = "info"

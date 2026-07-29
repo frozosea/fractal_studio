@@ -82,7 +82,7 @@ class AlipayPaymentGateway:
         try:
             signature = base64.b64decode(sign, validate=True)
             (await self._provider_public_key()).verify(
-                signature, self._canonical(fields).encode(charset), padding.PKCS1v15(), hashes.SHA256()
+                signature, self._notification_canonical(fields).encode(charset), padding.PKCS1v15(), hashes.SHA256()
             )
         except (InvalidSignature, ValueError, UnicodeError) as error:
             raise AlipayProtocolError("alipay_signature_invalid") from error
@@ -244,8 +244,15 @@ class AlipayPaymentGateway:
 
     @staticmethod
     def _canonical(fields: dict[str, str]) -> str:
-        # sign and sign_type are excluded from the canonical string per Alipay RSA2 rules.
-        return "&".join(f"{key}={fields[key]}" for key in sorted(fields) if key not in {"sign", "sign_type"} and fields[key] != "")
+        return "&".join(f"{key}={fields[key]}" for key in sorted(fields) if key != "sign" and fields[key] != "")
+
+    @staticmethod
+    def _notification_canonical(fields: dict[str, str]) -> str:
+        return "&".join(
+            f"{key}={fields[key]}"
+            for key in sorted(fields)
+            if key not in {"sign", "sign_type"} and fields[key] != ""
+        )
 
     @staticmethod
     def _charset(value: str) -> str:
@@ -270,4 +277,10 @@ class AlipayPaymentGateway:
         subject = value.strip()[:128]
         if not subject:
             raise PaymentGatewayConfigurationError("alipay_subject_invalid")
+        # The sandbox page-pay endpoint intermittently decodes non-ASCII form
+        # values as GBK even when charset=utf-8, which changes the signed bytes
+        # and is reported as invalid-signature. Keep the provider-facing label
+        # ASCII-stable; the original listing title remains in our order snapshot.
+        if not subject.isascii():
+            return "Fractal Studio order"
         return subject
