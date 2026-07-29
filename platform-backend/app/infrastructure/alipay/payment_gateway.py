@@ -228,7 +228,7 @@ class AlipayPaymentGateway:
 
     @staticmethod
     def _canonical(fields: dict[str, str]) -> str:
-        return "&".join(f"{key}={fields[key]}" for key in sorted(fields) if key not in {"sign", "sign_type"} and fields[key] != "")
+        return "&".join(f"{key}={fields[key]}" for key in sorted(fields) if key not in {"sign"} and fields[key] != "")
 
     @staticmethod
     def _charset(value: str) -> str:
