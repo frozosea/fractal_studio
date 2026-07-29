@@ -2,6 +2,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils/cn";
 import { usePathname, useRouter } from "@/i18n/navigation";
+import { useSearchParams } from "next/navigation";
 import { useLocale } from "next-intl";
 import { Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,12 +21,18 @@ const locales = [
 export function LocaleSwitcher() {
   const locale = useLocale();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
+  const [pendingLocale, startTransition] = React.useTransition();
 
   const currentLocale = locales.find((l) => l.code === locale) ?? locales[0];
 
-  const handleSwitch = (newLocale: string) => {
-    router.replace(pathname, { locale: newLocale });
+  const handleSwitch = (newLocale: (typeof locales)[number]["code"]) => {
+    if (newLocale === locale) return;
+    const query = searchParams.toString();
+    const hash = typeof window === "undefined" ? "" : window.location.hash;
+    const href = `${pathname}${query ? `?${query}` : ""}${hash}`;
+    startTransition(() => router.replace(href, { locale: newLocale }));
   };
 
   return (
@@ -40,6 +47,7 @@ export function LocaleSwitcher() {
         {locales.map((l) => (
           <DropdownMenuItem
             key={l.code}
+            disabled={pendingLocale || locale === l.code}
             onClick={() => handleSwitch(l.code)}
             className={cn(locale === l.code && "text-fractal-400")}
           >
