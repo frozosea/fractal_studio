@@ -42,6 +42,13 @@ import {
 
 type ImageMode = "map" | "julia" | "transitionPair" | "transitionMulti" | "formula" | "sequence";
 type SequenceOrbit = Extract<OrbitProgram, { type: "sequence" }>;
+type StudioExplorationSession = {
+  version: 1;
+  spec: FractalSpec;
+  juliaPickerSpec: FractalSpec;
+  mode: ImageMode;
+  output: { preset: string; width: number; height: number };
+};
 
 const defaults: FractalSpec = {
   version: 1,
@@ -96,6 +103,27 @@ const previewDebounceMs = 600;
 const minScale = 3 / 2 ** 41;
 const selectClass = "instrument-control h-9 w-full px-2 text-sm";
 const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+const imageModes: readonly ImageMode[] = ["map", "julia", "transitionPair", "transitionMulti", "formula", "sequence"];
+
+function parseExplorationSession(raw: string | null): StudioExplorationSession | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<StudioExplorationSession>;
+    if (
+      value.version !== 1
+      || value.spec?.version !== 1
+      || value.juliaPickerSpec?.version !== 1
+      || !value.mode
+      || !imageModes.includes(value.mode)
+      || !value.output
+      || !Number.isFinite(value.output.width)
+      || !Number.isFinite(value.output.height)
+    ) return null;
+    return value as StudioExplorationSession;
+  } catch {
+    return null;
+  }
+}
 
 function errorCode(error: unknown): string | null {
   return error instanceof PlatformApiError ? error.code : null;
@@ -165,6 +193,7 @@ export default function StudioPage() {
   const [previewing, setPreviewing] = useState(false);
   const [capabilities, setCapabilities] = useState<StudioCapabilities>(fallbackCapabilities);
   const [output, setOutput] = useState({ preset: "square", width: 1024, height: 1024 });
+  const [explorationReady, setExplorationReady] = useState(false);
   const [job, setJob] = useState<RenderJob | null>(null);
   const [allowance, setAllowance] = useState<ExportAllowance | null>(null);
   const exhausted = allowance?.remaining === 0;
@@ -176,6 +205,51 @@ export default function StudioPage() {
   const previewRef = useRef<string | null>(null);
   const juliaPickerPreviewRef = useRef<string | null>(null);
   const lastPreviewAtRef = useRef(0);
+  const explorationRef = useRef<StudioExplorationSession | null>(null);
+  const explorationStorageKey = user?.id ? `fractal-studio:exploration:v1:${user.id}` : null;
+
+  useEffect(() => {
+    if (!explorationStorageKey) return;
+    setExplorationReady(false);
+    let restored: StudioExplorationSession | null = null;
+    try {
+      restored = parseExplorationSession(window.sessionStorage.getItem(explorationStorageKey));
+    } catch {
+      /* Session storage may be unavailable in hardened/private browsing. */
+    }
+    if (restored) {
+      setSpec(restored.spec);
+      setJuliaPickerSpec(restored.juliaPickerSpec);
+      setMode(restored.mode);
+      setOutput({
+        preset: restored.output.preset,
+        width: Math.max(64, Math.min(4096, Math.round(restored.output.width))),
+        height: Math.max(64, Math.min(4096, Math.round(restored.output.height))),
+      });
+    } else {
+      setSpec(defaults);
+      setJuliaPickerSpec(defaults);
+      setMode("map");
+      setOutput({ preset: "square", width: 1024, height: 1024 });
+    }
+    explorationRef.current = null;
+    setExplorationReady(true);
+  }, [explorationStorageKey]);
+
+  useEffect(() => {
+    if (!explorationReady || !explorationStorageKey) return;
+    const snapshot: StudioExplorationSession = { version: 1, spec, juliaPickerSpec, mode, output };
+    explorationRef.current = snapshot;
+    const timer = window.setTimeout(() => {
+      try { window.sessionStorage.setItem(explorationStorageKey, JSON.stringify(snapshot)); } catch { /* ignore */ }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [explorationReady, explorationStorageKey, juliaPickerSpec, mode, output, spec]);
+
+  useEffect(() => () => {
+    if (!explorationStorageKey || !explorationRef.current) return;
+    try { window.sessionStorage.setItem(explorationStorageKey, JSON.stringify(explorationRef.current)); } catch { /* ignore */ }
+  }, [explorationStorageKey]);
 
   const previewSize = useMemo(() => previewDimensions(output.width, output.height), [output.height, output.width]);
   const canonical = useMemo<FractalSpec>(() => {
@@ -258,6 +332,7 @@ export default function StudioPage() {
   }, [job, t]);
 
   useEffect(() => {
+    if (!explorationReady) return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -301,7 +376,7 @@ export default function StudioPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [canonical, juliaPickerCanonical, juliaPickerSpecKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
+  }, [canonical, explorationReady, juliaPickerCanonical, juliaPickerSpecKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
 
   const update = (patch: Partial<FractalSpec>) => setSpec((current) => ({ ...current, ...patch }));
   const updateViewport = (patch: Partial<FractalSpec>) => {
