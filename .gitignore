@@ -44,6 +44,12 @@ HS_legacy_guide_zh.md
 CODE_REVIEW_REPORT.md
 PERFORMANCE_OPTIMIZATION_REPORT.md
 EXPLORATION_REPORT.md
+.build.log
+
+# Local safety backups
+*.bak
+*.bak.*
+*.old
 
 # Local credentials and browser-test artifacts
 .env
