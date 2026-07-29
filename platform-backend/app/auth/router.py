@@ -33,6 +33,21 @@ def _set_session_cookie(response: Response, session_token: str) -> None:
     )
 
 
+def _session_body(user: object, session_token: str) -> dict[str, object]:
+    """
+    Sign-in payload, including the raw session token.
+
+    The cookie is shared by every tab in a browser window, so a tab that wants
+    its own account keeps this token in sessionStorage and sends it as a bearer
+    token. That deliberately puts the token within reach of JavaScript, which
+    the HttpOnly cookie alone is not — the trade accepted to support several
+    accounts signed in side by side in one window.
+    """
+    body = user.model_dump(mode="json", by_alias=True)  # type: ignore[attr-defined]
+    body["sessionToken"] = session_token
+    return body
+
+
 def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(
         key="fs_session",
@@ -52,7 +67,7 @@ async def register(payload: CredentialsInput, request: Request, response: Respon
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth_rate_limit_unavailable") from error
     user, session_token = await service.register(payload.email, payload.password, request)
     _set_session_cookie(response, session_token)
-    return {"data": user.model_dump(mode="json", by_alias=True)}
+    return {"data": _session_body(user, session_token)}
 
 
 @router.post("/auth/login")
@@ -64,7 +79,7 @@ async def login(payload: CredentialsInput, request: Request, response: Response)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth_rate_limit_unavailable") from error
     user, session_token = await service.login(payload.email, payload.password, request)
     _set_session_cookie(response, session_token)
-    return {"data": user.model_dump(mode="json", by_alias=True)}
+    return {"data": _session_body(user, session_token)}
 
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -73,7 +88,10 @@ async def logout(
 ) -> Response:
     enforce_origin_and_csrf(request, principal)
     await service.logout(principal, request)
-    _clear_session_cookie(response)
+    # A tab signed in with a bearer token must not clear the shared cookie:
+    # that cookie belongs to whichever account a sibling tab is using.
+    if getattr(request.state, "session_source", "cookie") == "cookie":
+        _clear_session_cookie(response)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
@@ -82,6 +100,20 @@ async def logout(
 async def me(principal: AccessPrincipal = Depends(require_principal)) -> dict[str, object]:
     user = await service.current_user(principal)
     return {"data": user.model_dump(mode="json", by_alias=True)}
+
+
+@router.get("/auth/session-token")
+async def adopt_session(principal: AccessPrincipal = Depends(require_principal)) -> dict[str, object]:
+    """
+    Hand this tab the raw token of the session it just authenticated with.
+
+    A tab that authenticated by cookie stays coupled to every other tab in the
+    window — the cookie is shared, and the next sign-in anywhere re-points it.
+    Calling this once turns that into a bearer token the tab keeps in its own
+    sessionStorage, after which the tab never reads the cookie again. Same
+    exposure as the sign-in payload: deliberately reachable from JavaScript.
+    """
+    return {"data": {"sessionToken": principal.session_token}}
 
 
 @router.get("/auth/csrf-token")
@@ -105,4 +137,8 @@ async def creator_profile(
         response.headers[name] = value
     if session_token is not None and not replayed:
         _set_session_cookie(response, session_token)
+        # The rotated token has to reach a bearer tab too, or its stored token
+        # is the revoked one and the next request 401s.
+        if getattr(request.state, "session_source", "cookie") == "bearer":
+            response.headers["X-Session-Token"] = session_token
     return response

@@ -14,6 +14,8 @@
     "registerSubtitle": "在同一工作区保存坐标、渲染参数与导出图像。",
     "accountAccess": "账户访问",
     "secureSession": "安全工作区会话",
+    "sessionSwitched": "本标签页当前登录的账号已变为 {email}。",
+    "sessionEnded": "登录状态已在另一个标签页结束。",
     "newWorkspace": "新建工作区",
     "recipeReady": "坐标与配方存储",
     "emailLabel": "电子邮箱",
@@ -166,6 +168,8 @@
     "creatingExport": "正在创建任务…",
     "exportPng": "导出 PNG",
     "compositionHint": "预览与导出画框使用相同宽高比；输出单边尺寸限制为 64–4096 像素。",
+    "exportsRemaining": "免费导出剩余 {remaining} / {limit}",
+    "upgradeForUnlimited": "开通会员，不限导出次数",
     "exportJob": "导出任务",
     "cancelExport": "取消",
     "downloadPng": "下载 PNG",
@@ -236,7 +240,8 @@
       "preview": "预览失败",
       "export": "无法创建 PNG 导出任务",
       "cancel": "无法取消导出任务",
-      "download": "无法创建下载链接"
+      "download": "无法创建下载链接",
+      "exportQuotaExhausted": "免费导出次数已全部用完。"
     }
   },
   "points": {
@@ -442,7 +447,8 @@
     "errors": {
       "requestFailed": "请求失败，请稍后重试。",
       "requestWithCode": "请求失败（{code}）。",
-      "creatorRequired": "请先在结算页面创建创作者资料，再发布作品。"
+      "creatorRequired": "请先在结算页面创建创作者资料，再发布作品。",
+      "downloadFailed": "无法生成下载链接，请重试。"
     },
     "actions": {
       "download": "下载",
@@ -461,6 +467,8 @@
       "editTitle": "修改标题",
       "publish": "发布",
       "unpublish": "取消发布",
+      "hiddenLibrary": "隐藏素材",
+      "backToLibrary": "返回素材库",
       "clearFilters": "清除筛选"
     },
     "media": { "image": "图像", "video": "视频", "mesh": "三维网格" },
@@ -477,6 +485,18 @@
       "previewPreparing": "正在生成预览…",
       "previewUnavailable": "暂无预览",
       "created": "创建于 {date}",
+      "statusListed": "已上架",
+      "confirmListed": {
+        "hide": "该素材已创建上架项。隐藏将同时下架该上架项，并把素材移入隐藏素材库。是否继续？",
+        "delete": "该素材已创建上架项。删除将同时下架该上架项，并彻底删除该素材。是否继续？"
+      },
+      "confirmPublished": {
+        "hide": "该素材已在市场发布。隐藏将取消发布、下架该上架项，并把素材移入隐藏素材库。是否继续？",
+        "delete": "该素材已在市场发布。删除将取消发布、下架该上架项，并彻底删除该素材。是否继续？"
+      },
+      "hiddenTitle": "隐藏素材",
+      "hiddenSubtitle": "隐藏的素材不会出现在素材库中。可恢复至素材库，或永久删除。",
+      "hiddenEmpty": "暂无隐藏素材。",
       "draftCreated": "上架草稿已创建",
       "draftCreatedDescription": "请在“我的上架”中发布《{title}》，发布后才会出现在作品市场。",
       "createDraft": "创建上架草稿",

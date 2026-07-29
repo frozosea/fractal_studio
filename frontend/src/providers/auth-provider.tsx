@@ -19,6 +19,36 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const INTENDED_PATH_KEY = "fractal-studio:intended-path";
+const DEFAULT_LANDING = "/studio";
+
+/**
+ * Where to land after signing in. Kept in sessionStorage rather than a query
+ * parameter so it is scoped to this tab: two tabs bounced to /login at the
+ * same time each return to their own page.
+ */
+function rememberIntendedPath(pathname: string): void {
+  if (pathname === "/login" || pathname === "/register") return;
+  try {
+    window.sessionStorage.setItem(INTENDED_PATH_KEY, pathname);
+  } catch {
+    /* private mode with storage disabled — fall back to the default landing */
+  }
+}
+
+function takeIntendedPath(): string {
+  try {
+    const stored = window.sessionStorage.getItem(INTENDED_PATH_KEY);
+    window.sessionStorage.removeItem(INTENDED_PATH_KEY);
+    // Only ever a same-origin app path, never an absolute or protocol-relative
+    // URL an attacker could have planted to bounce the user off-site.
+    if (stored && stored.startsWith("/") && !stored.startsWith("//")) return stored;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_LANDING;
+}
+
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within <AuthProvider>");
@@ -41,21 +71,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isAuthPage = pathname === "/login" || pathname === "/register";
   useEffect(() => {
     if (!isPending && !isAuthenticated && !isAuthPage) {
+      rememberIntendedPath(pathname);
       router.push("/login");
     }
     if (!isPending && isAuthenticated && isAuthPage) {
-      router.push("/studio");
+      router.push(takeIntendedPath());
     }
-  }, [isAuthenticated, isPending, isAuthPage, router]);
+  }, [isAuthenticated, isPending, isAuthPage, pathname, router]);
 
   const login = async (credentials: CredentialsInput) => {
     await loginMutation.mutateAsync(credentials);
-    router.push("/studio");
+    router.push(takeIntendedPath());
   };
 
   const register = async (credentials: CredentialsInput) => {
     await registerMutation.mutateAsync(credentials);
-    router.push("/studio");
+    router.push(takeIntendedPath());
   };
 
   const logout = async () => {

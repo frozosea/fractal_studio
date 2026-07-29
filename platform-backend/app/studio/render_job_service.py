@@ -67,7 +67,9 @@ async def create(
             compute_request={"route": _route, "body": compute_request},
             idempotency_key=idempotency_key,
         )
-        await RenderQuotaService().reserve(connection, owner_id=principal.user_id, job_id=job.id)
+        await RenderQuotaService().reserve(
+            connection, owner_id=principal.user_id, job_id=job.id, output_kind=payload.output.kind
+        )
         await TransactionalOutboxService(connection).append(
             NewOutboxEvent(
                 event_type="render.created.v1",

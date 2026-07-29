@@ -41,6 +41,7 @@ class OrderView(BaseModel):
     currency: Literal["CNY"]
     paid_at: datetime | None = Field(default=None, alias="paidAt")
     created_at: datetime = Field(alias="createdAt")
+    out_trade_no: str | None = Field(default=None, alias="outTradeNo")
     items: list[OrderItemView]
 
     model_config = ConfigDict(populate_by_name=True)

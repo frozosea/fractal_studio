@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.responses import JSONResponse
 
 from app.auth.models import AccessPrincipal
-from app.core.access_middleware import enforce_origin_and_csrf, require_principal, require_role
+from app.core.access_middleware import enforce_origin_and_csrf, require_principal, require_role, session_token_from
 from app.marketplace.models import ListingCreateInput, ListingUpdateInput
 from app.marketplace.service import MarketplaceService
 
@@ -22,7 +22,9 @@ router = APIRouter(prefix="/v1", tags=["marketplace"])
 
 
 async def _optional_principal(request: Request) -> AccessPrincipal | None:
-    if request.cookies.get("fs_session") is None:
+    # Bearer first: a tab signed in as its own account carries no cookie of its
+    # own, and the window's shared cookie may point at a different user.
+    if session_token_from(request)[0] is None:
         return None
     return await require_principal(request)
 

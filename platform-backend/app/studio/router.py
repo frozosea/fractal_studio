@@ -9,10 +9,12 @@ from fastapi.responses import JSONResponse
 
 from app.auth.models import AccessPrincipal
 from app.core.access_middleware import enforce_origin_and_csrf, require_principal
+from app.core.db import get_engine
 from app.infrastructure.compute.compute_client import ComputeClientError
 from app.studio.capability_service import studio_capabilities
 from app.studio.models import PreviewInput, RecipeInput, RenderJobCreateInput
 from app.studio.preview_service import PreviewService
+from app.studio.quota_service import RenderQuotaService
 from app.studio.recipe_service import canonicalize_spec, create_or_reuse, list_recipes
 from app.studio.render_job_service import create as create_render_job
 from app.studio.render_job_service import get_owned as get_render_job
@@ -31,6 +33,22 @@ async def get_studio_capabilities(
         return {"data": await studio_capabilities()}
     except ComputeClientError as error:
         return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"error": {"code": error.code, "message": "Compute capabilities unavailable"}})
+
+
+@router.get("/me/export-allowance")
+async def get_export_allowance(
+    principal: AccessPrincipal = Depends(require_principal),
+) -> dict[str, object]:
+    async with get_engine().connect() as connection:
+        allowance = await RenderQuotaService().allowance(connection, owner_id=principal.user_id)
+    return {
+        "data": {
+            "member": allowance.member,
+            "limit": allowance.limit,
+            "used": allowance.used,
+            "remaining": allowance.remaining,
+        }
+    }
 
 
 @router.post("/recipes")

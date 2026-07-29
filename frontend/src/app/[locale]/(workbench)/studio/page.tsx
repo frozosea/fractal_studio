@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
   Braces,
@@ -24,6 +24,7 @@ import {
   PlatformApiError,
   type FractalSpec,
   type OrbitProgram,
+  type ExportAllowance,
   type RenderJob,
   type StudioCapabilities,
 } from "@/lib/api/platform";
@@ -165,6 +166,8 @@ export default function StudioPage() {
   const [capabilities, setCapabilities] = useState<StudioCapabilities>(fallbackCapabilities);
   const [output, setOutput] = useState({ preset: "square", width: 1024, height: 1024 });
   const [job, setJob] = useState<RenderJob | null>(null);
+  const [allowance, setAllowance] = useState<ExportAllowance | null>(null);
+  const exhausted = allowance?.remaining === 0;
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -220,6 +223,13 @@ export default function StudioPage() {
     : (capabilities.imageKinds.map.metrics.length ? capabilities.imageKinds.map.metrics : [...METRICS]);
   const selectedColor = COLOR_MAPS.find((item) => item.id === spec.colorMap) ?? COLOR_MAPS[0];
 
+  // Free exports left. Refreshed after every export so the counter and the
+  // server's decision cannot drift apart.
+  const refreshAllowance = useCallback(() => {
+    void platform.studio.exportAllowance().then(setAllowance).catch(() => setAllowance(null));
+  }, []);
+  useEffect(refreshAllowance, [refreshAllowance]);
+
   useEffect(() => {
     void platform.studio.capabilities().then(setCapabilities).catch((reason: unknown) => {
       setError(`${t("errors.capabilities")} (${errorCode(reason) ?? "request_failed"})`);
@@ -230,6 +240,12 @@ export default function StudioPage() {
       if (juliaPickerPreviewRef.current) URL.revokeObjectURL(juliaPickerPreviewRef.current);
     };
   }, [t]);
+
+  // A failed or cancelled job releases its slot again, so re-read the counter
+  // whenever a job settles.
+  useEffect(() => {
+    if (job && terminalStatuses.has(job.status)) refreshAllowance();
+  }, [job, refreshAllowance]);
 
   useEffect(() => {
     if (!job || terminalStatuses.has(job.status)) return;
@@ -475,8 +491,13 @@ export default function StudioPage() {
         height: output.height,
       }));
     } catch (reason) {
-      setError(`${t("errors.export")} (${errorCode(reason) ?? "request_failed"})`);
+      setError(
+        errorCode(reason) === "export_quota_exhausted"
+          ? t("errors.exportQuotaExhausted")
+          : `${t("errors.export")} (${errorCode(reason) ?? "request_failed"})`,
+      );
     } finally {
+      refreshAllowance();
       setExporting(false);
     }
   };
@@ -849,6 +870,11 @@ export default function StudioPage() {
               <ImageDown className="h-4 w-4 text-amber-300/80" />
               <h2 className="text-sm font-medium text-white/80">{t("sections.export")}</h2>
               <span className="ml-auto font-mono text-[10px] uppercase tracking-wider text-white/30">PNG · sRGB</span>
+              {allowance && !allowance.member && allowance.remaining !== null && (
+                <span className={`font-mono text-[10px] uppercase tracking-wider ${allowance.remaining === 0 ? "text-red-300/80" : "text-amber-300/70"}`}>
+                  {t("exportsRemaining", { remaining: allowance.remaining, limit: allowance.limit ?? 0 })}
+                </span>
+              )}
             </div>
             <div className="grid gap-2 md:grid-cols-[minmax(12rem,1fr)_8rem_8rem_auto] md:items-end">
               <Control label={t("outputPreset")}>
@@ -859,11 +885,17 @@ export default function StudioPage() {
               </Control>
               <ClampedNumberControl label={t("width")} min={64} max={4096} step="1" value={output.width} onCommit={(value) => updateOutputDimension("width", value)} />
               <ClampedNumberControl label={t("height")} min={64} max={4096} step="1" value={output.height} onCommit={(value) => updateOutputDimension("height", value)} />
-              <Button className="h-9 rounded-none border-amber-300/30 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25" disabled={exporting} onClick={() => void saveAndRender()}>
+              <Button className="h-9 rounded-none border-amber-300/30 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25" disabled={exporting || exhausted} onClick={() => void saveAndRender()}>
                 <Save className="h-4 w-4" />{exporting ? t("creatingExport") : t("exportPng")}
               </Button>
             </div>
             <p className="mt-2 text-xs text-white/35">{t("compositionHint")}</p>
+            {exhausted && (
+              <p className="mt-2 text-xs text-red-300/80">
+                {t("errors.exportQuotaExhausted")}{" "}
+                <Link href="/membership" className="text-amber-300 underline underline-offset-4">{t("upgradeForUnlimited")}</Link>
+              </p>
+            )}
 
             {job && (
               <div className="mt-3 border-t border-white/10 pt-3">

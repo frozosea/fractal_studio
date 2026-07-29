@@ -131,14 +131,14 @@ export default function PaymentResultPage() {
       for (let attempt = 0; attempt < 15; attempt++) {
         if (cancelled) return;
         try {
-          const page = await platform.commerce.purchases();
+          const page = await platform.commerce.purchases({ fresh: true });
           if (page.data.length === 0) {
             await new Promise((r) => setTimeout(r, 2000));
             continue;
           }
           const best =
             outTradeNo
-              ? page.data.find((o) => o.id === outTradeNo) ?? page.data[0]
+              ? page.data.find((o) => o.outTradeNo === outTradeNo) ?? page.data[0]
               : page.data[0];
           if (!best || cancelled) return;
           setLatestOrder(best);

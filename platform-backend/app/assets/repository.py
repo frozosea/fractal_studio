@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -23,6 +23,8 @@ class AssetRecord:
     files: list[dict[str, object]]
     derivative_status: str = "pending"
     derivative_error_code: str | None = None
+    #: Status of this asset's live listing, or None when it is not listed.
+    listing_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +62,8 @@ class MutationResult:
     asset: AssetRecord | None
     code: str
     cleanup_keys: list[str]
+    #: Listing statuses withdrawn as a side effect, for the audit trail.
+    withdrawn_listings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,13 +315,14 @@ async def find_owned(connection: AsyncConnection, *, asset_id: UUID, owner_id: U
             """
             SELECT a.id, a.owner_id, a.recipe_id, a.media_type::text AS media_type,
                    a.status::text AS status, a.visibility::text AS visibility, a.created_at,
-                   a.derivative_status, a.derivative_error_code,
+                   a.derivative_status, a.derivative_error_code, l.status::text AS listing_status,
                    COALESCE(jsonb_agg(jsonb_build_object(
                      'purpose', f.purpose::text, 'mediaType', f.media_type, 'sizeBytes', f.size_bytes
                    )) FILTER (WHERE f.id IS NOT NULL), '[]'::jsonb) AS files
             FROM assets a LEFT JOIN asset_files f ON f.asset_id = a.id AND f.purpose <> 'render_manifest'
+            LEFT JOIN listings l ON l.asset_id = a.id AND l.status <> 'archived'
             WHERE a.id = :asset_id AND a.owner_id = :owner_id
-            GROUP BY a.id
+            GROUP BY a.id, l.status
             """
         ),
         {"asset_id": asset_id, "owner_id": owner_id},
@@ -360,13 +365,14 @@ async def list_owned(
             f"""
             SELECT a.id, a.owner_id, a.recipe_id, a.media_type::text AS media_type,
                    a.status::text AS status, a.visibility::text AS visibility, a.created_at,
-                   a.derivative_status, a.derivative_error_code,
+                   a.derivative_status, a.derivative_error_code, l.status::text AS listing_status,
                    COALESCE(jsonb_agg(jsonb_build_object(
                      'purpose', f.purpose::text, 'mediaType', f.media_type, 'sizeBytes', f.size_bytes
                    )) FILTER (WHERE f.id IS NOT NULL), '[]'::jsonb) AS files
             FROM assets a LEFT JOIN asset_files f ON f.asset_id = a.id AND f.purpose <> 'render_manifest'
+            LEFT JOIN listings l ON l.asset_id = a.id AND l.status <> 'archived'
             WHERE {predicate}
-            GROUP BY a.id ORDER BY a.created_at DESC, a.id DESC LIMIT :limit
+            GROUP BY a.id, l.status ORDER BY a.created_at DESC, a.id DESC LIMIT :limit
             """
         ),
         params,
@@ -596,15 +602,26 @@ async def change_visibility(
     asset = await find_owned_locked(connection, asset_id=asset_id, owner_id=owner_id)
     if asset is None:
         return MutationResult(asset=None, code="not_found", cleanup_keys=[])
-    if await _has_non_archived_listing(connection, asset_id=asset_id):
-        return MutationResult(asset=None, code="listed", cleanup_keys=[])
     if asset.status == "deleted":
         return MutationResult(asset=None, code="deleted", cleanup_keys=[])
+    withdrawn: list[str] = []
+    if visibility == "hidden":
+        # Hiding an asset withdraws it from the marketplace in the same
+        # transaction: a hidden asset must never stay purchasable, and a
+        # published listing is unpublished on the way out.
+        withdrawn = await withdraw_listings(connection, asset_id=asset_id)
+    elif await _has_non_archived_listing(connection, asset_id=asset_id):
+        return MutationResult(asset=None, code="listed", cleanup_keys=[])
     await connection.execute(
         text("UPDATE assets SET visibility = CAST(:visibility AS asset_visibility) WHERE id = :asset_id"),
         {"visibility": visibility, "asset_id": asset_id},
     )
-    return MutationResult(asset=replace(asset, visibility=visibility), code="ok", cleanup_keys=[])
+    return MutationResult(
+        asset=replace(asset, visibility=visibility, listing_status=None if withdrawn else asset.listing_status),
+        code="ok",
+        cleanup_keys=[],
+        withdrawn_listings=withdrawn,
+    )
 
 
 async def soft_delete(connection: AsyncConnection, *, asset_id: UUID, owner_id: UUID) -> MutationResult:
@@ -615,8 +632,8 @@ async def soft_delete(connection: AsyncConnection, *, asset_id: UUID, owner_id: 
         return MutationResult(asset=asset, code="ok", cleanup_keys=[])
     if asset.status not in {"ready", "failed"}:
         return MutationResult(asset=None, code="invalid_state", cleanup_keys=[])
-    if await _has_non_archived_listing(connection, asset_id=asset_id):
-        return MutationResult(asset=None, code="listed", cleanup_keys=[])
+    # Deleting withdraws any live listing first, for the same reason hiding does.
+    withdrawn = await withdraw_listings(connection, asset_id=asset_id)
     await connection.execute(
         text("UPDATE assets SET status = 'deleted', visibility = 'hidden' WHERE id = :asset_id"),
         {"asset_id": asset_id},
@@ -629,7 +646,7 @@ async def soft_delete(connection: AsyncConnection, *, asset_id: UUID, owner_id: 
             {"asset_id": asset_id},
         )
         cleanup_keys = [str(key) for key in deleted_files.scalars()]
-    return MutationResult(asset=asset, code="ok", cleanup_keys=cleanup_keys)
+    return MutationResult(asset=asset, code="ok", cleanup_keys=cleanup_keys, withdrawn_listings=withdrawn)
 
 
 async def find_owned_locked(
@@ -640,6 +657,37 @@ async def find_owned_locked(
         {"asset_id": asset_id, "owner_id": owner_id},
     )
     return await find_owned(connection, asset_id=asset_id, owner_id=owner_id)
+
+
+async def withdraw_listings(connection: AsyncConnection, *, asset_id: UUID) -> list[str]:
+    """
+    Archive every live listing for an asset and report the statuses withdrawn.
+
+    Archiving is the terminal listing state, so this covers both "take it off
+    the marketplace" and "unpublish it first" in one step: a published listing
+    loses `published_at` and its published version, which is exactly what
+    unpublishing does, and then leaves the creator's active listings entirely.
+    Purchases already made are untouched — entitlements and order items keep
+    their own references to the asset.
+    """
+    previous = await connection.execute(
+        text("SELECT status::text FROM listings WHERE asset_id = :asset_id AND status <> 'archived' FOR UPDATE"),
+        {"asset_id": asset_id},
+    )
+    withdrawn = [str(value) for value in previous.scalars()]
+    if not withdrawn:
+        return []
+    await connection.execute(
+        text(
+            """
+            UPDATE listings
+            SET status = 'archived', published_at = NULL, current_published_version_id = NULL
+            WHERE asset_id = :asset_id AND status <> 'archived'
+            """
+        ),
+        {"asset_id": asset_id},
+    )
+    return withdrawn
 
 
 async def _has_non_archived_listing(connection: AsyncConnection, *, asset_id: UUID) -> bool:
@@ -681,5 +729,8 @@ def _asset_record(row: object) -> AssetRecord:
             str(data["derivative_error_code"])
             if data.get("derivative_error_code") is not None
             else None
+        ),
+        listing_status=(
+            str(data["listing_status"]) if data.get("listing_status") is not None else None
         ),
     )

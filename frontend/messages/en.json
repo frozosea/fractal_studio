@@ -14,6 +14,8 @@
     "registerSubtitle": "Save coordinates, rendering parameters and exported images in one workspace.",
     "accountAccess": "Account access",
     "secureSession": "Secure workspace session",
+    "sessionSwitched": "This tab is now signed in as {email}.",
+    "sessionEnded": "The session was ended in another tab.",
     "newWorkspace": "New workspace",
     "recipeReady": "Coordinate and recipe storage",
     "emailLabel": "Email address",
@@ -166,6 +168,8 @@
     "creatingExport": "Creating job…",
     "exportPng": "Export PNG",
     "compositionHint": "The preview uses the same aspect ratio as the export frame. Output dimensions are bounded to 64–4096 px per side.",
+    "exportsRemaining": "{remaining} of {limit} free exports remaining",
+    "upgradeForUnlimited": "Upgrade to membership for unlimited exports",
     "exportJob": "Export job",
     "cancelExport": "Cancel",
     "downloadPng": "Download PNG",
@@ -236,7 +240,8 @@
       "preview": "Preview failed",
       "export": "Could not create the PNG export",
       "cancel": "Could not cancel the export",
-      "download": "Could not create a download link"
+      "download": "Could not create a download link",
+      "exportQuotaExhausted": "The free PNG export allowance has been used in full."
     }
   },
   "points": {
@@ -442,7 +447,8 @@
     "errors": {
       "requestFailed": "The request failed. Please try again.",
       "requestWithCode": "The request failed ({code}).",
-      "creatorRequired": "Create a creator profile in Payouts before publishing a listing."
+      "creatorRequired": "Create a creator profile in Payouts before publishing a listing.",
+      "downloadFailed": "The download could not be prepared. Please try again."
     },
     "actions": {
       "download": "Download",
@@ -461,6 +467,8 @@
       "editTitle": "Edit title",
       "publish": "Publish",
       "unpublish": "Unpublish",
+      "hiddenLibrary": "Hidden items",
+      "backToLibrary": "Back to Library",
       "clearFilters": "Clear filters"
     },
     "media": { "image": "Image", "video": "Video", "mesh": "3D mesh" },
@@ -477,6 +485,18 @@
       "previewPreparing": "Preparing preview…",
       "previewUnavailable": "Preview unavailable",
       "created": "Created {date}",
+      "statusListed": "Listed",
+      "confirmListed": {
+        "hide": "This item has a listing. Hiding it withdraws the listing from your shelf and moves the item to Hidden items. Continue?",
+        "delete": "This item has a listing. Deleting it withdraws the listing from your shelf and removes the item permanently. Continue?"
+      },
+      "confirmPublished": {
+        "hide": "This item is published on Marketplace. Hiding it unpublishes the listing, withdraws it from your shelf, and moves the item to Hidden items. Continue?",
+        "delete": "This item is published on Marketplace. Deleting it unpublishes the listing, withdraws it from your shelf, and removes the item permanently. Continue?"
+      },
+      "hiddenTitle": "Hidden items",
+      "hiddenSubtitle": "Hidden items are kept out of your Library. Restore an item to return it, or delete it permanently.",
+      "hiddenEmpty": "No hidden items.",
       "draftCreated": "Draft listing created",
       "draftCreatedDescription": "Publish “{title}” in My listings to make it visible in Marketplace.",
       "createDraft": "Create draft listing",

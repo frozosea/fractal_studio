@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.auth import creator_profile_repository, session_service, user_repository, user_role_repository
 from app.auth.models import AccessPrincipal, CreatorProfileInput, UserView
 from app.core import audit_writer, idempotency_service
+from app.core.access_middleware import session_token_from
 from app.core.db import get_engine
 from app.core.request_context import request_id
 
@@ -98,11 +99,16 @@ async def login(email: str, password: str, request: Request) -> tuple[UserView, 
         if user is None or user["status"] != "active" or not _verify_password(password, str(user["password_hash"])):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
         user_id = user["id"]
-        existing = await session_service.resolve(connection, request.cookies.get("fs_session"))
+        raw_token, source = session_token_from(request)
+        existing = await session_service.resolve(connection, raw_token)
         if existing is not None and existing.user_id == user_id:
             session_token = await session_service.rotate(connection, existing, request)
         else:
-            if existing is not None:
+            # A session for a *different* user is only this tab's to end when the
+            # tab presented it itself as a bearer token. The cookie is shared by
+            # every tab in the window, so revoking what it points at would sign
+            # out whichever sibling tab is using that account.
+            if existing is not None and source == "bearer":
                 await session_service.revoke(connection, existing.session_id)
             session_token = await session_service.create(connection, user_id=user_id, request=request)
         await audit_writer.record_user_action(

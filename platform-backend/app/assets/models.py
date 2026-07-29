@@ -35,6 +35,10 @@ class AssetView(BaseModel):
     visibility: Literal["private", "hidden"]
     derivative_status: Literal["pending", "ready", "failed"] = Field(alias="derivativeStatus")
     derivative_error_code: str | None = Field(default=None, alias="derivativeErrorCode")
+    #: Live listing for this asset, if any. Archived listings do not count.
+    listing_status: Literal["draft", "published", "unpublished"] | None = Field(
+        default=None, alias="listingStatus"
+    )
     preview: AssetPreviewView | None = None
     created_at: datetime = Field(alias="createdAt")
     files: list[AssetFileView]

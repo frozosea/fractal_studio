@@ -1,5 +1,11 @@
 FROM debian:bookworm-slim AS build
 
+# Bound apt's network waits; without this a dropped connection hangs the build forever.
+RUN printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "3";\n' \
+        > /etc/apt/apt.conf.d/99-timeout \
+    && sed -i -e 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' \
+              -e 's|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' \
+        $(ls /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources 2>/dev/null)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake libopencv-dev libsqlite3-dev libssl-dev libomp-dev \
     libmpfr-dev libgmp-dev && rm -rf /var/lib/apt/lists/*
@@ -11,6 +17,11 @@ RUN cmake -S backend -B build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build --target fractal_studio_backend -j2
 
 FROM debian:bookworm-slim
+RUN printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "3";\n' \
+        > /etc/apt/apt.conf.d/99-timeout \
+    && sed -i -e 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' \
+              -e 's|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' \
+        $(ls /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources 2>/dev/null)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopencv-core406 libopencv-imgcodecs406 libopencv-imgproc406 libopencv-videoio406 \
     libsqlite3-0 libssl3 libgomp1 libmpfr6 ffmpeg curl \

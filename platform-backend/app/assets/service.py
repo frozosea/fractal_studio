@@ -245,6 +245,7 @@ def asset_view(record: repository.AssetRecord, preview: AssetPreview | None = No
         visibility=record.visibility,
         derivativeStatus=record.derivative_status,
         derivativeErrorCode=record.derivative_error_code,
+        listingStatus=record.listing_status,
         preview=AssetPreviewView(
             thumbnailUrl=preview.thumbnail_url,
             watermarkedPreviewUrl=preview.watermarked_preview_url,
@@ -305,7 +306,7 @@ class AssetLibraryService:
                 subject_type="asset",
                 subject_id=asset_id,
                 request_id_value=request_id(request),
-                metadata={"visibility": visibility},
+                metadata={"visibility": visibility, "withdrawnListings": result.withdrawn_listings},
             )
             await idempotency_service.complete(
                 connection,
@@ -348,7 +349,10 @@ class AssetLibraryService:
                 subject_type="asset",
                 subject_id=asset_id,
                 request_id_value=request_id(request),
-                metadata={"masterRetained": not bool(result.cleanup_keys)},
+                metadata={
+                    "masterRetained": not bool(result.cleanup_keys),
+                    "withdrawnListings": result.withdrawn_listings,
+                },
             )
             headers = {"Cache-Control": "no-store"}
             await idempotency_service.complete(

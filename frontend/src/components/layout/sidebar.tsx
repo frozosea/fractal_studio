@@ -23,8 +23,6 @@ interface NavItem {
   href: string;
   icon: LucideIcon;
   requiredRole?: string;
-  hideForMember?: boolean;
-  requireMember?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -32,11 +30,13 @@ const navItems: NavItem[] = [
   { label: "library", href: "/assets", icon: Images },
   { label: "marketplace", href: "/explore", icon: Store },
   { label: "favorites", href: "/favorites", icon: Heart },
-  { label: "listings", href: "/listings", icon: List, requireMember: true },
+  // Listings are gated on the creator role, not on membership: anyone can apply
+  // for a creator profile, so every signed-in account gets the entry.
+  { label: "listings", href: "/listings", icon: List },
   { label: "purchases", href: "/purchases", icon: ReceiptText },
   { label: "payouts", href: "/payouts", icon: Landmark },
   { label: "finance", href: "/finance", icon: ShieldCheck, requiredRole: "finance_operator" },
-  { label: "membership", href: "/membership", icon: Crown, hideForMember: true },
+  { label: "membership", href: "/membership", icon: Crown },
 ];
 
 export function Sidebar() {
@@ -89,8 +89,6 @@ export function Sidebar() {
       <nav className="flex-1 space-y-0.5 p-3" aria-label={t("navigation")}>
         {navItems.filter((item) => {
           if (item.requiredRole && !user?.roles.includes(item.requiredRole)) return false;
-          if (item.hideForMember && user?.member) return false;
-          if (item.requireMember && !user?.member) return false;
           return true;
         }).map((item) => {
           const isActive = pathname.startsWith(item.href);

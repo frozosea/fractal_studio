@@ -143,6 +143,36 @@ async def create_reservation(
     )
 
 
+async def count_lifetime_exports(connection: AsyncConnection, *, owner_id: UUID) -> int:
+    """
+    PNG exports this owner has spent against the free allowance.
+
+    A job that never produced anything — it failed, or the user cancelled it —
+    does not count; everything still in flight does, so the cap cannot be
+    overrun by queueing jobs faster than they finish. Only image jobs are
+    metered; the allowance is a cap on exported PNGs.
+    """
+    result = await connection.scalar(
+        text(
+            """
+            SELECT count(*) FROM render_jobs
+            WHERE owner_id = :owner_id
+              AND output_kind = 'image'
+              AND status NOT IN ('failed', 'cancelled')
+            """
+        ),
+        {"owner_id": owner_id},
+    )
+    return int(result or 0)
+
+
+async def has_active_membership(connection: AsyncConnection, *, user_id: UUID) -> bool:
+    result = await connection.scalar(
+        text("SELECT status FROM memberships WHERE user_id = :user_id"), {"user_id": user_id}
+    )
+    return result == "active"
+
+
 async def lock_user_reserved_units(connection: AsyncConnection, *, owner_id: UUID) -> int:
     """Lock owner first: serialises active-render quota reservations without global isolation."""
     await connection.execute(text("SELECT id FROM users WHERE id = :owner_id FOR UPDATE"), {"owner_id": owner_id})

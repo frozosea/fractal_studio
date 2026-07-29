@@ -243,8 +243,9 @@ async def unpublish(connection: AsyncConnection, *, listing: ListingRecord) -> L
 async def find_owned(
     connection: AsyncConnection, *, listing_id: UUID, creator_id: UUID
 ) -> ListingRecord | None:
+    """Archived listings read as absent: withdrawing one is terminal."""
     row = await connection.execute(
-        text(_DETAIL_SELECT + " WHERE l.id = :listing_id AND l.creator_id = :creator_id"),
+        text(_DETAIL_SELECT + " WHERE l.id = :listing_id AND l.creator_id = :creator_id AND l.status <> 'archived'"),
         {"listing_id": listing_id, "creator_id": creator_id},
     )
     found = row.mappings().one_or_none()
@@ -268,7 +269,9 @@ async def list_creator(
     before_created_at: datetime | None,
     before_id: UUID | None,
 ) -> list[ListingRecord]:
-    predicate = "l.creator_id = :creator_id"
+    # Archived listings were withdrawn (the asset was hidden or deleted); they
+    # are gone from the creator's shelf, not a state they can act on.
+    predicate = "l.creator_id = :creator_id AND l.status <> 'archived'"
     params: dict[str, object] = {"creator_id": creator_id, "limit": limit}
     if status is not None:
         predicate += " AND l.status::text = :status"

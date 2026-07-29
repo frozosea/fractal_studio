@@ -30,7 +30,8 @@ app.add_middleware(
     allow_origins=sorted(get_settings().trusted_origins),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Content-Type", "Idempotency-Key", "X-CSRF-Token", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-CSRF-Token", "X-Request-ID"],
+    expose_headers=["X-Session-Token"],
 )
 app.include_router(auth_router)
 app.include_router(studio_router)
@@ -66,6 +67,16 @@ def _trusted_request_id(request: Request) -> str:
     return _uuid7()
 
 
+def _append_vary(response, field: str) -> None:
+    existing = response.headers.get("Vary")
+    if existing is None:
+        response.headers["Vary"] = field
+        return
+    if field.lower() in {part.strip().lower() for part in existing.split(",")}:
+        return
+    response.headers["Vary"] = f"{existing}, {field}"
+
+
 @app.middleware("http")
 async def assign_request_id(request: Request, call_next):
     request_id = _trusted_request_id(request)
@@ -76,6 +87,11 @@ async def assign_request_id(request: Request, call_next):
     try:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        # Every response is session-scoped: never let a browser or intermediary
+        # replay one account's body to the next account signed in on the same device.
+        response.headers.setdefault("Cache-Control", "no-store")
+        _append_vary(response, "Cookie")
+        _append_vary(response, "Authorization")
         log_event(
             logging.INFO,
             "http request completed",
@@ -92,6 +108,7 @@ async def assign_request_id(request: Request, call_next):
 
 _DEFAULT_ERROR_CODE = {
     401: "unauthenticated",
+    402: "payment_required",
     403: "forbidden",
     404: "not_found",
     409: "invalid_state",
@@ -104,6 +121,7 @@ _DEFAULT_ERROR_CODE = {
 
 _PUBLIC_DETAIL_CODES = {
     "email_already_registered",
+    "export_quota_exhausted",
     "handle_already_registered",
     "idempotency_conflict",
     "insufficient_creator_balance",

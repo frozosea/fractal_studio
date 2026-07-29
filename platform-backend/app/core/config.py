@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     preview_max_pixels: int = Field(default=1_048_576, ge=1, le=1_048_576)
     preview_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
     render_quota_max_active: int = Field(default=3, ge=1, le=100)
+    # Lifetime export cap for accounts without an active membership. Members
+    # are not counted against it.
+    render_free_export_limit: int = Field(default=20, ge=1, le=10_000)
     master_download_ttl_seconds: int = Field(default=300, ge=60, le=900)
     public_preview_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
     media_max_input_bytes: int = Field(default=524_288_000, ge=1_048_576, le=2_147_483_647)

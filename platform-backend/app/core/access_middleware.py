@@ -15,9 +15,25 @@ from app.core.db import get_engine
 from app.core.request_context import user_id_var
 
 
+def session_token_from(request: Request) -> tuple[str | None, str]:
+    """
+    Locate the session token and report where it came from.
+
+    A bearer token wins over the cookie so that each browser tab can hold its
+    own account: the cookie is shared by every tab in the window, the bearer
+    token lives in that tab's sessionStorage.
+    """
+    header = request.headers.get("authorization", "")
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() == "bearer" and value.strip():
+        return value.strip(), "bearer"
+    return request.cookies.get("fs_session"), "cookie"
+
+
 async def require_principal(request: Request) -> AccessPrincipal:
     """Resolve fresh session, user state and roles for every protected request."""
-    raw_token = request.cookies.get("fs_session")
+    raw_token, source = session_token_from(request)
+    request.state.session_source = source
     async with get_engine().connect() as connection:
         principal = await session_service.resolve(connection, raw_token)
     if principal is None:

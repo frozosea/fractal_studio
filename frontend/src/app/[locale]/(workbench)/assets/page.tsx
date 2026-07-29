@@ -5,7 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
-import { useRouter } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { platform, PlatformApiError, type Asset } from "@/lib/api/platform";
 
 export default function AssetsPage() {
@@ -34,6 +34,30 @@ export default function AssetsPage() {
     catch (reason) { setError(errorText(reason)); }
   };
 
+  // A listed asset shows where it stands on the marketplace instead of the
+  // generic asset status: that is the state the owner acts on here.
+  const listingLabel = (asset: Asset): string | null => {
+    if (!asset.listingStatus) return null;
+    return asset.listingStatus === "published" ? t("listingStatus.published") : t("assets.statusListed");
+  };
+
+  // Hiding or deleting a listed asset withdraws its listing server-side, and a
+  // published listing disappears from Marketplace with it. Ask first — that is
+  // not recoverable from this screen.
+  const confirmWithdrawal = (asset: Asset, action: "hide" | "delete"): boolean => {
+    if (!asset.listingStatus) return true;
+    const key = asset.listingStatus === "published" ? "confirmPublished" : "confirmListed";
+    return window.confirm(t(`assets.${key}.${action}`));
+  };
+  const hide = (asset: Asset) => {
+    if (!confirmWithdrawal(asset, "hide")) return;
+    void platform.assets.setVisibility(asset.id, "hidden").then(refresh).catch((reason: unknown) => setError(errorText(reason)));
+  };
+  const remove = (asset: Asset) => {
+    if (!confirmWithdrawal(asset, "delete")) return;
+    void platform.assets.remove(asset.id).then(refresh).catch((reason: unknown) => setError(errorText(reason)));
+  };
+
   const createListing = async () => {
     if (!listingAsset) return;
     try {
@@ -48,7 +72,10 @@ export default function AssetsPage() {
   };
 
   return <div className="space-y-5">
-    <div><h1 className="text-2xl font-semibold">{t("assets.title")}</h1><p className="text-muted-foreground">{t("assets.subtitle")}</p></div>
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div><h1 className="text-2xl font-semibold">{t("assets.title")}</h1><p className="text-muted-foreground">{t("assets.subtitle")}</p></div>
+      <Button asChild size="sm" variant="outline"><Link href="/assets/hidden">{t("actions.hiddenLibrary")}</Link></Button>
+    </div>
     {error && <p className="text-red-400">{error}</p>}
     {assets.length === 0 && <p className="rounded border border-dashed p-6 text-muted-foreground">{t("assets.empty")}</p>}
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{assets.map((asset) => {
@@ -58,14 +85,14 @@ export default function AssetsPage() {
           {previewUrl ? <img alt={t("assets.previewAlt", { type: t(`media.${asset.mediaType}`) })} className="block h-full w-full object-contain" src={previewUrl} /> : <div className="flex h-full items-center justify-center p-4 text-center text-muted-foreground">{asset.derivativeStatus === "pending" ? t("assets.previewPreparing") : t("assets.previewUnavailable")}</div>}
         </div>
         <div className="p-4">
-          <div className="flex justify-between gap-3"><b>{t(`media.${asset.mediaType}`)}</b><span>{t(`assetStatus.${asset.status}`)}</span></div>
+          <div className="flex justify-between gap-3"><b>{t(`media.${asset.mediaType}`)}</b><span>{listingLabel(asset) ?? t(`assetStatus.${asset.status}`)}</span></div>
           <p className="mt-2 font-mono text-xs text-muted-foreground" title={asset.id}>{asset.id.slice(0, 13)}…</p>
           <p className="mt-1 text-xs text-muted-foreground">{t(`visibility.${asset.visibility}`)} · {t("assets.created", { date: new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(asset.createdAt)) })}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {asset.status === "ready" && <Button size="sm" onClick={() => void download(asset.id)}>{t("actions.download")}</Button>}
-            {asset.status === "ready" && asset.derivativeStatus === "ready" && <Button size="sm" variant="outline" onClick={() => setListingAsset(asset.id)}>{t("actions.createListing")}</Button>}
-            <Button size="sm" variant="outline" onClick={() => void platform.assets.setVisibility(asset.id, asset.visibility === "private" ? "hidden" : "private").then(refresh).catch((reason: unknown) => setError(errorText(reason)))}>{asset.visibility === "private" ? t("actions.hide") : t("actions.restore")}</Button>
-            <Button size="sm" variant="outline" onClick={() => void platform.assets.remove(asset.id).then(refresh).catch((reason: unknown) => setError(errorText(reason)))}>{t("actions.delete")}</Button>
+            {asset.status === "ready" && asset.derivativeStatus === "ready" && !asset.listingStatus && <Button size="sm" variant="outline" onClick={() => setListingAsset(asset.id)}>{t("actions.createListing")}</Button>}
+            <Button size="sm" variant="outline" onClick={() => hide(asset)}>{t("actions.hide")}</Button>
+            <Button size="sm" variant="outline" onClick={() => remove(asset)}>{t("actions.delete")}</Button>
           </div>
         </div>
       </article>;
