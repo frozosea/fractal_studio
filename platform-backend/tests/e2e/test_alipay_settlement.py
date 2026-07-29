@@ -96,6 +96,11 @@ async def test_signed_notification_reconcile_close_and_reversal(e2e_api_url: str
         assert (await buyer.post("/v1/webhooks/alipay", data=signed)).text == "success"
         assert (await _wait_order(buyer, order_id, "fulfilled"))["paidAt"]
         assert (await buyer.post(f"/v1/assets/{asset_id}/download-url")).status_code == 200
+        duplicate = await buyer.post(
+            "/v1/checkout", headers={"Idempotency-Key": "alipay-already-owned"}, json=checkout_payload
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == "asset_already_owned"
 
         engine = create_async_engine(os.environ["E2E_DATABASE_URL"])
         try:

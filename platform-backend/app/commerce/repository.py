@@ -165,6 +165,25 @@ async def find_active_order_for_listing(
     )
 
 
+async def has_active_entitlement(
+    connection: AsyncConnection, *, buyer_id: UUID, asset_id: UUID
+) -> bool:
+    """Return whether the buyer already owns an active licence for the asset."""
+    return bool(
+        await connection.scalar(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM entitlements
+                    WHERE user_id = :buyer_id
+                      AND asset_id = :asset_id
+                      AND status = 'active'
+                )
+            """),
+            {"buyer_id": buyer_id, "asset_id": asset_id},
+        )
+    )
+
+
 async def close_pending_orders_for_listing(
     connection: AsyncConnection, *, buyer_id: UUID, listing_id: UUID
 ) -> None:

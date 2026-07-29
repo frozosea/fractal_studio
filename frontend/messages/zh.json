@@ -464,6 +464,7 @@
       "addFavorite": "加入收藏",
       "removeFavorite": "取消收藏",
       "payAlipay": "使用支付宝付款",
+      "alreadyPurchased": "已购买",
       "editTitle": "修改标题",
       "publish": "发布",
       "unpublish": "取消发布",
@@ -515,7 +516,8 @@
       "byCreator": "作者：{creator}",
       "removedFavorite": "已取消收藏",
       "addedFavorite": "已加入收藏",
-      "addedFavoriteDescription": "可以在收藏页面中查看。"
+      "addedFavoriteDescription": "可以在收藏页面中查看。",
+      "alreadyPurchasedDescription": "你已拥有该作品，可在购买记录中直接下载。"
     },
     "favorites": {
       "title": "收藏",

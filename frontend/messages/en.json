@@ -464,6 +464,7 @@
       "addFavorite": "Add to favorites",
       "removeFavorite": "Remove from favorites",
       "payAlipay": "Pay with Alipay",
+      "alreadyPurchased": "Purchased",
       "editTitle": "Edit title",
       "publish": "Publish",
       "unpublish": "Unpublish",
@@ -515,7 +516,8 @@
       "byCreator": "by {creator}",
       "removedFavorite": "Removed from favorites",
       "addedFavorite": "Added to favorites",
-      "addedFavoriteDescription": "Saved in your Favorites library."
+      "addedFavoriteDescription": "Saved in your Favorites library.",
+      "alreadyPurchasedDescription": "You already own this item. Download it from Purchases."
     },
     "favorites": {
       "title": "Favorites",

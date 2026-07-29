@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
-import { platform, submitAlipayForm, type Listing } from "@/lib/api/platform";
+import { platform, PlatformApiError, submitAlipayForm, type Listing } from "@/lib/api/platform";
 
 function updateIds(ids: Set<string>, assetId: string, shouldInclude: boolean): Set<string> {
   const next = new Set(ids);
@@ -20,6 +20,7 @@ export default function ExplorePage() {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<Listing[]>([]);
   const [favoriteAssetIds, setFavoriteAssetIds] = useState<Set<string>>(new Set());
+  const [ownedAssetIds, setOwnedAssetIds] = useState<Set<string>>(new Set());
   const [favoriteBusy, setFavoriteBusy] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,9 +47,21 @@ export default function ExplorePage() {
     }
   };
 
+  const loadPurchases = async () => {
+    try {
+      const value = await platform.commerce.purchases({ fresh: true });
+      setOwnedAssetIds(new Set(value.data
+        .filter((order) => order.status === "fulfilled")
+        .flatMap((order) => order.items.map((item) => item.assetId))));
+    } catch (reason) {
+      setError(t("errors.requestFailed"));
+    }
+  };
+
   useEffect(() => {
     void search();
     void loadFavorites();
+    void loadPurchases();
   }, []);
 
   const toggleFavorite = async (assetId: string) => {
@@ -75,7 +88,12 @@ export default function ExplorePage() {
     try {
       submitAlipayForm((await platform.commerce.checkout(listing)).alipayForm);
     } catch (reason) {
-      setError(t("errors.requestFailed"));
+      if (reason instanceof PlatformApiError && reason.code === "asset_already_owned") {
+        setOwnedAssetIds((ids) => updateIds(ids, listing.assetId, true));
+        setError(t("marketplace.alreadyPurchasedDescription"));
+      } else {
+        setError(t("errors.requestFailed"));
+      }
     }
   };
 
@@ -105,6 +123,7 @@ export default function ExplorePage() {
           {items.map((listing) => {
             const isFavorite = favoriteAssetIds.has(listing.assetId);
             const isFavoriteBusy = favoriteBusy.has(listing.assetId);
+            const isOwned = ownedAssetIds.has(listing.assetId);
             return (
               <article key={listing.id} className="min-w-0 overflow-hidden rounded-xl border border-white/10">
                 <div className="aspect-[4/3] bg-white/5">
@@ -134,7 +153,10 @@ export default function ExplorePage() {
                     </Button>
                   </div>
                   {listing.description && <p className="line-clamp-2 text-sm text-muted-foreground">{listing.description}</p>}
-                  <Button className="w-full" onClick={() => void checkout(listing)}>{t("actions.payAlipay")}</Button>
+                  <Button className="w-full" disabled={isOwned} onClick={() => void checkout(listing)}>
+                    {isOwned ? t("actions.alreadyPurchased") : t("actions.payAlipay")}
+                  </Button>
+                  {isOwned && <p className="text-xs text-emerald-400">{t("marketplace.alreadyPurchasedDescription")}</p>}
                 </div>
               </article>
             );

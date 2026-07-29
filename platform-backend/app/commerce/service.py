@@ -76,6 +76,10 @@ class CheckoutService:
                 )
                 if claim.is_replay:
                     return claim.replay_body or {}, claim.replay_status or 201, claim.replay_headers or {}
+                if await repository.has_active_entitlement(
+                    connection, buyer_id=principal.user_id, asset_id=offer.asset_id
+                ):
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="asset_already_owned")
                 # Auto-close any previous pending order for this listing so the
                 # user can retry without hitting a hard 409.
                 await repository.close_pending_orders_for_listing(
