@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
   Braces,
@@ -1021,9 +1021,13 @@ function ScaleControl({ label, value, min, max = 1e9, onCommit }: {
   max?: number;
   onCommit: (value: number) => void;
 }) {
+  const inputId = useId();
   const externalValue = Number.isFinite(value) ? value : 3;
   const [draft, setDraft] = useState(String(externalValue));
-  useEffect(() => setDraft(String(externalValue)), [externalValue]);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setDraft(String(externalValue));
+  }, [editing, externalValue]);
 
   const parsed = Number(draft.trim());
   const valid = draft.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
@@ -1044,18 +1048,25 @@ function ScaleControl({ label, value, min, max = 1e9, onCommit }: {
   };
 
   return (
-    <Control label={label}>
+    <div className="mb-2 block text-[11px] text-white/45">
+      <label className="mb-1 block uppercase tracking-wider" htmlFor={inputId}>{label}</label>
       <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem]">
         <Button type="button" aria-label={`${label} ÷ 2`} title={`${label} ÷ 2`} className="h-9 rounded-none border-r-0 font-mono text-xs" size="sm" variant="outline" onClick={() => multiply(0.5)}>÷2</Button>
         <Input
+          id={inputId}
+          type="text"
+          autoComplete="off"
           aria-invalid={!valid}
           className="instrument-control h-9 rounded-none font-mono text-xs"
           inputMode="decimal"
           spellCheck={false}
           value={draft}
-          onBlur={commit}
+          onBlur={() => {
+            setEditing(false);
+            commit();
+          }}
           onChange={(event) => setDraft(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()}
+          onFocus={() => setEditing(true)}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
             if (event.key === "Escape") {
@@ -1066,7 +1077,7 @@ function ScaleControl({ label, value, min, max = 1e9, onCommit }: {
         />
         <Button type="button" aria-label={`${label} × 2`} title={`${label} × 2`} className="h-9 rounded-none border-l-0 font-mono text-xs" size="sm" variant="outline" onClick={() => multiply(2)}>×2</Button>
       </div>
-    </Control>
+    </div>
   );
 }
 
