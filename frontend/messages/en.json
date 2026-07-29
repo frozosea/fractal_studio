@@ -150,6 +150,8 @@
       "rendering": "Computing preview",
       "zoomOut": "Zoom out",
       "zoomIn": "Zoom in",
+      "panPreview": "Pan preview",
+      "zoomPreview": "Zoom preview",
       "frame": "export frame",
       "parameterFrame": "parameter viewport"
     },

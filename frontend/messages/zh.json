@@ -150,6 +150,8 @@
       "rendering": "正在计算预览",
       "zoomOut": "缩小",
       "zoomIn": "放大",
+      "panPreview": "移动预览",
+      "zoomPreview": "缩放预览",
       "frame": "导出画框",
       "parameterFrame": "参数视口"
     },

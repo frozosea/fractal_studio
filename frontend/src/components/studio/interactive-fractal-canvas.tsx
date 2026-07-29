@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Minus, Plus, LoaderCircle, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { FractalSpec } from "@/lib/api/platform";
@@ -29,10 +29,20 @@ type Props = {
     zoomIn: string;
     reset: string;
     frame: string;
+    panPreview: string;
+    zoomPreview: string;
   };
 };
 
 type ViewportBox = { left: number; top: number; width: number; height: number };
+type PreviewTransform = {
+  kind: "pan" | "zoom";
+  x: number;
+  y: number;
+  scale: number;
+  originX: number;
+  originY: number;
+};
 
 function worldFromClient(spec: FractalSpec, box: ViewportBox, clientX: number, clientY: number, scale = Number(spec.scale ?? 3)) {
   const aspect = box.width / box.height;
@@ -53,6 +63,13 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
   const wheelActive = useRef(false);
   const wheelTimer = useRef<number | null>(null);
   const wheelHandler = useRef<(event: WheelEvent) => void>(() => undefined);
+  const zoomBaseScale = useRef<number | null>(null);
+  const [previewTransform, setPreviewTransform] = useState<PreviewTransform | null>(null);
+
+  useEffect(() => {
+    setPreviewTransform(null);
+    zoomBaseScale.current = null;
+  }, [preview]);
 
   const move = (x: number, y: number, baseRe: number, baseIm: number, startX: number, startY: number) => {
     const box = element.current?.getBoundingClientRect();
@@ -96,6 +113,16 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
     const nextScale = Math.min(1e9, Math.max(1e-12, oldScale * Math.exp(event.deltaY * 0.0015)));
     const world = worldFromClient(spec, box, event.clientX, event.clientY);
     const nextAtCursor = worldFromClient({ ...spec, centerRe: 0, centerIm: 0 }, box, event.clientX, event.clientY, nextScale);
+    const baseScale = zoomBaseScale.current ?? oldScale;
+    zoomBaseScale.current = baseScale;
+    setPreviewTransform({
+      kind: "zoom",
+      x: 0,
+      y: 0,
+      scale: baseScale / nextScale,
+      originX: event.clientX - box.left,
+      originY: event.clientY - box.top,
+    });
     onChange({ scale: nextScale, centerRe: world.re - nextAtCursor.re, centerIm: world.im - nextAtCursor.im });
   };
 
@@ -111,23 +138,52 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
     if (wheelTimer.current) window.clearTimeout(wheelTimer.current);
   }, []);
 
+  const zoomCentered = (factor: number) => {
+    const box = element.current?.getBoundingClientRect();
+    onNavigationStart();
+    setPreviewTransform({
+      kind: "zoom",
+      x: 0,
+      y: 0,
+      scale: 1 / factor,
+      originX: (box?.width ?? width) / 2,
+      originY: (box?.height ?? height) / 2,
+    });
+    onZoom(factor);
+  };
+
   return <div className="scientific-canvas relative mx-auto max-w-full overflow-hidden bg-black" ref={element}
     onPointerDown={(event) => {
       if ((event.target as HTMLElement).closest("button")) return;
       onNavigationStart(); event.currentTarget.setPointerCapture(event.pointerId);
+      zoomBaseScale.current = null;
+      setPreviewTransform({ kind: "pan", x: 0, y: 0, scale: 1, originX: 0, originY: 0 });
       drag.current = { x: event.clientX, y: event.clientY, re: Number(spec.centerRe ?? 0), im: Number(spec.centerIm ?? 0), moved: false };
     }}
     onPointerMove={(event) => {
       const value = drag.current;
       if (!value) return;
       if (Math.hypot(event.clientX - value.x, event.clientY - value.y) > 4) value.moved = true;
-      if (value.moved) move(event.clientX, event.clientY, value.re, value.im, value.x, value.y);
+      if (value.moved) {
+        setPreviewTransform({
+          kind: "pan",
+          x: event.clientX - value.x,
+          y: event.clientY - value.y,
+          scale: 1,
+          originX: 0,
+          originY: 0,
+        });
+        move(event.clientX, event.clientY, value.re, value.im, value.x, value.y);
+      }
     }}
     onPointerUp={(event) => {
       const value = drag.current;
       drag.current = null;
       const box = element.current?.getBoundingClientRect();
-      if (value && !value.moved && box && onPointSelect) onPointSelect(worldFromClient(spec, box, event.clientX, event.clientY));
+      if (value && !value.moved) {
+        setPreviewTransform(null);
+        if (box && onPointSelect) onPointSelect(worldFromClient(spec, box, event.clientX, event.clientY));
+      }
     }}
     onPointerCancel={() => { drag.current = null; }}
     onDoubleClick={(event) => {
@@ -136,6 +192,7 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       const oldScale = Number(spec.scale ?? 3); const nextScale = Math.max(1e-12, oldScale * 0.35);
       const world = worldFromClient(spec, box, event.clientX, event.clientY);
       const nextAtCursor = worldFromClient({ ...spec, centerRe: 0, centerIm: 0 }, box, event.clientX, event.clientY, nextScale);
+      setPreviewTransform({ kind: "zoom", x: 0, y: 0, scale: oldScale / nextScale, originX: event.clientX - box.left, originY: event.clientY - box.top });
       onChange({ scale: nextScale, centerRe: world.re - nextAtCursor.re, centerIm: world.im - nextAtCursor.im });
     }}
     style={{
@@ -145,7 +202,17 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       height: "min(64dvh, 52rem)",
       width: "auto",
     }}>
-    {preview ? <img src={preview} alt={labels.alt} draggable={false} className="h-full w-full select-none object-contain" /> : <div className="grid h-full min-h-[26rem] place-items-center text-sm text-white/45">{labels.empty}</div>}
+    {preview ? <img
+      src={preview}
+      alt={labels.alt}
+      draggable={false}
+      className="h-full w-full select-none object-contain will-change-transform"
+      style={previewTransform ? {
+        transform: `translate3d(${previewTransform.x}px, ${previewTransform.y}px, 0) scale(${previewTransform.scale})`,
+        transformOrigin: `${previewTransform.originX}px ${previewTransform.originY}px`,
+        transition: previewTransform.kind === "zoom" ? "transform 100ms ease-out" : "none",
+      } : undefined}
+    /> : <div className="grid h-full min-h-[26rem] place-items-center text-sm text-white/45">{labels.empty}</div>}
     <div className="pointer-events-none absolute inset-0" aria-hidden="true">
       <span className="absolute left-1/2 top-0 h-full w-px bg-amber-300/10" />
       <span className="absolute left-0 top-1/2 h-px w-full bg-amber-300/10" />
@@ -156,11 +223,14 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       <span>{labels.hint}</span><span>{spec.iterations} {labels.detail}</span>
     </div>
     <span className="pointer-events-none absolute left-3 top-3 border border-amber-300/30 bg-black/75 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-200/80">{labels.frame} {exportWidth}×{exportHeight}</span>
+    {previewTransform && <span className="pointer-events-none absolute left-3 top-11 border border-cyan-300/30 bg-black/75 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-cyan-100/80">
+      {previewTransform.kind === "pan" ? labels.panPreview : labels.zoomPreview}
+    </span>}
     {previewing && <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/25"><span className="flex items-center gap-2 border border-white/15 bg-black/80 px-3 py-1.5 text-sm"><LoaderCircle className="h-4 w-4 animate-spin" /> {labels.rendering}</span></div>}
     <div className="absolute right-3 top-3 flex overflow-hidden border border-white/20 bg-black/80">
-      <Button aria-label={labels.zoomOut} title={labels.zoomOut} size="sm" variant="ghost" className="rounded-none" onClick={() => onZoom(2)}><Minus className="h-4 w-4" /></Button>
-      <Button aria-label={labels.zoomIn} title={labels.zoomIn} size="sm" variant="ghost" className="rounded-none border-x border-white/15" onClick={() => onZoom(0.35)}><Plus className="h-4 w-4" /></Button>
-      <Button aria-label={labels.reset} title={labels.reset} size="sm" variant="ghost" className="rounded-none" onClick={onReset}><RotateCcw className="h-4 w-4" /></Button>
+      <Button aria-label={labels.zoomOut} title={labels.zoomOut} size="sm" variant="ghost" className="rounded-none" onClick={() => zoomCentered(2)}><Minus className="h-4 w-4" /></Button>
+      <Button aria-label={labels.zoomIn} title={labels.zoomIn} size="sm" variant="ghost" className="rounded-none border-x border-white/15" onClick={() => zoomCentered(0.35)}><Plus className="h-4 w-4" /></Button>
+      <Button aria-label={labels.reset} title={labels.reset} size="sm" variant="ghost" className="rounded-none" onClick={() => { setPreviewTransform(null); onReset(); }}><RotateCcw className="h-4 w-4" /></Button>
     </div>
   </div>;
 }
