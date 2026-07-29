@@ -782,7 +782,7 @@ export default function StudioPage() {
                   <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem]">
                     <PreciseControl label={t("centerRe")} value={juliaPickerSpec.centerReStr ?? String(juliaPickerSpec.centerRe ?? 0)} onCommit={(value) => setJuliaPickerSpec((current) => ({ ...current, centerReStr: value, centerRe: Number(value) }))} />
                     <PreciseControl label={t("centerIm")} value={juliaPickerSpec.centerImStr ?? String(juliaPickerSpec.centerIm ?? 0)} onCommit={(value) => setJuliaPickerSpec((current) => ({ ...current, centerImStr: value, centerIm: Number(value) }))} />
-                    <NumberControl label={t("scale")} min={String(minScale)} step="0.000001" value={juliaPickerSpec.scale ?? 3} onChange={(value) => setJuliaPickerSpec((current) => ({ ...current, scale: Math.max(minScale, value) }))} />
+                    <ScaleControl label={t("scale")} min={minScale} value={juliaPickerSpec.scale ?? 3} onCommit={(value) => setJuliaPickerSpec((current) => ({ ...current, scale: value }))} />
                   </div>
                 </div>
                 <div className="border-l border-white/15 pl-3">
@@ -790,7 +790,7 @@ export default function StudioPage() {
                   <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem]">
                     <PreciseControl label={t("centerRe")} value={spec.centerReStr ?? String(spec.centerRe ?? 0)} onCommit={(value) => update({ centerReStr: value, centerRe: Number(value) })} />
                     <PreciseControl label={t("centerIm")} value={spec.centerImStr ?? String(spec.centerIm ?? 0)} onCommit={(value) => update({ centerImStr: value, centerIm: Number(value) })} />
-                    <NumberControl label={t("scale")} min={String(minScale)} step="0.000001" value={spec.scale ?? 3} onChange={(value) => update({ scale: Math.max(minScale, value) })} />
+                    <ScaleControl label={t("scale")} min={minScale} value={spec.scale ?? 3} onCommit={(value) => update({ scale: value })} />
                   </div>
                 </div>
               </div>
@@ -798,7 +798,7 @@ export default function StudioPage() {
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem]">
                 <PreciseControl label={t("centerRe")} value={spec.centerReStr ?? String(spec.centerRe ?? 0)} onCommit={(value) => update({ centerReStr: value, centerRe: Number(value) })} />
                 <PreciseControl label={t("centerIm")} value={spec.centerImStr ?? String(spec.centerIm ?? 0)} onCommit={(value) => update({ centerImStr: value, centerIm: Number(value) })} />
-                <NumberControl label={t("scale")} min={String(minScale)} step="0.000001" value={spec.scale ?? 3} onChange={(value) => update({ scale: Math.max(minScale, value) })} />
+                <ScaleControl label={t("scale")} min={minScale} value={spec.scale ?? 3} onCommit={(value) => update({ scale: value })} />
               </div>
             )}
           </section>
@@ -937,6 +937,62 @@ function Control({ label, children }: { label: string; children: React.ReactNode
 
 function NumberControl({ label, value, onChange, ...props }: { label: string; value: number; onChange: (value: number) => void } & Omit<React.ComponentProps<typeof Input>, "value" | "onChange">) {
   return <Control label={label}><Input className="instrument-control h-9 rounded-none font-mono text-xs" value={Number.isFinite(value) ? value : 0} type="number" onChange={(event) => onChange(Number(event.target.value))} {...props} /></Control>;
+}
+
+function ScaleControl({ label, value, min, max = 1e9, onCommit }: {
+  label: string;
+  value: number;
+  min: number;
+  max?: number;
+  onCommit: (value: number) => void;
+}) {
+  const externalValue = Number.isFinite(value) ? value : 3;
+  const [draft, setDraft] = useState(String(externalValue));
+  useEffect(() => setDraft(String(externalValue)), [externalValue]);
+
+  const parsed = Number(draft.trim());
+  const valid = draft.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
+  const commit = () => {
+    if (!valid) {
+      setDraft(String(externalValue));
+      return;
+    }
+    const next = Math.max(min, Math.min(max, parsed));
+    setDraft(String(next));
+    if (next !== externalValue) onCommit(next);
+  };
+  const multiply = (factor: number) => {
+    const base = valid ? parsed : externalValue;
+    const next = Math.max(min, Math.min(max, base * factor));
+    setDraft(String(next));
+    if (next !== externalValue) onCommit(next);
+  };
+
+  return (
+    <Control label={label}>
+      <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem]">
+        <Button type="button" aria-label={`${label} ÷ 2`} title={`${label} ÷ 2`} className="h-9 rounded-none border-r-0 font-mono text-xs" size="sm" variant="outline" onClick={() => multiply(0.5)}>÷2</Button>
+        <Input
+          aria-invalid={!valid}
+          className="instrument-control h-9 rounded-none font-mono text-xs"
+          inputMode="decimal"
+          spellCheck={false}
+          value={draft}
+          onBlur={commit}
+          onChange={(event) => setDraft(event.target.value)}
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              setDraft(String(externalValue));
+              event.currentTarget.blur();
+            }
+          }}
+        />
+        <Button type="button" aria-label={`${label} × 2`} title={`${label} × 2`} className="h-9 rounded-none border-l-0 font-mono text-xs" size="sm" variant="outline" onClick={() => multiply(2)}>×2</Button>
+      </div>
+    </Control>
+  );
 }
 
 function ClampedNumberControl({ label, value, min, max, onCommit, ...props }: { label: string; value: number; min: number; max: number; onCommit: (value: number) => void } & Omit<React.ComponentProps<typeof Input>, "value" | "onChange" | "min" | "max">) {
