@@ -736,18 +736,14 @@ export default function StudioPage() {
                     <label className="mb-1 flex justify-between text-xs text-white/50"><span>{t("transitionAngle")}</span><span className="font-mono text-amber-200/80">{((spec.transitionThetaMilliDeg ?? 0) / 1000).toFixed(1)}°</span></label>
                     <div className="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-2">
                       <input className="w-full accent-amber-500" max="180000" min="-180000" step="1000" type="range" value={spec.transitionThetaMilliDeg ?? 0} onChange={(event) => update({ transitionThetaMilliDeg: Number(event.target.value) })} />
-                      <Input
+                      <DraftNumberInput
                         aria-label={t("transitionAngleInput")}
                         className="h-9 rounded-none font-mono text-xs"
-                        max="180"
-                        min="-180"
-                        step="0.1"
-                        type="number"
+                        inputMode="decimal"
+                        max={180}
+                        min={-180}
                         value={(spec.transitionThetaMilliDeg ?? 0) / 1000}
-                        onChange={(event) => {
-                          const degrees = Number(event.target.value);
-                          if (Number.isFinite(degrees)) update({ transitionThetaMilliDeg: Math.round(Math.max(-180, Math.min(180, degrees)) * 1000) });
-                        }}
+                        onCommit={(degrees) => update({ transitionThetaMilliDeg: Math.round(degrees * 1000) })}
                       />
                     </div>
                   </div>
@@ -1010,8 +1006,59 @@ function Control({ label, children }: { label: string; children: React.ReactNode
   return <label className="mb-2 block text-[11px] text-white/45"><span className="mb-1 block uppercase tracking-wider">{label}</span>{children}</label>;
 }
 
+function DraftNumberInput({ value, min, max, onCommit, ...props }: {
+  value: number;
+  min?: number | string;
+  max?: number | string;
+  onCommit: (value: number) => void;
+} & Omit<React.ComponentProps<typeof Input>, "value" | "onChange" | "min" | "max">) {
+  const externalValue = Number.isFinite(value) ? value : 0;
+  const [draft, setDraft] = useState(String(externalValue));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setDraft(String(externalValue));
+  }, [editing, externalValue]);
+
+  const commit = () => {
+    const parsed = Number(draft.trim());
+    if (!draft.trim() || !Number.isFinite(parsed)) {
+      setDraft(String(externalValue));
+      return;
+    }
+    const lower = min === undefined ? -Infinity : Number(min);
+    const upper = max === undefined ? Infinity : Number(max);
+    const next = Math.max(lower, Math.min(upper, parsed));
+    setDraft(String(next));
+    if (next !== externalValue) onCommit(next);
+  };
+
+  return (
+    <Input
+      {...props}
+      inputMode="decimal"
+      max={max}
+      min={min}
+      type="text"
+      value={draft}
+      onBlur={() => {
+        setEditing(false);
+        commit();
+      }}
+      onChange={(event) => setDraft(event.target.value)}
+      onFocus={() => setEditing(true)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setDraft(String(externalValue));
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
 function NumberControl({ label, value, onChange, ...props }: { label: string; value: number; onChange: (value: number) => void } & Omit<React.ComponentProps<typeof Input>, "value" | "onChange">) {
-  return <Control label={label}><Input className="instrument-control h-9 rounded-none font-mono text-xs" value={Number.isFinite(value) ? value : 0} type="number" onChange={(event) => onChange(Number(event.target.value))} {...props} /></Control>;
+  return <Control label={label}><DraftNumberInput className="instrument-control h-9 rounded-none font-mono text-xs" value={value} onCommit={onChange} {...props} /></Control>;
 }
 
 function ScaleControl({ label, value, min, max = 1e9, onCommit }: {
