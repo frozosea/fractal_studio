@@ -412,6 +412,35 @@
   box-shadow: 0 0 0 1px #08090b, 0 18px 40px rgb(0 0 0 / 0.3);
 }
 
+/* Public marketing pages share the laboratory language with auth and the 2D
+   studio. They omit the centered crosshair, which only reads correctly on a
+   single-viewport screen, not down a long scrolling page. */
+.public-instrument {
+  --instrument-bg: #090a0c;
+  --instrument-panel: #101217;
+  --instrument-rule: #2b2f36;
+  --instrument-amber: #f0a030;
+  color: #d6d8db;
+  background-color: #090a0c;
+  background-image:
+    linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+/* Section rule that fades at both ends, echoing .gradient-line in amber. */
+.instrument-rule {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(240 160 48 / 0.28) 18%,
+    rgb(240 160 48 / 0.14) 50%,
+    rgb(240 160 48 / 0.28) 82%,
+    transparent 100%
+  );
+}
+
 /* Authentication uses the same compact laboratory language as the 2D studio. */
 .auth-instrument {
   --instrument-bg: #090a0c;

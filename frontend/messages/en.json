@@ -38,6 +38,92 @@
       "registerFailed": "Registration failed. Please try again."
     }
   },
+  "landing": {
+    "meta": {
+      "title": "Fractal Studio",
+      "description": "Explore two-dimensional fractal maps in the browser: native C++ compute, reproducible image recipes, high-precision deep zoom and a creator marketplace."
+    },
+    "nav": {
+      "label": "Site navigation",
+      "home": "Home",
+      "tutorial": "Tutorial",
+      "help": "Help",
+      "signIn": "Sign in",
+      "signUp": "Sign up free",
+      "workbench": "Open workbench"
+    },
+    "footer": {
+      "licence": "MIT licence · v0.1.0"
+    },
+    "hero": {
+      "kicker": "PARAMETER SPACE",
+      "title": "Explore infinite complexity on the complex plane",
+      "subtitle": "One drag takes you into the boundary of the Mandelbrot set. Rendering runs on a native C++ compute backend, and every image keeps a reproducible parameter recipe, so you can return to the same coordinate whenever you like.",
+      "ctaPrimary": "Sign up free",
+      "ctaSecondary": "Read the tutorial",
+      "scroll": "Scroll to learn more"
+    },
+    "intro": {
+      "kicker": "About the project",
+      "title": "A reproducible fractal imaging system",
+      "body1": "Fractal Studio splits interactive exploration from final rendering. The browser owns the viewport, the parameters and a low-resolution preview; the real work goes to a private native C++ service. You keep instant feedback while dragging, and full precision when exporting.",
+      "body2": "Every exploration is stored as a canonical parameter recipe rather than an isolated picture. Re-rendering the same recipe later produces the same result, and it scales straight up to export size.",
+      "layers": {
+        "browser": { "name": "Browser interface", "note": "Viewport control, parameter editing, live preview and downloads." },
+        "platform": { "name": "Platform service", "note": "Accounts, recipe storage, render orchestration, assets and orders." },
+        "compute": { "name": "Private compute backend", "note": "Native C++ kernels doing the actual iteration, colouring and output." }
+      }
+    },
+    "features": {
+      "kicker": "Capabilities",
+      "title": "Everything between a coordinate and a finished print",
+      "items": {
+        "variants": { "name": "{variants} built-in formulas", "note": "Mandelbrot, Tricorn, Burning Ship, Celtic, and the transcendental family." },
+        "julia": { "name": "Julia dual plane", "note": "Pick a point on the parameter plane and see its dynamical plane at once." },
+        "transition": { "name": "Axial transitions", "note": "Interpolate continuously between two formulas, or weight several legs." },
+        "formula": { "name": "Custom formulas", "note": "Write your own iteration in an expression DSL, or sequence it by step count." },
+        "coloring": { "name": "{colorMaps} palettes plus custom gradients", "note": "Built-in colormaps, histogram equalization, and gradients with cycles and phase." },
+        "export": { "name": "PNG export", "note": "Up to 4096 px per edge, from a preset frame or a custom size." },
+        "precision": { "name": "High-precision deep zoom", "note": "fp32 / fp64 / fx64 scalar types keep detail as you descend." },
+        "cuda": { "name": "CUDA acceleration", "note": "Picks the GPU path when available, with AVX2 / AVX-512 and threaded CPU fallbacks." }
+      }
+    },
+    "workflow": {
+      "kicker": "Workflow",
+      "title": "Four steps from coordinate to listing",
+      "steps": {
+        "explore": { "name": "Explore", "note": "Drag to pan, wheel or pinch to zoom, until you find the structure." },
+        "render": { "name": "Render", "note": "Set iterations, orbit metric and colouring, then render at full precision." },
+        "export": { "name": "Export", "note": "Download the PNG master; the recipe stays with it in your library." },
+        "publish": { "name": "Publish", "note": "Apply for a creator profile, list the work, and earn on each sale." }
+      },
+      "cta": "Read the full tutorial"
+    },
+    "market": {
+      "kicker": "Marketplace",
+      "title": "Let other people find your coordinate",
+      "body": "Every listing comes from a real render and carries its formula, iteration depth, resolution and colouring. Buyers can filter on those parameters, and open a creator page to see the rest of their work.",
+      "points": {
+        "discover": "Filter by formula, iteration depth, resolution and colouring.",
+        "buy": "Pay with Alipay; the master file unlocks as soon as the callback confirms.",
+        "earn": "Creators keep a revenue share and can request a payout."
+      }
+    },
+    "membership": {
+      "kicker": "Membership",
+      "title": "Pay once, keep it",
+      "priceNote": "One-time · lifetime",
+      "body": "Membership unlocks every built-in map, the Julia dual plane, full colouring control and PNG export. No subscription, no per-image billing.",
+      "cta": "Sign up and see membership"
+    },
+    "cta": {
+      "kicker": "Get started",
+      "title": "Start from z² + c and see what lives on the boundary",
+      "body": "Sign up and open the workbench. The first exploration needs no configuration at all.",
+      "primary": "Sign up free",
+      "help": "Read the FAQ first"
+    }
+  },
   "nav": {
     "studio": "Studio",
     "points": "Points",

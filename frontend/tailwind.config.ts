@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import plugin from "tailwindcss/plugin";
 
 const config: Config = {
   darkMode: ["class"],
@@ -138,7 +139,15 @@ const config: Config = {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [
+    require("tailwindcss-animate"),
+    // `coarse:` targets touch input rather than a screen width, so a tablet at
+    // desktop width still gets finger-sized controls. Used to raise hit targets
+    // without inflating the studio's dense instrument rows on a mouse.
+    plugin(({ addVariant }) => {
+      addVariant("coarse", "@media (pointer: coarse)");
+    }),
+  ],
 };
 
 export default config;

@@ -23,12 +23,27 @@ const INTENDED_PATH_KEY = "fractal-studio:intended-path";
 const DEFAULT_LANDING = "/studio";
 
 /**
+ * Pages an anonymous visitor is allowed to see. The marketing surface has to be
+ * readable before signing up, so these are the only routes that do not bounce
+ * to /login. Everything else stays gated.
+ */
+const PUBLIC_PATHS = new Set(["/", "/tutorial", "/help", "/login", "/register"]);
+const PUBLIC_PATH_PREFIXES = ["/creator/"];
+
+export function isPublicPath(pathname: string): boolean {
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  return PUBLIC_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
+/**
  * Where to land after signing in. Kept in sessionStorage rather than a query
  * parameter so it is scoped to this tab: two tabs bounced to /login at the
  * same time each return to their own page.
  */
 function rememberIntendedPath(pathname: string): void {
-  if (pathname === "/login" || pathname === "/register") return;
+  // A public page is never worth returning to: someone who signs up from the
+  // landing page wants the workbench, not the brochure.
+  if (isPublicPath(pathname)) return;
   try {
     window.sessionStorage.setItem(INTENDED_PATH_KEY, pathname);
   } catch {
@@ -67,17 +82,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const registerMutation = useRegisterMutation();
   const logoutMutation = useLogoutMutation();
 
-  // Redirect to login for protected routes
+  // Redirect to login for protected routes. Signed-in visitors are only moved
+  // off the two auth forms — they may legitimately be reading /help or a
+  // creator page, so the rest of the public surface never force-redirects.
   const isAuthPage = pathname === "/login" || pathname === "/register";
+  const isPublic = isPublicPath(pathname);
   useEffect(() => {
-    if (!isPending && !isAuthenticated && !isAuthPage) {
+    if (!isPending && !isAuthenticated && !isPublic) {
       rememberIntendedPath(pathname);
       router.push("/login");
     }
     if (!isPending && isAuthenticated && isAuthPage) {
       router.push(takeIntendedPath());
     }
-  }, [isAuthenticated, isPending, isAuthPage, pathname, router]);
+  }, [isAuthenticated, isPending, isAuthPage, isPublic, pathname, router]);
 
   const login = async (credentials: CredentialsInput) => {
     await loginMutation.mutateAsync(credentials);
