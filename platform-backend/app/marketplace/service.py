@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.assets.ports import AssetPreview, AssetReader
 from app.assets.reader import AssetReadService
+from app.auth import creator_profile_repository
 from app.auth.models import AccessPrincipal
 from app.core import audit_writer, idempotency_service
 from app.core.config import get_settings
@@ -249,6 +250,17 @@ class MarketplaceService:
                 sort=sort, after=after, limit=limit,
             )
         return list(await asyncio.gather(*(_listing_view(record, self._assets) for record in records))), records
+
+    async def creator(self, *, handle: str) -> dict[str, object] | None:
+        async with get_engine().connect() as connection:
+            row = await creator_profile_repository.find_public_by_handle(connection, handle)
+        if row is None:
+            return None
+        return {
+            "handle": str(row["handle"]),
+            "displayName": str(row["display_name"]),
+            "publishedCount": int(row["published_count"]),
+        }
 
     async def facets(self) -> list[dict[str, object]]:
         async with get_engine().connect() as connection:

@@ -257,6 +257,18 @@
       "signUp": "Sign up free"
     }
   },
+  "creator": {
+      "meta": {
+          "title": "Work by {name} · Fractal Studio",
+          "description": "Browse {count} fractal works published by {name} on Fractal Studio."
+      },
+      "notFound": {
+          "title": "Creator not found"
+      },
+      "published": "{count} works on sale",
+      "empty": "This creator has nothing on sale yet.",
+      "loadMore": "Load more"
+  },
   "nav": {
     "studio": "Studio",
     "points": "Points",

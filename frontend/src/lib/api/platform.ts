@@ -163,6 +163,13 @@ export interface FacetCount {
   count: number;
 }
 
+/** Public creator profile shown on a shareable creator page. */
+export interface CreatorProfile {
+  handle: string;
+  displayName: string;
+  publishedCount: number;
+}
+
 export interface ExploreQuery {
   q?: string;
   variant?: string | null;
@@ -692,6 +699,12 @@ export const platform = {
       return collection<Listing>(`/v1/explore?${params.toString()}`);
     },
     facets: () => collection<FacetCount>("/v1/explore/facets"),
+    creator: (handle: string) => request<CreatorProfile>(`/v1/creators/${encodeURIComponent(handle)}`),
+    creatorListings: (handle: string, cursor?: string | null, limit = 24) => {
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (cursor) params.set("cursor", cursor);
+      return collection<Listing>(`/v1/creators/${encodeURIComponent(handle)}/listings?${params.toString()}`);
+    },
     listing: (listingId: string) => request<Listing>(`/v1/listings/${listingId}`),
     mine: () => collection<Listing>("/v1/me/listings?limit=48"),
     create: (body: { assetId: string; title: string; description: string; tags: string[]; price: string; licenceOffer: { code: string; termsVersion: string } }) => request<Listing>("/v1/listings", { method: "POST", body: json(body) }, { csrf: true, idempotency: true }),

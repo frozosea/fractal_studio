@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from app.auth.models import AccessPrincipal
@@ -158,6 +158,43 @@ async def explore(
 async def explore_facets() -> dict[str, object]:
     """Facet values present in the published catalogue, with listing counts."""
     return {"data": await MarketplaceService().facets()}
+
+
+# Handles are `^[a-z0-9_]{3,32}$`, enforced in Pydantic and by a DB check
+# constraint, so they are URL-safe and cannot collide with a locale segment.
+_HANDLE_PATTERN = r"^[a-z0-9_]{3,32}$"
+
+
+@router.get("/creators/{handle}")
+async def get_creator(handle: str = Path(..., pattern=_HANDLE_PATTERN)) -> dict[str, object]:
+    """Public creator profile. Unauthenticated, like the catalogue it fronts."""
+    profile = await MarketplaceService().creator(handle=handle)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="creator_not_found")
+    return {"data": profile}
+
+
+@router.get("/creators/{handle}/listings")
+async def get_creator_listings(
+    handle: str = Path(..., pattern=_HANDLE_PATTERN),
+    cursor: str | None = Query(default=None, max_length=2048),
+    limit: int = Query(default=24, ge=1, le=48),
+) -> dict[str, object]:
+    """
+    One creator's published work, newest first. Deliberately deterministic:
+    unlike the marketplace, a profile page should not reshuffle between visits.
+    """
+    filters = _normalized_filters(
+        q=None, tag=None, creator=None, media_type=None, min_price=None, max_price=None, sort="newest",
+    ) | {"creatorExact": handle}
+    after = _explore_after(cursor, filters)
+    views, records = await MarketplaceService().explore(
+        q=None, tag=None, creator=None, creator_exact=handle, media_type=None,
+        min_price=None, max_price=None, sort="newest", after=after, limit=limit + 1,
+    )
+    page = views[:limit]
+    next_cursor = _next_explore_cursor(filters=filters, record=records[limit - 1]) if len(records) > limit else None
+    return {"data": [view.model_dump(mode="json", by_alias=True) for view in page], "page": {"nextCursor": next_cursor}}
 
 
 @router.get("/listings/{listing_id}")

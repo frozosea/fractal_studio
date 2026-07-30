@@ -3,6 +3,7 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Heart, Loader2, Shuffle } from "lucide-react";
 import { useTranslations } from "next-intl";
+import { Link } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
@@ -303,7 +304,17 @@ export default function ExplorePage() {
               <ListingCard
                 key={listing.id}
                 title={listing.title}
-                subtitle={`${t("marketplace.byCreator", { creator: listing.creator.displayName })} · ${listing.price} CNY`}
+                subtitle={
+                  <>
+                    <Link
+                      href={`/creator/${listing.creator.handle}`}
+                      className="underline-offset-2 hover:text-white/80 hover:underline"
+                    >
+                      {t("marketplace.byCreator", { creator: listing.creator.displayName })}
+                    </Link>
+                    {` · ${listing.price} CNY`}
+                  </>
+                }
                 previewUrl={listing.preview?.thumbnailUrl}
                 previewAlt={t("marketplace.previewAlt", { title: listing.title })}
                 previewFallback={t("marketplace.previewUnavailable")}

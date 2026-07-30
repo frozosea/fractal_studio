@@ -257,6 +257,18 @@
       "signUp": "免费注册"
     }
   },
+  "creator": {
+      "meta": {
+          "title": "{name} 的作品 · Fractal Studio",
+          "description": "浏览 {name} 在 Fractal Studio 上发布的 {count} 件分形作品。"
+      },
+      "notFound": {
+          "title": "找不到这位创作者"
+      },
+      "published": "{count} 件在售作品",
+      "empty": "这位创作者还没有在售作品。",
+      "loadMore": "加载更多"
+  },
   "nav": {
     "studio": "图谱",
     "points": "特殊点",
