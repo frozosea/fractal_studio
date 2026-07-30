@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import os
@@ -27,11 +28,27 @@ from app.core.db import get_engine
 from app.core.request_context import request_id
 
 
+_SCRYPT_N = 2**17
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_MAX_MEMORY = 256 * 1024 * 1024
+
+
 def _hash_password(password: str, *, salt: bytes | None = None) -> str:
     """Use stdlib scrypt; hash string contains parameters but never leaves persistence."""
     salt = salt or os.urandom(16)
-    derived = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1)
-    return "scrypt$16384$8$1${}${}".format(
+    derived = hashlib.scrypt(
+        password.encode(),
+        salt=salt,
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+        maxmem=_SCRYPT_MAX_MEMORY,
+    )
+    return "scrypt${}${}${}${}${}".format(
+        _SCRYPT_N,
+        _SCRYPT_R,
+        _SCRYPT_P,
         base64.urlsafe_b64encode(salt).decode(),
         base64.urlsafe_b64encode(derived).decode(),
     )
@@ -48,10 +65,24 @@ def _verify_password(password: str, encoded: str) -> bool:
             n=int(n),
             r=int(r),
             p=int(p),
+            maxmem=_SCRYPT_MAX_MEMORY,
         )
         return hmac.compare_digest(actual, base64.urlsafe_b64decode(hash_b64))
-    except (ValueError, TypeError):
+    except (binascii.Error, ValueError, TypeError):
         return False
+
+
+def _password_needs_rehash(encoded: str) -> bool:
+    try:
+        algorithm, n, r, p, _salt_b64, _hash_b64 = encoded.split("$")
+        return (
+            algorithm != "scrypt"
+            or int(n) != _SCRYPT_N
+            or int(r) != _SCRYPT_R
+            or int(p) != _SCRYPT_P
+        )
+    except (ValueError, TypeError):
+        return True
 
 
 async def _user_view(connection: AsyncConnection, user_id: uuid.UUID) -> UserView:
@@ -105,15 +136,22 @@ async def register(email: str, password: str, request: Request) -> tuple[UserVie
 async def login(email: str, password: str, request: Request) -> tuple[UserView, str]:
     async with get_engine().begin() as connection:
         user = await user_repository.find_by_email(connection, email)
+        encoded_password = str(user["password_hash"]) if user is not None else ""
         if (
             user is None
             or user["status"] != "active"
-            or not _verify_password(password, str(user["password_hash"]))
+            or not _verify_password(password, encoded_password)
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials"
             )
         user_id = user["id"]
+        if _password_needs_rehash(encoded_password):
+            await user_repository.update_password_hash(
+                connection,
+                user_id=user_id,
+                password_hash=_hash_password(password),
+            )
         raw_token, source = session_token_from(request)
         existing = await session_service.resolve(connection, raw_token)
         if existing is not None and existing.user_id == user_id:

@@ -8,7 +8,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 
-async def create(connection: AsyncConnection, *, user_id: UUID, email: str, password_hash: str) -> None:
+async def create(
+    connection: AsyncConnection, *, user_id: UUID, email: str, password_hash: str
+) -> None:
     await connection.execute(
         text("INSERT INTO users (id, email, password_hash) VALUES (:id, :email, :password_hash)"),
         {"id": user_id, "email": email, "password_hash": password_hash},
@@ -17,13 +19,24 @@ async def create(connection: AsyncConnection, *, user_id: UUID, email: str, pass
 
 async def find_by_email(connection: AsyncConnection, email: str) -> dict[str, object] | None:
     result = await connection.execute(
-        text("SELECT id, email, password_hash, status FROM users WHERE email = :email"), {"email": email}
+        text("SELECT id, email, password_hash, status FROM users WHERE email = :email"),
+        {"email": email},
     )
     return result.mappings().one_or_none()
 
 
+async def update_password_hash(
+    connection: AsyncConnection, *, user_id: UUID, password_hash: str
+) -> None:
+    await connection.execute(
+        text("UPDATE users SET password_hash = :password_hash WHERE id = :user_id"),
+        {"user_id": user_id, "password_hash": password_hash},
+    )
+
+
 async def find_active_by_id(connection: AsyncConnection, user_id: UUID) -> dict[str, object] | None:
     result = await connection.execute(
-        text("SELECT id, email, status FROM users WHERE id = :id AND status = 'active'"), {"id": user_id}
+        text("SELECT id, email, status FROM users WHERE id = :id AND status = 'active'"),
+        {"id": user_id},
     )
     return result.mappings().one_or_none()

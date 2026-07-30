@@ -1,6 +1,15 @@
 fractal.kevin0412.top {
 	encode zstd gzip
 
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
 	# Platform publishes /v1/*; remove only the public /platform prefix.
 	handle_path /platform/* {
 		reverse_proxy 127.0.0.1:18110

@@ -1,4 +1,31 @@
 services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:${POSTGRES_PORT:-15442}:5432"
+
+  redis:
+    ports: !override
+      - "127.0.0.1:${REDIS_PORT:-16389}:6379"
+
+  minio:
+    ports: !override
+      - "127.0.0.1:${MINIO_PORT:-19010}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-19011}:9001"
+
+  compute:
+    ports: !override
+      - "127.0.0.1:${COMPUTE_PORT:-18101}:18080"
+
+  alipay-stub:
+    ports: !override
+      - "127.0.0.1:${ALIPAY_STUB_PORT:-18102}:8000"
+
+  api:
+    environment:
+      SESSION_COOKIE_SECURE: "true"
+    ports: !override
+      - "127.0.0.1:${PLATFORM_PORT:-18100}:8000"
+
   frontend:
     build:
       context: .
@@ -8,4 +35,6 @@ services:
       NEXT_PUBLIC_PLATFORM_API_URL: /platform
       PLATFORM_INTERNAL_URL: http://api:8000
     command: !reset null
+    ports: !override
+      - "127.0.0.1:${FRONTEND_PORT:-3010}:3000"
     volumes: !reset []

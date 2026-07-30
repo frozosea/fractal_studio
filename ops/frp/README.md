@@ -17,7 +17,9 @@ MinIO directly to the Internet.
 Caddy is the only public application listener. It serves ports 80/443, strips
 the `/platform` prefix before sending API requests, preserves the complete
 `/fractal-platform/...` path for MinIO signatures, and sends everything else
-to Next.js.
+to Next.js. The release Compose overlay binds every host-published service to
+`127.0.0.1`; Caddy adds HSTS and baseline browser security headers, while the
+Platform API marks session cookies `Secure`.
 
 ## Prerequisites
 
