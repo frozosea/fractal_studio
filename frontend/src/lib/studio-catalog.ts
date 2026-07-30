@@ -85,6 +85,13 @@ export const LOCATION_PRESETS: Array<{
   { id: "doubleSpiral", spec: { centerRe: -0.16, centerIm: 1.0405, scale: 0.026, iterations: 900 } },
 ];
 
+/**
+ * Largest edge the platform will render, mirroring the `ImageOutputSpec`
+ * width/height bound (64..4096) in the Platform API. Larger than the biggest
+ * preset below, which a custom size can exceed.
+ */
+export const MAX_OUTPUT_EDGE = 4096;
+
 export const OUTPUT_PRESETS = [
   { id: "square", width: 1024, height: 1024 },
   { id: "squareLarge", width: 2048, height: 2048 },

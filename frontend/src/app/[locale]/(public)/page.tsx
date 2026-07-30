@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
-import { BUILTIN_VARIANTS, COLOR_MAPS } from "@/lib/studio-catalog";
+import { BUILTIN_VARIANTS, COLOR_MAPS, MAX_OUTPUT_EDGE } from "@/lib/studio-catalog";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("landing");
@@ -69,6 +69,16 @@ const FEATURE_KEYS = [
 
 const WORKFLOW_ICONS = [Compass, Wand2, Download, Store] as const;
 const WORKFLOW_KEYS = ["explore", "render", "export", "publish"] as const;
+
+/**
+ * Counts and limits are read from the catalogue rather than asserted in prose,
+ * so the copy cannot drift from what the studio actually offers.
+ */
+const FEATURE_VALUES = {
+  variants: BUILTIN_VARIANTS.length,
+  colorMaps: COLOR_MAPS.length,
+  maxEdge: MAX_OUTPUT_EDGE,
+} as const;
 
 export default async function LandingPage() {
   const t = await getTranslations("landing");
@@ -164,13 +174,10 @@ export default async function LandingPage() {
               <div key={key} className="instrument-panel min-w-0 p-4 sm:p-5">
                 <Icon className="h-4 w-4 text-amber-400/80" aria-hidden="true" />
                 <p className="mt-3 text-sm text-white/85">
-                  {t(`features.items.${key}.name`, {
-                    variants: BUILTIN_VARIANTS.length,
-                    colorMaps: COLOR_MAPS.length,
-                  })}
+                  {t(`features.items.${key}.name`, FEATURE_VALUES)}
                 </p>
                 <p className="mt-2 text-xs leading-relaxed text-white/40">
-                  {t(`features.items.${key}.note`)}
+                  {t(`features.items.${key}.note`, FEATURE_VALUES)}
                 </p>
               </div>
             );

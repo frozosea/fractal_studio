@@ -34,6 +34,7 @@ import {
   COLOR_MAPS,
   FORMULA_EXAMPLES,
   LOCATION_PRESETS,
+  MAX_OUTPUT_EDGE,
   METRICS,
   OUTPUT_PRESETS,
   TRANSITION_METRICS,
@@ -552,7 +553,7 @@ export default function StudioPage() {
     else setOutput((current) => ({ ...current, preset: "custom" }));
   };
   const updateOutputDimension = (field: "width" | "height", value: number) => {
-    setOutput((current) => ({ ...current, preset: "custom", [field]: Math.max(64, Math.min(4096, Math.round(value))) }));
+    setOutput((current) => ({ ...current, preset: "custom", [field]: Math.max(64, Math.min(MAX_OUTPUT_EDGE, Math.round(value))) }));
   };
   const saveAndRender = async () => {
     setError(null);

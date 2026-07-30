@@ -83,7 +83,7 @@
         "transition": { "name": "Axial transitions", "note": "Interpolate continuously between two formulas, or weight several legs." },
         "formula": { "name": "Custom formulas", "note": "Write your own iteration in an expression DSL, or sequence it by step count." },
         "coloring": { "name": "{colorMaps} palettes plus custom gradients", "note": "Built-in colormaps, histogram equalization, and gradients with cycles and phase." },
-        "export": { "name": "PNG export", "note": "Up to 4096 px per edge, from a preset frame or a custom size." },
+        "export": { "name": "PNG export", "note": "Up to {maxEdge} px per edge, from a preset frame or a custom size." },
         "precision": { "name": "High-precision deep zoom", "note": "fp32 / fp64 / fx64 scalar types keep detail as you descend." },
         "cuda": { "name": "CUDA acceleration", "note": "Picks the GPU path when available, with AVX2 / AVX-512 and threaded CPU fallbacks." }
       }
@@ -122,6 +122,139 @@
       "body": "Sign up and open the workbench. The first exploration needs no configuration at all.",
       "primary": "Sign up free",
       "help": "Read the FAQ first"
+    }
+  },
+  "tutorial": {
+    "meta": {
+      "title": "Tutorial · Fractal Studio",
+      "description": "Learn Fractal Studio in six steps: pick a formula, explore the viewport, the Julia dual plane, iteration depth, colouring, and exporting and listing your work."
+    },
+    "kicker": "TUTORIAL",
+    "title": "One complete piece in six steps",
+    "lede": "This guide follows the order of the workbench panels. You do not have to read it end to end — open the workbench and follow along. Each step closes with the mistake people usually hit.",
+    "contents": "Contents",
+    "steps": {
+      "mode": {
+        "kicker": "Image mode",
+        "name": "Choose an image mode and a formula",
+        "body1": "The first panel is the image mode. A plain map renders the whole set on the parameter plane. Julia fixes a complex constant c and renders the matching dynamical plane instead. The pair and multi transitions take two-dimensional slices between formulas, and custom formula and formula sequence let you define the iteration yourself.",
+        "body2": "In plain map mode you can swap the formula freely — {variants} are built in, from the classic Mandelbrot to Tricorn, Burning Ship, Celtic, and the transcendental sin, cos and exp family. Each one carries a line describing its geometry.",
+        "tip": "Frame the view with Mandelbrot first, then switch formulas: the coordinate and zoom carry over, and the same location often looks nothing alike under a different formula."
+      },
+      "navigate": {
+        "kicker": "Viewport control",
+        "name": "Pan and zoom to explore",
+        "body1": "The canvas is directly manipulable. Drag to pan; use the wheel or a two-finger pinch to zoom. Zoom is anchored on the pointer or on the midpoint between your fingers, so the structure you are watching stays put.",
+        "body2": "The crosshair marks the current viewport centre, and the badge in the corner shows the export frame size. Zooming applies a CSS transform for instant feedback while the real recomputation follows, so dragging never stalls.",
+        "tip": "If the image turns mushy or blocky once you are deep, that is usually not a zoom limit — it means iterations are too low or the scalar precision needs raising. See step 04."
+      },
+      "julia": {
+        "kicker": "Dual plane",
+        "name": "The Julia dual plane and picking c",
+        "body1": "Julia mode splits the canvas in two: the parameter plane on the left, the matching dynamical plane on the right. Click anywhere on the parameter plane to set the complex constant c, and the right pane recomputes at once.",
+        "body2": "The chosen c stays marked with a ring on the parameter plane. The two panes pan and zoom independently, so you can nudge c along the boundary on one side while magnifying the detail on the other.",
+        "tip": "Values of c near the boundary of the set are usually the interesting ones: c inside gives solid regions, and c too far outside shatters the Julia set into dust."
+      },
+      "depth": {
+        "kicker": "Numerics",
+        "name": "Iteration depth and orbit metrics",
+        "body1": "Maximum iterations decides how many steps run before a point is declared escaped. The deeper you zoom, the finer the boundary and the more iterations it needs; too few shows up as detail flattening into blocks of solid colour.",
+        "body2": "The orbit metric decides which property of the orbit drives the colour: escape time is the standard, minimum and maximum magnitude reveal filaments inside the set, and the orbit envelope gives broader texture. The scalar type can be fp32, fp64 or fx64 — more precision holds detail together under deep zoom.",
+        "tip": "Iterations and render time scale together. Find the location at a low iteration count, then raise it once the composition is settled and submit the real render."
+      },
+      "coloring": {
+        "kicker": "Colouring",
+        "name": "Palettes and gradients",
+        "body1": "There are {colorMaps} built-in palettes, from grayscale to Viridis, Inferno and Spectral. On top of that sits the colouring mode: direct stays faithful to the raw metric, full histogram equalization reveals global structure, and centre-weighted equalization suits exploring around a subject.",
+        "body2": "For full control, switch to a custom gradient: place your own stops and tune cycles, phase and wrap. Note that a built-in palette and a custom gradient are mutually exclusive — once the gradient is on it takes over, and it requires the direct colouring mode.",
+        "tip": "The preview in the workbench can look brighter than the exported master, because the two use different sampling sizes. Tune the gradient against an export, not against the preview alone."
+      },
+      "publish": {
+        "kicker": "Export and publish",
+        "name": "Export a PNG and list it",
+        "body1": "In the export panel, pick a preset frame or type a custom size — up to {maxEdge} px per edge — then submit the render. Rendering is asynchronous with live progress; when it finishes the piece lands in your library and the PNG master is downloadable.",
+        "body2": "To sell, first request a creator profile on the payouts page with a handle and a display name. Then create a listing draft for the piece from your library, set a price and publish it to the marketplace. Buyer payments are confirmed by an Alipay callback, after which they can download the master and you keep a revenue share.",
+        "tip": "Free accounts have a limited number of exports; membership removes the cap. Publishing also waits on a watermarked public preview being generated, so a fresh draft may not be publishable for a moment."
+      }
+    },
+    "gestures": {
+      "drag": { "input": "Drag", "effect": "Pan the viewport" },
+      "wheel": { "input": "Wheel", "effect": "Zoom anchored on the pointer" },
+      "pinch": { "input": "Two-finger pinch", "effect": "Zoom anchored on the midpoint, panning at the same time" },
+      "doubleTap": { "input": "Double click / double tap", "effect": "Zoom in one step on that point" },
+      "buttons": { "input": "Canvas buttons", "effect": "Zoom in, out, or reset the view by a fixed step" }
+    },
+    "cta": {
+      "primary": "Sign up and start exploring",
+      "help": "Stuck? Read the FAQ"
+    }
+  },
+  "help": {
+    "meta": {
+      "title": "Help and FAQ · Fractal Studio",
+      "description": "Fractal Studio FAQ: accounts and sign-in, membership and payment, rendering and export, marketplace and payouts, mobile use and troubleshooting."
+    },
+    "kicker": "HELP",
+    "title": "Frequently asked questions",
+    "lede": "Grouped by topic. If you are after the steps rather than a fix, the tutorial is the better place to start.",
+    "contents": "Groups",
+    "groups": {
+      "account": {
+        "name": "Accounts and sign-in",
+        "items": {
+          "password": { "q": "What are the password requirements?", "a": "At least 12 characters. There is no forced mix of character classes beyond that, though a longer password is obviously stronger." },
+          "session": { "q": "Why did another tab say my sign-in changed?", "a": "The session is shared across one browser window. If you sign in as a different account or sign out in another tab, the others notice and tell you, so you do not keep working under the wrong account." },
+          "reset": { "q": "I forgot my password.", "a": "There is no self-service password reset yet. If you cannot sign in, contact the site administrator." }
+        }
+      },
+      "membership": {
+        "name": "Membership and payment",
+        "items": {
+          "what": { "q": "What does membership include?", "a": "Classic map rendering, Julia exploration, every transition mode, and unlimited PNG export. It is a one-time ¥29, not a subscription." },
+          "pay": { "q": "Which payment methods work?", "a": "Alipay for now. Once payment completes, an Alipay callback confirms it and the entitlement takes effect immediately." },
+          "pending": { "q": "I paid but nothing unlocked.", "a": "The callback can lag briefly. Wait a moment and refresh, or check the order status under Purchases. If the order still says awaiting payment you can retry; if it says a payment is already pending, do not order again." },
+          "quota": { "q": "How many exports does a free account get?", "a": "Free accounts have an export cap, and exporting past it reports the quota as exhausted. Membership has no cap." }
+        }
+      },
+      "render": {
+        "name": "Rendering and export",
+        "items": {
+          "slow": { "q": "How long does a render take?", "a": "Mostly a function of iteration count and output size, both of which scale roughly linearly with time. Find the composition at a low iteration count, then raise it for the real render." },
+          "size": { "q": "What is the largest export?", "a": "Up to {maxEdge} px per edge. Use a preset frame or enter your own width and height." },
+          "brightness": { "q": "Why is my export darker than the preview?", "a": "Preview and export sample at different sizes, so the same gradient reads differently in each. Judge colour from an export; tuning against the preview alone tends to come out dark." },
+          "deep": { "q": "Is there a zoom depth limit?", "a": "The limit comes from numeric precision, not from a fixed zoom level. When you go deep, raise the iteration count and switch the scalar type to fp64 or fx64 — running out of precision shows up as blocky patches and flattened detail." }
+        }
+      },
+      "market": {
+        "name": "Marketplace and payouts",
+        "items": {
+          "become": { "q": "How do I become a creator?", "a": "Fill in a handle and display name on the payouts page. There is no review step. Once the creator role is granted, the listing action appears in your library." },
+          "handle": { "q": "What are the rules for a creator handle?", "a": "3 to 32 characters, lowercase letters, digits and underscores only, and unique across the site. It appears in your public profile URL, so it is worth settling on one." },
+          "publish": { "q": "Why can't I publish a fresh listing draft?", "a": "Publishing waits on a watermarked public preview being generated for the piece. The publish action stays disabled until it is ready — wait a moment and refresh." },
+          "payout": { "q": "How do payouts work?", "a": "Once a buyer's payment is confirmed, your share accumulates in the available balance. Submit a payout request with your receiving code on the payouts page. Only one request can be pending at a time." }
+        }
+      },
+      "mobile": {
+        "name": "Using it on mobile",
+        "items": {
+          "zoom": { "q": "How do I zoom the map on a phone?", "a": "Pinch with two fingers, anchored on the midpoint between them. One finger drags to pan, and moving two fingers together pans while zooming. A double tap also zooms in one step." },
+          "nav": { "q": "Where did the sidebar go?", "a": "On narrow screens it collapses into a drawer. Tap the panel icon in the top left to open it; it closes itself once you pick a page." },
+          "canvas": { "q": "Why is the canvas small on my phone?", "a": "The canvas fits the screen width at the export frame's aspect ratio, so the page never scrolls sideways. Zoom in to inspect detail rather than scrolling horizontally." }
+        }
+      },
+      "trouble": {
+        "name": "Troubleshooting",
+        "items": {
+          "noPreview": { "q": "The preview never appears.", "a": "The first preview takes a moment to generate. If it stays in the computing state, check your connection and reload. More complex parameters and higher iteration counts both make previews slower." },
+          "noPayment": { "q": "The order status never updates.", "a": "Order status is driven by the Alipay callback, which can lag. Check Purchases for the latest state rather than paying again; if it stays in an exception state, contact an administrator to reconcile it." },
+          "tabs": { "q": "Actions fail even though I appear signed in.", "a": "After switching accounts across tabs, an older tab may be holding a session that no longer applies. Reload that tab to resynchronise." }
+        }
+      }
+    },
+    "more": {
+      "body": "Not covered here? The tutorial walks the whole flow, and once you sign up you can try it directly in the workbench.",
+      "tutorial": "Read the tutorial",
+      "signUp": "Sign up free"
     }
   },
   "nav": {
@@ -743,6 +876,12 @@
     "architecture": "Browser → Platform → private Compute"
   },
   "common": {
+    "notFound": {
+      "title": "This page does not exist",
+      "description": "The link may have expired, or the address was mistyped. Head back to the home page, or take a look at the help centre.",
+      "home": "Back to home",
+      "help": "Help centre"
+    },
     "save": "Save",
     "cancel": "Cancel",
     "loading": "Loading...",
