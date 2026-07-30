@@ -35,7 +35,13 @@ export function WorkbenchShell({ children, title }: WorkbenchShellProps) {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-deep-void">
+    // `viewport-fit=cover` lets the page run under the notch and the home
+    // indicator, so the shell has to pad itself back out. The sidebar is fixed
+    // to the viewport and therefore needs its own insets.
+    <div
+      className="flex h-[100dvh] overflow-hidden bg-deep-void"
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
       <Sidebar
         collapsed={sidebarCollapsed}
         mobileOpen={mobileSidebarOpen}
@@ -55,7 +61,10 @@ export function WorkbenchShell({ children, title }: WorkbenchShellProps) {
       )}>
         <Navbar title={title} onToggleSidebar={toggleSidebar} />
         <StatusRail />
-        <main className="flex-1 overflow-auto p-3 sm:p-4 lg:p-6">
+        <main
+          className="flex-1 overflow-auto p-3 sm:p-4 lg:p-6"
+          style={{ paddingBottom: "max(env(safe-area-inset-bottom), 0.75rem)" }}
+        >
           {children}
         </main>
       </div>

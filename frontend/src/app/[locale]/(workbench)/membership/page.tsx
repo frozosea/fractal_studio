@@ -45,7 +45,7 @@ export default function MembershipPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
+      <div className="flex min-h-[60dvh] items-center justify-center">
         <div className="w-full max-w-lg space-y-6">
           <Skeleton className="mx-auto h-12 w-48" />
           <Skeleton className="mx-auto h-64 w-full rounded-2xl" />
@@ -56,7 +56,7 @@ export default function MembershipPage() {
 
   if (member) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
+      <div className="flex min-h-[60dvh] items-center justify-center">
         <div className="w-full max-w-lg space-y-8 text-center">
           <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shadow-lg shadow-amber-500/20">
             <Crown className="h-10 w-10 text-white" />
@@ -84,7 +84,7 @@ export default function MembershipPage() {
   }
 
   return (
-    <div className="flex min-h-[60vh] items-center justify-center">
+    <div className="flex min-h-[60dvh] items-center justify-center">
       <div className="w-full max-w-lg space-y-8 text-center">
         {/* Hero */}
         <div className="space-y-3">

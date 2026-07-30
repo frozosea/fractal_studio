@@ -162,7 +162,7 @@ export default function PaymentResultPage() {
   const isMembership = status === "success" && latestOrder?.items.length === 0;
 
   return (
-    <div className="flex min-h-[60vh] items-center justify-center">
+    <div className="flex min-h-[60dvh] items-center justify-center">
       <div className="w-full max-w-md space-y-6 text-center">
         <div className="flex justify-center">
           {isMembership ? (

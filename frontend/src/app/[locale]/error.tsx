@@ -10,7 +10,7 @@ export default function ErrorPage({
   reset: () => void;
 }) {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-deep-void">
+    <div className="flex min-h-[100dvh] flex-col items-center justify-center bg-deep-void">
       <h1 className="text-4xl font-bold text-destructive">Error</h1>
       <p className="mt-4 max-w-md text-center text-muted-foreground">
         {error.message || "Something went wrong"}

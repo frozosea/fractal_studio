@@ -49,6 +49,11 @@
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
+    /* Stop pull-to-refresh and rubber-banding from firing when a scrollable
+       panel inside the app reaches its end. */
+    overscroll-behavior-y: none;
+    /* The grey flash on tap adds nothing over the explicit hover/active states. */
+    -webkit-tap-highlight-color: transparent;
   }
 
   html {

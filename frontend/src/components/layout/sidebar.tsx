@@ -66,13 +66,17 @@ export function Sidebar({ collapsed = false, mobileOpen = false, onNavigate }: S
   return (
     <aside
       className={cn(
-        "fixed left-0 top-0 z-40 flex h-screen w-60 flex-col transition-[width,transform] duration-200",
+        "fixed left-0 top-0 z-40 flex h-[100dvh] w-60 flex-col transition-[width,transform] duration-200",
         mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
         collapsed ? "md:w-16" : "md:w-60",
       )}
       style={{
         background: "#0d0f12",
         borderRight: "1px solid #2b2f36",
+        // Fixed to the viewport, so the shell's insets do not reach it.
+        paddingTop: "env(safe-area-inset-top)",
+        paddingLeft: "env(safe-area-inset-left)",
+        paddingBottom: "env(safe-area-inset-bottom)",
       }}
     >
       {/* Logo — quiet glow */}

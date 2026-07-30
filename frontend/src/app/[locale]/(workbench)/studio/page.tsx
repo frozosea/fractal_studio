@@ -609,7 +609,7 @@ export default function StudioPage() {
       </header>
 
       <div className="grid gap-4 xl:grid-cols-[23rem_minmax(0,1fr)]">
-        <aside className="space-y-3 xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto xl:pr-1">
+        <aside className="space-y-3 xl:sticky xl:top-4 xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto xl:pr-1">
           <Panel index="01" title={t("sections.imageMode")}>
             <div className="grid grid-cols-2 gap-1.5">
               {(["map", "julia", "transitionPair", "transitionMulti", "formula", "sequence"] as const).map((item) => {

@@ -36,8 +36,9 @@ export function Navbar({ title, onToggleSidebar }: NavbarProps) {
 
       {/* Right: Status + Locale */}
       <div className="flex items-center gap-3 shrink-0">
-        {/* Backend status indicator */}
-        <div className="flex items-center gap-2 rounded-lg border border-white/5 bg-deep-slate/30 px-3 py-1.5">
+        {/* Backend status indicator — the whole pill goes on phones, not just
+            its label, or it crowds the title out below ~400px. */}
+        <div className="hidden items-center gap-2 rounded-lg border border-white/5 bg-deep-slate/30 px-3 py-1.5 sm:flex">
           <span
             className={cn(
               "relative flex h-2 w-2",

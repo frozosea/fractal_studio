@@ -3,6 +3,11 @@ import plugin from "tailwindcss/plugin";
 
 const config: Config = {
   darkMode: ["class"],
+  future: {
+    // Wrap `hover:` in `@media (hover: hover)`. Without it a tap on a touch
+    // device leaves the hover state stuck until something else is tapped.
+    hoverOnlyWhenSupported: true,
+  },
   content: ["./src/**/*.{ts,tsx}"],
   prefix: "",
   theme: {
