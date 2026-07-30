@@ -53,3 +53,19 @@ curl --noproxy '*' -fsS \
   -b scripts/.dev-user.cookies \
   http://localhost:18000/v1/me
 ```
+
+## Administrator account
+
+Administrators use a normal registered account plus the `admin` RBAC role. Apply migrations,
+register the account through the normal UI/API, then grant the role without handling its password:
+
+```bash
+docker compose exec -e ADMIN_EMAIL=admin@example.test api \
+  uv run --no-sync python scripts/grant_admin.py
+```
+
+The next authenticated request resolves roles directly from PostgreSQL, so a new login is not
+required. The `/internal/v1/admin/*` API and the frontend Administration page provide account
+status, membership and privileged-role management, Marketplace moderation, aggregate commerce
+statistics and render-job health. Administrator mutations are audited. An administrator cannot
+disable itself, revoke its own role, or remove the final administrator.

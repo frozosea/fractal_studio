@@ -2,7 +2,7 @@
 
 /** Browser client for the public Platform API. Compute stays worker-only. */
 
-export type Role = "creator" | "finance_operator" | string;
+export type Role = "admin" | "creator" | "finance_operator" | string;
 
 export interface PlatformUser {
   id: string;
@@ -192,6 +192,78 @@ export interface InternalPayoutRequest extends PayoutRequest {
   qrExpiresAt?: string | null;
   externalReference?: string | null;
   operator?: { id: string; email: string } | null;
+}
+
+export interface AdminStatistics {
+  generatedAt: string;
+  users: {
+    total: number;
+    active: number;
+    disabled: number;
+    creators: number;
+    members: number;
+    admins: number;
+    newLast30Days: number;
+  };
+  market: {
+    listings: number;
+    published: number;
+    draft: number;
+    unpublished: number;
+    archived: number;
+    readyAssets: number;
+    favorites: number;
+  };
+  commerce: {
+    orders: number;
+    fulfilled: number;
+    pendingPayment: number;
+    paymentExceptions: number;
+    marketplaceGrossCny: string;
+    membershipRevenueCny: string;
+    creatorRevenueCny: string;
+    platformRevenueCny: string;
+  };
+  compute: {
+    renderJobs: number;
+    active: number;
+    completed: number;
+    failed: number;
+  };
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  status: "active" | "disabled";
+  roles: Array<"admin" | "creator" | "finance_operator">;
+  member: boolean;
+  creatorProfile?: { handle: string; displayName: string } | null;
+  assetCount: number;
+  listingCount: number;
+  fulfilledOrderCount: number;
+  createdAt: string;
+}
+
+export interface AdminListing {
+  id: string;
+  assetId: string;
+  creatorId: string;
+  creatorEmail: string;
+  creatorHandle?: string | null;
+  creatorDisplayName?: string | null;
+  status: "draft" | "published" | "unpublished" | "archived";
+  title: string;
+  description: string;
+  tags: string[];
+  price: string;
+  currency: "CNY";
+  mediaType: "image" | "video" | "mesh";
+  favoriteCount: number;
+  saleCount: number;
+  createdAt: string;
+  publishedAt?: string | null;
+  preview?: Listing["preview"];
 }
 
 export class PlatformApiError extends Error {
@@ -604,6 +676,26 @@ export const platform = {
     payouts: (status?: PayoutRequest["status"]) => collection<InternalPayoutRequest>(`/internal/v1/payout-requests?limit=48${status ? `&status=${status}` : ""}`),
     markPaid: (payoutId: string, externalReference: string) => request<InternalPayoutRequest>(`/internal/v1/payout-requests/${payoutId}/mark-paid`, { method: "POST", body: json({ externalReference }) }, { csrf: true, idempotency: true }),
     reject: (payoutId: string, reason: string) => request<InternalPayoutRequest>(`/internal/v1/payout-requests/${payoutId}/reject`, { method: "POST", body: json({ reason }) }, { csrf: true, idempotency: true }),
+  },
+  admin: {
+    statistics: () => request<AdminStatistics>("/internal/v1/admin/statistics"),
+    users: (filters: { query?: string; status?: AdminUser["status"] | "all"; role?: "admin" | "creator" | "finance_operator" | "all" } = {}, cursor?: string | null) => {
+      const params = new URLSearchParams({ limit: "100" });
+      if (filters.query) params.set("q", filters.query);
+      if (filters.status && filters.status !== "all") params.set("status", filters.status);
+      if (filters.role && filters.role !== "all") params.set("role", filters.role);
+      if (cursor) params.set("cursor", cursor);
+      return collection<AdminUser>(`/internal/v1/admin/users?${params.toString()}`, { fresh: true });
+    },
+    updateUser: (userId: string, body: Partial<{ status: AdminUser["status"]; member: boolean; privilegedRoles: Array<"admin" | "finance_operator"> }>) => request<AdminUser>(`/internal/v1/admin/users/${userId}`, { method: "PATCH", body: json(body) }, { csrf: true, idempotency: true }),
+    listings: (filters: { query?: string; status?: AdminListing["status"] | "all" } = {}, cursor?: string | null) => {
+      const params = new URLSearchParams({ limit: "100" });
+      if (filters.query) params.set("q", filters.query);
+      if (filters.status && filters.status !== "all") params.set("status", filters.status);
+      if (cursor) params.set("cursor", cursor);
+      return collection<AdminListing>(`/internal/v1/admin/listings?${params.toString()}`, { fresh: true });
+    },
+    moderateListing: (listingId: string, action: "unpublish" | "archive", reason: string) => request<AdminListing>(`/internal/v1/admin/listings/${listingId}/moderate`, { method: "POST", body: json({ action, reason }) }, { csrf: true, idempotency: true }),
   },
   membership: {
     status: () => request<{ member: boolean }>("/v1/me/membership"),

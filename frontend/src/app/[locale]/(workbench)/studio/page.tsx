@@ -886,7 +886,7 @@ export default function StudioPage() {
                   exportHeight={previewSize.height}
                   exportWidth={previewSize.width}
                   height={previewSize.height}
-                  labels={{ alt: t("canvas.parameterAlt"), empty: t("canvas.empty"), hint: t("canvas.selectHint"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetParameter"), frame: t("canvas.parameterFrame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
+                  labels={{ alt: t("canvas.parameterAlt"), empty: t("canvas.empty"), hint: t("canvas.selectHint"), hintTouch: t("canvas.selectHintTouch"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetParameter"), frame: t("canvas.parameterFrame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
                   onChange={updateJuliaPickerViewport}
                   onNavigationStart={() => undefined}
                   onPointSelect={({ re, im }) => update({ juliaRe: re, juliaIm: im })}
@@ -905,7 +905,7 @@ export default function StudioPage() {
                   exportHeight={output.height}
                   exportWidth={output.width}
                   height={previewSize.height}
-                  labels={{ alt: t("canvas.juliaAlt"), empty: t("canvas.empty"), hint: t("canvas.hint"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetJulia"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
+                  labels={{ alt: t("canvas.juliaAlt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetJulia"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
                   onChange={updateViewport}
                   onNavigationStart={() => undefined}
                   onReset={resetJuliaViewport}
@@ -922,7 +922,7 @@ export default function StudioPage() {
               exportHeight={output.height}
               exportWidth={output.width}
               height={previewSize.height}
-              labels={{ alt: t("canvas.alt"), empty: t("canvas.empty"), hint: t("canvas.hint"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("reset"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
+              labels={{ alt: t("canvas.alt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("reset"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
               onChange={updateViewport}
               onNavigationStart={() => undefined}
               onReset={reset}

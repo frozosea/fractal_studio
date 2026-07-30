@@ -3,6 +3,7 @@ import * as React from "react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Navbar } from "@/components/layout/navbar";
 import { StatusRail } from "@/components/layout/status-rail";
+import { useIsMobile } from "@/lib/hooks/use-media-query";
 import { cn } from "@/lib/utils/cn";
 
 interface WorkbenchShellProps {
@@ -13,13 +14,16 @@ interface WorkbenchShellProps {
 export function WorkbenchShell({ children, title }: WorkbenchShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
+  // Same threshold as the `md:` classes below, read from one place rather than
+  // duplicated as a magic number in a click handler.
+  const isMobile = useIsMobile();
 
   React.useEffect(() => {
     setSidebarCollapsed(window.localStorage.getItem("fs-sidebar-collapsed") === "true");
   }, []);
 
   const toggleSidebar = () => {
-    if (window.matchMedia("(max-width: 767px)").matches) {
+    if (isMobile) {
       setMobileSidebarOpen((open) => !open);
       return;
     }

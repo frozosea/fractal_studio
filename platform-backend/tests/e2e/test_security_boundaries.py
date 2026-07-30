@@ -37,5 +37,7 @@ async def test_access_boundaries_and_safe_views() -> None:
         assert_error(other_asset, status=404, code="not_found")
         operator = await stranger.get("/internal/v1/payout-requests")
         assert_error(operator, status=403, code="forbidden")
+        admin = await stranger.get("/internal/v1/admin/statistics")
+        assert_error(admin, status=403, code="forbidden")
         invalid_limit = await stranger.get("/v1/explore", params={"limit": 49})
         assert_error(invalid_limit, status=422, code="validation_error")

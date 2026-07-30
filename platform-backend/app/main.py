@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.admin.router import router as admin_router
 from app.auth.router import router as auth_router
 from app.assets.router import router as assets_router
 from app.commerce.router import router as commerce_router
@@ -41,6 +42,7 @@ app.include_router(commerce_router)
 app.include_router(payout_router)
 app.include_router(payout_operator_router)
 app.include_router(membership_router)
+app.include_router(admin_router)
 
 
 def _uuid7() -> str:
@@ -125,6 +127,9 @@ _PUBLIC_DETAIL_CODES = {
     "handle_already_registered",
     "idempotency_conflict",
     "insufficient_creator_balance",
+    "cannot_disable_self",
+    "cannot_remove_own_admin",
+    "last_admin",
     "payout_request_pending",
 }
 

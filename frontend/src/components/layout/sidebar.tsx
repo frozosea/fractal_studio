@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Loader2,
   Crown,
+  UserCog,
   type LucideIcon,
 } from "lucide-react";
 
@@ -36,6 +37,7 @@ const navItems: NavItem[] = [
   { label: "purchases", href: "/purchases", icon: ReceiptText },
   { label: "payouts", href: "/payouts", icon: Landmark },
   { label: "finance", href: "/finance", icon: ShieldCheck, requiredRole: "finance_operator" },
+  { label: "admin", href: "/admin", icon: UserCog, requiredRole: "admin" },
   { label: "membership", href: "/membership", icon: Crown },
 ];
 

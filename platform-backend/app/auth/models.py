@@ -47,7 +47,7 @@ class UserView(BaseModel):
     id: UUID
     email: str
     status: Literal["active", "disabled"]
-    roles: list[Literal["creator", "finance_operator"]]
+    roles: list[Literal["admin", "creator", "finance_operator"]]
     creator_profile: CreatorProfileView | None = Field(default=None, alias="creatorProfile")
     member: bool = False
 
