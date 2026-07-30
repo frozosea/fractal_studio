@@ -667,6 +667,11 @@
     "checkFailed": "System check failed"
   },
   "commerce": {
+    "render": {
+          "iterations": "{count} iter",
+          "zoomDepth": "depth 10^{depth}",
+          "customFormula": "Custom formula"
+    },
     "errors": {
       "requestFailed": "The request failed. Please try again.",
       "requestWithCode": "The request failed ({code}).",
@@ -728,6 +733,24 @@
       "priceCny": "Price in CNY"
     },
     "marketplace": {
+      "facets": {
+              "variant": "Formula",
+              "colorMap": "Colour",
+              "depth": "Depth",
+              "resolution": "Size",
+              "depthValues": {
+                      "le512": "≤512 iter",
+                      "le1024": "513–1024 iter",
+                      "le2048": "1025–2048 iter",
+                      "gt2048": ">2048 iter"
+              },
+              "resolutionValues": {
+                      "le1mp": "≤1 MP",
+                      "le2mp": "1–2 MP",
+                      "le8mp": "2–8 MP",
+                      "gt8mp": ">8 MP"
+              }
+      },
       "title": "Marketplace",
       "subtitle": "Published fractal artwork with payment status verified by Alipay.",
       "searchPlaceholder": "Search listings",
@@ -764,6 +787,8 @@
       "publicPreviewPreparing": "The public preview is still being prepared."
     },
     "purchases": {
+      "untitled": "Untitled work",
+      "downloadToView": "Download to view",
       "title": "Purchases",
       "subtitle": "Downloads are available while the purchase entitlement is active.",
       "empty": "No purchases yet."

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +30,7 @@ class OrderItemView(BaseModel):
     commission_policy_version: str = Field(alias="commissionPolicyVersion")
     creator_amount: Decimal = Field(alias="creatorAmount")
     platform_fee_amount: Decimal = Field(alias="platformFeeAmount")
+    snapshot: dict[str, Any] | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 

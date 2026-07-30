@@ -667,6 +667,11 @@
     "checkFailed": "系统检查失败"
   },
   "commerce": {
+    "render": {
+          "iterations": "{count} 次迭代",
+          "zoomDepth": "深度 10^{depth}",
+          "customFormula": "自定义公式"
+    },
     "errors": {
       "requestFailed": "请求失败，请稍后重试。",
       "requestWithCode": "请求失败（{code}）。",
@@ -728,6 +733,24 @@
       "priceCny": "价格（人民币）"
     },
     "marketplace": {
+      "facets": {
+              "variant": "公式",
+              "colorMap": "染色",
+              "depth": "深度",
+              "resolution": "分辨率",
+              "depthValues": {
+                      "le512": "≤512 次",
+                      "le1024": "513–1024 次",
+                      "le2048": "1025–2048 次",
+                      "gt2048": ">2048 次"
+              },
+              "resolutionValues": {
+                      "le1mp": "≤1 百万像素",
+                      "le2mp": "1–2 百万像素",
+                      "le8mp": "2–8 百万像素",
+                      "gt8mp": ">8 百万像素"
+              }
+      },
       "title": "作品市场",
       "subtitle": "浏览已发布的分形作品；付款状态由支付宝回调确认。",
       "searchPlaceholder": "搜索作品",
@@ -764,6 +787,8 @@
       "publicPreviewPreparing": "公开预览仍在生成中。"
     },
     "purchases": {
+      "untitled": "未命名作品",
+      "downloadToView": "下载原图查看",
       "title": "购买记录",
       "subtitle": "购买授权有效时可以下载对应素材。",
       "empty": "暂无购买记录。"

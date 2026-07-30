@@ -39,7 +39,8 @@ def _order_view(record: repository.OrderRecord) -> OrderView:
         items=[OrderItemView(id=item.id, listingId=item.listing_id, listingVersionId=item.listing_version_id,
             licenceOfferId=item.licence_offer_id, assetId=item.asset_id, creatorId=item.creator_id, price=item.price,
             currency=cast(object, item.currency), commissionPolicyVersion=item.commission_policy_version,
-            creatorAmount=item.creator_amount, platformFeeAmount=item.platform_fee_amount) for item in record.items],
+            creatorAmount=item.creator_amount, platformFeeAmount=item.platform_fee_amount,
+            snapshot=item.snapshot) for item in record.items],
     )
 
 

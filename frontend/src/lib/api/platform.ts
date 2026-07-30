@@ -144,6 +144,36 @@ export interface Asset {
   files: Array<{ purpose: string; mediaType: string; sizeBytes: number }>;
 }
 
+/** Intrinsic properties of the render, denormalized onto the listing. */
+export interface RenderMeta {
+  variant?: string | null;
+  iterations?: number | null;
+  width?: number | null;
+  height?: number | null;
+  colorMap?: string | null;
+  colorMode?: string | null;
+  viewScale?: number | null;
+}
+
+/** Facet values present in the published catalogue, with listing counts. */
+export type FacetName = "variant" | "colorMap" | "depth" | "resolution";
+export interface FacetCount {
+  facet: FacetName;
+  value: string;
+  count: number;
+}
+
+export interface ExploreQuery {
+  q?: string;
+  variant?: string | null;
+  colorMap?: string | null;
+  depth?: string | null;
+  resolution?: string | null;
+  creator?: string | null;
+  cursor?: string | null;
+  limit?: number;
+}
+
 export interface Listing {
   id: string;
   assetId: string;
@@ -155,7 +185,8 @@ export interface Listing {
   price: string;
   currency: "CNY";
   publishedAt?: string | null;
-  preview?: { thumbnailUrl?: string | null; watermarkedPreviewUrl?: string | null; videoPosterUrl?: string | null } | null;
+  preview?: { mediaType?: "image" | "video" | "mesh"; thumbnailUrl?: string | null; watermarkedPreviewUrl?: string | null; videoPosterUrl?: string | null } | null;
+  render?: RenderMeta | null;
   licenceOffer: { id: string; code: string; termsVersion: string; terms: Record<string, unknown> };
 }
 
@@ -167,7 +198,13 @@ export interface Order {
   paidAt?: string | null;
   createdAt: string;
   outTradeNo?: string | null;
-  items: Array<{ assetId: string; listingId: string; price: string }>;
+  items: Array<{
+    assetId: string;
+    listingId: string;
+    price: string;
+    /** Immutable listing snapshot taken when the order was placed. */
+    snapshot?: Record<string, unknown> | null;
+  }>;
 }
 
 export interface PayoutRequest {
@@ -641,9 +678,20 @@ export const platform = {
     downloadUrl: (assetId: string) => request<{ url: string; expiresAt: string }>(`/v1/assets/${assetId}/download-url`, { method: "POST" }, { csrf: true }),
   },
   marketplace: {
-    explore: (query = "", cursor?: string | null, limit = 12) => collection<Listing>(
-      `/v1/explore?limit=${limit}${query ? `&q=${encodeURIComponent(query)}` : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
-    ),
+    // An options object rather than positional arguments: the catalogue now has
+    // four facets on top of the text query, and `collection()` caches by URL, so
+    // a stable parameter order matters.
+    explore: ({ q, variant, colorMap, depth, resolution, creator, cursor, limit = 12 }: ExploreQuery = {}) => {
+      const params = new URLSearchParams({ limit: String(limit) });
+      for (const [key, value] of [
+        ["q", q], ["variant", variant], ["colorMap", colorMap],
+        ["depth", depth], ["resolution", resolution], ["creator", creator], ["cursor", cursor],
+      ] as const) {
+        if (value) params.set(key, value);
+      }
+      return collection<Listing>(`/v1/explore?${params.toString()}`);
+    },
+    facets: () => collection<FacetCount>("/v1/explore/facets"),
     listing: (listingId: string) => request<Listing>(`/v1/listings/${listingId}`),
     mine: () => collection<Listing>("/v1/me/listings?limit=48"),
     create: (body: { assetId: string; title: string; description: string; tags: string[]; price: string; licenceOffer: { code: string; termsVersion: string } }) => request<Listing>("/v1/listings", { method: "POST", body: json(body) }, { csrf: true, idempotency: true }),

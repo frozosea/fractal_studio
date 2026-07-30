@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ListingCard } from "@/components/shared/listing-card";
+import { RenderMeta } from "@/components/shared/render-meta";
 import { CARD_GRID_STYLE } from "@/lib/utils/layout";
 import { platform, PlatformApiError, type Listing } from "@/lib/api/platform";
 import { Link } from "@/i18n/navigation";
@@ -109,6 +110,7 @@ export default function ListingsPage() {
             previewAlt={t("marketplace.previewAlt", { title: listing.title })}
             previewFallback={t("listings.previewPreparing")}
           >
+            <RenderMeta render={listing.render} />
             <p className="line-clamp-2 text-sm text-muted-foreground">
               {listing.description || t("listings.noDescription")}
             </p>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { ListingCard } from "@/components/shared/listing-card";
+import { RenderMeta } from "@/components/shared/render-meta";
 import { CARD_GRID_STYLE } from "@/lib/utils/layout";
 import { platform, type Listing } from "@/lib/api/platform";
 
@@ -51,6 +52,7 @@ export default function FavoritesPage() {
               previewAlt={t("marketplace.previewAlt", { title: listing?.title ?? "" })}
               previewFallback={t("marketplace.previewUnavailable")}
             >
+              <RenderMeta render={listing?.render} />
               <Button
                 size="sm"
                 variant="outline"

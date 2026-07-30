@@ -28,6 +28,10 @@ class OrderItemRecord:
     commission_policy_version: str
     creator_amount: Decimal
     platform_fee_amount: Decimal
+    # The immutable listing snapshot taken at publish time. Carries what was
+    # bought — title, creator, media type and render metadata — so a purchase
+    # stays describable even after the listing is edited or withdrawn.
+    snapshot: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,14 +86,17 @@ def _item(row: Any) -> OrderItemRecord:
         price=Decimal(data["price_amount"]), currency=str(data["item_currency"]),
         commission_policy_version=str(data["commission_policy_version"]), creator_amount=Decimal(data["creator_amount"]),
         platform_fee_amount=Decimal(data["platform_fee_amount"]),
+        snapshot=dict(data["snapshot"]) if data.get("snapshot") else None,
     )
 
 
 _ORDER_ITEMS = """
     SELECT oi.id AS item_id, oi.listing_id, oi.listing_version_id, oi.licence_offer_id, oi.asset_id, oi.creator_id,
            oi.price_amount, oi.currency AS item_currency, oi.commission_policy_version,
-           oi.creator_amount, oi.platform_fee_amount
-    FROM order_items oi WHERE oi.order_id = :order_id ORDER BY oi.id
+           oi.creator_amount, oi.platform_fee_amount, lv.snapshot_json AS snapshot
+    FROM order_items oi
+    LEFT JOIN listing_versions lv ON lv.id = oi.listing_version_id
+    WHERE oi.order_id = :order_id ORDER BY oi.id
 """
 
 

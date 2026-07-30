@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
 import { ListingCard } from "@/components/shared/listing-card";
+import { RenderMeta } from "@/components/shared/render-meta";
+import { FacetBar, type FacetSelection } from "@/components/shared/facet-bar";
 import { CARD_GRID_STYLE } from "@/lib/utils/layout";
-import { platform, PlatformApiError, submitAlipayForm, type Listing } from "@/lib/api/platform";
+import { platform, PlatformApiError, submitAlipayForm, type FacetCount, type Listing } from "@/lib/api/platform";
 
 function updateIds(ids: Set<string>, assetId: string, shouldInclude: boolean): Set<string> {
   const next = new Set(ids);
@@ -44,6 +46,8 @@ export default function ExplorePage() {
   const t = useTranslations("commerce");
   const [query, setQuery] = useState("");
   const [appliedQuery, setAppliedQuery] = useState("");
+  const [selection, setSelection] = useState<FacetSelection>({});
+  const [facets, setFacets] = useState<FacetCount[]>([]);
   const [items, setItems] = useState<Listing[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [favoriteAssetIds, setFavoriteAssetIds] = useState<Set<string>>(new Set());
@@ -58,17 +62,23 @@ export default function ExplorePage() {
   const loadingMoreRef = useRef(false);
   const searchRequestRef = useRef(0);
   const bufferedListingsRef = useRef<Listing[]>([]);
+  const appliedSelectionRef = useRef<FacetSelection>({});
 
-  const search = useCallback(async (nextQuery: string) => {
+  // Every facet change goes through here rather than mutating state in place:
+  // the page serves from an in-memory buffer, and a cursor is bound to the
+  // filter set it was issued under, so both have to be discarded together or
+  // the next page would come back 422 cursor_filter_mismatch.
+  const search = useCallback(async (nextQuery: string, nextSelection: FacetSelection = {}) => {
     const requestId = ++searchRequestRef.current;
     const normalizedQuery = nextQuery.trim();
     loadingMoreRef.current = false;
+    appliedSelectionRef.current = nextSelection;
     setAppliedQuery(normalizedQuery);
     setIsLoading(true);
     setIsLoadingMore(false);
     setError(null);
     try {
-      const value = await platform.marketplace.explore(normalizedQuery, null, POOL_SIZE);
+      const value = await platform.marketplace.explore({ q: normalizedQuery, ...nextSelection, limit: POOL_SIZE });
       if (requestId !== searchRequestRef.current) return;
       const shuffled = shuffledListings(value.data);
       const firstBatch = shuffled.slice(0, BATCH_SIZE);
@@ -95,7 +105,9 @@ export default function ExplorePage() {
     setIsLoadingMore(true);
     try {
       if (bufferedListingsRef.current.length === 0 && nextCursor) {
-        const value = await platform.marketplace.explore(appliedQuery, nextCursor, POOL_SIZE);
+        const value = await platform.marketplace.explore({
+          q: appliedQuery, ...appliedSelectionRef.current, cursor: nextCursor, limit: POOL_SIZE,
+        });
         if (requestId !== searchRequestRef.current) return;
         bufferedListingsRef.current = shuffledListings(value.data);
         setNextCursor(value.page.nextCursor);
@@ -125,7 +137,9 @@ export default function ExplorePage() {
       ]);
       let alternatives = candidates.filter((item) => !currentIds.has(item.id));
       if (alternatives.length < BATCH_SIZE && cursor) {
-        const value = await platform.marketplace.explore(appliedQuery, cursor, POOL_SIZE);
+        const value = await platform.marketplace.explore({
+          q: appliedQuery, ...appliedSelectionRef.current, cursor, limit: POOL_SIZE,
+        });
         if (requestId !== searchRequestRef.current) return;
         cursor = value.page.nextCursor;
         candidates = uniqueListings([...candidates, ...value.data]);
@@ -173,8 +187,24 @@ export default function ExplorePage() {
     }
   };
 
+  const loadFacets = async () => {
+    try {
+      setFacets((await platform.marketplace.facets()).data);
+    } catch {
+      // A missing facet bar is a degraded catalogue, not a broken one — the
+      // listings themselves are unaffected, so this stays quiet.
+      setFacets([]);
+    }
+  };
+
+  const applyFacets = (nextSelection: FacetSelection) => {
+    setSelection(nextSelection);
+    void search(appliedQuery, nextSelection);
+  };
+
   useEffect(() => {
     void search("");
+    void loadFacets();
     void loadFavorites();
     void loadPurchases();
   }, [search]);
@@ -194,7 +224,7 @@ export default function ExplorePage() {
 
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void search(query);
+    void search(query, selection);
   };
 
   const toggleFavorite = async (assetId: string) => {
@@ -244,6 +274,7 @@ export default function ExplorePage() {
           <span className="hidden sm:inline">{isRefreshingBatch ? t("marketplace.refreshingBatch") : t("marketplace.refreshBatch")}</span>
         </Button>
       </form>
+      <FacetBar facets={facets} selection={selection} onChange={applyFacets} disabled={isLoading} />
       {error && <p className="text-red-400">{error}</p>}
       {isLoading && (
         <div
@@ -290,6 +321,7 @@ export default function ExplorePage() {
                   </Button>
                 }
               >
+                <RenderMeta render={listing.render} />
                 {listing.description && <p className="line-clamp-2 text-sm text-muted-foreground">{listing.description}</p>}
                 <Button className="w-full coarse:h-11" disabled={isOwned} onClick={() => void checkout(listing)}>
                   {isOwned ? t("actions.alreadyPurchased") : t("actions.payAlipay")}
