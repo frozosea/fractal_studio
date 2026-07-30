@@ -688,7 +688,6 @@
       "removeFavorite": "Remove from favorites",
       "payAlipay": "Pay with Alipay",
       "alreadyPurchased": "Purchased",
-      "editTitle": "Edit title",
       "publish": "Publish",
       "unpublish": "Unpublish",
       "hiddenLibrary": "Hidden items",
@@ -757,7 +756,9 @@
       "title": "My listings",
       "subtitle": "Review drafts created from your Library, then publish them to Marketplace.",
       "empty": "No listings yet. Create one from a ready item in your Library.",
-      "titlePrompt": "Listing title",
+      "editTitle": "Edit listing",
+      "editHint": "Title, description and price apply to the published listing immediately.",
+      "descriptionPlaceholder": "Description — shown on the marketplace card and included in search",
       "previewPreparing": "Preview is being prepared",
       "noDescription": "No description",
       "publicPreviewPreparing": "The public preview is still being prepared."

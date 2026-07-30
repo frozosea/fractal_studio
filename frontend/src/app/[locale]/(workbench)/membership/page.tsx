@@ -65,7 +65,7 @@ export default function MembershipPage() {
             <h1 className="text-2xl font-bold">{t("membership.activeTitle")}</h1>
             <p className="mt-2 text-muted-foreground">{t("membership.activeDescription")}</p>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-left">
+          <div className="grid grid-cols-1 gap-3 text-left sm:grid-cols-2">
             {[
               { icon: Palette, text: t("membership.benefitMap") },
               { icon: Layers, text: t("membership.benefitJulia") },

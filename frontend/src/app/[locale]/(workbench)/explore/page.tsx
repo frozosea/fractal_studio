@@ -6,6 +6,8 @@ import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
+import { ListingCard } from "@/components/shared/listing-card";
+import { CARD_GRID_STYLE } from "@/lib/utils/layout";
 import { platform, PlatformApiError, submitAlipayForm, type Listing } from "@/lib/api/platform";
 
 function updateIds(ids: Set<string>, assetId: string, shouldInclude: boolean): Set<string> {
@@ -246,7 +248,7 @@ export default function ExplorePage() {
       {isLoading && (
         <div
           className="grid gap-4 lg:gap-5"
-          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18rem), 1fr))" }}
+          style={CARD_GRID_STYLE}
           aria-label={t("marketplace.loading")}
         >
           {Array.from({ length: 8 }, (_, index) => <div key={index} className="aspect-[4/3] animate-pulse rounded-xl bg-white/5" />)}
@@ -260,47 +262,40 @@ export default function ExplorePage() {
       {!isLoading && (
         <div
           className="grid gap-4 lg:gap-5"
-          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18rem), 1fr))" }}
+          style={CARD_GRID_STYLE}
         >
           {items.map((listing) => {
             const isFavorite = favoriteAssetIds.has(listing.assetId);
             const isFavoriteBusy = favoriteBusy.has(listing.assetId);
             const isOwned = ownedAssetIds.has(listing.assetId);
             return (
-              <article key={listing.id} className="min-w-0 overflow-hidden rounded-xl border border-white/10">
-                <div className="aspect-[4/3] bg-white/5">
-                  {listing.preview?.thumbnailUrl ? (
-                    <img src={listing.preview.thumbnailUrl} alt={t("marketplace.previewAlt", { title: listing.title })} loading="lazy" decoding="async" className="block h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex h-full items-center justify-center p-3 text-center text-sm text-muted-foreground">
-                      {t("marketplace.previewUnavailable")}
-                    </div>
-                  )}
-                </div>
-                <div className="space-y-3 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h2 className="truncate font-medium">{listing.title}</h2>
-                      <p className="text-sm text-muted-foreground">{t("marketplace.byCreator", { creator: listing.creator.displayName })} · {listing.price} CNY</p>
-                    </div>
-                    <Button
-                      size="icon"
-                      variant={isFavorite ? "neon" : "outline"}
-                      disabled={isFavoriteBusy}
-                      onClick={() => void toggleFavorite(listing.assetId)}
-                      aria-label={isFavorite ? t("actions.removeFavorite") : t("actions.addFavorite")}
-                      title={isFavorite ? t("actions.removeFavorite") : t("actions.addFavorite")}
-                    >
-                      <Heart className="h-4 w-4" fill={isFavorite ? "currentColor" : "none"} />
-                    </Button>
-                  </div>
-                  {listing.description && <p className="line-clamp-2 text-sm text-muted-foreground">{listing.description}</p>}
-                  <Button className="w-full" disabled={isOwned} onClick={() => void checkout(listing)}>
-                    {isOwned ? t("actions.alreadyPurchased") : t("actions.payAlipay")}
+              <ListingCard
+                key={listing.id}
+                title={listing.title}
+                subtitle={`${t("marketplace.byCreator", { creator: listing.creator.displayName })} · ${listing.price} CNY`}
+                previewUrl={listing.preview?.thumbnailUrl}
+                previewAlt={t("marketplace.previewAlt", { title: listing.title })}
+                previewFallback={t("marketplace.previewUnavailable")}
+                headerAction={
+                  <Button
+                    size="icon"
+                    variant={isFavorite ? "neon" : "outline"}
+                    disabled={isFavoriteBusy}
+                    className="shrink-0 coarse:h-11 coarse:w-11"
+                    onClick={() => void toggleFavorite(listing.assetId)}
+                    aria-label={isFavorite ? t("actions.removeFavorite") : t("actions.addFavorite")}
+                    title={isFavorite ? t("actions.removeFavorite") : t("actions.addFavorite")}
+                  >
+                    <Heart className="h-4 w-4" fill={isFavorite ? "currentColor" : "none"} />
                   </Button>
-                  {isOwned && <p className="text-xs text-emerald-400">{t("marketplace.alreadyPurchasedDescription")}</p>}
-                </div>
-              </article>
+                }
+              >
+                {listing.description && <p className="line-clamp-2 text-sm text-muted-foreground">{listing.description}</p>}
+                <Button className="w-full coarse:h-11" disabled={isOwned} onClick={() => void checkout(listing)}>
+                  {isOwned ? t("actions.alreadyPurchased") : t("actions.payAlipay")}
+                </Button>
+                {isOwned && <p className="text-xs text-emerald-400">{t("marketplace.alreadyPurchasedDescription")}</p>}
+              </ListingCard>
             );
           })}
         </div>

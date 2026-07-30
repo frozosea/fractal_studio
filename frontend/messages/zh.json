@@ -688,7 +688,6 @@
       "removeFavorite": "取消收藏",
       "payAlipay": "使用支付宝付款",
       "alreadyPurchased": "已购买",
-      "editTitle": "修改标题",
       "publish": "发布",
       "unpublish": "取消发布",
       "hiddenLibrary": "隐藏素材",
@@ -757,7 +756,9 @@
       "title": "我的上架",
       "subtitle": "检查从素材库创建的草稿，然后发布到作品市场。",
       "empty": "还没有上架项，请从素材库中选择一个已就绪素材创建。",
-      "titlePrompt": "作品标题",
+      "editTitle": "编辑上架信息",
+      "editHint": "标题、简介和价格都会立刻应用到已发布的作品。",
+      "descriptionPlaceholder": "作品简介（会显示在市场卡片上，也参与搜索）",
       "previewPreparing": "正在生成预览",
       "noDescription": "暂无说明",
       "publicPreviewPreparing": "公开预览仍在生成中。"

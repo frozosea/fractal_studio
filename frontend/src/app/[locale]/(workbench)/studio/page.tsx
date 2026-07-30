@@ -608,10 +608,10 @@ export default function StudioPage() {
         </div>
       </header>
 
-      <div className="grid gap-4 xl:grid-cols-[23rem_minmax(0,1fr)]">
-        <aside className="space-y-3 xl:sticky xl:top-4 xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto xl:pr-1">
+      <div className="grid gap-4 lg:grid-cols-[21rem_minmax(0,1fr)] xl:grid-cols-[23rem_minmax(0,1fr)]">
+        <aside className="space-y-3 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto lg:pr-1">
           <Panel index="01" title={t("sections.imageMode")}>
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
               {(["map", "julia", "transitionPair", "transitionMulti", "formula", "sequence"] as const).map((item) => {
                 const locked = !isMember && MEMBER_ONLY_MODES.has(item);
                 const disabled = locked
@@ -660,7 +660,7 @@ export default function StudioPage() {
 
             {mode === "julia" && (
               <>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <NumberControl label={t("juliaRe")} value={spec.juliaRe ?? -0.8} step="0.0001" onChange={(value) => update({ juliaRe: value })} />
                   <NumberControl label={t("juliaIm")} value={spec.juliaIm ?? 0.156} step="0.0001" onChange={(value) => update({ juliaIm: value })} />
                 </div>
@@ -735,7 +735,7 @@ export default function StudioPage() {
                 {mode === "transitionPair" && (
                   <div className="mb-3">
                     <label className="mb-1 flex justify-between text-xs text-white/50"><span>{t("transitionAngle")}</span><span className="font-mono text-amber-200/80">{((spec.transitionThetaMilliDeg ?? 0) / 1000).toFixed(1)}°</span></label>
-                    <div className="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-2">
+                    <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_6rem]">
                       <input className="w-full accent-amber-500" max="180000" min="-180000" step="1000" type="range" value={spec.transitionThetaMilliDeg ?? 0} onChange={(event) => update({ transitionThetaMilliDeg: Number(event.target.value) })} />
                       <DraftNumberInput
                         aria-label={t("transitionAngleInput")}
@@ -750,7 +750,7 @@ export default function StudioPage() {
                   </div>
                 )}
                 {mode === "transitionPair" ? (
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <Control label={t("transitionFrom")}>
                       <select className={selectClass} value={spec.transitionFrom} onChange={(event) => update({ transitionFrom: event.target.value })}>{axisVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}</select>
                     </Control>
@@ -761,7 +761,7 @@ export default function StudioPage() {
                 ) : (
                   <div className="space-y-2">
                     {(spec.transitionLegs ?? []).map((leg, index) => (
-                      <div className="grid grid-cols-[minmax(0,1fr)_5.5rem_1.5rem] items-end gap-1.5" key={index}>
+                      <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_1.5rem] items-end gap-1.5 sm:grid-cols-[minmax(0,1fr)_5.5rem_1.5rem]" key={index}>
                         <Control label={t("transitionLeg", { index: index + 1 })}>
                           <select className={selectClass} value={leg.variant} onChange={(event) => updateTransitionLeg(index, { variant: event.target.value })}>{axisVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}</select>
                         </Control>
@@ -791,7 +791,7 @@ export default function StudioPage() {
                 <p className="mt-1 text-[11px] text-white/35"><span className="text-amber-200/60">{t("cost")}</span> {t(`colorMaps.${selectedColor.id}.cost`)}</p>
               </div>
             )}
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <Control label={t("colorMode")}>
                 <select className={selectClass} disabled={Boolean(spec.colorProgram)} value={spec.colorMode ?? "direct"} onChange={(event) => update({ colorMode: event.target.value as NonNullable<FractalSpec["colorMode"]> })}>
                   {capabilities.colorModes.map((item) => <option key={item} value={item}>{t(`colorModes.${item}.name`)}</option>)}
@@ -818,7 +818,7 @@ export default function StudioPage() {
           <details className="instrument-panel group">
             <summary className="cursor-pointer list-none px-3 py-2 text-xs uppercase tracking-[0.14em] text-white/55">04 · {t("sections.compute")}</summary>
             <div className="border-t border-white/10 p-3">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <NumberControl label={t("iterations")} min="1" max="1000000" step="16" value={spec.iterations ?? 512} onChange={(value) => update({ iterations: Math.round(value) })} />
                 <NumberControl label={t("bailout")} min="0.01" step="0.5" value={spec.bailout ?? 2} onChange={(value) => update({ bailout: value })} />
                 <NumberControl label={t("rotation")} min="-360" max="360" step="1" value={spec.rotationDeg ?? 0} onChange={(value) => update({ rotationDeg: value })} />
@@ -1208,13 +1208,13 @@ function GradientEditor({ program, maxStops, onChange, onStopChange, onAdd, onRe
         ))}
       </div>
       <Button className="mt-2 w-full rounded-none" disabled={program.stops.length >= maxStops} size="sm" variant="outline" onClick={onAdd}><Plus className="h-3.5 w-3.5" />{t("addColor")}</Button>
-      <div className="mt-3 grid grid-cols-2 gap-2">
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         <NumberControl label={t("gradientCycles")} min="0.01" max="64" step="0.1" value={program.cycles ?? 1} onChange={(value) => onChange({ cycles: value })} />
         <NumberControl label={t("gradientPhase")} min="-1000" max="1000" step="0.05" value={program.phase ?? 0} onChange={(value) => onChange({ phase: value })} />
         <Control label={t("gradientWrap")}>
           <select className={selectClass} value={program.wrap ?? "repeat"} onChange={(event) => onChange({ wrap: event.target.value as "clamp" | "repeat" | "mirror" })}><option value="repeat">{t("wrap.repeat")}</option><option value="clamp">{t("wrap.clamp")}</option><option value="mirror">{t("wrap.mirror")}</option></select>
         </Control>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <Control label={t("interiorColor")}><input aria-label={t("interiorColor")} className="h-9 w-full bg-transparent" type="color" value={program.interiorColor ?? "#050505"} onChange={(event) => onChange({ interiorColor: event.target.value })} /></Control>
           <Control label={t("invalidColor")}><input aria-label={t("invalidColor")} className="h-9 w-full bg-transparent" type="color" value={program.invalidColor ?? "#ff00ff"} onChange={(event) => onChange({ invalidColor: event.target.value })} /></Control>
         </div>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Link } from "@/i18n/navigation";
+import { CARD_GRID_STYLE } from "@/lib/utils/layout";
 import { platform, PlatformApiError, type Asset } from "@/lib/api/platform";
 
 export default function HiddenAssetsPage() {
@@ -34,7 +35,7 @@ export default function HiddenAssetsPage() {
     </div>
     {error && <p className="text-red-400">{error}</p>}
     {assets.length === 0 && <p className="rounded border border-dashed p-6 text-muted-foreground">{t("assets.hiddenEmpty")}</p>}
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{assets.map((asset) => {
+    <div className="grid gap-4 lg:gap-5" style={CARD_GRID_STYLE}>{assets.map((asset) => {
       const previewUrl = asset.preview?.thumbnailUrl ?? asset.preview?.videoPosterUrl;
       return <article key={asset.id} className="min-w-0 overflow-hidden rounded-xl border border-white/10 text-sm">
         <div className="aspect-[4/3] border-b border-white/10 bg-white/[0.03]">

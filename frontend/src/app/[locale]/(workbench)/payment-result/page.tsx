@@ -97,8 +97,8 @@ function DownloadSection({ order }: { order: Order }) {
     <Card className="p-5 space-y-3 text-left">
       <h3 className="font-medium">{t("paymentResult.downloadAssets")}</h3>
       {order.items.map((item) => (
-        <div key={item.assetId} className="flex items-center justify-between">
-          <div>
+        <div key={item.assetId} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
             <p className="break-all text-xs text-muted-foreground font-mono">{item.assetId}</p>
             <p className="text-sm">{item.price} CNY</p>
           </div>
@@ -193,8 +193,8 @@ export default function PaymentResultPage() {
 
         {latestOrder && (
           <div className="text-left space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">{t("order.id")}</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-sm text-muted-foreground">{t("order.id")}</span>
               <Badge variant={cfg.badgeVariant}>{cfg.badge}</Badge>
             </div>
             <p className="break-all text-xs text-muted-foreground font-mono">{latestOrder.id}</p>
