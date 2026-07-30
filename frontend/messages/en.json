@@ -892,6 +892,7 @@
         "revokeFinance": "Revoke finance access",
         "grantAdmin": "Make administrator",
         "revokeAdmin": "Revoke administrator",
+        "creatorCannotBeAdmin": "Creator and administrator accounts must remain separate.",
         "empty": "No accounts match these filters."
       },
       "market": {

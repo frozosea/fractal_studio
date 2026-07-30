@@ -194,6 +194,7 @@ export default function AdminPage() {
             {users.map((row) => {
               const isSelf = row.id === user?.id;
               const rowBusy = busy === `user:${row.id}`;
+              const creatorCannotBecomeAdmin = row.roles.includes("creator") && !row.roles.includes("admin");
               return <article key={row.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
@@ -210,7 +211,16 @@ export default function AdminPage() {
                     <Button size="sm" variant="outline" loading={rowBusy} disabled={isSelf} onClick={() => toggleStatus(row)}>{t(row.status === "active" ? "accounts.disable" : "accounts.enable")}</Button>
                     <Button size="sm" variant="outline" loading={rowBusy} onClick={() => toggleMembership(row)}>{t(row.member ? "accounts.revokeMembership" : "accounts.grantMembership")}</Button>
                     <Button size="sm" variant="outline" loading={rowBusy} onClick={() => toggleRole(row, "finance_operator")}>{t(row.roles.includes("finance_operator") ? "accounts.revokeFinance" : "accounts.grantFinance")}</Button>
-                    <Button size="sm" variant="outline" loading={rowBusy} disabled={isSelf} onClick={() => toggleRole(row, "admin")}>{t(row.roles.includes("admin") ? "accounts.revokeAdmin" : "accounts.grantAdmin")}</Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      loading={rowBusy}
+                      disabled={isSelf || creatorCannotBecomeAdmin}
+                      title={creatorCannotBecomeAdmin ? t("accounts.creatorCannotBeAdmin") : undefined}
+                      onClick={() => toggleRole(row, "admin")}
+                    >
+                      {t(row.roles.includes("admin") ? "accounts.revokeAdmin" : "accounts.grantAdmin")}
+                    </Button>
                   </div>
                 </div>
               </article>;

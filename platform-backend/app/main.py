@@ -31,7 +31,13 @@ app.add_middleware(
     allow_origins=sorted(get_settings().trusted_origins),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-CSRF-Token", "X-Request-ID"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Idempotency-Key",
+        "X-CSRF-Token",
+        "X-Request-ID",
+    ],
     expose_headers=["X-Session-Token"],
 )
 app.include_router(auth_router)
@@ -129,6 +135,7 @@ _PUBLIC_DETAIL_CODES = {
     "insufficient_creator_balance",
     "cannot_disable_self",
     "cannot_remove_own_admin",
+    "admin_creator_role_conflict",
     "last_admin",
     "payout_request_pending",
 }
@@ -137,20 +144,43 @@ _PUBLIC_DETAIL_CODES = {
 @app.exception_handler(HTTPException)
 async def platform_http_exception_handler(request: Request, error: HTTPException) -> JSONResponse:
     detail = error.detail if isinstance(error.detail, str) else None
-    code = detail if detail in _PUBLIC_DETAIL_CODES else _DEFAULT_ERROR_CODE.get(error.status_code, "request_failed")
+    code = (
+        detail
+        if detail in _PUBLIC_DETAIL_CODES
+        else _DEFAULT_ERROR_CODE.get(error.status_code, "request_failed")
+    )
     message = code.replace("_", " ")
-    return JSONResponse(status_code=error.status_code, content={"error": {"code": code, "message": message, "details": {}}})
+    return JSONResponse(
+        status_code=error.status_code,
+        content={"error": {"code": code, "message": message, "details": {}}},
+    )
 
 
 @app.exception_handler(RequestValidationError)
-async def platform_validation_exception_handler(request: Request, error: RequestValidationError) -> JSONResponse:
-    return JSONResponse(status_code=422, content={"error": {"code": "validation_error", "message": "request validation failed", "details": {}}})
+async def platform_validation_exception_handler(
+    request: Request, error: RequestValidationError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "code": "validation_error",
+                "message": "request validation failed",
+                "details": {},
+            }
+        },
+    )
 
 
 @app.exception_handler(Exception)
 async def platform_unexpected_exception_handler(request: Request, error: Exception) -> JSONResponse:
     log_event(logging.ERROR, "unhandled request error", error_type=type(error).__name__)
-    return JSONResponse(status_code=500, content={"error": {"code": "internal_error", "message": "internal server error", "details": {}}})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {"code": "internal_error", "message": "internal server error", "details": {}}
+        },
+    )
 
 
 @app.get("/healthz", tags=["system"])

@@ -892,6 +892,7 @@
         "revokeFinance": "撤销财务权限",
         "grantAdmin": "设为管理员",
         "revokeAdmin": "撤销管理员",
+        "creatorCannotBeAdmin": "创作者与管理员必须使用相互独立的账号。",
         "empty": "没有找到符合条件的账号。"
       },
       "market": {

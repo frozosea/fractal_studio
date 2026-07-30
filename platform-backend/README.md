@@ -56,13 +56,18 @@ curl --noproxy '*' -fsS \
 
 ## Administrator account
 
-Administrators use a normal registered account plus the `admin` RBAC role. Apply migrations,
-register the account through the normal UI/API, then grant the role without handling its password:
+Administrators use a dedicated registered account plus the `admin` RBAC role. Apply migrations,
+register a separate account through the normal UI/API, then grant the role without handling its
+password:
 
 ```bash
 docker compose exec -e ADMIN_EMAIL=admin@example.test api \
   uv run --no-sync python scripts/grant_admin.py
 ```
+
+Administrator and creator identities are intentionally mutually exclusive. A creator account
+cannot be granted `admin`, and an administrator cannot create a creator profile. This invariant is
+also enforced by PostgreSQL triggers so it cannot be bypassed by another application path.
 
 The next authenticated request resolves roles directly from PostgreSQL, so a new login is not
 required. The `/internal/v1/admin/*` API and the frontend Administration page provide account

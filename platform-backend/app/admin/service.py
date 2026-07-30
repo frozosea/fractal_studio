@@ -55,6 +55,18 @@ def _user_view(record: repository.AdminUserRecord) -> AdminUserView:
     )
 
 
+def _ensure_admin_creator_separation(
+    record: repository.AdminUserRecord, privileged_roles: set[str]
+) -> None:
+    if "admin" in privileged_roles and (
+        "creator" in record.roles or record.creator_handle is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="admin_creator_role_conflict",
+        )
+
+
 class AdminService:
     def __init__(self, *, assets: AssetReader | None = None) -> None:
         self._assets = assets or AssetReadService()
@@ -146,18 +158,25 @@ class AdminService:
             locked = await repository.lock_user(connection, user_id)
             current = await repository.find_user(connection, user_id)
             if locked is None or current is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="admin_user_not_found")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="admin_user_not_found"
+                )
 
             next_status = payload.status or current.status
             next_member = current.member if payload.member is None else payload.member
-            current_privileged = {role for role in current.roles if role in {"admin", "finance_operator"}}
+            current_privileged = {
+                role for role in current.roles if role in {"admin", "finance_operator"}
+            }
             next_privileged = (
                 current_privileged
                 if payload.privileged_roles is None
                 else set(payload.privileged_roles)
             )
+            _ensure_admin_creator_separation(current, next_privileged)
             if user_id == principal.user_id and next_status != "active":
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot_disable_self")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="cannot_disable_self"
+                )
             if user_id == principal.user_id and "admin" not in next_privileged:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT, detail="cannot_remove_own_admin"
@@ -177,9 +196,7 @@ class AdminService:
             updated = await repository.find_user(connection, user_id)
             assert updated is not None
             view = _user_view(updated)
-            body: dict[str, object] = {
-                "data": view.model_dump(mode="json", by_alias=True)
-            }
+            body: dict[str, object] = {"data": view.model_dump(mode="json", by_alias=True)}
             headers = {"Cache-Control": "no-store"}
             await audit_writer.record_user_action(
                 connection,
@@ -250,7 +267,9 @@ class AdminService:
                 )
             locked = await repository.lock_listing(connection, listing_id)
             if locked is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="listing_not_found")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="listing_not_found"
+                )
             previous_status = str(locked["status"])
             if payload.action == "unpublish" and previous_status != "published":
                 raise HTTPException(
@@ -266,9 +285,7 @@ class AdminService:
             updated = await repository.find_listing(connection, listing_id)
             assert updated is not None
             view = await self._listing_view(updated)
-            body: dict[str, object] = {
-                "data": view.model_dump(mode="json", by_alias=True)
-            }
+            body: dict[str, object] = {"data": view.model_dump(mode="json", by_alias=True)}
             headers = {"Cache-Control": "no-store"}
             await audit_writer.record_user_action(
                 connection,
@@ -292,9 +309,7 @@ class AdminService:
             )
         return body, 200, headers
 
-    async def _listing_view(
-        self, record: repository.AdminListingRecord
-    ) -> AdminListingView:
+    async def _listing_view(self, record: repository.AdminListingRecord) -> AdminListingView:
         preview = await self._assets.find_public_preview(asset_id=record.asset_id)
         preview_view = None
         if preview is not None:

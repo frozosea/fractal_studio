@@ -14,7 +14,12 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.auth import creator_profile_repository, session_service, user_repository, user_role_repository
+from app.auth import (
+    creator_profile_repository,
+    session_service,
+    user_repository,
+    user_role_repository,
+)
 from app.auth.models import AccessPrincipal, CreatorProfileInput, UserView
 from app.core import audit_writer, idempotency_service
 from app.core.access_middleware import session_token_from
@@ -78,7 +83,9 @@ async def register(email: str, password: str, request: Request) -> tuple[UserVie
             await user_repository.create(
                 connection, user_id=user_id, email=email, password_hash=_hash_password(password)
             )
-            session_token = await session_service.create(connection, user_id=user_id, request=request)
+            session_token = await session_service.create(
+                connection, user_id=user_id, request=request
+            )
             await audit_writer.record_user_action(
                 connection,
                 actor_user_id=user_id,
@@ -89,15 +96,23 @@ async def register(email: str, password: str, request: Request) -> tuple[UserVie
             )
             view = await _user_view(connection, user_id)
     except IntegrityError as error:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="email_already_registered") from error
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="email_already_registered"
+        ) from error
     return view, session_token
 
 
 async def login(email: str, password: str, request: Request) -> tuple[UserView, str]:
     async with get_engine().begin() as connection:
         user = await user_repository.find_by_email(connection, email)
-        if user is None or user["status"] != "active" or not _verify_password(password, str(user["password_hash"])):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
+        if (
+            user is None
+            or user["status"] != "active"
+            or not _verify_password(password, str(user["password_hash"]))
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials"
+            )
         user_id = user["id"]
         raw_token, source = session_token_from(request)
         existing = await session_service.resolve(connection, raw_token)
@@ -110,7 +125,9 @@ async def login(email: str, password: str, request: Request) -> tuple[UserView, 
             # out whichever sibling tab is using that account.
             if existing is not None and source == "bearer":
                 await session_service.revoke(connection, existing.session_id)
-            session_token = await session_service.create(connection, user_id=user_id, request=request)
+            session_token = await session_service.create(
+                connection, user_id=user_id, request=request
+            )
         await audit_writer.record_user_action(
             connection,
             actor_user_id=user_id,
@@ -148,6 +165,11 @@ async def upsert_creator_profile(
     request: Request,
 ) -> tuple[dict[str, Any], str | None, bool, dict[str, str]]:
     """Profile, creator role, audit, session rotation and idempotency commit together."""
+    if "admin" in principal.roles:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="admin_creator_role_conflict",
+        )
     try:
         async with get_engine().begin() as connection:
             claim = await idempotency_service.claim(
@@ -175,7 +197,11 @@ async def upsert_creator_profile(
                 request_id_value=request_id(request),
             )
             new_session_token = await session_service.rotate(connection, principal, request)
-            body = {"data": (await _user_view(connection, principal.user_id)).model_dump(mode="json", by_alias=True)}
+            body = {
+                "data": (await _user_view(connection, principal.user_id)).model_dump(
+                    mode="json", by_alias=True
+                )
+            }
             response_headers = {"Cache-Control": "no-store"}
             await idempotency_service.complete(
                 connection,
@@ -185,5 +211,7 @@ async def upsert_creator_profile(
                 response_headers=response_headers,
             )
     except IntegrityError as error:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="handle_already_registered") from error
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="handle_already_registered"
+        ) from error
     return body, new_session_token, False, response_headers

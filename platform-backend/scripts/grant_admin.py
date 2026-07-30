@@ -32,6 +32,12 @@ async def grant(email: str) -> None:
             raise RuntimeError(f"account does not exist: {email}")
         if user["status"] != "active":
             raise RuntimeError(f"account is not active: {email}")
+        creator = await connection.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM creator_profiles WHERE user_id = $1)",
+            user["id"],
+        )
+        if creator:
+            raise RuntimeError(f"account is a creator and cannot become an administrator: {email}")
         await connection.execute(
             "INSERT INTO user_roles (user_id, role) VALUES ($1, 'admin') "
             "ON CONFLICT (user_id, role) DO NOTHING",
