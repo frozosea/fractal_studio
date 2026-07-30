@@ -1,129 +1,156 @@
 # Frontend Guide / 前端与移动端维护说明
 
-这份文档记录前端结构、状态流和移动端/平板横屏适配策略。它的重点是让后续 UI 改动知道应该改哪里、怎么验证。
+这份文档记录前端结构、公开页面、响应式与触控策略。目标是让后续 UI 改动知道应该改哪里、怎么验证。
 
-Orbit 多步编排、repeat block、自定义公式选择、配方版本和视角存档的产品任务见 [Orbit 编排与配方存档任务清单](orbit_recipe_product_tasks.md)。该编辑器使用 Platform authoring DTO，不应直接让组件拼 Compute v1 JSON。
+Orbit 多步编排、repeat block、自定义公式选择、配方版本和视角存档的产品任务见
+[Orbit 编排与配方存档任务清单](orbit_recipe_product_tasks.md)。该编辑器使用 Platform authoring
+DTO，不应直接让组件拼 Compute v1 JSON。
 
-## App Structure / 应用结构
+## Stack / 技术栈
+
+Next.js 14 App Router + React 18 + TypeScript + Tailwind 3.4 + next-intl。
+数据层用 TanStack Query 与 zustand，组件基于 Radix primitives，图标用 lucide-react。
+包管理器是 pnpm。
 
 | Area | Files | Notes |
 |---|---|---|
-| Shell | `src/App.vue` | 桌面三栏：NavRail / main / StatusRail。移动端改为顶栏 / 内容 / 底部状态栏。 |
-| Navigation | `src/router.ts`, `components/NavRail.vue` | 当前页面：Map、Points、3D、Runs、System。 |
-| API | `src/api.ts` | 所有后端请求和 TypeScript 类型集中在这里。 |
-| Shared state | `src/types.ts`, `src/i18n.ts`, `src/theme.ts` | 全局 status、文案和主题。 |
-| Device mode | `src/device.ts` | 设备/viewport 检测，并设置 `<html data-device="...">`。 |
-| Base styles | `src/assets/tokens.css`, `src/assets/base.css` | 颜色、spacing、全局控件尺寸、移动端基础规则。 |
+| Root layout | `src/app/layout.tsx` | `<html>`/`<body>`、`metadata`、`viewport`、全局 provider。 |
+| Providers | `src/providers/` | `AuthProvider` 同时负责路由守卫，见下。 |
+| API client | `src/lib/api/platform.ts` | 所有 Platform 请求与 TypeScript 类型集中在这里。 |
+| i18n | `src/i18n/`, `messages/{zh,en}.json` | `localePrefix: 'as-needed'`，默认 `zh`。 |
+| Styles | `src/app/globals.css`, `tailwind.config.ts` | 唯一一份 CSS 文件；设计 token 是 `:root` 上的 HSL 三元组。 |
 
-## View Responsibilities / 页面职责
+## Routes / 路由
 
-| Route | View | Responsibility |
+路由分三组，`(auth)`、`(public)`、`(workbench)`，route group 不影响 URL。
+
+| Group | Routes | Shell |
 |---|---|---|
-| `/` | `views/MapView.vue` | 2D 地图、Julia、特殊点叠加、自定义公式、transition、视频导出。 |
-| `/points` | `views/PointsView.vue` | 独立特殊点搜索/枚举工作区。 |
-| `/3d` | `views/ThreeDView.vue` | HS field/mesh、transition voxel/mesh、Three.js 预览和导出。 |
-| `/runs` | `views/RunsView.vue` | 历史 run、artifact 列表、下载/查看。 |
-| `/system` | `views/SystemView.vue` | 硬件、能力探测、benchmark。 |
+| `(public)` | `/`、`/tutorial`、`/help`、`/creator/[handle]` | `PublicHeader` + `PublicFooter`，`.public-instrument` 坐标纸背景 |
+| `(auth)` | `/login`、`/register` | `.auth-instrument` |
+| `(workbench)` | `/studio`、`/explore`、`/assets`、`/listings`、`/favorites`、`/purchases`、`/payouts`、`/finance`、`/membership`、`/payment-result`、`/admin` | `WorkbenchShell`（侧边栏 + 顶栏 + 状态条） |
 
-## Responsive Strategy / 响应式策略
+### 公开页面与鉴权守卫
 
-移动端不是单纯按手机 UA 判断，而是合并 viewport、触控和 iPadOS 等信号。
+`src/providers/auth-provider.tsx` 挂在根 layout 上，负责把未登录访客送去 `/login`。
+允许匿名访问的路径集中在一个地方：
 
-`frontend/src/device.ts` 判为 `mobile` 的情况：
-
-- viewport width `<= 760px`
-- touch/coarse pointer 且 width `<= 1200px`
-- 平板横屏：width `761px..1200px` 且 `orientation: landscape`
-- mobile UA，包含 iPadOS 伪装成 Macintosh 但有多点触控的情况
-
-判定后会设置：
-
-```html
-<html data-device="mobile">
+```ts
+const PUBLIC_PATHS = new Set(["/", "/tutorial", "/help", "/login", "/register"]);
+const PUBLIC_PATH_PREFIXES = ["/creator/"];
+export function isPublicPath(pathname: string): boolean { … }
 ```
 
-全局和各 view 的 CSS 使用同一组媒体条件：
+**新增公开页面时必须同时更新这个集合**，否则页面会在客户端 hydration 之后被弹回登录页。
+`rememberIntendedPath` 也会跳过公开路径：从落地页注册的用户应该进工作台，而不是被送回宣传页。
 
-```css
-@media (max-width: 760px),
-  ((pointer: coarse) and (max-width: 1200px)),
-  ((any-pointer: coarse) and (max-width: 1200px)),
-  ((min-width: 761px) and (max-width: 1200px) and (orientation: landscape)) {
-  /* mobile and tablet-landscape layout */
-}
+公开页面尽量写成 server component，这样匿名访客拿到的是真实 HTML，链接分享和抓取才有意义；
+只有需要登录态的 `PublicHeader` 是 client component。
+
+后端侧 `GET /v1/explore`、`GET /v1/explore/facets`、`GET /v1/creators/{handle}` 及其 listings
+路由都没有鉴权依赖，公开页面因此不需要任何会话。
+
+## Visual language / 视觉语言
+
+代码里有两套语言，不要混用：
+
+- **仪器风格（琥珀色）** — `.public-instrument`、`.auth-instrument`、`.scientific-studio`、
+  `.instrument-panel`、`.instrument-kicker`、`.instrument-control`、`.instrument-note`、
+  `.instrument-rule`、`.scientific-canvas`。琥珀 `#f0a030`、分隔线 `#2b2f36`、1–2px 圆角、
+  等宽大写 kicker、48px 坐标纸。用于公开页面、登录注册、`/studio`、侧边栏与顶栏。
+- **深空玻璃（紫青）** — `.fractal-ambient`、`.glass-panel*`、`.gradient-text`、`.btn-glow`、
+  `.canvas-glow`，以及 `fractal.*` / `neon.*` / `deep.*` 调色板。`Card` 就是 `.glass-panel`。
+  用于会员页与商业化页面。
+
+只有 `:root` 一套 token，没有 `.dark {}` 块——`<html className="dark">` 是写死的，
+当前没有浅色主题。
+
+## Responsive strategy / 响应式策略
+
+全部依赖 Tailwind 断点（sm 640 / md 768 / lg 1024 / xl 1280），CSS 里没有手写 `@media`。
+
+### 卡片网格
+
+所有作品网格共用一份 `src/lib/utils/layout.ts` 里的 `CARD_GRID_STYLE`：
+
+```ts
+gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18rem), 1fr))"
 ```
 
-平板横屏还有单独增强：
+`min(100%, 18rem)` 是关键：单写 `minmax(18rem, 1fr)` 在任何窄于 288px 的容器里都会溢出，
+而手机减去 padding 之后就是这个宽度。写成 `min(100%, …)` 时最窄会收成一列，然后自己长到
+2/3/4 列，不需要断点，也不需要 resize 监听。
 
-```css
-@media (min-width: 761px) and (max-width: 1200px) and (orientation: landscape) {
-  /* use horizontal space without reverting to desktop side rails */
-}
-```
+配套规则：容器 `min-w-0 overflow-hidden`、文字 `min-w-0` + `truncate`、
+图片盒子固定 `aspect-[4/3]` + `object-cover` + `loading="lazy" decoding="async"`。
+卡片本身用 `src/components/shared/listing-card.tsx`，市场、收藏、上架、创作者主页共用一份。
 
-## Current Mobile Layout / 当前移动端布局
+### 触控
 
-### App Shell
+- `coarse:` 变体（`tailwind.config.ts` 里的 plugin）等价于 `@media (pointer: coarse)`。
+  用它把点按目标放大到 44px，而不是全局撑大按钮，否则 studio 的密集控件行会被撑坏。
+- `future.hoverOnlyWhenSupported` 已开启：否则触屏上点一下，hover 态会一直粘住。
+- 需要**行为**（而不只是样式）随视口变化时，用 `src/lib/hooks/use-media-query.ts` 的
+  `useMediaQuery` / `useIsMobile` / `useIsCoarsePointer`。它基于 `useSyncExternalStore`，
+  服务端快照恒为 `false`，所以依赖它的分支必须能退化成宽屏布局，否则会 hydration 不一致。
 
-- Desktop: `NavRail | main | StatusRail`
-- Mobile/tablet-touch: `NavRail` 变成 48px 顶部横向导航
-- `StatusRail` 变成底部状态栏，默认折叠
-- 页面高度使用 `100dvh`，避免移动浏览器地址栏导致 `100vh` 失真
+### 视口与安全区
 
-### Map View
+`src/app/layout.tsx` 导出 `viewport`，包含 `viewport-fit: cover` 与 `themeColor`。
+**没有**设置 `maximum-scale` / `user-scalable=no`：画布已经用 `touch-action: none` 接管了手势，
+再禁用浏览器缩放只会损失可访问性。
 
-- 控制区在手机上横向滚动，避免把画布挤没。
-- 平板横屏控制区允许换行，最大高度约束为 `174px`，保留画布空间。
-- 手机上 Mandelbrot/Julia 双 pane 上下排列。
-- 平板横屏上双 pane 保持左右排列。
-- 特殊点 panel 手机上放到底部，平板横屏放回右侧窄栏。
-- modal 在小屏下全宽，并限制在 `100dvh` 内滚动。
+因为用了 `viewport-fit: cover`，页面会延伸到刘海和home 指示条下面，所以
+`WorkbenchShell`、`main`、`Sidebar`、`PublicHeader`、`PublicFooter` 都要自己补
+`env(safe-area-inset-*)`。固定定位的元素拿不到父级 padding，必须单独补。
 
-### 3D View
+全屏高度一律用 `dvh`，不要用 `vh`：移动端浏览器工具栏收起时 `100vh` 会超出屏幕。
 
-- 手机上控制区在上、viewer 在下。
-- 平板横屏上控制区回到左侧，viewer 占右侧主要空间。
-- viewer 使用稳定 `min-height`，避免 Three.js canvas 被压到不可见。
+## Map canvas gestures / 画布手势
 
-### Runs / System / Points
+`src/components/studio/interactive-fractal-canvas.tsx`。注意它不是 `<canvas>`，
+而是一个包着服务端预览 `<img>` 的 `<div>`，拖拽/缩放时先用 CSS transform 给即时反馈。
 
-- 小屏下缩小 padding。
-- Runs 表格保留最小宽度，允许局部横向滚动，而不是让整个 app 横向溢出。
-- 长 artifact 名称使用换行策略。
+| 输入 | 行为 |
+|---|---|
+| 拖拽 / 单指拖拽 | 平移 |
+| 滚轮 | 以指针为锚点缩放 |
+| 双指捏合 | 以双指中点为锚点缩放，同时可平移 |
+| 双击 / 双击屏幕 | 在该点放大一档 |
+| 单击（Julia 模式） | 选择复常数 c |
 
-## Adding Frontend Features / 新增前端功能
+实现要点：
 
-1. 先在 `src/api.ts` 增加请求/响应类型和 client 函数。
-2. 页面级工作流写在 `views/*.vue`，可复用交互拆到 `components/`。
-3. 会影响全局状态栏的字段，更新 `src/types.ts` 和 `App.vue` 里的默认 status。
-4. 新页面需要同步改 `src/router.ts` 和 `components/NavRail.vue`。
-5. 有用户可见文本时，检查 `src/i18n.ts`。
-6. 新增布局时同时写移动端 media block，尤其是 `MapView.vue`、`ThreeDView.vue` 这类高密度页面。
+- `pointers` 是一个 `Map<pointerId, {x, y}>`。单个 `drag` 对象无法表达两根手指——第二次
+  `pointerdown` 会覆盖第一根的原点，手势会退化成乱跳的平移。
+- `spec.scale` 是视口在复平面上的宽度，所以张开手指（ratio > 1）必须**除**以 ratio。
+- 锚点从手势开始时锁存的状态解算，而不是上一帧，长手势因此不会累积漂移。
+- `gestureWasPinch` 会阻止捏合之后抬手被当成点击，否则 Julia 模式下会误改选中的 c。
+- 画布宽度写成 `min(100%, calc(min(64dvh, 52rem) * <aspect>))`：宽屏由高度决定，
+  窄屏由容器宽度决定，避免 16:9 画框在手机上要求 900px 宽。
 
-## Mobile QA Checklist / 移动端检查清单
+## Adding features / 新增功能
 
-建议至少检查这些 viewport：
+1. 先在 `src/lib/api/platform.ts` 增加请求函数与类型。
+2. 页面级工作流写在 `app/[locale]/(group)/…/page.tsx`，可复用交互拆到 `components/`。
+3. 新的公开页面要同步更新 `isPublicPath`。
+4. 所有用户可见文本都要进 `messages/zh.json` **和** `messages/en.json`，两边键必须一致。
+5. 作品网格用 `CARD_GRID_STYLE` + `ListingCard`，不要新写一套列数阶梯。
+6. 渲染参数展示用 `components/shared/render-meta.tsx`，标签复用 `studio.variants.*` /
+   `studio.colorMaps.*`，不要重复翻译。
 
-- Phone portrait: `390x844` 或 `412x915`
-- Phone landscape: `844x390`
-- Tablet landscape: `1024x768`
-- Large tablet landscape: `1180x820` 或接近 `1200px` 宽
+## Mobile QA checklist / 移动端检查清单
 
-每次移动端相关改动都检查：
+自动化部分：`pnpm test:e2e` 会跑两个 project，`chromium`（桌面全流程）与 `mobile`
+（Pixel 5，只跑 `*.mobile.spec.ts` 的布局检查，包含匿名可访问性与横向溢出断言）。
 
-- 顶部导航可以横向滚动，且不会遮住内容。
-- StatusRail 在移动端默认折叠，展开后不吃掉全部主内容。
-- Map canvas 可见，拖拽/缩放仍然生效。
-- 控制区按钮、select、input 高度足够触控。
-- 页面整体没有非预期横向滚动；只有 controls/table 等局部区域可以横向滚动。
-- 长文件名、长公式、错误信息不会撑破 panel。
-- 平板横屏不是桌面三栏老布局，而是顶部导航 + 主内容 + 底部状态栏。
+人工至少检查这些视口：`390x844`、`412x915`、`844x390`（横屏）、`1024x768`、`1180x820`。
 
-## CSS Pitfalls / CSS 注意事项
+每次动布局都检查：
 
-- 移动端容器优先用 `minmax(0, 1fr)`、`min-width: 0`、`min-height: 0`，否则 grid/flex 子元素容易把布局撑爆。
-- 长文本使用 `overflow-wrap: anywhere` 或局部滚动，不要让整个 app 横向滚动。
-- 移动端高度使用 `100dvh`。
-- Canvas/Three.js 容器要有稳定尺寸，避免初始化时拿到 0 宽高。
-- 对 touch 设备不要只依赖 hover tooltip；关键操作必须有可见按钮或文本。
-- 平板横屏不能只看 width；需要结合 `orientation` 和 coarse pointer。
+- 页面整体没有横向滚动；只有 facet chip 行、studio 控件行这类局部区域可以横向滚动。
+- 侧边栏在窄屏下是抽屉，选中页面后自动收起。
+- 画布可见，单指平移、双指缩放、双击放大都生效；Julia 模式下捏合之后不会误选 c。
+- 按钮、select、input 在触屏下够大（`coarse:` 变体）。
+- 长标题、长公式、长 ID 不会撑破卡片。
+- 刘海屏上顶栏内容不被遮挡，底部按钮不被 home 指示条压住。

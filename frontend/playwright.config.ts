@@ -9,5 +9,11 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3010",
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    // The desktop project owns the full journey; the mobile one only runs the
+    // layout checks, which is where a small viewport actually tells you
+    // something the desktop run cannot.
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /\.mobile\.spec\.ts$/ },
+    { name: "mobile", use: { ...devices["Pixel 5"] }, testMatch: /\.mobile\.spec\.ts$/ },
+  ],
 });

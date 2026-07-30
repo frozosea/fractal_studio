@@ -172,11 +172,15 @@ ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
 
 ```bash
 cd frontend
-npm ci
-npm run build
+pnpm install --frozen-lockfile
+pnpm type-check
+pnpm build
 ```
 
-这个检查能覆盖 TypeScript/Vite/Vue 编译层面的错误，但不等于视觉回归测试。
+`type-check` 覆盖类型层面的错误，`build` 额外覆盖 App Router 的路由冲突与
+server/client 边界问题。两者都不等于视觉回归测试。
+
+改动 `messages/*.json` 之后，确认两个语言的键集合完全一致——缺键在运行时才会炸。
 
 ## Dev Server Smoke / 本地联调冒烟
 
@@ -187,8 +191,9 @@ npm run build
 默认地址：
 
 ```text
-Frontend: http://localhost:5174
-Backend: http://localhost:18080
+Frontend:     http://localhost:3010
+Platform API: http://localhost:18100
+Compute:      http://localhost:18101
 ```
 
 Backend smoke URLs：
@@ -238,7 +243,17 @@ http://localhost:18080/api/runs
 
 ## Mobile And Tablet QA / 移动端和平板检查
 
-移动端布局细节见 [frontend.md](frontend.md)。每次动前端布局至少检查：
+移动端布局细节见 [frontend.md](frontend.md)。先跑自动化：
+
+```bash
+cd frontend
+pnpm test:e2e --project=mobile
+```
+
+它在 Pixel 5 视口上检查公开页面（`/`、`/tutorial`、`/help`、`/creator/[handle]`）
+可以匿名打开、没有横向溢出，并确认 `/studio` 仍然会跳转登录。
+
+人工部分每次动前端布局至少检查：
 
 - phone portrait: `390x844` 或 `412x915`
 - phone landscape: `844x390`
@@ -266,8 +281,9 @@ ctest --test-dir runtime/build --output-on-failure
 
 ```bash
 cd frontend
-npm ci
-npm run build
+pnpm type-check
+pnpm build
+pnpm test:e2e
 ```
 
 文档改动：
@@ -278,6 +294,7 @@ git diff --check
 
 ## Known Gaps / 已知缺口
 
-- 目前没有自动浏览器视觉回归测试。
-- 没有 Playwright 断点截图检查，移动端布局仍依赖人工 QA。
+- 目前没有自动浏览器视觉回归测试（截图对比）。
+- Playwright 的 `mobile` project 会在 Pixel 5 视口上断言公开页面可匿名访问且没有横向溢出，
+  但只覆盖公开页面；工作台页面的窄屏布局仍依赖人工 QA。
 - 3D canvas 和 video export 更依赖手动验证，因为产物较大、运行时间较长。

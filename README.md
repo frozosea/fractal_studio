@@ -47,7 +47,7 @@ Legacy C++ `/api/*` routes are not a browser dependency.
 - [Architecture / 架构](docs/architecture.md): backend/frontend layers, data flow, compute pipelines, and where to add features.
 - [Feature Status / 功能状态](docs/feature_status.md): dated implementation status and explicit deferral decisions.
 - [Development Guide / 开发手册](docs/development.md): local setup, build commands, runtime directories, and troubleshooting.
-- [Frontend Guide / 前端与移动端维护说明](docs/frontend.md): frontend structure, responsive strategy, tablet-landscape behavior, and mobile QA checklist.
+- [Frontend Guide / 前端与移动端维护说明](docs/frontend.md): route groups and the public-page guard, visual languages, the shared card grid, touch and safe-area rules, map canvas gestures, and the mobile QA checklist.
 - [Render Pipeline / 二维渲染链路](docs/render_pipeline.md): map render, Julia, transition slices, engines, scalars, variants, and custom formulas.
 - [AI-Assisted Exploration / AI 辅助探索](docs/ai_assisted_exploration.md): 找位置、调色、构图微调、文案与上架的经验、工作流和质量门。
 - [Commercialization Implementation / 商业化实施记录](docs/commercialization_implementation.md): FastAPI/Compute v1 商业化重构计划、当前完成度与验证记录。
