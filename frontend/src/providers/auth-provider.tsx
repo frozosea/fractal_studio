@@ -21,6 +21,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const INTENDED_PATH_KEY = "fractal-studio:intended-path";
 const DEFAULT_LANDING = "/studio";
+const ADMIN_LANDING = "/admin";
 
 /**
  * Pages an anonymous visitor is allowed to see. The marketing surface has to be
@@ -75,6 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const queryClient = useQueryClient();
   const { currentUser, isAuthenticated, isPending } = useAuthStore();
+  const isAdmin = Boolean(currentUser?.roles.includes("admin"));
 
   useSyncAuth();
 
@@ -88,18 +90,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isAuthPage = pathname === "/login" || pathname === "/register";
   const isPublic = isPublicPath(pathname);
   useEffect(() => {
+    if (isPending) return;
     if (!isPending && !isAuthenticated && !isPublic) {
       rememberIntendedPath(pathname);
-      router.push("/login");
+      router.replace("/login");
+      return;
     }
-    if (!isPending && isAuthenticated && isAuthPage) {
-      router.push(takeIntendedPath());
+    if (!isAuthenticated) return;
+    if (isAdmin && pathname !== ADMIN_LANDING) {
+      takeIntendedPath();
+      router.replace(ADMIN_LANDING);
+      return;
     }
-  }, [isAuthenticated, isPending, isAuthPage, isPublic, pathname, router]);
+    if (!isAdmin && pathname === ADMIN_LANDING) {
+      router.replace(DEFAULT_LANDING);
+      return;
+    }
+    if (isAuthPage) {
+      router.replace(takeIntendedPath());
+    }
+  }, [isAdmin, isAuthenticated, isPending, isAuthPage, isPublic, pathname, router]);
 
   const login = async (credentials: CredentialsInput) => {
-    await loginMutation.mutateAsync(credentials);
-    router.push(takeIntendedPath());
+    const user = await loginMutation.mutateAsync(credentials);
+    const intendedPath = takeIntendedPath();
+    router.push(user.roles.includes("admin") ? ADMIN_LANDING : intendedPath);
   };
 
   const register = async (credentials: CredentialsInput) => {

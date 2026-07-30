@@ -52,6 +52,7 @@ export function Sidebar({ collapsed = false, mobileOpen = false, onNavigate }: S
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAuth();
+  const isAdmin = Boolean(user?.roles.includes("admin"));
   const [pendingHref, setPendingHref] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -100,6 +101,7 @@ export function Sidebar({ collapsed = false, mobileOpen = false, onNavigate }: S
       {/* Navigation — soft hover, no harsh highlights */}
       <nav className={cn("flex-1 space-y-0.5", collapsed ? "p-2 md:px-2" : "p-3")} aria-label={t("navigation")}>
         {navItems.filter((item) => {
+          if (isAdmin) return item.requiredRole === "admin";
           if (item.requiredRole && !user?.roles.includes(item.requiredRole)) return false;
           return true;
         }).map((item) => {

@@ -15,6 +15,27 @@ from app.core.db import get_engine
 from app.core.request_context import user_id_var
 
 
+_ADMIN_ALLOWED_PATHS = {
+    "/v1/me",
+    "/v1/auth/logout",
+    "/v1/auth/session-token",
+    "/v1/auth/csrf-token",
+}
+_ADMIN_ALLOWED_PREFIXES = ("/internal/v1/admin",)
+
+
+def enforce_account_scope(request: Request, principal: AccessPrincipal) -> None:
+    """Keep dedicated administrator identities out of customer/creator APIs."""
+    if "admin" not in principal.roles:
+        return
+    path = request.url.path.rstrip("/") or "/"
+    if path in _ADMIN_ALLOWED_PATHS:
+        return
+    if any(path == prefix or path.startswith(f"{prefix}/") for prefix in _ADMIN_ALLOWED_PREFIXES):
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin_scope_only")
+
+
 def session_token_from(request: Request) -> tuple[str | None, str]:
     """
     Locate the session token and report where it came from.
@@ -38,6 +59,7 @@ async def require_principal(request: Request) -> AccessPrincipal:
         principal = await session_service.resolve(connection, raw_token)
     if principal is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthenticated")
+    enforce_account_scope(request, principal)
     request.state.principal = principal
     request.state.user_id = str(principal.user_id)
     user_id_var.set(str(principal.user_id))

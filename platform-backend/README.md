@@ -68,6 +68,9 @@ docker compose exec -e ADMIN_EMAIL=admin@example.test api \
 Administrator and creator identities are intentionally mutually exclusive. A creator account
 cannot be granted `admin`, and an administrator cannot create a creator profile. This invariant is
 also enforced by PostgreSQL triggers so it cannot be bypassed by another application path.
+Authenticated administrator sessions are additionally scoped to identity/session endpoints and
+`/internal/v1/admin/*`; Studio preview/rendering, assets, purchases, membership and payout APIs
+reject them with `403 admin_scope_only`.
 
 The next authenticated request resolves roles directly from PostgreSQL, so a new login is not
 required. The `/internal/v1/admin/*` API and the frontend Administration page provide account

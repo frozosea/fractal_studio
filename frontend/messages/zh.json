@@ -949,6 +949,7 @@
     "toggleSidebar": "切换侧栏",
     "platformApi": "平台服务",
     "logout": "退出登录",
+    "adminArchitecture": "管理员 → 管理接口 → 平台数据",
     "architecture": "浏览器 → 平台服务 → 私有计算服务"
   },
   "common": {

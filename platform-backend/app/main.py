@@ -136,6 +136,7 @@ _PUBLIC_DETAIL_CODES = {
     "cannot_disable_self",
     "cannot_remove_own_admin",
     "admin_creator_role_conflict",
+    "admin_scope_only",
     "last_admin",
     "payout_request_pending",
 }
