@@ -39,7 +39,13 @@ const navItems: NavItem[] = [
   { label: "membership", href: "/membership", icon: Crown },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  collapsed?: boolean;
+  mobileOpen?: boolean;
+  onNavigate?: () => void;
+}
+
+export function Sidebar({ collapsed = false, mobileOpen = false, onNavigate }: SidebarProps) {
   const t = useTranslations("workbench");
   const pathname = usePathname();
   const router = useRouter();
@@ -56,7 +62,11 @@ export function Sidebar() {
 
   return (
     <aside
-      className="fixed left-0 top-0 z-40 flex h-screen w-60 flex-col"
+      className={cn(
+        "fixed left-0 top-0 z-40 flex h-screen w-60 flex-col transition-[width,transform] duration-200",
+        mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+        collapsed ? "md:w-16" : "md:w-60",
+      )}
       style={{
         background: "#0d0f12",
         borderRight: "1px solid #2b2f36",
@@ -64,7 +74,7 @@ export function Sidebar() {
     >
       {/* Logo — quiet glow */}
       <div
-        className="flex h-14 shrink-0 items-center gap-2.5 px-5"
+        className={cn("flex h-14 shrink-0 items-center gap-2.5", collapsed ? "md:justify-center md:px-2" : "px-5")}
         style={{ borderBottom: "1px solid hsl(226 22% 18% / 0.4)" }}
       >
         <div
@@ -76,7 +86,7 @@ export function Sidebar() {
           <span className="text-xs font-bold text-black">F</span>
         </div>
         <span
-          className="text-sm font-semibold tracking-wide"
+          className={cn("text-sm font-semibold tracking-wide", collapsed && "md:hidden")}
           style={{
             color: "hsl(0 0% 100%)",
           }}
@@ -86,7 +96,7 @@ export function Sidebar() {
       </div>
 
       {/* Navigation — soft hover, no harsh highlights */}
-      <nav className="flex-1 space-y-0.5 p-3" aria-label={t("navigation")}>
+      <nav className={cn("flex-1 space-y-0.5", collapsed ? "p-2 md:px-2" : "p-3")} aria-label={t("navigation")}>
         {navItems.filter((item) => {
           if (item.requiredRole && !user?.roles.includes(item.requiredRole)) return false;
           return true;
@@ -100,11 +110,16 @@ export function Sidebar() {
               prefetch
               onMouseEnter={() => prefetch(item.href)}
               onFocus={() => prefetch(item.href)}
-              onClick={() => setPendingHref(item.href)}
+              onClick={() => {
+                setPendingHref(item.href);
+                onNavigate?.();
+              }}
               aria-current={isActive ? "page" : undefined}
               aria-busy={pendingHref === item.href}
+              title={collapsed ? t(`nav.${item.label}`) : undefined}
               className={cn(
                 "flex items-center gap-3 rounded-sm border-l-2 px-3 py-2 text-sm transition-colors duration-150",
+                collapsed && "md:justify-center md:px-2",
                 isActive
                   ? "border-amber-400 bg-[#15181e] text-white"
                   : "border-transparent text-white/45 hover:bg-white/[0.03] hover:text-white/75"
@@ -116,8 +131,8 @@ export function Sidebar() {
                   isActive ? "text-amber-400" : "text-white/30"
                 )}
               />
-              <span className="font-normal tracking-wide">{t(`nav.${item.label}`)}</span>
-              {pendingHref === item.href && <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-amber-400" />}
+              <span className={cn("font-normal tracking-wide", collapsed && "md:hidden")}>{t(`nav.${item.label}`)}</span>
+              {pendingHref === item.href && <Loader2 className={cn("ml-auto h-3.5 w-3.5 animate-spin text-amber-400", collapsed && "md:hidden")} />}
             </Link>
           );
         })}
@@ -125,20 +140,20 @@ export function Sidebar() {
 
       {/* Footer — whisper the version */}
       <div
-        className="border-t p-3"
+        className={cn("border-t p-3", collapsed && "md:px-2")}
         style={{ borderTopColor: "hsl(226 22% 18% / 0.4)" }}
       >
         <div
-          className="rounded-lg px-3 py-2"
+          className={cn("rounded-lg px-3 py-2", collapsed && "md:px-1 md:text-center")}
           style={{ background: "hsl(226 22% 14% / 0.4)" }}
         >
           <p
-            className="text-[10px] uppercase tracking-[0.15em]"
+            className={cn("text-[10px] uppercase tracking-[0.15em]", collapsed && "md:hidden")}
             style={{ color: "hsl(220 16% 40%)" }}
           >
             {t("footer")}
           </p>
-          <p className="text-xs text-amber-400/60">v0.1.0</p>
+          <p className="text-xs text-amber-400/60">{collapsed ? "v0.1" : "v0.1.0"}</p>
         </div>
       </div>
     </aside>

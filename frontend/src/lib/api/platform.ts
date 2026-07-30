@@ -569,7 +569,9 @@ export const platform = {
     downloadUrl: (assetId: string) => request<{ url: string; expiresAt: string }>(`/v1/assets/${assetId}/download-url`, { method: "POST" }, { csrf: true }),
   },
   marketplace: {
-    explore: (query = "") => collection<Listing>(`/v1/explore?limit=24${query ? `&q=${encodeURIComponent(query)}` : ""}`),
+    explore: (query = "", cursor?: string | null) => collection<Listing>(
+      `/v1/explore?limit=12${query ? `&q=${encodeURIComponent(query)}` : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+    ),
     listing: (listingId: string) => request<Listing>(`/v1/listings/${listingId}`),
     mine: () => collection<Listing>("/v1/me/listings?limit=48"),
     create: (body: { assetId: string; title: string; description: string; tags: string[]; price: string; licenceOffer: { code: string; termsVersion: string } }) => request<Listing>("/v1/listings", { method: "POST", body: json(body) }, { csrf: true, idempotency: true }),

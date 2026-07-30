@@ -512,6 +512,8 @@
       "subtitle": "Published fractal artwork with payment status verified by Alipay.",
       "searchPlaceholder": "Search listings",
       "loading": "Loading marketplace",
+      "loadingMore": "Loading more artwork…",
+      "endOfResults": "You have reached the end",
       "empty": "No published listings found. Publish a draft from My listings to make it appear here.",
       "previewAlt": "Preview of {title}",
       "previewUnavailable": "Preview unavailable",

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Heart } from "lucide-react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Heart, Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,25 +18,62 @@ function updateIds(ids: Set<string>, assetId: string, shouldInclude: boolean): S
 export default function ExplorePage() {
   const t = useTranslations("commerce");
   const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
   const [items, setItems] = useState<Listing[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [favoriteAssetIds, setFavoriteAssetIds] = useState<Set<string>>(new Set());
   const [ownedAssetIds, setOwnedAssetIds] = useState<Set<string>>(new Set());
   const [favoriteBusy, setFavoriteBusy] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+  const loadingMoreRef = useRef(false);
+  const searchRequestRef = useRef(0);
 
-  const search = async () => {
+  const search = useCallback(async (nextQuery: string) => {
+    const requestId = ++searchRequestRef.current;
+    const normalizedQuery = nextQuery.trim();
+    loadingMoreRef.current = false;
+    setAppliedQuery(normalizedQuery);
     setIsLoading(true);
+    setIsLoadingMore(false);
     setError(null);
     try {
-      const value = await platform.marketplace.explore(query);
+      const value = await platform.marketplace.explore(normalizedQuery);
+      if (requestId !== searchRequestRef.current) return;
       setItems(value.data);
+      setNextCursor(value.page.nextCursor);
     } catch (reason) {
+      if (requestId !== searchRequestRef.current) return;
       setError(t("errors.requestFailed"));
+      setItems([]);
+      setNextCursor(null);
     } finally {
-      setIsLoading(false);
+      if (requestId === searchRequestRef.current) setIsLoading(false);
     }
-  };
+  }, [t]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMoreRef.current || isLoading) return;
+    const requestId = searchRequestRef.current;
+    loadingMoreRef.current = true;
+    setIsLoadingMore(true);
+    try {
+      const value = await platform.marketplace.explore(appliedQuery, nextCursor);
+      if (requestId !== searchRequestRef.current) return;
+      setItems((current) => {
+        const known = new Set(current.map((item) => item.id));
+        return [...current, ...value.data.filter((item) => !known.has(item.id))];
+      });
+      setNextCursor(value.page.nextCursor);
+    } catch (reason) {
+      if (requestId === searchRequestRef.current) setError(t("errors.requestFailed"));
+    } finally {
+      loadingMoreRef.current = false;
+      if (requestId === searchRequestRef.current) setIsLoadingMore(false);
+    }
+  }, [appliedQuery, isLoading, nextCursor, t]);
 
   const loadFavorites = async () => {
     try {
@@ -59,10 +96,28 @@ export default function ExplorePage() {
   };
 
   useEffect(() => {
-    void search();
+    void search("");
     void loadFavorites();
     void loadPurchases();
-  }, []);
+  }, [search]);
+
+  useEffect(() => {
+    const target = loadMoreRef.current;
+    if (!target || !nextCursor || isLoading) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+      },
+      { rootMargin: "480px 0px" },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [isLoading, loadMore, nextCursor]);
+
+  const submitSearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void search(query);
+  };
 
   const toggleFavorite = async (assetId: string) => {
     const wasFavorite = favoriteAssetIds.has(assetId);
@@ -103,14 +158,18 @@ export default function ExplorePage() {
         <h1 className="text-2xl font-semibold">{t("marketplace.title")}</h1>
         <p className="text-muted-foreground">{t("marketplace.subtitle")}</p>
       </div>
-      <div className="flex gap-2">
+      <form className="flex gap-2" onSubmit={submitSearch}>
         <Input value={query} placeholder={t("marketplace.searchPlaceholder")} onChange={(event) => setQuery(event.target.value)} />
-        <Button onClick={() => void search()} loading={isLoading}>{t("actions.search")}</Button>
-      </div>
+        <Button type="submit" loading={isLoading}>{t("actions.search")}</Button>
+      </form>
       {error && <p className="text-red-400">{error}</p>}
       {isLoading && (
-        <div className="grid grid-cols-2 gap-5" aria-label={t("marketplace.loading")}>
-          {[0, 1].map((index) => <div key={index} className="aspect-[4/3] animate-pulse rounded-xl bg-white/5" />)}
+        <div
+          className="grid gap-4 lg:gap-5"
+          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18rem), 1fr))" }}
+          aria-label={t("marketplace.loading")}
+        >
+          {Array.from({ length: 8 }, (_, index) => <div key={index} className="aspect-[4/3] animate-pulse rounded-xl bg-white/5" />)}
         </div>
       )}
       {!isLoading && !error && items.length === 0 && (
@@ -119,7 +178,10 @@ export default function ExplorePage() {
         </p>
       )}
       {!isLoading && (
-        <div className="grid grid-cols-2 gap-5">
+        <div
+          className="grid gap-4 lg:gap-5"
+          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18rem), 1fr))" }}
+        >
           {items.map((listing) => {
             const isFavorite = favoriteAssetIds.has(listing.assetId);
             const isFavoriteBusy = favoriteBusy.has(listing.assetId);
@@ -128,7 +190,7 @@ export default function ExplorePage() {
               <article key={listing.id} className="min-w-0 overflow-hidden rounded-xl border border-white/10">
                 <div className="aspect-[4/3] bg-white/5">
                   {listing.preview?.thumbnailUrl ? (
-                    <img src={listing.preview.thumbnailUrl} alt={t("marketplace.previewAlt", { title: listing.title })} className="block h-full w-full object-cover" />
+                    <img src={listing.preview.thumbnailUrl} alt={t("marketplace.previewAlt", { title: listing.title })} loading="lazy" decoding="async" className="block h-full w-full object-cover" />
                   ) : (
                     <div className="flex h-full items-center justify-center p-3 text-center text-sm text-muted-foreground">
                       {t("marketplace.previewUnavailable")}
@@ -161,6 +223,17 @@ export default function ExplorePage() {
               </article>
             );
           })}
+        </div>
+      )}
+      {!isLoading && items.length > 0 && (
+        <div ref={loadMoreRef} className="flex min-h-12 items-center justify-center py-3 text-sm text-muted-foreground">
+          {isLoadingMore ? (
+            <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />{t("marketplace.loadingMore")}</span>
+          ) : nextCursor ? (
+            <span className="h-1" aria-hidden="true" />
+          ) : (
+            <span>{t("marketplace.endOfResults")}</span>
+          )}
         </div>
       )}
     </div>
