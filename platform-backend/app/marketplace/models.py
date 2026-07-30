@@ -112,6 +112,24 @@ class PreviewView(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class RenderMetaView(BaseModel):
+    """
+    What the artwork actually is, denormalized onto the listing at draft time.
+    Every field is optional: an older listing, or one from an exotic recipe, may
+    not carry all of them.
+    """
+
+    variant: str | None = None
+    iterations: int | None = None
+    width: int | None = None
+    height: int | None = None
+    color_map: str | None = Field(default=None, alias="colorMap")
+    color_mode: str | None = Field(default=None, alias="colorMode")
+    view_scale: float | None = Field(default=None, alias="viewScale")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class LicenceOfferView(BaseModel):
     id: UUID
     code: str
@@ -133,6 +151,7 @@ class ListingView(BaseModel):
     currency: Literal["CNY"]
     published_at: datetime | None = Field(default=None, alias="publishedAt")
     preview: PreviewView | None = None
+    render: RenderMetaView | None = None
     licence_offer: LicenceOfferView = Field(alias="licenceOffer")
 
     model_config = ConfigDict(populate_by_name=True)

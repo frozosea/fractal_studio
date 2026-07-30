@@ -30,6 +30,7 @@ from app.marketplace.models import (
     ListingUpdateInput,
     ListingView,
     PreviewView,
+    RenderMetaView,
 )
 from app.marketplace.ports import PublishedOfferSnapshot
 
@@ -43,6 +44,22 @@ def _preview_view(preview: AssetPreview | None) -> PreviewView | None:
         watermarkedPreviewUrl=preview.watermarked_preview_url,
         videoPosterUrl=preview.video_poster_url,
     )
+
+
+def _render_meta(record: repository.ListingRecord) -> RenderMetaView | None:
+    """None when a listing predates the facet columns and no backfill matched."""
+    fields = {
+        "variant": record.variant,
+        "iterations": record.iterations,
+        "width": record.output_width,
+        "height": record.output_height,
+        "colorMap": record.color_map,
+        "colorMode": record.color_mode,
+        "viewScale": record.view_scale,
+    }
+    if all(value is None for value in fields.values()):
+        return None
+    return RenderMetaView(**fields)
 
 
 async def _listing_view(record: repository.ListingRecord, assets: AssetReader) -> ListingView:
@@ -59,6 +76,7 @@ async def _listing_view(record: repository.ListingRecord, assets: AssetReader) -
         currency="CNY",
         publishedAt=record.published_at,
         preview=_preview_view(preview),
+        render=_render_meta(record),
         licenceOffer=LicenceOfferView(
             id=record.licence_offer_id,
             code=record.licence_code,
@@ -219,14 +237,22 @@ class MarketplaceService:
     async def explore(
         self, *, q: str | None, tag: str | None, creator: str | None, media_type: str | None,
         min_price: Decimal | None, max_price: Decimal | None,
+        variant: str | None = None, color_map: str | None = None,
+        depth: str | None = None, resolution: str | None = None, creator_exact: str | None = None,
         sort: Literal["newest", "price_asc", "price_desc", "relevance"], after: dict[str, object] | None, limit: int,
     ) -> tuple[list[ListingView], list[repository.ListingRecord]]:
         async with get_engine().connect() as connection:
             records = await repository.search_published(
-                connection, q=q, tag=tag, creator=creator, media_type=media_type, min_price=min_price,
-                max_price=max_price, sort=sort, after=after, limit=limit,
+                connection, q=q, tag=tag, creator=creator, creator_exact=creator_exact,
+                media_type=media_type, min_price=min_price, max_price=max_price,
+                variant=variant, color_map=color_map, depth=depth, resolution=resolution,
+                sort=sort, after=after, limit=limit,
             )
         return list(await asyncio.gather(*(_listing_view(record, self._assets) for record in records))), records
+
+    async def facets(self) -> list[dict[str, object]]:
+        async with get_engine().connect() as connection:
+            return await repository.facet_counts(connection)
 
     async def list_creator(
         self, *, principal: AccessPrincipal, listing_status: str | None, limit: int,
@@ -331,6 +357,9 @@ class MarketplaceService:
             "creator": {"handle": record.creator_handle, "displayName": record.creator_display_name},
             "title": record.title, "description": record.description, "tags": record.tags,
             "price": format(record.price, ".2f"), "currency": record.currency, "mediaType": media_type,
+            "render": (lambda meta: meta.model_dump(mode="json", by_alias=True, exclude_none=True) if meta else None)(
+                _render_meta(record)
+            ),
             "licenceOffer": {"id": str(record.licence_offer_id), "code": record.licence_code,
                               "termsVersion": record.licence_terms_version, "terms": record.licence_terms},
         }

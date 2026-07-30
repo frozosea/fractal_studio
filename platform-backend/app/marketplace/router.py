@@ -47,6 +47,8 @@ def _decode_cursor(cursor: str) -> dict[str, object]:
 def _normalized_filters(
     *, q: str | None, tag: str | None, creator: str | None, media_type: str | None,
     min_price: Decimal | None, max_price: Decimal | None, sort: str,
+    variant: str | None = None, color_map: str | None = None,
+    depth: str | None = None, resolution: str | None = None,
 ) -> dict[str, str | None]:
     for amount in (min_price, max_price):
         if amount is not None and (not amount.is_finite() or amount.as_tuple().exponent < -2):
@@ -58,6 +60,10 @@ def _normalized_filters(
         "mediaType": media_type,
         "minPrice": format(min_price, ".2f") if min_price is not None else None,
         "maxPrice": format(max_price, ".2f") if max_price is not None else None,
+        "variant": variant,
+        "colorMap": color_map,
+        "depth": depth,
+        "resolution": resolution,
         "sort": sort,
     }
     if min_price is not None and max_price is not None and min_price > max_price:
@@ -122,21 +128,36 @@ async def explore(
     media_type: Literal["image", "video", "mesh"] | None = Query(default=None, alias="mediaType"),
     min_price: Decimal | None = Query(default=None, alias="minPrice", ge=Decimal("0.01")),
     max_price: Decimal | None = Query(default=None, alias="maxPrice", ge=Decimal("0.01")),
+    variant: str | None = Query(default=None, max_length=64),
+    color_map: str | None = Query(default=None, alias="colorMap", max_length=64),
+    depth: Literal["le512", "le1024", "le2048", "gt2048"] | None = Query(default=None),
+    resolution: Literal["le1mp", "le2mp", "le8mp", "gt8mp"] | None = Query(default=None),
     sort: Literal["newest", "price_asc", "price_desc", "relevance"] = "newest",
     cursor: str | None = Query(default=None, max_length=2048),
     limit: int = Query(default=24, ge=1, le=48),
 ) -> dict[str, object]:
     if sort == "relevance" and not (q and q.strip()):
         sort = "newest"
-    filters = _normalized_filters(q=q, tag=tag, creator=creator, media_type=media_type, min_price=min_price, max_price=max_price, sort=sort)
+    filters = _normalized_filters(
+        q=q, tag=tag, creator=creator, media_type=media_type, min_price=min_price, max_price=max_price,
+        variant=variant, color_map=color_map, depth=depth, resolution=resolution, sort=sort,
+    )
     after = _explore_after(cursor, filters)
     views, records = await MarketplaceService().explore(
         q=filters["q"], tag=filters["tag"], creator=filters["creator"], media_type=media_type,
-        min_price=min_price, max_price=max_price, sort=sort, after=after, limit=limit + 1,
+        min_price=min_price, max_price=max_price,
+        variant=variant, color_map=color_map, depth=depth, resolution=resolution,
+        sort=sort, after=after, limit=limit + 1,
     )
     page = views[:limit]
     next_cursor = _next_explore_cursor(filters=filters, record=records[limit - 1]) if len(records) > limit else None
     return {"data": [view.model_dump(mode="json", by_alias=True) for view in page], "page": {"nextCursor": next_cursor}}
+
+
+@router.get("/explore/facets")
+async def explore_facets() -> dict[str, object]:
+    """Facet values present in the published catalogue, with listing counts."""
+    return {"data": await MarketplaceService().facets()}
 
 
 @router.get("/listings/{listing_id}")

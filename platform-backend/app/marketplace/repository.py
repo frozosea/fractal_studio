@@ -35,6 +35,13 @@ class ListingRecord:
     licence_code: str
     licence_terms_version: str
     licence_terms: dict[str, object]
+    variant: str | None = None
+    iterations: int | None = None
+    output_width: int | None = None
+    output_height: int | None = None
+    color_map: str | None = None
+    color_mode: str | None = None
+    view_scale: float | None = None
     cursor_value: object | None = None
 
 
@@ -66,8 +73,93 @@ def _record(row: Any) -> ListingRecord:
         licence_code=str(data["licence_code"]),
         licence_terms_version=str(data["licence_terms_version"]),
         licence_terms=dict(data["licence_terms"]),
+        variant=data.get("variant"),
+        iterations=data.get("iterations"),
+        output_width=data.get("output_width"),
+        output_height=data.get("output_height"),
+        color_map=data.get("color_map"),
+        color_mode=data.get("color_mode"),
+        view_scale=data.get("view_scale"),
         cursor_value=data.get("cursor_value"),
     )
+
+
+# Facets a buyer browses by, resolved from the two JSONB blobs that hold them.
+# Kept in step with `_FACET_EXPRESSIONS` in
+# migrations/versions/20260730_0018_listing_render_facets.py, which backfills
+# rows that predate the columns. Alembic revisions stay self-contained, so the
+# two copies are deliberate.
+#
+# `canonical_spec` is dumped with exclude_none=True, so `colorMap`,
+# `colorProgram` and `orbitProgram` are absent rather than null — hence
+# jsonb_exists rather than a null check. `colorMap` and `colorProgram` are
+# mutually exclusive by validator, so the custom gradient can safely take over
+# the same column.
+_FACET_DERIVATION = """
+    CASE WHEN jsonb_exists(r.canonical_spec, 'orbitProgram') THEN 'custom'
+         ELSE r.canonical_spec ->> 'variant' END,
+    COALESCE((j.output_spec_json ->> 'iterations')::int,
+             (r.canonical_spec ->> 'iterations')::int),
+    COALESCE((j.output_spec_json ->> 'width')::int,
+             (j.output_spec_json ->> 'resolution')::int),
+    COALESCE((j.output_spec_json ->> 'height')::int,
+             (j.output_spec_json ->> 'resolution')::int),
+    CASE WHEN jsonb_exists(r.canonical_spec, 'colorProgram') THEN 'custom_gradient'
+         ELSE r.canonical_spec ->> 'colorMap' END,
+    r.canonical_spec ->> 'colorMode',
+    (r.canonical_spec ->> 'scale')::double precision
+"""
+
+# Iteration depth and pixel count are browsed in bands rather than as free
+# ranges. The bands are applied over the raw columns instead of being stored, so
+# thresholds can be retuned without a migration. Upper bound `None` marks the
+# open-ended top band.
+_DEPTH_EXPR = "l.iterations"
+_DEPTH_BANDS: tuple[tuple[str, int | None], ...] = (
+    ("le512", 512),
+    ("le1024", 1024),
+    ("le2048", 2048),
+    ("gt2048", None),
+)
+_RESOLUTION_EXPR = "l.output_width * l.output_height"
+_RESOLUTION_BANDS: tuple[tuple[str, int | None], ...] = (
+    ("le1mp", 1_000_000),
+    ("le2mp", 2_000_000),
+    ("le8mp", 8_000_000),
+    ("gt8mp", None),
+)
+
+
+def _band_predicates(expr: str, bands: tuple[tuple[str, int | None], ...]) -> dict[str, str]:
+    """One WHERE fragment per band, derived from the shared boundaries."""
+    predicates: dict[str, str] = {}
+    previous: int | None = None
+    for key, upper in bands:
+        if upper is None:
+            predicates[key] = f"{expr} > {previous}"
+        elif previous is None:
+            predicates[key] = f"{expr} <= {upper}"
+        else:
+            predicates[key] = f"{expr} > {previous} AND {expr} <= {upper}"
+        previous = upper
+    return predicates
+
+
+def _band_case(expr: str, bands: tuple[tuple[str, int | None], ...]) -> str:
+    """The same boundaries as a CASE, for counting. Earlier arms win."""
+    arms = [
+        f"WHEN {expr} <= {upper} THEN '{key}'" if upper is not None else f"ELSE '{key}'"
+        for key, upper in bands
+    ]
+    return "CASE " + " ".join(arms) + " END"
+
+
+# Keys are validated as a Literal in the router before reaching these dicts, so
+# the fragments are never caller-controlled.
+DEPTH_BUCKETS: dict[str, str] = _band_predicates(_DEPTH_EXPR, _DEPTH_BANDS)
+RESOLUTION_BUCKETS: dict[str, str] = _band_predicates(_RESOLUTION_EXPR, _RESOLUTION_BANDS)
+DEPTH_KEYS = tuple(key for key, _ in _DEPTH_BANDS)
+RESOLUTION_KEYS = tuple(key for key, _ in _RESOLUTION_BANDS)
 
 
 _DETAIL_SELECT = """
@@ -76,6 +168,8 @@ _DETAIL_SELECT = """
            cp.handle AS creator_handle, cp.display_name AS creator_display_name,
            lo.id AS licence_offer_id, lo.code AS licence_code,
            lo.terms_version AS licence_terms_version, lo.terms_json AS licence_terms,
+           l.variant, l.iterations, l.output_width, l.output_height,
+           l.color_map, l.color_mode, l.view_scale,
            COALESCE((SELECT array_agg(lt.tag ORDER BY lt.tag) FROM listing_tags lt
                      WHERE lt.listing_id = l.id), ARRAY[]::text[]) AS tags
     FROM listings l
@@ -100,9 +194,15 @@ async def create_draft(
     listing_id, offer_id = uuid4(), uuid4()
     await connection.execute(
         text(
-            """
-            INSERT INTO listings (id, asset_id, creator_id, status, title, description, price_amount, currency)
-            VALUES (:id, :asset_id, :creator_id, 'draft', :title, :description, :price, 'CNY')
+            f"""
+            INSERT INTO listings (id, asset_id, creator_id, status, title, description, price_amount, currency,
+                                  variant, iterations, output_width, output_height, color_map, color_mode, view_scale)
+            SELECT :id, :asset_id, :creator_id, 'draft', :title, :description, :price, 'CNY',
+                   {_FACET_DERIVATION}
+            FROM assets a
+            JOIN fractal_recipes r ON r.id = a.recipe_id
+            JOIN render_jobs j ON j.id = a.render_job_id
+            WHERE a.id = :asset_id
             """
         ),
         {"id": listing_id, "asset_id": asset_id, "creator_id": creator_id, "title": title,
@@ -316,9 +416,14 @@ async def search_published(
     q: str | None,
     tag: str | None,
     creator: str | None,
+    creator_exact: str | None = None,
     media_type: str | None,
     min_price: Decimal | None,
     max_price: Decimal | None,
+    variant: str | None = None,
+    color_map: str | None = None,
+    depth: str | None = None,
+    resolution: str | None = None,
     sort: Literal["newest", "price_asc", "price_desc", "relevance"],
     after: dict[str, object] | None,
     limit: int,
@@ -327,9 +432,10 @@ async def search_published(
     params: dict[str, object] = {"limit": limit}
     if q:
         predicates.append(
-            "(to_tsvector('simple', concat_ws(' ', l.title, l.description, cp.handle, "
+            "(to_tsvector('simple', concat_ws(' ', l.title, l.description, cp.handle, cp.display_name, "
             "COALESCE((SELECT string_agg(lt.tag, ' ') FROM listing_tags lt WHERE lt.listing_id = l.id), ''))) "
-            "@@ websearch_to_tsquery('simple', :q) OR l.title % :q OR cp.handle % :q)"
+            "@@ websearch_to_tsquery('simple', :q) "
+            "OR l.title % :q OR cp.handle % :q OR cp.display_name % :q)"
         )
         params["q"] = q
     if tag:
@@ -338,6 +444,11 @@ async def search_published(
     if creator:
         predicates.append("cp.handle ILIKE :creator")
         params["creator"] = f"%{creator}%"
+    if creator_exact:
+        # A profile page must show one creator's work, so it cannot use the
+        # substring match above: `creator=bob` would also list `bobby`.
+        predicates.append("cp.handle = :creator_exact")
+        params["creator_exact"] = creator_exact
     if media_type:
         predicates.append("a.media_type::text = :media_type")
         params["media_type"] = media_type
@@ -347,8 +458,24 @@ async def search_published(
     if max_price is not None:
         predicates.append("l.price_amount <= :max_price")
         params["max_price"] = max_price
+    if variant:
+        predicates.append("l.variant = :variant")
+        params["variant"] = variant
+    if color_map:
+        predicates.append("l.color_map = :color_map")
+        params["color_map"] = color_map
+    if depth and depth in DEPTH_BUCKETS:
+        predicates.append(f"({DEPTH_BUCKETS[depth]})")
+    if resolution and resolution in RESOLUTION_BUCKETS:
+        predicates.append(f"({RESOLUTION_BUCKETS[resolution]})")
 
-    rank = "ts_rank(to_tsvector('simple', concat_ws(' ', l.title, l.description, cp.handle)), websearch_to_tsquery('simple', :q))"
+    # The rank vector has to list the same columns as the filter above, or a
+    # row can match the WHERE clause and then score zero when sorting by
+    # relevance.
+    rank = (
+        "ts_rank(to_tsvector('simple', concat_ws(' ', l.title, l.description, cp.handle, cp.display_name)), "
+        "websearch_to_tsquery('simple', :q))"
+    )
     cursor_expr = "l.published_at"
     if sort == "price_asc":
         cursor_expr, order, comparison = "l.price_amount", "l.price_amount ASC, l.id ASC", ">"
@@ -372,6 +499,44 @@ async def search_published(
         params,
     )
     return [_record(row) for row in rows.mappings()]
+
+
+_PUBLISHED = "l.status = 'published' AND l.current_published_version_id IS NOT NULL"
+
+
+async def facet_counts(connection: AsyncConnection) -> list[dict[str, object]]:
+    """
+    Values actually present in the published catalogue, with how many listings
+    carry each. Lets the browser show only facets that would return something
+    rather than a wall of empty filters.
+    """
+    rows = await connection.execute(
+        text(
+            f"""
+            SELECT 'variant' AS facet, l.variant AS value, COUNT(*) AS total
+            FROM listings l WHERE {_PUBLISHED} AND l.variant IS NOT NULL
+            GROUP BY l.variant
+            UNION ALL
+            SELECT 'colorMap', l.color_map, COUNT(*)
+            FROM listings l WHERE {_PUBLISHED} AND l.color_map IS NOT NULL
+            GROUP BY l.color_map
+            UNION ALL
+            SELECT 'depth', {_band_case(_DEPTH_EXPR, _DEPTH_BANDS)}, COUNT(*)
+            FROM listings l WHERE {_PUBLISHED} AND l.iterations IS NOT NULL
+            GROUP BY 2
+            UNION ALL
+            SELECT 'resolution', {_band_case(_RESOLUTION_EXPR, _RESOLUTION_BANDS)}, COUNT(*)
+            FROM listings l
+            WHERE {_PUBLISHED} AND l.output_width IS NOT NULL AND l.output_height IS NOT NULL
+            GROUP BY 2
+            ORDER BY 1, 3 DESC, 2
+            """
+        )
+    )
+    return [
+        {"facet": str(row["facet"]), "value": str(row["value"]), "count": int(row["total"])}
+        for row in rows.mappings()
+    ]
 
 
 async def save_favorite(connection: AsyncConnection, *, user_id: UUID, asset_id: UUID) -> FavoriteRecord | None:
