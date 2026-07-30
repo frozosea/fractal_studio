@@ -513,6 +513,8 @@
       "searchPlaceholder": "Search listings",
       "loading": "Loading marketplace",
       "loadingMore": "Loading more artwork…",
+      "refreshBatch": "Shuffle",
+      "refreshingBatch": "Shuffling artwork…",
       "endOfResults": "You have reached the end",
       "empty": "No published listings found. Publish a draft from My listings to make it appear here.",
       "previewAlt": "Preview of {title}",

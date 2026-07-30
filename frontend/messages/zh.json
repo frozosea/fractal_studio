@@ -513,6 +513,8 @@
       "searchPlaceholder": "搜索作品",
       "loading": "正在加载作品市场",
       "loadingMore": "正在加载更多作品…",
+      "refreshBatch": "换一批",
+      "refreshingBatch": "正在换一批…",
       "endOfResults": "已经看到全部作品",
       "empty": "没有找到已发布作品。请先在“我的上架”中发布一份草稿。",
       "previewAlt": "《{title}》预览",

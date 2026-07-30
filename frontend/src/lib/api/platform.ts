@@ -569,8 +569,8 @@ export const platform = {
     downloadUrl: (assetId: string) => request<{ url: string; expiresAt: string }>(`/v1/assets/${assetId}/download-url`, { method: "POST" }, { csrf: true }),
   },
   marketplace: {
-    explore: (query = "", cursor?: string | null) => collection<Listing>(
-      `/v1/explore?limit=12${query ? `&q=${encodeURIComponent(query)}` : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+    explore: (query = "", cursor?: string | null, limit = 12) => collection<Listing>(
+      `/v1/explore?limit=${limit}${query ? `&q=${encodeURIComponent(query)}` : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
     ),
     listing: (listingId: string) => request<Listing>(`/v1/listings/${listingId}`),
     mine: () => collection<Listing>("/v1/me/listings?limit=48"),

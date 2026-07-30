@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Heart, Loader2 } from "lucide-react";
+import { Heart, Loader2, Shuffle } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,29 @@ function updateIds(ids: Set<string>, assetId: string, shouldInclude: boolean): S
   return next;
 }
 
+const BATCH_SIZE = 12;
+const POOL_SIZE = 48;
+
+function shuffledListings(values: Listing[]): Listing[] {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const current = result[index]!;
+    result[index] = result[swapIndex]!;
+    result[swapIndex] = current;
+  }
+  return result;
+}
+
+function uniqueListings(values: Listing[]): Listing[] {
+  const seen = new Set<string>();
+  return values.filter((listing) => {
+    if (seen.has(listing.id)) return false;
+    seen.add(listing.id);
+    return true;
+  });
+}
+
 export default function ExplorePage() {
   const t = useTranslations("commerce");
   const [query, setQuery] = useState("");
@@ -26,10 +49,13 @@ export default function ExplorePage() {
   const [favoriteBusy, setFavoriteBusy] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isRefreshingBatch, setIsRefreshingBatch] = useState(false);
+  const [bufferedCount, setBufferedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
   const searchRequestRef = useRef(0);
+  const bufferedListingsRef = useRef<Listing[]>([]);
 
   const search = useCallback(async (nextQuery: string) => {
     const requestId = ++searchRequestRef.current;
@@ -40,14 +66,20 @@ export default function ExplorePage() {
     setIsLoadingMore(false);
     setError(null);
     try {
-      const value = await platform.marketplace.explore(normalizedQuery);
+      const value = await platform.marketplace.explore(normalizedQuery, null, POOL_SIZE);
       if (requestId !== searchRequestRef.current) return;
-      setItems(value.data);
+      const shuffled = shuffledListings(value.data);
+      const firstBatch = shuffled.slice(0, BATCH_SIZE);
+      bufferedListingsRef.current = shuffled.slice(BATCH_SIZE);
+      setBufferedCount(bufferedListingsRef.current.length);
+      setItems(firstBatch);
       setNextCursor(value.page.nextCursor);
     } catch (reason) {
       if (requestId !== searchRequestRef.current) return;
       setError(t("errors.requestFailed"));
       setItems([]);
+      bufferedListingsRef.current = [];
+      setBufferedCount(0);
       setNextCursor(null);
     } finally {
       if (requestId === searchRequestRef.current) setIsLoading(false);
@@ -55,18 +87,20 @@ export default function ExplorePage() {
   }, [t]);
 
   const loadMore = useCallback(async () => {
-    if (!nextCursor || loadingMoreRef.current || isLoading) return;
+    if ((!nextCursor && bufferedListingsRef.current.length === 0) || loadingMoreRef.current || isLoading) return;
     const requestId = searchRequestRef.current;
     loadingMoreRef.current = true;
     setIsLoadingMore(true);
     try {
-      const value = await platform.marketplace.explore(appliedQuery, nextCursor);
-      if (requestId !== searchRequestRef.current) return;
-      setItems((current) => {
-        const known = new Set(current.map((item) => item.id));
-        return [...current, ...value.data.filter((item) => !known.has(item.id))];
-      });
-      setNextCursor(value.page.nextCursor);
+      if (bufferedListingsRef.current.length === 0 && nextCursor) {
+        const value = await platform.marketplace.explore(appliedQuery, nextCursor, POOL_SIZE);
+        if (requestId !== searchRequestRef.current) return;
+        bufferedListingsRef.current = shuffledListings(value.data);
+        setNextCursor(value.page.nextCursor);
+      }
+      const batch = bufferedListingsRef.current.splice(0, BATCH_SIZE);
+      setBufferedCount(bufferedListingsRef.current.length);
+      setItems((current) => uniqueListings([...current, ...batch]));
     } catch (reason) {
       if (requestId === searchRequestRef.current) setError(t("errors.requestFailed"));
     } finally {
@@ -74,6 +108,48 @@ export default function ExplorePage() {
       if (requestId === searchRequestRef.current) setIsLoadingMore(false);
     }
   }, [appliedQuery, isLoading, nextCursor, t]);
+
+  const refreshBatch = async () => {
+    if (isLoading || isRefreshingBatch) return;
+    const requestId = searchRequestRef.current;
+    const currentIds = new Set(items.map((item) => item.id));
+    setIsRefreshingBatch(true);
+    setError(null);
+    try {
+      let cursor = nextCursor;
+      let candidates = uniqueListings([
+        ...bufferedListingsRef.current,
+        ...items,
+      ]);
+      let alternatives = candidates.filter((item) => !currentIds.has(item.id));
+      if (alternatives.length < BATCH_SIZE && cursor) {
+        const value = await platform.marketplace.explore(appliedQuery, cursor, POOL_SIZE);
+        if (requestId !== searchRequestRef.current) return;
+        cursor = value.page.nextCursor;
+        candidates = uniqueListings([...candidates, ...value.data]);
+        alternatives = candidates.filter((item) => !currentIds.has(item.id));
+      }
+
+      const shuffledAlternatives = shuffledListings(alternatives);
+      const nextBatch = shuffledAlternatives.slice(0, BATCH_SIZE);
+      if (nextBatch.length < BATCH_SIZE) {
+        const selected = new Set(nextBatch.map((item) => item.id));
+        nextBatch.push(...shuffledListings(candidates)
+          .filter((item) => !selected.has(item.id))
+          .slice(0, BATCH_SIZE - nextBatch.length));
+      }
+      const selectedIds = new Set(nextBatch.map((item) => item.id));
+      bufferedListingsRef.current = shuffledListings(candidates.filter((item) => !selectedIds.has(item.id)));
+      setBufferedCount(bufferedListingsRef.current.length);
+      setNextCursor(cursor);
+      setItems(nextBatch);
+      document.querySelector("main")?.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (reason) {
+      if (requestId === searchRequestRef.current) setError(t("errors.requestFailed"));
+    } finally {
+      if (requestId === searchRequestRef.current) setIsRefreshingBatch(false);
+    }
+  };
 
   const loadFavorites = async () => {
     try {
@@ -103,7 +179,7 @@ export default function ExplorePage() {
 
   useEffect(() => {
     const target = loadMoreRef.current;
-    if (!target || !nextCursor || isLoading) return;
+    if (!target || (!nextCursor && bufferedCount === 0) || isLoading) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) void loadMore();
@@ -112,7 +188,7 @@ export default function ExplorePage() {
     );
     observer.observe(target);
     return () => observer.disconnect();
-  }, [isLoading, loadMore, nextCursor]);
+  }, [bufferedCount, isLoading, loadMore, nextCursor]);
 
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -161,6 +237,10 @@ export default function ExplorePage() {
       <form className="flex gap-2" onSubmit={submitSearch}>
         <Input value={query} placeholder={t("marketplace.searchPlaceholder")} onChange={(event) => setQuery(event.target.value)} />
         <Button type="submit" loading={isLoading}>{t("actions.search")}</Button>
+        <Button type="button" variant="outline" loading={isRefreshingBatch} disabled={isLoading} onClick={() => void refreshBatch()}>
+          <Shuffle className="h-4 w-4" />
+          <span className="hidden sm:inline">{isRefreshingBatch ? t("marketplace.refreshingBatch") : t("marketplace.refreshBatch")}</span>
+        </Button>
       </form>
       {error && <p className="text-red-400">{error}</p>}
       {isLoading && (
@@ -229,7 +309,7 @@ export default function ExplorePage() {
         <div ref={loadMoreRef} className="flex min-h-12 items-center justify-center py-3 text-sm text-muted-foreground">
           {isLoadingMore ? (
             <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />{t("marketplace.loadingMore")}</span>
-          ) : nextCursor ? (
+          ) : nextCursor || bufferedCount > 0 ? (
             <span className="h-1" aria-hidden="true" />
           ) : (
             <span>{t("marketplace.endOfResults")}</span>
