@@ -4,6 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { Minus, Plus, LoaderCircle, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useIsCoarsePointer } from "@/lib/hooks/use-media-query";
+import {
+  IDENTITY_PREVIEW,
+  panBy,
+  previewTransformCss,
+  zoomAbout,
+  type PreviewTransform,
+} from "@/lib/utils/preview-transform";
 import type { FractalSpec } from "@/lib/api/platform";
 
 type Props = {
@@ -38,36 +45,6 @@ type Props = {
 };
 
 type ViewportBox = { left: number; top: number; width: number; height: number };
-/**
- * Optimistic feedback shown while the server renders the next preview.
- *
- * Translation and scale are independent components, not alternatives: the CSS
- * `translate3d(…) scale(…)` can express both at once, and gestures genuinely
- * combine — panning and then zooming before the new image arrives has to keep
- * both contributions or the picture jumps back under the cursor. `panning` and
- * `zooming` only record which gestures are contributing, for the badge and to
- * decide whether a transition would help or lag.
- */
-type PreviewTransform = {
-  panning: boolean;
-  zooming: boolean;
-  x: number;
-  y: number;
-  scale: number;
-  originX: number;
-  originY: number;
-};
-
-const IDENTITY_PREVIEW: PreviewTransform = {
-  panning: false,
-  zooming: false,
-  x: 0,
-  y: 0,
-  scale: 1,
-  originX: 0,
-  originY: 0,
-};
-
 type PointerPoint = { x: number; y: number };
 /** Latched at the moment a second finger lands, so pinch never accumulates drift. */
 type PinchState = {
@@ -77,9 +54,10 @@ type PinchState = {
   startScale: number;
   startCenterRe: number;
   startCenterIm: number;
-  /** Translation already on screen when the pinch began, so it is not discarded. */
-  basePanX: number;
-  basePanY: number;
+  /** Previous frame, so each move contributes an increment rather than a total. */
+  lastDistance: number;
+  lastMidX: number;
+  lastMidY: number;
 };
 
 /** Separation and midpoint of the first two live pointers, or null below two. */
@@ -108,14 +86,13 @@ function worldFromClient(spec: FractalSpec, box: ViewportBox, clientX: number, c
 
 export function InteractiveFractalCanvas({ spec, preview, previewing, width, height, onChange, onReset, onZoom, onNavigationStart, onPointSelect, selection, exportWidth, exportHeight, labels }: Props) {
   const element = useRef<HTMLDivElement>(null);
-  // `baseX`/`baseY` hold the translation already on screen when the drag began,
-  // so a pan that starts on top of an existing preview adds to it rather than
-  // snapping the image back to the origin.
-  const drag = useRef<{ x: number; y: number; re: number; im: number; moved: boolean; baseX: number; baseY: number } | null>(null);
+  // `lastX`/`lastY` track the pointer between moves so the pan applies as an
+  // increment. Deriving it from the drag origin instead goes stale the moment a
+  // zoom lands mid-drag and rewrites the translation.
+  const drag = useRef<{ x: number; y: number; re: number; im: number; moved: boolean; lastX: number; lastY: number } | null>(null);
   const wheelActive = useRef(false);
   const wheelTimer = useRef<number | null>(null);
   const wheelHandler = useRef<(event: WheelEvent) => void>(() => undefined);
-  const zoomBaseScale = useRef<number | null>(null);
   // Every live pointer, keyed by id. A single `drag` object cannot represent two
   // fingers: the second pointerdown would overwrite the first one's origin and
   // the gesture would degrade into an erratic pan.
@@ -144,9 +121,8 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
 
   useEffect(() => {
     // A freshly rendered image already reflects every committed gesture, so the
-    // optimistic transform and its zoom baseline both start over.
+    // optimistic transform starts over from identity.
     clearPreview();
-    zoomBaseScale.current = null;
   }, [preview]);
 
   const move = (x: number, y: number, baseRe: number, baseIm: number, startX: number, startY: number) => {
@@ -191,15 +167,10 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
     const nextScale = Math.min(1e9, Math.max(1e-12, oldScale * Math.exp(event.deltaY * 0.0015)));
     const world = worldFromClient(spec, box, event.clientX, event.clientY);
     const nextAtCursor = worldFromClient({ ...spec, centerRe: 0, centerIm: 0 }, box, event.clientX, event.clientY, nextScale);
-    const baseScale = zoomBaseScale.current ?? oldScale;
-    zoomBaseScale.current = baseScale;
-    updatePreview((current) => ({
-      ...current,
-      zooming: true,
-      scale: baseScale / nextScale,
-      originX: event.clientX - box.left,
-      originY: event.clientY - box.top,
-    }));
+    // The realised ratio, read back after the clamp, so an event that hits the
+    // zoom limit contributes exactly what the spec actually moved by.
+    const step = oldScale / nextScale;
+    updatePreview((current) => zoomAbout(current, step, event.clientX - box.left, event.clientY - box.top));
     onChange({ scale: nextScale, centerRe: world.re - nextAtCursor.re, centerIm: world.im - nextAtCursor.im });
   };
 
@@ -224,18 +195,16 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
     const world = worldFromClient(startSpec, box, state.startMidX, state.startMidY, state.startScale);
     const nextAtMid = worldFromClient({ ...spec, centerRe: 0, centerIm: 0 }, box, midX, midY, nextScale);
 
-    const baseScale = zoomBaseScale.current ?? state.startScale;
-    zoomBaseScale.current = baseScale;
-    updatePreview((current) => ({
-      ...current,
-      panning: true,
-      zooming: true,
-      x: state.basePanX + (midX - state.startMidX),
-      y: state.basePanY + (midY - state.startMidY),
-      scale: baseScale / nextScale,
-      originX: midX - box.left,
-      originY: midY - box.top,
-    }));
+    // Zoom by this frame's ratio about the current midpoint, then follow the
+    // midpoint itself, which is what makes pinch-zoom and two-finger pan one
+    // gesture.
+    const step = state.lastDistance > 0 ? distance / state.lastDistance : 1;
+    const dx = midX - state.lastMidX;
+    const dy = midY - state.lastMidY;
+    state.lastDistance = distance;
+    state.lastMidX = midX;
+    state.lastMidY = midY;
+    updatePreview((current) => panBy(zoomAbout(current, step, midX - box.left, midY - box.top), dx, dy));
     onChange({ scale: nextScale, centerRe: world.re - nextAtMid.re, centerIm: world.im - nextAtMid.im });
   };
 
@@ -247,7 +216,6 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
     // on screen as the pinch's base.
     drag.current = null;
     gestureWasPinch.current = true;
-    const base = previewRef.current ?? IDENTITY_PREVIEW;
     pinch.current = {
       startDistance: geometry.distance,
       startMidX: geometry.midX,
@@ -255,8 +223,9 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       startScale: Number(spec.scale ?? 3),
       startCenterRe: Number(spec.centerRe ?? 0),
       startCenterIm: Number(spec.centerIm ?? 0),
-      basePanX: base.x,
-      basePanY: base.y,
+      lastDistance: geometry.distance,
+      lastMidX: geometry.midX,
+      lastMidY: geometry.midY,
     };
   };
 
@@ -273,15 +242,14 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       if (remaining) {
         // The pinch's zoom and translation both stay on screen; the drag simply
         // continues from them. Clearing here used to snap the image back.
-        const base = previewRef.current ?? IDENTITY_PREVIEW;
         drag.current = {
           x: remaining.x,
           y: remaining.y,
           re: Number(spec.centerRe ?? 0),
           im: Number(spec.centerIm ?? 0),
           moved: true,
-          baseX: base.x,
-          baseY: base.y,
+          lastX: remaining.x,
+          lastY: remaining.y,
         };
       }
     }
@@ -315,13 +283,9 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
   const zoomCentered = (factor: number) => {
     const box = element.current?.getBoundingClientRect();
     onNavigationStart();
-    updatePreview((current) => ({
-      ...current,
-      zooming: true,
-      scale: current.scale / factor,
-      originX: (box?.width ?? width) / 2,
-      originY: (box?.height ?? height) / 2,
-    }));
+    updatePreview((current) =>
+      zoomAbout(current, 1 / factor, (box?.width ?? width) / 2, (box?.height ?? height) / 2),
+    );
     onZoom(factor);
   };
 
@@ -335,8 +299,7 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
         onNavigationStart();
         gestureWasPinch.current = false;
         // Starting a drag must not wipe a zoom that has not been re-rendered
-        // yet; the pan builds on top of whatever is already displayed.
-        const base = previewRef.current ?? IDENTITY_PREVIEW;
+        // yet; the pan composes on top of whatever is already displayed.
         updatePreview((current) => ({ ...current, panning: true }));
         drag.current = {
           x: event.clientX,
@@ -344,8 +307,8 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
           re: Number(spec.centerRe ?? 0),
           im: Number(spec.centerIm ?? 0),
           moved: false,
-          baseX: base.x,
-          baseY: base.y,
+          lastX: event.clientX,
+          lastY: event.clientY,
         };
         return;
       }
@@ -366,12 +329,13 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       if (!value) return;
       if (Math.hypot(event.clientX - value.x, event.clientY - value.y) > 4) value.moved = true;
       if (value.moved) {
-        updatePreview((current) => ({
-          ...current,
-          panning: true,
-          x: value.baseX + (event.clientX - value.x),
-          y: value.baseY + (event.clientY - value.y),
-        }));
+        const dx = event.clientX - value.lastX;
+        const dy = event.clientY - value.lastY;
+        value.lastX = event.clientX;
+        value.lastY = event.clientY;
+        updatePreview((current) => panBy(current, dx, dy));
+        // The committed spec still resolves from the drag origin, which cannot
+        // accumulate rounding the way a sum of deltas would.
         move(event.clientX, event.clientY, value.re, value.im, value.x, value.y);
       }
     }}
@@ -383,15 +347,7 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       const oldScale = Number(spec.scale ?? 3); const nextScale = Math.max(1e-12, oldScale * 0.35);
       const world = worldFromClient(spec, box, event.clientX, event.clientY);
       const nextAtCursor = worldFromClient({ ...spec, centerRe: 0, centerIm: 0 }, box, event.clientX, event.clientY, nextScale);
-      const baseScale = zoomBaseScale.current ?? oldScale;
-      zoomBaseScale.current = baseScale;
-      updatePreview((current) => ({
-        ...current,
-        zooming: true,
-        scale: baseScale / nextScale,
-        originX: event.clientX - box.left,
-        originY: event.clientY - box.top,
-      }));
+      updatePreview((current) => zoomAbout(current, oldScale / nextScale, event.clientX - box.left, event.clientY - box.top));
       onChange({ scale: nextScale, centerRe: world.re - nextAtCursor.re, centerIm: world.im - nextAtCursor.im });
     }}
     style={{
@@ -410,8 +366,8 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       draggable={false}
       className="h-full w-full select-none object-contain will-change-transform"
       style={previewTransform ? {
-        transform: `translate3d(${previewTransform.x}px, ${previewTransform.y}px, 0) scale(${previewTransform.scale})`,
-        transformOrigin: `${previewTransform.originX}px ${previewTransform.originY}px`,
+        transform: previewTransformCss(previewTransform),
+        transformOrigin: "0 0",
         transition: previewTransform.panning ? "none" : "transform 100ms ease-out",
       } : undefined}
     /> : <div className="grid h-full min-h-[14rem] place-items-center px-4 text-center text-sm text-white/45 sm:min-h-[26rem]">{labels.empty}</div>}
@@ -435,7 +391,7 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
     <div className="absolute right-3 top-3 flex overflow-hidden border border-white/20 bg-black/80">
       <Button aria-label={labels.zoomOut} title={labels.zoomOut} size="sm" variant="ghost" className="rounded-none coarse:h-11 coarse:w-11" onClick={() => zoomCentered(2)}><Minus className="h-4 w-4" /></Button>
       <Button aria-label={labels.zoomIn} title={labels.zoomIn} size="sm" variant="ghost" className="rounded-none border-x border-white/15 coarse:h-11 coarse:w-11" onClick={() => zoomCentered(0.35)}><Plus className="h-4 w-4" /></Button>
-      <Button aria-label={labels.reset} title={labels.reset} size="sm" variant="ghost" className="rounded-none coarse:h-11 coarse:w-11" onClick={() => { clearPreview(); zoomBaseScale.current = null; onReset(); }}><RotateCcw className="h-4 w-4" /></Button>
+      <Button aria-label={labels.reset} title={labels.reset} size="sm" variant="ghost" className="rounded-none coarse:h-11 coarse:w-11" onClick={() => { clearPreview(); onReset(); }}><RotateCcw className="h-4 w-4" /></Button>
     </div>
   </div>;
 }
