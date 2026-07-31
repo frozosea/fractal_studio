@@ -69,6 +69,7 @@ Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件
 - [3d_pipeline.md](3d_pipeline.md): HS field/mesh、transition volume、marching cubes、voxel export。
 - [video_pipeline.md](video_pipeline.md): ln-map、preview、统一视频导出、warp/encode。
 - [platform_compute_integration.md](platform_compute_integration.md): 当前 Platform Worker 调用 C++ 私有 `/api/*` 的生产合同与状态机。
+- [hybrid_cloud_compute_deployment_plan.md](hybrid_cloud_compute_deployment_plan.md): VPS 业务控制面、OSS/CDN、4090/GTX 1050 双 Compute 节点和节点亲和调度的分阶段部署计划。
 - [compute_v1_contract.md](compute_v1_contract.md): C++ `/compute/v1/*` 工具/扩展合同；当前 Platform Worker 不使用。
 - [compute_v1_cookbook.md](compute_v1_cookbook.md): Key、workload、curl、DSL/sequence 与 transition 的上手手册。
 - [orbit_recipe_product_tasks.md](orbit_recipe_product_tasks.md): repeat block、公式编排、不可变配方/视角存档和服务后端/前端任务清单。
@@ -107,6 +108,7 @@ Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件
 - `docs/compute_v1_cookbook.md`: Compute v1 从零调用和玩法请求示例。
 - `docs/compute_v1_jobs.md`: Compute v1 逐 kind 参数和产物参考。
 - `docs/platform_compute_integration.md`: Platform 服务后端的 Compute 对接实现指南。
+- `docs/hybrid_cloud_compute_deployment_plan.md`: 云端 Platform 与双 Compute 节点部署、迁移、验收和工作量计划。
 - `docs/testing.md`: 测试和 QA。
 - `docs/lnmap_precision_experiments.md`: ln-map 精度实验记录。
 - `HS_legacy_guide_zh.md`: legacy HS 学习笔记，主要用于理解历史实现。

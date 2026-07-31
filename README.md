@@ -57,6 +57,7 @@ Legacy C++ `/api/*` routes are not a browser dependency.
 - [Coloring Contract / 染色合同](docs/coloring_contract.md): 内置染色字段、自定义 gradient schema、支持矩阵及 Platform/前端接入任务。
 - [Compute v1 Jobs / 任务参数与产物](docs/compute_v1_jobs.md): 19 个 kind 的 payload 默认值、限制、preview 结构和必需 artifact。
 - [Platform–Compute Integration / 服务后端对接指南](docs/platform_compute_integration.md): FastAPI ComputeClient、PostgreSQL Outbox、轮询/取消、产物摄取和硬件策略。
+- [Hybrid Cloud Compute Deployment / 云端业务层与双计算节点计划](docs/hybrid_cloud_compute_deployment_plan.md): VPS 控制面、OSS/CDN、4090 主节点、GTX 1050 辅助节点、调度亲和及按时长/token 估算的迁移计划。
 - [Special Points / 特殊点链路](docs/special_points.md): center/Misiurewicz solving, search, classification, progress, and artifacts.
 - [Recurrence Metric / 递归距离度量](docs/recurrence_metric.md): `min_pairwise_dist`, HS-Recurrence behavior, cost, and supported engines.
 - [3D Pipeline / 三维链路](docs/3d_pipeline.md): HS fields/meshes, transition volumes, marching cubes, and voxel export.
