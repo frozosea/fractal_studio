@@ -21,7 +21,7 @@ export function RequestActivityIndicator() {
 
   return (
     <div
-      className="pointer-events-none fixed right-4 top-4 z-[110] flex items-center gap-2 rounded-sm border border-amber-300/25 bg-[#101217]/95 px-3 py-2 font-mono text-[11px] text-amber-100/80 shadow-xl"
+      className="pointer-events-none fixed right-4 top-4 z-[110] flex items-center gap-2 rounded-sm border border-amber-300/25 bg-instrument-panel/95 px-3 py-2 font-mono text-[11px] text-amber-100/80 shadow-xl"
       role="status"
       aria-live="polite"
     >

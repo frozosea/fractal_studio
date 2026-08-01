@@ -991,6 +991,12 @@
     "architecture": "Browser → Platform → private Compute"
   },
   "common": {
+    "theme": {
+      "label": "Theme",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System"
+    },
     "notFound": {
       "title": "This page does not exist",
       "description": "The link may have expired, or the address was mistyped. Head back to the home page, or take a look at the help centre.",

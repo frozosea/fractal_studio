@@ -283,11 +283,11 @@ export default function ExplorePage() {
           style={CARD_GRID_STYLE}
           aria-label={t("marketplace.loading")}
         >
-          {Array.from({ length: 8 }, (_, index) => <div key={index} className="aspect-[4/3] animate-pulse rounded-xl bg-white/5" />)}
+          {Array.from({ length: 8 }, (_, index) => <div key={index} className="aspect-[4/3] animate-pulse rounded-xl bg-wash/5" />)}
         </div>
       )}
       {!isLoading && !error && items.length === 0 && (
-        <p className="rounded-xl border border-dashed border-white/15 p-6 text-sm text-muted-foreground">
+        <p className="rounded-xl border border-dashed border-hairline/15 p-6 text-sm text-muted-foreground">
           {t("marketplace.empty")}
         </p>
       )}
@@ -308,7 +308,7 @@ export default function ExplorePage() {
                   <>
                     <Link
                       href={`/creator/${listing.creator.handle}`}
-                      className="underline-offset-2 hover:text-white/80 hover:underline"
+                      className="underline-offset-2 hover:text-ink/80 hover:underline"
                     >
                       {t("marketplace.byCreator", { creator: listing.creator.displayName })}
                     </Link>

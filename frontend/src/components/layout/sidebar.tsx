@@ -67,12 +67,11 @@ export function Sidebar({ collapsed = false, mobileOpen = false, onNavigate }: S
     <aside
       className={cn(
         "fixed left-0 top-0 z-40 flex h-[100dvh] w-60 flex-col transition-[width,transform] duration-200",
+        "border-r border-instrument-rule bg-instrument-panel",
         mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
         collapsed ? "md:w-16" : "md:w-60",
       )}
       style={{
-        background: "#0d0f12",
-        borderRight: "1px solid #2b2f36",
         // Fixed to the viewport, so the shell's insets do not reach it.
         paddingTop: "env(safe-area-inset-top)",
         paddingLeft: "env(safe-area-inset-left)",
@@ -81,23 +80,15 @@ export function Sidebar({ collapsed = false, mobileOpen = false, onNavigate }: S
     >
       {/* Logo — quiet glow */}
       <div
-        className={cn("flex h-14 shrink-0 items-center gap-2.5", collapsed ? "md:justify-center md:px-2" : "px-5")}
-        style={{ borderBottom: "1px solid hsl(226 22% 18% / 0.4)" }}
+        className={cn(
+          "flex h-14 shrink-0 items-center gap-2.5 border-b border-instrument-rule/40",
+          collapsed ? "md:justify-center md:px-2" : "px-5",
+        )}
       >
-        <div
-          className="flex h-7 w-7 items-center justify-center"
-          style={{
-            background: "#f0a030",
-          }}
-        >
-          <span className="text-xs font-bold text-black">F</span>
+        <div className="flex h-7 w-7 items-center justify-center bg-brand">
+          <span className="text-xs font-bold text-brand-ink">F</span>
         </div>
-        <span
-          className={cn("text-sm font-semibold tracking-wide", collapsed && "md:hidden")}
-          style={{
-            color: "hsl(0 0% 100%)",
-          }}
-        >
+        <span className={cn("text-sm font-semibold tracking-wide text-ink", collapsed && "md:hidden")}>
           Fractal Studio
         </span>
       </div>
@@ -129,14 +120,14 @@ export function Sidebar({ collapsed = false, mobileOpen = false, onNavigate }: S
                 "flex items-center gap-3 rounded-sm border-l-2 px-3 py-2 text-sm transition-colors duration-150",
                 collapsed && "md:justify-center md:px-2",
                 isActive
-                  ? "border-amber-400 bg-[#15181e] text-white"
-                  : "border-transparent text-white/45 hover:bg-white/[0.03] hover:text-white/75"
+                  ? "border-amber-400 bg-instrument-raised text-ink"
+                  : "border-transparent text-ink/60 hover:bg-wash/[0.03] hover:text-ink/75"
               )}
             >
               <Icon
                 className={cn(
                   "h-4 w-4 shrink-0 transition-colors duration-200",
-                  isActive ? "text-amber-400" : "text-white/30"
+                  isActive ? "text-amber-400" : "text-ink/30"
                 )}
               />
               <span className={cn("font-normal tracking-wide", collapsed && "md:hidden")}>{t(`nav.${item.label}`)}</span>
@@ -147,17 +138,18 @@ export function Sidebar({ collapsed = false, mobileOpen = false, onNavigate }: S
       </nav>
 
       {/* Footer — whisper the version */}
-      <div
-        className={cn("border-t p-3", collapsed && "md:px-2")}
-        style={{ borderTopColor: "hsl(226 22% 18% / 0.4)" }}
-      >
+      <div className={cn("border-t border-instrument-rule/40 p-3", collapsed && "md:px-2")}>
         <div
-          className={cn("rounded-lg px-3 py-2", collapsed && "md:px-1 md:text-center")}
-          style={{ background: "hsl(226 22% 14% / 0.4)" }}
+          className={cn(
+            "rounded-lg bg-instrument-raised/40 px-3 py-2",
+            collapsed && "md:px-1 md:text-center",
+          )}
         >
           <p
-            className={cn("text-[10px] uppercase tracking-[0.15em]", collapsed && "md:hidden")}
-            style={{ color: "hsl(220 16% 40%)" }}
+            className={cn(
+              "text-[10px] uppercase tracking-[0.15em] text-ink/60",
+              collapsed && "md:hidden",
+            )}
           >
             {t("footer")}
           </p>

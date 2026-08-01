@@ -2,8 +2,168 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Design tokens
+   ───────────────────────────────────────────────────────────────────────
+   `:root` carries the light theme, `.dark` the dark one; `ThemeProvider`
+   toggles the class on <html>. Two conventions run through this file:
+
+   1. shadcn-style tokens (`--background`, `--card`, …) are **HSL triples**
+      consumed as `hsl(var(--x))`, because tailwind.config.ts wraps them.
+   2. Everything else is an **RGB triple** consumed as `rgb(var(--x) / a)`,
+      so Tailwind's `<alpha-value>` and our own alphas both work.
+
+   Tokens whose name is a *direction* rather than a colour — `--wash`,
+   `--hairline`, `--ink` — invert between themes. They exist because the app
+   was written with `bg-white/5`, `border-white/10` and `text-white/60`
+   everywhere, all of which mean "contrast away from the surface", not
+   literally white. See tailwind.config.ts.
+   ═══════════════════════════════════════════════════════════════════════ */
+
 @layer base {
   :root {
+    color-scheme: light;
+
+    /* ─── Warm paper foundation ─── */
+    --background: 40 20% 98%;
+    --foreground: 222 25% 12%;
+
+    /* ─── Cards read as raised paper, not glass ─── */
+    --card: 0 0% 100%;
+    --card-foreground: 222 25% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 25% 12%;
+
+    /* ─── Accents darkened until they carry text on white ─── */
+    --primary: 271 72% 46%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 178 72% 28%;
+    --secondary-foreground: 0 0% 100%;
+
+    /* ─── Low-saturation neutrals ─── */
+    --muted: 40 14% 93%;
+    --muted-foreground: 222 12% 38%;
+
+    /* ─── Accent: subdued purple wash ─── */
+    --accent: 271 44% 93%;
+    --accent-foreground: 271 60% 28%;
+
+    /* ─── Soft destructive (never harsh red) ─── */
+    --destructive: 0 62% 44%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* ─── Borders: barely visible ─── */
+    --border: 40 12% 86%;
+    --input: 40 12% 86%;
+    --ring: 271 72% 46%;
+
+    /* ─── Glass radius ─── */
+    --radius: 0.75rem;
+
+    /* ─── Contrast direction: toward ink on light, toward light on dark ───
+       `--ink` is pushed nearly to black on purpose. The same alpha buys less
+       contrast over a bright surface than over a dark one, so `text-ink/45`
+       measures ~3.3:1 here against ~4.5:1 on the dark theme. Every step of
+       darkness recovers part of that; see the tier note in docs/frontend.md
+       before using an alpha below /55 for text that has to be read. */
+    --wash: 10 12 16;
+    --hairline: 10 12 16;
+    --ink: 10 12 16;
+
+    /* ─── Amber accent ramp ───
+       Throughout this app the amber shade number encodes *contrast against
+       the surface*, not absolute lightness: `text-amber-100` is the brightest
+       accent text, `amber-500` the deepest fill. So the ramp inverts with the
+       surface — on paper the same roles need dark browns. `brand` is separate
+       because a solid accent fill must stay recognisably amber in both
+       themes; only its ink flips. */
+    --amber-100: 107 47 8;
+    --amber-200: 125 60 7;
+    --amber-300: 144 73 10;
+    --amber-400: 163 86 11;
+    --amber-500: 180 97 12;
+    --brand: 217 138 26;
+    --brand-ink: 26 16 2;
+
+    /* ─── Purple ramp, inverted for the same reason as amber. 500 is the
+           pivot: it carries text on either surface, so it does not move. ─── */
+    --fractal-50: 31 7 80;
+    --fractal-100: 62 18 126;
+    --fractal-200: 82 20 158;
+    --fractal-300: 101 22 194;
+    --fractal-400: 124 34 224;
+    --fractal-500: 147 51 255;
+    --fractal-600: 168 120 255;
+    --fractal-700: 196 168 255;
+    --fractal-800: 220 207 255;
+    --fractal-900: 237 229 255;
+    --fractal-950: 245 240 255;
+
+    --neon-purple: 124 34 224;
+    --neon-cyan: 15 118 110;
+
+    /* ─── Surfaces behind popovers, inputs and the app shell ─── */
+    --surface-raised: 255 255 255;
+    --surface-sunken: 246 245 242;
+    --surface-indigo: 240 238 234;
+
+    /* ─── Instrument language (amber laboratory) ─── */
+    --instrument-bg: 250 249 247;
+    --instrument-panel: 255 255 255;
+    --instrument-panel-raised: 243 241 236;
+    --instrument-rule: 217 212 203;
+    --instrument-amber: 163 93 0;
+    --instrument-ink: 28 30 34;
+    --instrument-control-border: 203 198 188;
+    --instrument-mode-bg: 247 245 241;
+    --instrument-canvas-border: 198 193 184;
+    /* Graph-paper grid: ink lines on paper read at a higher alpha than the
+       white lines that draw the same grid on black. */
+    --instrument-grid: 17 20 26;
+    --instrument-grid-alpha: 0.05;
+    /* Inset top highlight — a light source above the panel. Inverts to a
+       hairline shadow on paper, where a white inset is invisible. */
+    --instrument-bevel: 17 20 26;
+    --instrument-bevel-alpha: 0.05;
+
+    /* ─── Deep-space glass ─── */
+    --glass-tint: 255 255 255;
+    --glass-tint-deep: 250 249 252;
+    --glass-alpha: 0.78;
+    --glass-alpha-deep: 0.68;
+    --glass-edge: 17 20 26;
+    --glass-edge-alpha: 0.09;
+    /* The inset bevel is a white top highlight — depth against a dark panel,
+       and nothing at all against a white one. Switched off rather than left
+       to render invisibly. */
+    --glass-bevel-alpha: 0;
+    --glass-shadow: 120 116 140;
+    --glass-shadow-alpha: 0.16;
+    --glass-shadow-alpha-soft: 0.1;
+
+    /* Gradient text has to survive a white background. */
+    --gradient-from: 271 72% 46%;
+    --gradient-mid: 271 72% 40%;
+    --gradient-to: 178 72% 30%;
+    --gradient-subtle-to: 222 25% 25%;
+
+    /* ─── Ambient background ─── */
+    --ambient-base: 40 20% 98%;
+    --ambient-base-edge: 40 16% 95%;
+    --ambient-bloom-alpha: 0.07;
+    --ambient-bloom-alpha-soft: 0.05;
+
+    /* ─── Scrollbars & selection ─── */
+    --scrollbar-thumb: 40 8% 76%;
+    --scrollbar-thumb-hover: 40 8% 62%;
+    --selection-bg: 271 72% 46%;
+    --selection-alpha: 0.18;
+    --selection-fg: 222 25% 12%;
+  }
+
+  .dark {
+    color-scheme: dark;
+
     /* ─── Deep Indigo Foundation ─── */
     --background: 228 50% 8%;
     --foreground: 220 30% 88%;
@@ -37,8 +197,81 @@
     --input: 226 22% 16%;
     --ring: 271 85% 62%;
 
-    /* ─── Glass radius ─── */
-    --radius: 0.75rem;
+    --wash: 255 255 255;
+    --hairline: 255 255 255;
+    --ink: 255 255 255;
+
+    --amber-100: 254 243 199;
+    --amber-200: 253 230 138;
+    --amber-300: 252 211 77;
+    --amber-400: 251 191 36;
+    --amber-500: 245 158 11;
+    --brand: 240 160 48;
+    --brand-ink: 10 11 13;
+
+    --fractal-50: 245 240 255;
+    --fractal-100: 237 229 255;
+    --fractal-200: 220 207 255;
+    --fractal-300: 196 168 255;
+    --fractal-400: 168 120 255;
+    --fractal-500: 147 51 255;
+    --fractal-600: 124 34 224;
+    --fractal-700: 101 22 194;
+    --fractal-800: 82 20 158;
+    --fractal-900: 62 18 126;
+    --fractal-950: 31 7 80;
+
+    --neon-purple: 147 51 255;
+    --neon-cyan: 54 240 232;
+
+    --surface-raised: 30 41 59;
+    --surface-sunken: 9 14 26;
+    --surface-indigo: 15 23 42;
+
+    /* ─── Instrument language (amber laboratory) ─── */
+    --instrument-bg: 9 10 12;
+    --instrument-panel: 16 18 23;
+    --instrument-panel-raised: 21 24 30;
+    --instrument-rule: 43 47 54;
+    --instrument-amber: 240 160 48;
+    --instrument-ink: 214 216 219;
+    --instrument-control-border: 49 53 61;
+    --instrument-mode-bg: 13 15 18;
+    --instrument-canvas-border: 55 59 67;
+    --instrument-grid: 255 255 255;
+    --instrument-grid-alpha: 0.025;
+    --instrument-bevel: 255 255 255;
+    --instrument-bevel-alpha: 0.025;
+
+    /* ─── Deep-space glass ─── */
+    --glass-tint: 17 22 44;
+    --glass-tint-deep: 14 19 37;
+    --glass-alpha: 0.75;
+    --glass-alpha-deep: 0.65;
+    --glass-edge: 255 255 255;
+    --glass-edge-alpha: 0.06;
+    --glass-bevel-alpha: 0.04;
+    --glass-shadow: 5 7 17;
+    --glass-shadow-alpha: 0.4;
+    --glass-shadow-alpha-soft: 0.3;
+
+    --gradient-from: 271 85% 70%;
+    --gradient-mid: 271 85% 50%;
+    --gradient-to: 178 75% 55%;
+    --gradient-subtle-to: 220 30% 80%;
+
+    /* ─── Ambient background ─── */
+    --ambient-base: 228 50% 6%;
+    --ambient-base-edge: 228 50% 4%;
+    --ambient-bloom-alpha: 0.05;
+    --ambient-bloom-alpha-soft: 0.04;
+
+    /* ─── Scrollbars & selection ─── */
+    --scrollbar-thumb: 226 22% 20%;
+    --scrollbar-thumb-hover: 226 22% 28%;
+    --selection-bg: 271 85% 55%;
+    --selection-alpha: 0.25;
+    --selection-fg: 0 0% 100%;
   }
 
   * {
@@ -67,32 +300,46 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Ambient deep-space background — slow, healing, never distracting
+   Ambient background — slow, healing, never distracting
    ═══════════════════════════════════════════════════════════════════════ */
 
 @layer components {
   .fractal-ambient {
     position: relative;
-    background:
-      /* deepest void */
-      radial-gradient(ellipse 100% 100% at 50% 50%, hsl(228 50% 6%) 0%, hsl(228 50% 4%) 100%);
+    background: radial-gradient(
+      ellipse 100% 100% at 50% 50%,
+      hsl(var(--ambient-base)) 0%,
+      hsl(var(--ambient-base-edge)) 100%
+    );
   }
 
+  /* Three aurora-like blooms — very faint, very slow drift. Present in both
+     themes; on paper they read as a warm tint rather than a glow. */
   .fractal-ambient::before {
     content: "";
     position: fixed;
     inset: 0;
     z-index: 0;
     pointer-events: none;
-    /* Three aurora-like blobs — very faint, very slow drift */
     background:
       radial-gradient(ellipse 60% 50% at 15% 25%,
-        hsl(271 85% 55% / 0.05) 0%, transparent 70%),
+        hsl(271 85% 55% / var(--ambient-bloom-alpha)) 0%, transparent 70%),
       radial-gradient(ellipse 50% 55% at 85% 65%,
-        hsl(178 75% 50% / 0.04) 0%, transparent 70%),
+        hsl(178 75% 50% / var(--ambient-bloom-alpha-soft)) 0%, transparent 70%),
       radial-gradient(ellipse 40% 40% at 55% 45%,
-        hsl(271 85% 55% / 0.03) 0%, transparent 65%),
-      /* Very faint starfield noise */
+        hsl(271 85% 55% / var(--ambient-bloom-alpha-soft)) 0%, transparent 65%);
+    animation: aurora-drift 60s ease-in-out infinite;
+  }
+
+  /* The starfield is dark-only: white pinpricks on paper just look like dust,
+     and darkening them to suit the light theme reads as dirt on the screen. */
+  .dark .fractal-ambient::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
       radial-gradient(1px 1px at 10% 20%, hsl(0 0% 100% / 0.12) 0%, transparent 100%),
       radial-gradient(1px 1px at 30% 60%, hsl(0 0% 100% / 0.08) 0%, transparent 100%),
       radial-gradient(1px 1px at 55% 15%, hsl(0 0% 100% / 0.10) 0%, transparent 100%),
@@ -112,57 +359,58 @@
   /* ─── 3D Glass Panels: layered depth, soft glow, no harsh edges ─── */
 
   .glass-panel {
-    @apply rounded-xl border border-white/[0.06];
+    @apply rounded-xl border;
+    border-color: rgb(var(--glass-edge) / var(--glass-edge-alpha));
     background: linear-gradient(
       135deg,
-      hsl(228 45% 12% / 0.75) 0%,
-      hsl(228 45% 10% / 0.65) 50%,
-      hsl(228 45% 12% / 0.75) 100%
+      rgb(var(--glass-tint) / var(--glass-alpha)) 0%,
+      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 50%,
+      rgb(var(--glass-tint) / var(--glass-alpha)) 100%
     );
     backdrop-filter: blur(20px) saturate(120%);
     -webkit-backdrop-filter: blur(20px) saturate(120%);
     box-shadow:
-      0 1px 0 0 hsl(0 0% 100% / 0.04) inset,
-      0 4px 24px hsl(228 50% 4% / 0.4),
-      0 1px 4px hsl(228 50% 4% / 0.3);
+      0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
+      0 4px 24px rgb(var(--glass-shadow) / var(--glass-shadow-alpha)),
+      0 1px 4px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
   }
 
   /* ─── Gradient-tinted glass variants ─── */
 
   .glass-panel-purple {
     @apply rounded-xl border;
-    border-color: hsl(271 60% 40% / 0.12);
+    border-color: hsl(271 60% 45% / 0.16);
     background: linear-gradient(
       135deg,
-      hsl(271 60% 30% / 0.12) 0%,
-      hsl(228 45% 10% / 0.70) 40%,
-      hsl(228 45% 10% / 0.70) 60%,
-      hsl(271 60% 30% / 0.08) 100%
+      hsl(271 60% 45% / 0.12) 0%,
+      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 40%,
+      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 60%,
+      hsl(271 60% 45% / 0.08) 100%
     );
     backdrop-filter: blur(20px) saturate(120%);
     -webkit-backdrop-filter: blur(20px) saturate(120%);
     box-shadow:
-      0 1px 0 0 hsl(271 85% 55% / 0.04) inset,
-      0 4px 24px hsl(271 60% 20% / 0.2),
-      0 1px 4px hsl(228 50% 4% / 0.3);
+      0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
+      0 4px 24px hsl(271 60% 35% / var(--glass-shadow-alpha-soft)),
+      0 1px 4px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
   }
 
   .glass-panel-cyan {
     @apply rounded-xl border;
-    border-color: hsl(178 60% 40% / 0.10);
+    border-color: hsl(178 60% 40% / 0.14);
     background: linear-gradient(
       135deg,
-      hsl(178 60% 25% / 0.10) 0%,
-      hsl(228 45% 10% / 0.70) 40%,
-      hsl(228 45% 10% / 0.70) 60%,
-      hsl(178 60% 25% / 0.06) 100%
+      hsl(178 60% 35% / 0.10) 0%,
+      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 40%,
+      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 60%,
+      hsl(178 60% 35% / 0.06) 100%
     );
     backdrop-filter: blur(20px) saturate(120%);
     -webkit-backdrop-filter: blur(20px) saturate(120%);
     box-shadow:
-      0 1px 0 0 hsl(178 75% 50% / 0.03) inset,
-      0 4px 24px hsl(178 60% 15% / 0.15),
-      0 1px 4px hsl(228 50% 4% / 0.3);
+      0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
+      0 4px 24px hsl(178 60% 30% / var(--glass-shadow-alpha-soft)),
+      0 1px 4px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
   }
 
   /* ─── Gradient text ─── */
@@ -170,9 +418,9 @@
   .gradient-text {
     background: linear-gradient(
       135deg,
-      hsl(271 85% 70%) 0%,
-      hsl(271 85% 50%) 40%,
-      hsl(178 75% 55%) 100%
+      hsl(var(--gradient-from)) 0%,
+      hsl(var(--gradient-mid)) 40%,
+      hsl(var(--gradient-to)) 100%
     );
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -182,8 +430,8 @@
   .gradient-text-subtle {
     background: linear-gradient(
       135deg,
-      hsl(271 60% 55%) 0%,
-      hsl(220 30% 80%) 100%
+      hsl(var(--gradient-mid)) 0%,
+      hsl(var(--gradient-subtle-to)) 100%
     );
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -205,9 +453,9 @@
     background: linear-gradient(
       90deg,
       transparent 0%,
-      hsl(271 85% 55% / 0.4) 20%,
-      hsl(178 75% 50% / 0.3) 50%,
-      hsl(271 85% 55% / 0.4) 80%,
+      hsl(var(--gradient-mid) / 0.4) 20%,
+      hsl(var(--gradient-to) / 0.3) 50%,
+      hsl(var(--gradient-mid) / 0.4) 80%,
       transparent 100%
     );
   }
@@ -225,9 +473,9 @@
     padding: 1px;
     background: linear-gradient(
       135deg,
-      hsl(271 85% 55% / 0.6) 0%,
-      hsl(178 75% 50% / 0.4) 50%,
-      hsl(271 85% 55% / 0.6) 100%
+      hsl(var(--gradient-mid) / 0.6) 0%,
+      hsl(var(--gradient-to) / 0.4) 50%,
+      hsl(var(--gradient-mid) / 0.6) 100%
     );
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
@@ -241,18 +489,19 @@
   }
 
   .glass-panel-sm {
-    @apply rounded-lg border border-white/[0.05];
+    @apply rounded-lg border;
+    border-color: rgb(var(--glass-edge) / var(--glass-edge-alpha));
     background: linear-gradient(
       135deg,
-      hsl(228 45% 12% / 0.65) 0%,
-      hsl(228 45% 10% / 0.55) 100%
+      rgb(var(--glass-tint) / var(--glass-alpha-deep)) 0%,
+      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 100%
     );
     backdrop-filter: blur(16px) saturate(110%);
     -webkit-backdrop-filter: blur(16px) saturate(110%);
     box-shadow:
-      0 1px 0 0 hsl(0 0% 100% / 0.03) inset,
-      0 2px 16px hsl(228 50% 4% / 0.3),
-      0 1px 3px hsl(228 50% 4% / 0.2);
+      0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
+      0 2px 16px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft)),
+      0 1px 3px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
   }
 
   /* ─── Fractal canvas glow: soft, meditative, never blinding ─── */
@@ -260,7 +509,7 @@
     box-shadow:
       0 0 60px hsl(271 85% 55% / 0.08),
       0 0 120px hsl(178 75% 50% / 0.04),
-      inset 0 0 60px hsl(228 50% 6% / 0.4);
+      inset 0 0 60px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
   }
 }
 
@@ -287,7 +536,7 @@
   }
 }
 
-/* ─── Custom scrollbar: thin, dark, subtle ─── */
+/* ─── Custom scrollbar: thin, subtle, follows the surface ─── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -298,12 +547,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(226 22% 20%);
+  background: hsl(var(--scrollbar-thumb));
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(226 22% 28%);
+  background: hsl(var(--scrollbar-thumb-hover));
 }
 
 ::-webkit-scrollbar-corner {
@@ -312,28 +561,29 @@
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: hsl(226 22% 20%) transparent;
+  scrollbar-color: hsl(var(--scrollbar-thumb)) transparent;
 }
 
-/* Studio keeps the original project character: a compact scientific instrument. */
+/* ═══════════════════════════════════════════════════════════════════════
+   Instrument language — the compact scientific look shared by the studio,
+   the public pages and auth. All three used to repeat the same hex triple;
+   the colours now come from the token block above, so these rules describe
+   structure only and both themes stay in step.
+   ═══════════════════════════════════════════════════════════════════════ */
+
 .scientific-studio {
-  --instrument-bg: #0a0b0d;
-  --instrument-panel: #111318;
-  --instrument-panel-raised: #15181e;
-  --instrument-rule: #2b2f36;
-  --instrument-amber: #f0a030;
-  color: #d6d8db;
+  color: rgb(var(--instrument-ink));
 }
 
 .instrument-panel {
-  border: 1px solid var(--instrument-rule);
+  border: 1px solid rgb(var(--instrument-rule));
   border-radius: 2px;
-  background: var(--instrument-panel);
-  box-shadow: 0 1px 0 rgb(255 255 255 / 0.025) inset;
+  background: rgb(var(--instrument-panel));
+  box-shadow: 0 1px 0 rgb(var(--instrument-bevel) / var(--instrument-bevel-alpha)) inset;
 }
 
 .instrument-kicker {
-  color: rgb(240 160 48 / 0.78);
+  color: rgb(var(--instrument-amber) / 0.78);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.67rem;
   letter-spacing: 0.16em;
@@ -341,20 +591,20 @@
 }
 
 .instrument-control {
-  border: 1px solid #31353d !important;
+  border: 1px solid rgb(var(--instrument-control-border)) !important;
   border-radius: 1px !important;
-  background: var(--instrument-bg) !important;
-  color: #d6d8db !important;
+  background: rgb(var(--instrument-bg)) !important;
+  color: rgb(var(--instrument-ink)) !important;
   outline: none;
 }
 
 .instrument-control:focus {
-  border-color: rgb(240 160 48 / 0.7) !important;
-  box-shadow: 0 0 0 1px rgb(240 160 48 / 0.16);
+  border-color: rgb(var(--instrument-amber) / 0.7) !important;
+  box-shadow: 0 0 0 1px rgb(var(--instrument-amber) / 0.16);
 }
 
 .instrument-control:disabled {
-  color: rgb(214 216 219 / 0.3) !important;
+  color: rgb(var(--instrument-ink) / 0.3) !important;
 }
 
 .instrument-mode {
@@ -363,24 +613,24 @@
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  border: 1px solid var(--instrument-rule);
+  border: 1px solid rgb(var(--instrument-rule));
   border-radius: 1px;
-  background: #0d0f12;
-  color: rgb(214 216 219 / 0.58);
+  background: rgb(var(--instrument-mode-bg));
+  color: rgb(var(--instrument-ink) / 0.58);
   font-size: 0.72rem;
   transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
 }
 
 .instrument-mode:hover:not(:disabled) {
-  border-color: rgb(240 160 48 / 0.45);
-  color: #f0e4d3;
+  border-color: rgb(var(--instrument-amber) / 0.45);
+  color: rgb(var(--instrument-ink) / 0.95);
 }
 
 .instrument-mode[data-active="true"] {
-  border-color: rgb(240 160 48 / 0.7);
-  background: rgb(240 160 48 / 0.09);
-  color: #f5c884;
-  box-shadow: 2px 0 0 var(--instrument-amber) inset;
+  border-color: rgb(var(--instrument-amber) / 0.7);
+  background: rgb(var(--instrument-amber) / 0.09);
+  color: rgb(var(--instrument-amber));
+  box-shadow: 2px 0 0 rgb(var(--instrument-amber)) inset;
 }
 
 .instrument-mode:disabled {
@@ -390,9 +640,9 @@
 
 .instrument-note {
   margin-top: 0.45rem;
-  border-left: 1px solid rgb(240 160 48 / 0.35);
+  border-left: 1px solid rgb(var(--instrument-amber) / 0.35);
   padding-left: 0.55rem;
-  color: rgb(214 216 219 / 0.38);
+  color: rgb(var(--instrument-ink) / 0.55);
   font-size: 0.68rem;
   line-height: 1.55;
 }
@@ -401,35 +651,34 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-top: 1px solid rgb(255 255 255 / 0.06);
+  border-top: 1px solid rgb(var(--instrument-rule));
   padding-top: 0.45rem;
-  color: rgb(214 216 219 / 0.58);
+  color: rgb(var(--instrument-ink) / 0.58);
   font-size: 0.75rem;
 }
 
 .instrument-check input {
-  accent-color: var(--instrument-amber);
+  accent-color: rgb(var(--instrument-amber));
 }
 
 .scientific-canvas {
-  border: 1px solid #373b43;
+  border: 1px solid rgb(var(--instrument-canvas-border));
   border-radius: 1px;
-  box-shadow: 0 0 0 1px #08090b, 0 18px 40px rgb(0 0 0 / 0.3);
+  box-shadow:
+    0 0 0 1px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft)),
+    0 18px 40px rgb(var(--glass-shadow) / var(--glass-shadow-alpha));
 }
 
 /* Public marketing pages share the laboratory language with auth and the 2D
    studio. They omit the centered crosshair, which only reads correctly on a
    single-viewport screen, not down a long scrolling page. */
-.public-instrument {
-  --instrument-bg: #090a0c;
-  --instrument-panel: #101217;
-  --instrument-rule: #2b2f36;
-  --instrument-amber: #f0a030;
-  color: #d6d8db;
-  background-color: #090a0c;
+.public-instrument,
+.auth-instrument {
+  color: rgb(var(--instrument-ink));
+  background-color: rgb(var(--instrument-bg));
   background-image:
-    linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px);
+    linear-gradient(rgb(var(--instrument-grid) / var(--instrument-grid-alpha)) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--instrument-grid) / var(--instrument-grid-alpha)) 1px, transparent 1px);
   background-size: 48px 48px;
 }
 
@@ -439,25 +688,11 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgb(240 160 48 / 0.28) 18%,
-    rgb(240 160 48 / 0.14) 50%,
-    rgb(240 160 48 / 0.28) 82%,
+    rgb(var(--instrument-amber) / 0.28) 18%,
+    rgb(var(--instrument-amber) / 0.14) 50%,
+    rgb(var(--instrument-amber) / 0.28) 82%,
     transparent 100%
   );
-}
-
-/* Authentication uses the same compact laboratory language as the 2D studio. */
-.auth-instrument {
-  --instrument-bg: #090a0c;
-  --instrument-panel: #101217;
-  --instrument-rule: #2b2f36;
-  --instrument-amber: #f0a030;
-  color: #d6d8db;
-  background-color: #090a0c;
-  background-image:
-    linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px);
-  background-size: 48px 48px;
 }
 
 .auth-instrument::before {
@@ -466,30 +701,32 @@
   content: "";
   pointer-events: none;
   background:
-    linear-gradient(90deg, transparent 0, rgb(240 160 48 / 0.06) 50%, transparent 100%) 50% 50% / 100% 1px no-repeat,
-    linear-gradient(transparent 0, rgb(240 160 48 / 0.04) 50%, transparent 100%) 50% 50% / 1px 100% no-repeat;
+    linear-gradient(90deg, transparent 0, rgb(var(--instrument-amber) / 0.06) 50%, transparent 100%) 50% 50% / 100% 1px no-repeat,
+    linear-gradient(transparent 0, rgb(var(--instrument-amber) / 0.04) 50%, transparent 100%) 50% 50% / 1px 100% no-repeat;
 }
 
 .auth-panel {
-  border: 1px solid var(--instrument-rule);
+  border: 1px solid rgb(var(--instrument-rule));
   border-radius: 2px;
-  background: rgb(16 18 23 / 0.96);
-  box-shadow: 0 1px 0 rgb(255 255 255 / 0.025) inset, 0 24px 70px rgb(0 0 0 / 0.35);
+  background: rgb(var(--instrument-panel) / 0.96);
+  box-shadow:
+    0 1px 0 rgb(var(--instrument-bevel) / var(--instrument-bevel-alpha)) inset,
+    0 24px 70px rgb(var(--glass-shadow) / var(--glass-shadow-alpha));
 }
 
 .auth-control {
-  border: 1px solid #31353d !important;
-  background: #090a0c !important;
-  color: #d6d8db !important;
+  border: 1px solid rgb(var(--instrument-control-border)) !important;
+  background: rgb(var(--instrument-bg)) !important;
+  color: rgb(var(--instrument-ink)) !important;
 }
 
 .auth-control:focus {
-  border-color: rgb(240 160 48 / 0.7) !important;
-  box-shadow: 0 0 0 1px rgb(240 160 48 / 0.15) !important;
+  border-color: rgb(var(--instrument-amber) / 0.7) !important;
+  box-shadow: 0 0 0 1px rgb(var(--instrument-amber) / 0.15) !important;
 }
 
-/* ─── Selection: soft purple wash ─── */
+/* ─── Selection ─── */
 ::selection {
-  background: hsl(271 85% 55% / 0.25);
-  color: hsl(0 0% 100%);
+  background: hsl(var(--selection-bg) / var(--selection-alpha));
+  color: hsl(var(--selection-fg));
 }

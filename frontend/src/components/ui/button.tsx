@@ -11,18 +11,18 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-white/[0.08] text-white/80 hover:bg-white/[0.12] border border-white/[0.06]",
+          "bg-wash/[0.08] text-ink/80 hover:bg-wash/[0.12] border border-hairline/[0.06]",
         destructive:
           "bg-red-500/10 text-red-400/80 hover:bg-red-500/15 border border-red-500/10",
         outline:
-          "border border-white/[0.08] bg-transparent text-white/60 hover:bg-white/[0.04] hover:text-white/85",
+          "border border-hairline/[0.08] bg-transparent text-ink/60 hover:bg-wash/[0.04] hover:text-ink/85",
         secondary:
-          "bg-white/[0.04] text-white/55 hover:bg-white/[0.07] hover:text-white/75",
+          "bg-wash/[0.04] text-ink/55 hover:bg-wash/[0.07] hover:text-ink/75",
         ghost:
-          "text-white/45 hover:bg-white/[0.04] hover:text-white/70",
+          "text-ink/60 hover:bg-wash/[0.04] hover:text-ink/85",
         link: "text-primary/80 underline-offset-4 hover:underline",
         fractal:
-          "bg-primary/85 text-white hover:bg-primary/75",
+          "bg-primary/85 text-primary-foreground hover:bg-primary/75",
         neon:
           "bg-transparent border border-primary/30 text-primary hover:bg-primary/[0.06]",
       },

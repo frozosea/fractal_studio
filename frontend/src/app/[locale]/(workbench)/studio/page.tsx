@@ -596,13 +596,13 @@ export default function StudioPage() {
 
   return (
     <div className="scientific-studio mx-auto max-w-[1560px] space-y-4">
-      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-white/10 pb-4">
+      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline/10 pb-4">
         <div>
           <p className="instrument-kicker">{t("eyebrow")}</p>
-          <h1 className="mt-1 text-2xl font-medium tracking-tight text-white">{t("title")}</h1>
-          <p className="mt-1 max-w-3xl text-sm text-white/50">{t("subtitle")}</p>
+          <h1 className="mt-1 text-2xl font-medium tracking-tight text-ink">{t("title")}</h1>
+          <p className="mt-1 max-w-3xl text-sm text-ink/50">{t("subtitle")}</p>
         </div>
-        <div className="flex items-center gap-2 font-mono text-[11px] text-white/45">
+        <div className="flex items-center gap-2 font-mono text-[11px] text-ink/45">
           <span className="h-1.5 w-1.5 bg-emerald-400" />
           {t("renderer")}: {capabilities.rendererVersion ?? t("loadingCapabilities")}
         </div>
@@ -635,7 +635,7 @@ export default function StudioPage() {
                 );
               })}
             </div>
-            <p className="mt-2 text-xs leading-relaxed text-white/40">{t(`modeNotes.${mode}`)}</p>
+            <p className="mt-2 text-xs leading-relaxed text-ink/60">{t(`modeNotes.${mode}`)}</p>
           </Panel>
 
           <Panel index="02" title={t("sections.geometry")}>
@@ -678,12 +678,12 @@ export default function StudioPage() {
                     onChange={(event) => setFormulaSource(event.target.value)}
                   />
                 </Control>
-                <details className="mb-2 border border-white/10 bg-black/15">
-                  <summary className="flex cursor-pointer list-none items-center justify-between px-2 py-1.5 text-[11px] uppercase tracking-wider text-white/50 hover:text-white/75">
+                <details className="mb-2 border border-hairline/10 bg-black/15">
+                  <summary className="flex cursor-pointer list-none items-center justify-between px-2 py-1.5 text-[11px] uppercase tracking-wider text-ink/50 hover:text-ink/75">
                     <span>{t("formulaExamples")}</span>
                     <span className="font-mono text-amber-200/60">{FORMULA_EXAMPLES.length}</span>
                   </summary>
-                  <div className="max-h-64 space-y-1 overflow-y-auto border-t border-white/10 p-1.5">
+                  <div className="max-h-64 space-y-1 overflow-y-auto border-t border-hairline/10 p-1.5">
                     {FORMULA_EXAMPLES.map((item) => {
                       const name = t(`variants.${item.id}.name`);
                       return (
@@ -694,13 +694,13 @@ export default function StudioPage() {
                           onClick={() => setFormulaSource(item.source)}
                           type="button"
                         >
-                          <span className="block text-[11px] text-white/65">{name}</span>
+                          <span className="block text-[11px] text-ink/65">{name}</span>
                           <code className="mt-0.5 block break-all text-[10px] leading-relaxed text-amber-100/65">{item.source}</code>
                         </button>
                       );
                     })}
                   </div>
-                  <p className="border-t border-white/10 px-2 py-1.5 text-[10px] leading-relaxed text-white/35">{t("formulaExamplesHint")}</p>
+                  <p className="border-t border-hairline/10 px-2 py-1.5 text-[10px] leading-relaxed text-ink/35">{t("formulaExamplesHint")}</p>
                 </details>
                 <p className="instrument-note">{t("formulaHint")}</p>
               </>
@@ -709,10 +709,10 @@ export default function StudioPage() {
             {mode === "sequence" && (
               <div className="space-y-2">
                 {sequence.steps.map((step, index) => (
-                  <div className="border border-white/10 bg-black/20 p-2" key={index}>
+                  <div className="border border-hairline/10 bg-black/20 p-2" key={index}>
                     <div className="mb-2 flex items-center justify-between">
                       <span className="font-mono text-[10px] uppercase tracking-wider text-amber-200/70">{t("sequenceStep", { index: index + 1 })}</span>
-                      <button aria-label={t("removeStep")} className="text-white/35 hover:text-red-300 disabled:opacity-20" disabled={sequence.steps.length <= 1} onClick={() => removeSequenceStep(index)} type="button"><Trash2 className="h-3.5 w-3.5" /></button>
+                      <button aria-label={t("removeStep")} className="text-ink/35 hover:text-red-300 disabled:opacity-20" disabled={sequence.steps.length <= 1} onClick={() => removeSequenceStep(index)} type="button"><Trash2 className="h-3.5 w-3.5" /></button>
                     </div>
                     <textarea
                       className="instrument-control min-h-16 w-full resize-y p-2 font-mono text-xs"
@@ -734,7 +734,7 @@ export default function StudioPage() {
               <>
                 {mode === "transitionPair" && (
                   <div className="mb-3">
-                    <label className="mb-1 flex justify-between text-xs text-white/50"><span>{t("transitionAngle")}</span><span className="font-mono text-amber-200/80">{((spec.transitionThetaMilliDeg ?? 0) / 1000).toFixed(1)}°</span></label>
+                    <label className="mb-1 flex justify-between text-xs text-ink/50"><span>{t("transitionAngle")}</span><span className="font-mono text-amber-200/80">{((spec.transitionThetaMilliDeg ?? 0) / 1000).toFixed(1)}°</span></label>
                     <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_6rem]">
                       <input className="w-full accent-amber-500" max="180000" min="-180000" step="1000" type="range" value={spec.transitionThetaMilliDeg ?? 0} onChange={(event) => update({ transitionThetaMilliDeg: Number(event.target.value) })} />
                       <DraftNumberInput
@@ -766,7 +766,7 @@ export default function StudioPage() {
                           <select className={selectClass} value={leg.variant} onChange={(event) => updateTransitionLeg(index, { variant: event.target.value })}>{axisVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}</select>
                         </Control>
                         <NumberControl label={t("weight")} min="0.01" max="1000000" step="0.05" value={leg.weight} onChange={(value) => updateTransitionLeg(index, { weight: Math.max(0.01, value) })} />
-                        <button aria-label={t("removeLeg")} className="mb-2 h-9 text-white/35 hover:text-red-300 disabled:opacity-20" disabled={(spec.transitionLegs?.length ?? 0) <= 1} onClick={() => removeTransitionLeg(index)} type="button"><Trash2 className="mx-auto h-3.5 w-3.5" /></button>
+                        <button aria-label={t("removeLeg")} className="mb-2 h-9 text-ink/35 hover:text-red-300 disabled:opacity-20" disabled={(spec.transitionLegs?.length ?? 0) <= 1} onClick={() => removeTransitionLeg(index)} type="button"><Trash2 className="mx-auto h-3.5 w-3.5" /></button>
                       </div>
                     ))}
                     <Button className="w-full rounded-none" disabled={(spec.transitionLegs?.length ?? 0) >= 4} size="sm" variant="outline" onClick={addTransitionLeg}><Plus className="h-3.5 w-3.5" />{t("addLeg")}</Button>
@@ -784,11 +784,11 @@ export default function StudioPage() {
               </select>
             </Control>
             {!spec.colorProgram && selectedColor && (
-              <div className="mb-3 border border-white/10 bg-black/20 p-2">
+              <div className="mb-3 border border-hairline/10 bg-black/20 p-2">
                 <div className="h-4" style={{ background: selectedColor.preview }} />
-                <p className="mt-2 text-xs leading-relaxed text-white/60">{t(`colorMaps.${selectedColor.id}.description`)}</p>
-                <p className="mt-1 text-[11px] text-white/35"><span className="text-amber-200/60">{t("bestFor")}</span> {t(`colorMaps.${selectedColor.id}.bestFor`)}</p>
-                <p className="mt-1 text-[11px] text-white/35"><span className="text-amber-200/60">{t("cost")}</span> {t(`colorMaps.${selectedColor.id}.cost`)}</p>
+                <p className="mt-2 text-xs leading-relaxed text-ink/60">{t(`colorMaps.${selectedColor.id}.description`)}</p>
+                <p className="mt-1 text-[11px] text-ink/35"><span className="text-amber-200/60">{t("bestFor")}</span> {t(`colorMaps.${selectedColor.id}.bestFor`)}</p>
+                <p className="mt-1 text-[11px] text-ink/35"><span className="text-amber-200/60">{t("cost")}</span> {t(`colorMaps.${selectedColor.id}.cost`)}</p>
               </div>
             )}
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -816,8 +816,8 @@ export default function StudioPage() {
           </Panel>
 
           <details className="instrument-panel group">
-            <summary className="cursor-pointer list-none px-3 py-2 text-xs uppercase tracking-[0.14em] text-white/55">04 · {t("sections.compute")}</summary>
-            <div className="border-t border-white/10 p-3">
+            <summary className="cursor-pointer list-none px-3 py-2 text-xs uppercase tracking-[0.14em] text-ink/55">04 · {t("sections.compute")}</summary>
+            <div className="border-t border-hairline/10 p-3">
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <NumberControl label={t("iterations")} min="1" max="1000000" step="16" value={spec.iterations ?? 512} onChange={(value) => update({ iterations: Math.round(value) })} />
                 <NumberControl label={t("bailout")} min="0.01" step="0.5" value={spec.bailout ?? 2} onChange={(value) => update({ bailout: value })} />
@@ -843,9 +843,9 @@ export default function StudioPage() {
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <span className="instrument-kicker">{t("viewport")}</span>
-                <span className="font-mono text-[11px] text-white/35">{t(modeLabelKey(mode))} · {zoomLevel.toFixed(2)} oct</span>
+                <span className="font-mono text-[11px] text-ink/35">{t(modeLabelKey(mode))} · {zoomLevel.toFixed(2)} oct</span>
               </div>
-              <span className="font-mono text-[10px] text-white/30">{t("centerAlwaysVisible")}</span>
+              <span className="font-mono text-[10px] text-ink/30">{t("centerAlwaysVisible")}</span>
             </div>
             {mode === "julia" ? (
               <div className="grid gap-3 lg:grid-cols-2">
@@ -857,8 +857,8 @@ export default function StudioPage() {
                     <ScaleControl label={t("scale")} min={minScale} value={juliaPickerSpec.scale ?? 3} onCommit={(value) => setJuliaPickerSpec((current) => ({ ...current, scale: value }))} />
                   </div>
                 </div>
-                <div className="border-l border-white/15 pl-3">
-                  <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-white/50">B · {t("juliaDynamicalPlane")}</p>
+                <div className="border-l border-hairline/15 pl-3">
+                  <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.15em] text-ink/50">B · {t("juliaDynamicalPlane")}</p>
                   <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8rem]">
                     <PreciseControl label={t("centerRe")} value={spec.centerReStr ?? String(spec.centerRe ?? 0)} onCommit={(value) => update({ centerReStr: value, centerRe: Number(value) })} />
                     <PreciseControl label={t("centerIm")} value={spec.centerImStr ?? String(spec.centerIm ?? 0)} onCommit={(value) => update({ centerImStr: value, centerIm: Number(value) })} />
@@ -879,7 +879,7 @@ export default function StudioPage() {
             <section className="grid gap-3 lg:grid-cols-2">
               <div className="instrument-panel overflow-hidden p-2">
                 <div className="mb-2 flex items-start justify-between gap-3 px-1">
-                  <div><p className="instrument-kicker">A · {t("juliaParameterPlane")}</p><p className="mt-1 text-xs text-white/40">{t("juliaPickerHint")}</p></div>
+                  <div><p className="instrument-kicker">A · {t("juliaParameterPlane")}</p><p className="mt-1 text-xs text-ink/40">{t("juliaPickerHint")}</p></div>
                   <span className="shrink-0 font-mono text-[10px] text-amber-200/70">c = {formatCoordinate(spec.juliaRe)} {Number(spec.juliaIm ?? 0) < 0 ? "−" : "+"} {formatCoordinate(Math.abs(Number(spec.juliaIm ?? 0)))}i</span>
                 </div>
                 <InteractiveFractalCanvas
@@ -900,7 +900,7 @@ export default function StudioPage() {
                 />
               </div>
               <div className="instrument-panel overflow-hidden p-2">
-                <div className="mb-2 px-1"><p className="instrument-kicker">B · {t("juliaDynamicalPlane")}</p><p className="mt-1 text-xs text-white/40">{t("juliaOutputHint")}</p></div>
+                <div className="mb-2 px-1"><p className="instrument-kicker">B · {t("juliaDynamicalPlane")}</p><p className="mt-1 text-xs text-ink/40">{t("juliaOutputHint")}</p></div>
                 <InteractiveFractalCanvas
                   exportHeight={output.height}
                   exportWidth={output.width}
@@ -940,8 +940,8 @@ export default function StudioPage() {
           <section className="instrument-panel p-3">
             <div className="mb-3 flex items-center gap-2">
               <ImageDown className="h-4 w-4 text-amber-300/80" />
-              <h2 className="text-sm font-medium text-white/80">{t("sections.export")}</h2>
-              <span className="ml-auto font-mono text-[10px] uppercase tracking-wider text-white/30">PNG · sRGB</span>
+              <h2 className="text-sm font-medium text-ink/80">{t("sections.export")}</h2>
+              <span className="ml-auto font-mono text-[10px] uppercase tracking-wider text-ink/30">PNG · sRGB</span>
               {allowance && !allowance.member && allowance.remaining !== null && (
                 <span className={`font-mono text-[10px] uppercase tracking-wider ${allowance.remaining === 0 ? "text-red-300/80" : "text-amber-300/70"}`}>
                   {t("exportsRemaining", { remaining: allowance.remaining, limit: allowance.limit ?? 0 })}
@@ -961,7 +961,7 @@ export default function StudioPage() {
                 <Save className="h-4 w-4" />{exporting ? t("creatingExport") : t("exportPng")}
               </Button>
             </div>
-            <p className="mt-2 text-xs text-white/35">{t("compositionHint")}</p>
+            <p className="mt-2 text-xs text-ink/35">{t("compositionHint")}</p>
             {exhausted && (
               <p className="mt-2 text-xs text-red-300/80">
                 {t("errors.exportQuotaExhausted")}{" "}
@@ -970,12 +970,12 @@ export default function StudioPage() {
             )}
 
             {job && (
-              <div className="mt-3 border-t border-white/10 pt-3">
+              <div className="mt-3 border-t border-hairline/10 pt-3">
                 <div className="flex flex-wrap items-center gap-3 text-sm">
                   {job.status === "completed" ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <span className="h-2 w-2 bg-amber-400" />}
-                  <span>{t("exportJob")}: <b className="font-mono font-normal text-white/80">{job.status}</b></span>
-                  <span className="font-mono text-white/45">{job.progressPercent}%</span>
-                  <div className="h-1.5 min-w-28 flex-1 overflow-hidden bg-white/10"><div className="h-full bg-amber-400 transition-[width]" style={{ width: `${job.progressPercent}%` }} /></div>
+                  <span>{t("exportJob")}: <b className="font-mono font-normal text-ink/80">{job.status}</b></span>
+                  <span className="font-mono text-ink/45">{job.progressPercent}%</span>
+                  <div className="h-1.5 min-w-28 flex-1 overflow-hidden bg-wash/10"><div className="h-full bg-amber-400 transition-[width]" style={{ width: `${job.progressPercent}%` }} /></div>
                   {!terminalStatuses.has(job.status) && <Button className="rounded-none" size="sm" variant="outline" onClick={() => void cancelJob()}>{t("cancelExport")}</Button>}
                   {job.status === "completed" && job.assetId && (
                     <>
@@ -997,14 +997,14 @@ export default function StudioPage() {
 function Panel({ index, title, children }: { index: string; title: string; children: React.ReactNode }) {
   return (
     <section className="instrument-panel">
-      <h2 className="border-b border-white/10 px-3 py-2 text-xs uppercase tracking-[0.14em] text-white/55"><span className="mr-2 font-mono text-amber-300/65">{index}</span>{title}</h2>
+      <h2 className="border-b border-hairline/10 px-3 py-2 text-xs uppercase tracking-[0.14em] text-ink/55"><span className="mr-2 font-mono text-amber-300/65">{index}</span>{title}</h2>
       <div className="p-3">{children}</div>
     </section>
   );
 }
 
 function Control({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="mb-2 block text-[11px] text-white/45"><span className="mb-1 block uppercase tracking-wider">{label}</span>{children}</label>;
+  return <label className="mb-2 block text-[11px] text-ink/60"><span className="mb-1 block uppercase tracking-wider">{label}</span>{children}</label>;
 }
 
 function DraftNumberInput({ value, min, max, onCommit, ...props }: {
@@ -1096,7 +1096,7 @@ function ScaleControl({ label, value, min, max = 1e9, onCommit }: {
   };
 
   return (
-    <div className="mb-2 block text-[11px] text-white/45">
+    <div className="mb-2 block text-[11px] text-ink/60">
       <label className="mb-1 block uppercase tracking-wider" htmlFor={inputId}>{label}</label>
       <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem]">
         <Button type="button" aria-label={`${label} ÷ 2`} title={`${label} ÷ 2`} className="h-9 rounded-none border-r-0 font-mono text-xs" size="sm" variant="outline" onClick={() => multiply(0.5)}>÷2</Button>
@@ -1185,8 +1185,8 @@ function GradientEditor({ program, maxStops, onChange, onStopChange, onAdd, onRe
   t: ReturnType<typeof useTranslations<"studio">>;
 }) {
   return (
-    <div className="mt-3 border-t border-white/10 pt-3">
-      <div className="mb-3 h-5 border border-white/15" style={{ background: `linear-gradient(90deg, ${program.stops.map((stop) => `${stop.color} ${stop.at * 100}%`).join(", ")})` }} />
+    <div className="mt-3 border-t border-hairline/10 pt-3">
+      <div className="mb-3 h-5 border border-hairline/15" style={{ background: `linear-gradient(90deg, ${program.stops.map((stop) => `${stop.color} ${stop.at * 100}%`).join(", ")})` }} />
       <div className="space-y-1.5">
         {program.stops.map((stop, index) => (
           <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_2rem_1.5rem] items-center gap-1.5" key={index}>
@@ -1202,8 +1202,8 @@ function GradientEditor({ program, maxStops, onChange, onStopChange, onAdd, onRe
               value={stop.at}
               onChange={(event) => onStopChange(index, { at: Number(event.target.value) })}
             />
-            <span className="font-mono text-[10px] text-white/45">{Math.round(stop.at * 100)}</span>
-            <button aria-label={t("removeColor")} className="text-white/30 hover:text-red-300 disabled:opacity-20" disabled={program.stops.length <= 2} onClick={() => onRemove(index)} type="button"><Trash2 className="h-3.5 w-3.5" /></button>
+            <span className="font-mono text-[10px] text-ink/45">{Math.round(stop.at * 100)}</span>
+            <button aria-label={t("removeColor")} className="text-ink/30 hover:text-red-300 disabled:opacity-20" disabled={program.stops.length <= 2} onClick={() => onRemove(index)} type="button"><Trash2 className="h-3.5 w-3.5" /></button>
           </div>
         ))}
       </div>

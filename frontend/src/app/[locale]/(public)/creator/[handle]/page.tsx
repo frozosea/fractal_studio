@@ -47,15 +47,15 @@ export default async function CreatorPage({ params }: Params) {
       <div className="flex flex-wrap items-center gap-5">
         <span
           aria-hidden="true"
-          className="flex h-16 w-16 shrink-0 items-center justify-center border border-amber-300/30 bg-[#0b0d10] font-mono text-2xl text-amber-300/80"
+          className="flex h-16 w-16 shrink-0 items-center justify-center border border-amber-300/30 bg-instrument-panel font-mono text-2xl text-amber-300/80"
         >
           {monogram}
         </span>
         <div className="min-w-0">
-          <h1 className="truncate text-2xl font-light tracking-tight text-white sm:text-3xl">
+          <h1 className="truncate text-2xl font-light tracking-tight text-ink sm:text-3xl">
             {profile.displayName}
           </h1>
-          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.16em] text-white/35">
+          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.16em] text-ink/35">
             @{profile.handle} · {t("published", { count: profile.publishedCount })}
           </p>
         </div>

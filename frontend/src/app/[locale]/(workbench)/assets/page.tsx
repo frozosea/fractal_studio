@@ -105,8 +105,8 @@ export default function AssetsPage() {
     {assets.length === 0 && <p className="rounded border border-dashed p-6 text-muted-foreground">{t("assets.empty")}</p>}
     <div className="grid gap-4 lg:gap-5" style={CARD_GRID_STYLE}>{assets.map((asset) => {
       const previewUrl = asset.preview?.thumbnailUrl ?? asset.preview?.videoPosterUrl;
-      return <article key={asset.id} className="min-w-0 overflow-hidden rounded-xl border border-white/10 text-sm">
-        <div className="aspect-[4/3] border-b border-white/10 bg-white/[0.03]">
+      return <article key={asset.id} className="min-w-0 overflow-hidden rounded-xl border border-hairline/10 text-sm">
+        <div className="aspect-[4/3] border-b border-hairline/10 bg-wash/[0.03]">
           {previewUrl ? <img alt={t("assets.previewAlt", { type: t(`media.${asset.mediaType}`) })} className="block h-full w-full object-contain" src={previewUrl} /> : <div className="flex h-full items-center justify-center p-4 text-center text-muted-foreground">{asset.derivativeStatus === "pending" ? t("assets.previewPreparing") : t("assets.previewUnavailable")}</div>}
         </div>
         <div className="p-4">

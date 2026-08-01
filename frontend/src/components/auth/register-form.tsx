@@ -41,19 +41,19 @@ export function RegisterForm() {
 
   return (
     <div className="w-full max-w-[30rem]">
-      <header className="mb-5 border-b border-white/10 pb-5">
+      <header className="mb-5 border-b border-hairline/10 pb-5">
         <div className="mb-5 flex items-center justify-between">
           <span className="instrument-kicker">AUTH / 02</span>
-          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-white/25">c ∈ ℂ</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink/25">c ∈ ℂ</span>
         </div>
-        <h1 className="text-2xl font-medium tracking-tight text-white">{t("registerTitle")}</h1>
-        <p className="mt-2 text-sm leading-6 text-white/45">{t("registerSubtitle")}</p>
+        <h1 className="text-2xl font-medium tracking-tight text-ink">{t("registerTitle")}</h1>
+        <p className="mt-2 text-sm leading-6 text-ink/60">{t("registerSubtitle")}</p>
       </header>
 
       <section className="auth-panel p-5 sm:p-7">
-        <div className="mb-6 flex items-center gap-3 border-b border-white/[0.07] pb-4">
+        <div className="mb-6 flex items-center gap-3 border-b border-hairline/[0.07] pb-4">
           <span className="grid h-9 w-9 place-items-center border border-amber-300/40 bg-amber-400/[0.07]"><UserPlus className="h-4 w-4 text-amber-200/75" /></span>
-          <div><p className="text-sm text-white/80">{t("newWorkspace")}</p><p className="mt-0.5 font-mono text-[10px] uppercase tracking-wider text-white/30">{t("recipeReady")}</p></div>
+          <div><p className="text-sm text-ink/80">{t("newWorkspace")}</p><p className="mt-0.5 font-mono text-[10px] uppercase tracking-wider text-ink/30">{t("recipeReady")}</p></div>
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -72,7 +72,7 @@ export function RegisterForm() {
           <Button type="submit" className="h-10 w-full rounded-none border border-amber-300/35 bg-amber-500/15 text-amber-100 hover:bg-amber-500/25" disabled={isSubmitting} loading={isSubmitting}>
             {t("createAccount")}<ArrowRight className="h-4 w-4" />
           </Button>
-          <p className="text-center text-sm text-white/35">{t("haveAccount")} <Link href="/login" className="text-amber-200/75 transition-colors hover:text-amber-100">{t("signIn")}</Link></p>
+          <p className="text-center text-sm text-ink/60">{t("haveAccount")} <Link href="/login" className="text-amber-200/75 transition-colors hover:text-amber-100">{t("signIn")}</Link></p>
         </form>
       </section>
     </div>
@@ -82,8 +82,8 @@ export function RegisterForm() {
 function AuthField({ label, icon, error, children }: { label: string; icon: React.ReactNode; error?: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">{label}</span>
-      <span className="relative block"><span className="pointer-events-none absolute left-3 top-3 text-white/25">{icon}</span>{children}</span>
+      <span className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-ink/60">{label}</span>
+      <span className="relative block"><span className="pointer-events-none absolute left-3 top-3 text-ink/25">{icon}</span>{children}</span>
       {error && <span className="mt-1.5 block text-xs text-red-300/75">{error}</span>}
     </label>
   );

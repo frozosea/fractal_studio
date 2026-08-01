@@ -48,7 +48,7 @@ export default function PurchasesPage() {
       </div>
       {error && <p className="text-red-400">{error}</p>}
       {orders.length === 0 && (
-        <p className="rounded-xl border border-dashed border-white/15 p-6 text-sm text-muted-foreground">
+        <p className="rounded-xl border border-dashed border-hairline/15 p-6 text-sm text-muted-foreground">
           {t("purchases.empty")}
         </p>
       )}

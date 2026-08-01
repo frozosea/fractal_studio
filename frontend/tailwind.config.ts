@@ -26,6 +26,41 @@ const config: Config = {
         ring: "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
+
+        // Direction, not colour. The app was written against a dark surface
+        // with `bg-white/5`, `border-white/10` and `text-white/60`, none of
+        // which mean "white" — they mean "step away from the surface". These
+        // three flip with the theme so a single class works in both. Keep the
+        // alpha you would have used; only the direction changes.
+        wash: "rgb(var(--wash) / <alpha-value>)",
+        hairline: "rgb(var(--hairline) / <alpha-value>)",
+        ink: "rgb(var(--ink) / <alpha-value>)",
+
+        // Amber is this project's accent, and its shade number encodes
+        // contrast against the surface rather than lightness, so the ramp is
+        // inverted in the light theme. See the note in globals.css.
+        amber: {
+          100: "rgb(var(--amber-100) / <alpha-value>)",
+          200: "rgb(var(--amber-200) / <alpha-value>)",
+          300: "rgb(var(--amber-300) / <alpha-value>)",
+          400: "rgb(var(--amber-400) / <alpha-value>)",
+          500: "rgb(var(--amber-500) / <alpha-value>)",
+        },
+        // A solid accent fill has to stay amber in both themes — inverting it
+        // would turn the logo mark into a brown square. Only its ink flips.
+        brand: {
+          DEFAULT: "rgb(var(--brand) / <alpha-value>)",
+          ink: "rgb(var(--brand-ink) / <alpha-value>)",
+        },
+
+        // Instrument chrome, previously repeated as raw hex in the shells.
+        instrument: {
+          DEFAULT: "rgb(var(--instrument-bg) / <alpha-value>)",
+          panel: "rgb(var(--instrument-panel) / <alpha-value>)",
+          raised: "rgb(var(--instrument-panel-raised) / <alpha-value>)",
+          rule: "rgb(var(--instrument-rule) / <alpha-value>)",
+          ink: "rgb(var(--instrument-ink) / <alpha-value>)",
+        },
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
@@ -55,26 +90,28 @@ const config: Config = {
           foreground: "hsl(var(--card-foreground))",
         },
         fractal: {
-          50: "#f5f0ff",
-          100: "#ede5ff",
-          200: "#dccfff",
-          300: "#c4a8ff",
-          400: "#a878ff",
-          500: "#9333ff",
-          600: "#7c22e0",
-          700: "#6516c2",
-          800: "#52149e",
-          900: "#3e127e",
-          950: "#1f0750",
+          50: "rgb(var(--fractal-50) / <alpha-value>)",
+          100: "rgb(var(--fractal-100) / <alpha-value>)",
+          200: "rgb(var(--fractal-200) / <alpha-value>)",
+          300: "rgb(var(--fractal-300) / <alpha-value>)",
+          400: "rgb(var(--fractal-400) / <alpha-value>)",
+          500: "rgb(var(--fractal-500) / <alpha-value>)",
+          600: "rgb(var(--fractal-600) / <alpha-value>)",
+          700: "rgb(var(--fractal-700) / <alpha-value>)",
+          800: "rgb(var(--fractal-800) / <alpha-value>)",
+          900: "rgb(var(--fractal-900) / <alpha-value>)",
+          950: "rgb(var(--fractal-950) / <alpha-value>)",
         },
         neon: {
-          purple: "#9333FF",
-          cyan: "#36F0E8",
+          purple: "rgb(var(--neon-purple) / <alpha-value>)",
+          cyan: "rgb(var(--neon-cyan) / <alpha-value>)",
         },
+        // Surface roles, not literal colours: `void` is the app shell behind
+        // everything, `slate` the raised sheet popovers and inputs sit on.
         deep: {
-          indigo: "#0F172A",
-          slate: "#1E293B",
-          void: "#090E1A",
+          indigo: "rgb(var(--surface-indigo) / <alpha-value>)",
+          slate: "rgb(var(--surface-raised) / <alpha-value>)",
+          void: "rgb(var(--surface-sunken) / <alpha-value>)",
         },
       },
       borderRadius: {
@@ -89,10 +126,13 @@ const config: Config = {
         "glow-cyan": "0 0 30px hsl(178 84% 58% / 0.15), 0 0 60px hsl(178 84% 58% / 0.06)",
         "glow-canvas":
           "0 0 40px hsl(271 91% 65% / 0.1), 0 0 80px hsl(178 84% 58% / 0.06), inset 0 0 60px hsl(222 47% 11% / 0.3)",
+        // Cast against `--glass-shadow`, which is near-black on the dark theme
+        // and a soft grey-violet on paper — a 30%-black drop shadow that reads
+        // as depth on black reads as grime on white.
         glass:
-          "0 8px 32px hsl(222 47% 6% / 0.3), 0 2px 8px hsl(222 47% 6% / 0.2)",
-        "glass-sm": "0 4px 16px hsl(222 47% 6% / 0.2)",
-        float: "0 12px 40px hsl(222 47% 6% / 0.5)",
+          "0 8px 32px rgb(var(--glass-shadow) / var(--glass-shadow-alpha)), 0 2px 8px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft))",
+        "glass-sm": "0 4px 16px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft))",
+        float: "0 12px 40px rgb(var(--glass-shadow) / calc(var(--glass-shadow-alpha) * 1.25))",
       },
       keyframes: {
         "accordion-down": {

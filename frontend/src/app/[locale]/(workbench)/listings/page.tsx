@@ -87,7 +87,7 @@ export default function ListingsPage() {
       </div>
       {error && <p className="text-red-400">{error}</p>}
       {needsCreatorProfile && (
-        <p className="rounded-xl border border-dashed border-white/15 p-6 text-sm text-muted-foreground">
+        <p className="rounded-xl border border-dashed border-hairline/15 p-6 text-sm text-muted-foreground">
           {t("errors.creatorRequired")}{" "}
           <Link href="/payouts" className="text-amber-400 underline underline-offset-4">
             {tNav("nav.payouts")}
@@ -95,7 +95,7 @@ export default function ListingsPage() {
         </p>
       )}
       {!needsCreatorProfile && listings.length === 0 && (
-        <p className="rounded-xl border border-dashed border-white/15 p-6 text-sm text-muted-foreground">
+        <p className="rounded-xl border border-dashed border-hairline/15 p-6 text-sm text-muted-foreground">
           {t("listings.empty")}
         </p>
       )}
@@ -156,7 +156,7 @@ export default function ListingsPage() {
               onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
             />
             <textarea
-              className="min-h-24 w-full rounded-lg border border-white/[0.08] bg-transparent p-3 text-sm text-white/80 outline-none placeholder:text-white/30 focus-visible:border-white/20"
+              className="min-h-24 w-full rounded-lg border border-hairline/[0.08] bg-transparent p-3 text-sm text-ink/80 outline-none placeholder:text-ink/30 focus-visible:border-hairline/20"
               placeholder={t("listings.descriptionPlaceholder")}
               value={draft.description}
               maxLength={4000}

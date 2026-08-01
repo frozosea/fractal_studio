@@ -35,7 +35,7 @@ function SectionHead({ index, kicker, title }: { index: string; kicker: string; 
       <p className="instrument-kicker">
         {index} / {kicker}
       </p>
-      <h2 className="mt-3 text-2xl font-light tracking-tight text-white/90 sm:text-3xl">{title}</h2>
+      <h2 className="mt-3 text-2xl font-light tracking-tight text-ink/90 sm:text-3xl">{title}</h2>
       <div className="instrument-rule mt-5" />
     </div>
   );
@@ -87,11 +87,11 @@ export default async function LandingPage() {
   return (
     <>
       {/* ── Hero ───────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden border-b border-[#2b2f36]">
+      <section className="relative overflow-hidden border-b border-instrument-rule">
         <div className="mx-auto max-w-6xl px-4 py-16 sm:px-8 sm:py-24">
           <div className="flex items-center gap-3">
             <span className="h-2 w-2 shrink-0 bg-amber-400" />
-            <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/45">
+            <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink/45">
               {tAuth("systemLabel")}
             </span>
           </div>
@@ -99,13 +99,13 @@ export default async function LandingPage() {
           <p className="instrument-kicker mt-10">{t("hero.kicker")}</p>
 
           <div className="mt-5 border-l border-amber-300/35 pl-5 sm:pl-6">
-            <p className="font-mono text-3xl font-light tracking-[-0.06em] text-white/80 sm:text-5xl">
+            <p className="font-mono text-3xl font-light tracking-[-0.06em] text-ink/80 sm:text-5xl">
               zₙ₊₁ = zₙ² + c
             </p>
-            <h1 className="mt-6 max-w-3xl text-3xl font-light leading-tight tracking-tight text-white sm:text-5xl">
+            <h1 className="mt-6 max-w-3xl text-3xl font-light leading-tight tracking-tight text-ink sm:text-5xl">
               {t("hero.title")}
             </h1>
-            <p className="mt-5 max-w-2xl text-sm leading-relaxed text-white/55 sm:text-base">
+            <p className="mt-5 max-w-2xl text-sm leading-relaxed text-ink/55 sm:text-base">
               {t("hero.subtitle")}
             </p>
 
@@ -123,13 +123,13 @@ export default async function LandingPage() {
           </div>
 
           {/* Spec strip — the same 1px-gap grid the sign-in aside uses. */}
-          <div className="mt-14 grid max-w-lg grid-cols-3 gap-px border border-white/10 bg-white/10 font-mono text-[10px] uppercase tracking-wider text-white/35">
-            <span className="bg-[#0b0d10] p-3">Re(c)</span>
-            <span className="bg-[#0b0d10] p-3">Im(c)</span>
-            <span className="bg-[#0b0d10] p-3">|z| &gt; 2</span>
+          <div className="mt-14 grid max-w-lg grid-cols-3 gap-px border border-hairline/10 bg-wash/10 font-mono text-[10px] uppercase tracking-wider text-ink/35">
+            <span className="bg-instrument-panel p-3">Re(c)</span>
+            <span className="bg-instrument-panel p-3">Im(c)</span>
+            <span className="bg-instrument-panel p-3">|z| &gt; 2</span>
           </div>
 
-          <p className="mt-12 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/30">
+          <p className="mt-12 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-ink/30">
             <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
             {t("hero.scroll")}
           </p>
@@ -140,20 +140,20 @@ export default async function LandingPage() {
       <Section id="intro">
         <SectionHead index="01" kicker={t("intro.kicker")} title={t("intro.title")} />
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-12">
-          <div className="space-y-4 text-sm leading-relaxed text-white/60">
+          <div className="space-y-4 text-sm leading-relaxed text-ink/60">
             <p>{t("intro.body1")}</p>
             <p>{t("intro.body2")}</p>
           </div>
-          <ul className="space-y-px bg-white/10">
+          <ul className="space-y-px bg-wash/10">
             {(["browser", "platform", "compute"] as const).map((layer, index) => (
-              <li key={layer} className="bg-[#0b0d10] p-4 sm:p-5">
+              <li key={layer} className="bg-instrument-panel p-4 sm:p-5">
                 <div className="flex items-baseline gap-3">
                   <span className="font-mono text-[10px] text-amber-400/70">
                     {String(index + 1).padStart(2, "0")}
                   </span>
                   <div className="min-w-0">
-                    <p className="text-sm text-white/85">{t(`intro.layers.${layer}.name`)}</p>
-                    <p className="mt-1 text-xs leading-relaxed text-white/40">
+                    <p className="text-sm text-ink/85">{t(`intro.layers.${layer}.name`)}</p>
+                    <p className="mt-1 text-xs leading-relaxed text-ink/60">
                       {t(`intro.layers.${layer}.note`)}
                     </p>
                   </div>
@@ -173,10 +173,10 @@ export default async function LandingPage() {
             return (
               <div key={key} className="instrument-panel min-w-0 p-4 sm:p-5">
                 <Icon className="h-4 w-4 text-amber-400/80" aria-hidden="true" />
-                <p className="mt-3 text-sm text-white/85">
+                <p className="mt-3 text-sm text-ink/85">
                   {t(`features.items.${key}.name`, FEATURE_VALUES)}
                 </p>
-                <p className="mt-2 text-xs leading-relaxed text-white/40">
+                <p className="mt-2 text-xs leading-relaxed text-ink/60">
                   {t(`features.items.${key}.note`, FEATURE_VALUES)}
                 </p>
               </div>
@@ -195,12 +195,12 @@ export default async function LandingPage() {
               <li key={key} className="instrument-panel min-w-0 p-4 sm:p-5">
                 <div className="flex items-center justify-between gap-2">
                   <Icon className="h-4 w-4 text-amber-400/80" aria-hidden="true" />
-                  <span className="font-mono text-[10px] text-white/25">
+                  <span className="font-mono text-[10px] text-ink/25">
                     {String(index + 1).padStart(2, "0")}
                   </span>
                 </div>
-                <p className="mt-3 text-sm text-white/85">{t(`workflow.steps.${key}.name`)}</p>
-                <p className="mt-2 text-xs leading-relaxed text-white/40">
+                <p className="mt-3 text-sm text-ink/85">{t(`workflow.steps.${key}.name`)}</p>
+                <p className="mt-2 text-xs leading-relaxed text-ink/60">
                   {t(`workflow.steps.${key}.note`)}
                 </p>
               </li>
@@ -219,10 +219,10 @@ export default async function LandingPage() {
       <Section id="market">
         <SectionHead index="04" kicker={t("market.kicker")} title={t("market.title")} />
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:gap-12">
-          <p className="text-sm leading-relaxed text-white/60">{t("market.body")}</p>
+          <p className="text-sm leading-relaxed text-ink/60">{t("market.body")}</p>
           <ul className="space-y-2.5">
             {(["discover", "buy", "earn"] as const).map((point) => (
-              <li key={point} className="flex items-start gap-3 text-sm text-white/70">
+              <li key={point} className="flex items-start gap-3 text-sm text-ink/70">
                 <span className="mt-1.5 h-1.5 w-1.5 shrink-0 bg-amber-400/70" />
                 <span className="min-w-0">{t(`market.points.${point}`)}</span>
               </li>
@@ -238,11 +238,11 @@ export default async function LandingPage() {
           <div className="min-w-0">
             <div className="flex items-baseline gap-2">
               <span className="font-mono text-4xl font-light text-amber-300">¥29</span>
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/35">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink/35">
                 {t("membership.priceNote")}
               </span>
             </div>
-            <p className="mt-3 max-w-xl text-sm leading-relaxed text-white/55">
+            <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink/55">
               {t("membership.body")}
             </p>
           </div>
@@ -253,13 +253,13 @@ export default async function LandingPage() {
       </Section>
 
       {/* ── Closing CTA ───────────────────────────────────────────────── */}
-      <section className="border-t border-[#2b2f36] bg-[#0b0d10]">
+      <section className="border-t border-instrument-rule bg-instrument-panel">
         <div className="mx-auto max-w-6xl px-4 py-14 text-center sm:px-8 sm:py-20">
           <p className="instrument-kicker">{t("cta.kicker")}</p>
-          <h2 className="mx-auto mt-4 max-w-2xl text-2xl font-light tracking-tight text-white sm:text-3xl">
+          <h2 className="mx-auto mt-4 max-w-2xl text-2xl font-light tracking-tight text-ink sm:text-3xl">
             {t("cta.title")}
           </h2>
-          <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-white/50">
+          <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-ink/50">
             {t("cta.body")}
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">

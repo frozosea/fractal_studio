@@ -168,9 +168,9 @@ export default function AdminPage() {
       {error && <p className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">{error}</p>}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {statCards.map(({ label, value, hint, icon: Icon }) => (
-          <article key={label} className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+          <article key={label} className="rounded-xl border border-hairline/10 bg-wash/[0.025] p-4">
             <div className="flex items-center justify-between text-sm text-muted-foreground"><span>{label}</span><Icon className="h-4 w-4" /></div>
-            <p className="mt-3 text-2xl font-semibold text-white/90">{value}</p>
+            <p className="mt-3 text-2xl font-semibold text-ink/90">{value}</p>
             <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
           </article>
         ))}
@@ -184,10 +184,10 @@ export default function AdminPage() {
         </TabsList>
 
         <TabsContent value="accounts" className="space-y-4">
-          <section className="grid gap-2 rounded-xl border border-white/10 p-4 md:grid-cols-[minmax(12rem,1fr)_12rem_12rem_auto]">
+          <section className="grid gap-2 rounded-xl border border-hairline/10 p-4 md:grid-cols-[minmax(12rem,1fr)_12rem_12rem_auto]">
             <Input value={userQuery} placeholder={t("accounts.searchPlaceholder")} onChange={(event) => { setUserQuery(event.target.value); setNextUserCursor(null); }} onKeyDown={(event) => { if (event.key === "Enter") void loadUsers(); }} />
-            <select className="h-10 rounded-lg border border-white/[0.08] bg-[#15181e] px-3 text-sm text-white/75" value={userStatus} onChange={(event) => { setUserStatus(event.target.value as UserStatusFilter); setNextUserCursor(null); }}>{userStatuses.map((value) => <option key={value} value={value}>{t(`userStatus.${value}`)}</option>)}</select>
-            <select className="h-10 rounded-lg border border-white/[0.08] bg-[#15181e] px-3 text-sm text-white/75" value={userRole} onChange={(event) => { setUserRole(event.target.value as UserRoleFilter); setNextUserCursor(null); }}>{userRoles.map((value) => <option key={value} value={value}>{t(`role.${value}`)}</option>)}</select>
+            <select className="h-10 rounded-lg border border-hairline/[0.08] bg-instrument-raised px-3 text-sm text-ink/75" value={userStatus} onChange={(event) => { setUserStatus(event.target.value as UserStatusFilter); setNextUserCursor(null); }}>{userStatuses.map((value) => <option key={value} value={value}>{t(`userStatus.${value}`)}</option>)}</select>
+            <select className="h-10 rounded-lg border border-hairline/[0.08] bg-instrument-raised px-3 text-sm text-ink/75" value={userRole} onChange={(event) => { setUserRole(event.target.value as UserRoleFilter); setNextUserCursor(null); }}>{userRoles.map((value) => <option key={value} value={value}>{t(`role.${value}`)}</option>)}</select>
             <Button variant="outline" onClick={() => void loadUsers()}>{t("search")}</Button>
           </section>
           <div className="space-y-3">
@@ -195,10 +195,10 @@ export default function AdminPage() {
               const isSelf = row.id === user?.id;
               const rowBusy = busy === `user:${row.id}`;
               const creatorCannotBecomeAdmin = row.roles.includes("creator") && !row.roles.includes("admin");
-              return <article key={row.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+              return <article key={row.id} className="rounded-xl border border-hairline/10 bg-wash/[0.02] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <p className="truncate font-medium text-white/90">{row.email}</p>
+                    <p className="truncate font-medium text-ink/90">{row.email}</p>
                     <p className="mt-1 text-xs text-muted-foreground">{row.creatorProfile ? `${row.creatorProfile.displayName} · @${row.creatorProfile.handle}` : t("accounts.noCreatorProfile")} · {formatDate(row.createdAt)}</p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       <Badge variant={row.status === "active" ? "success" : "error"}>{t(`userStatus.${row.status}`)}</Badge>
@@ -225,26 +225,26 @@ export default function AdminPage() {
                 </div>
               </article>;
             })}
-            {!loading && users.length === 0 && <p className="rounded-xl border border-dashed border-white/10 p-8 text-center text-sm text-muted-foreground">{t("accounts.empty")}</p>}
+            {!loading && users.length === 0 && <p className="rounded-xl border border-dashed border-hairline/10 p-8 text-center text-sm text-muted-foreground">{t("accounts.empty")}</p>}
           </div>
           {nextUserCursor && <div className="flex justify-center"><Button variant="outline" onClick={() => void loadUsers(true)}>{t("loadMore")}</Button></div>}
         </TabsContent>
 
         <TabsContent value="market" className="space-y-4">
-          <section className="grid gap-2 rounded-xl border border-white/10 p-4 md:grid-cols-[minmax(12rem,1fr)_14rem_auto]">
+          <section className="grid gap-2 rounded-xl border border-hairline/10 p-4 md:grid-cols-[minmax(12rem,1fr)_14rem_auto]">
             <Input value={listingQuery} placeholder={t("market.searchPlaceholder")} onChange={(event) => { setListingQuery(event.target.value); setNextListingCursor(null); }} onKeyDown={(event) => { if (event.key === "Enter") void loadListings(); }} />
-            <select className="h-10 rounded-lg border border-white/[0.08] bg-[#15181e] px-3 text-sm text-white/75" value={listingStatus} onChange={(event) => { setListingStatus(event.target.value as ListingStatusFilter); setNextListingCursor(null); }}>{listingStatuses.map((value) => <option key={value} value={value}>{t(`listingStatus.${value}`)}</option>)}</select>
+            <select className="h-10 rounded-lg border border-hairline/[0.08] bg-instrument-raised px-3 text-sm text-ink/75" value={listingStatus} onChange={(event) => { setListingStatus(event.target.value as ListingStatusFilter); setNextListingCursor(null); }}>{listingStatuses.map((value) => <option key={value} value={value}>{t(`listingStatus.${value}`)}</option>)}</select>
             <Button variant="outline" onClick={() => void loadListings()}>{t("search")}</Button>
           </section>
           <div className="grid gap-4 xl:grid-cols-2">
             {listings.map((listing) => {
               const rowBusy = busy === `listing:${listing.id}`;
-              return <article key={listing.id} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02] sm:grid sm:grid-cols-[11rem_minmax(0,1fr)]">
-                <div className="aspect-[4/3] bg-white/[0.04] sm:aspect-auto">
+              return <article key={listing.id} className="overflow-hidden rounded-xl border border-hairline/10 bg-wash/[0.02] sm:grid sm:grid-cols-[11rem_minmax(0,1fr)]">
+                <div className="aspect-[4/3] bg-wash/[0.04] sm:aspect-auto">
                   {listing.preview?.thumbnailUrl ? <img src={listing.preview.thumbnailUrl} alt={listing.title} className="h-full w-full object-cover" loading="lazy" /> : <div className="flex h-full min-h-32 items-center justify-center text-xs text-muted-foreground">{t("market.noPreview")}</div>}
                 </div>
                 <div className="min-w-0 p-4">
-                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate font-medium text-white/90">{listing.title}</h2><p className="truncate text-xs text-muted-foreground">{listing.creatorDisplayName ?? listing.creatorHandle ?? listing.creatorEmail}</p></div><Badge variant={listing.status === "published" ? "success" : listing.status === "archived" ? "error" : "outline"}>{t(`listingStatus.${listing.status}`)}</Badge></div>
+                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate font-medium text-ink/90">{listing.title}</h2><p className="truncate text-xs text-muted-foreground">{listing.creatorDisplayName ?? listing.creatorHandle ?? listing.creatorEmail}</p></div><Badge variant={listing.status === "published" ? "success" : listing.status === "archived" ? "error" : "outline"}>{t(`listingStatus.${listing.status}`)}</Badge></div>
                   <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{listing.description || t("market.noDescription")}</p>
                   <p className="mt-2 text-xs text-muted-foreground">{listing.price} {listing.currency} · {t("market.activity", { favorites: listing.favoriteCount, sales: listing.saleCount })}</p>
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -254,16 +254,16 @@ export default function AdminPage() {
                 </div>
               </article>;
             })}
-            {!loading && listings.length === 0 && <p className="rounded-xl border border-dashed border-white/10 p-8 text-center text-sm text-muted-foreground xl:col-span-2">{t("market.empty")}</p>}
+            {!loading && listings.length === 0 && <p className="rounded-xl border border-dashed border-hairline/10 p-8 text-center text-sm text-muted-foreground xl:col-span-2">{t("market.empty")}</p>}
           </div>
           {nextListingCursor && <div className="flex justify-center"><Button variant="outline" onClick={() => void loadListings(true)}>{t("loadMore")}</Button></div>}
         </TabsContent>
 
         <TabsContent value="details">
           {statistics && <div className="grid gap-4 lg:grid-cols-3">
-            <section className="rounded-xl border border-white/10 p-4"><h2 className="font-medium">{t("details.accounts")}</h2><dl className="mt-3 space-y-2 text-sm">{[[t("details.active"), statistics.users.active], [t("details.disabled"), statistics.users.disabled], [t("details.members"), statistics.users.members], [t("details.creators"), statistics.users.creators], [t("details.admins"), statistics.users.admins]].map(([label, value]) => <div key={String(label)} className="flex justify-between gap-4"><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl></section>
-            <section className="rounded-xl border border-white/10 p-4"><h2 className="font-medium">{t("details.market")}</h2><dl className="mt-3 space-y-2 text-sm">{[[t("listingStatus.published"), statistics.market.published], [t("listingStatus.draft"), statistics.market.draft], [t("listingStatus.unpublished"), statistics.market.unpublished], [t("listingStatus.archived"), statistics.market.archived], [t("details.readyAssets"), statistics.market.readyAssets]].map(([label, value]) => <div key={String(label)} className="flex justify-between gap-4"><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl></section>
-            <section className="rounded-xl border border-white/10 p-4"><h2 className="font-medium">{t("details.commerce")}</h2><dl className="mt-3 space-y-2 text-sm">{[[t("details.orders"), statistics.commerce.orders], [t("details.pending"), statistics.commerce.pendingPayment], [t("details.exceptions"), statistics.commerce.paymentExceptions], [t("details.creatorRevenue"), `¥${statistics.commerce.creatorRevenueCny}`], [t("details.platformRevenue"), `¥${statistics.commerce.platformRevenueCny}`]].map(([label, value]) => <div key={String(label)} className="flex justify-between gap-4"><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl></section>
+            <section className="rounded-xl border border-hairline/10 p-4"><h2 className="font-medium">{t("details.accounts")}</h2><dl className="mt-3 space-y-2 text-sm">{[[t("details.active"), statistics.users.active], [t("details.disabled"), statistics.users.disabled], [t("details.members"), statistics.users.members], [t("details.creators"), statistics.users.creators], [t("details.admins"), statistics.users.admins]].map(([label, value]) => <div key={String(label)} className="flex justify-between gap-4"><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl></section>
+            <section className="rounded-xl border border-hairline/10 p-4"><h2 className="font-medium">{t("details.market")}</h2><dl className="mt-3 space-y-2 text-sm">{[[t("listingStatus.published"), statistics.market.published], [t("listingStatus.draft"), statistics.market.draft], [t("listingStatus.unpublished"), statistics.market.unpublished], [t("listingStatus.archived"), statistics.market.archived], [t("details.readyAssets"), statistics.market.readyAssets]].map(([label, value]) => <div key={String(label)} className="flex justify-between gap-4"><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl></section>
+            <section className="rounded-xl border border-hairline/10 p-4"><h2 className="font-medium">{t("details.commerce")}</h2><dl className="mt-3 space-y-2 text-sm">{[[t("details.orders"), statistics.commerce.orders], [t("details.pending"), statistics.commerce.pendingPayment], [t("details.exceptions"), statistics.commerce.paymentExceptions], [t("details.creatorRevenue"), `¥${statistics.commerce.creatorRevenueCny}`], [t("details.platformRevenue"), `¥${statistics.commerce.platformRevenueCny}`]].map(([label, value]) => <div key={String(label)} className="flex justify-between gap-4"><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl></section>
           </div>}
         </TabsContent>
       </Tabs>

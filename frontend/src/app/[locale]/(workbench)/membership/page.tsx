@@ -59,6 +59,8 @@ export default function MembershipPage() {
       <div className="flex min-h-[60dvh] items-center justify-center">
         <div className="w-full max-w-lg space-y-8 text-center">
           <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shadow-lg shadow-amber-500/20">
+            {/* Sits on the amber gradient, not on the page surface, so it
+                stays white in both themes. */}
             <Crown className="h-10 w-10 text-white" />
           </div>
           <div>
@@ -72,7 +74,7 @@ export default function MembershipPage() {
               { icon: Zap, text: t("membership.benefitAll") },
               { icon: Sparkles, text: t("membership.benefitExport") },
             ].map((b, i) => (
-              <div key={i} className="flex items-start gap-2 rounded-lg bg-white/5 p-3">
+              <div key={i} className="flex items-start gap-2 rounded-lg bg-wash/5 p-3">
                 <b.icon className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
                 <span className="text-sm">{b.text}</span>
               </div>
@@ -88,7 +90,7 @@ export default function MembershipPage() {
       <div className="w-full max-w-lg space-y-8 text-center">
         {/* Hero */}
         <div className="space-y-3">
-          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-white/5 ring-1 ring-white/10">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-wash/5 ring-1 ring-hairline/10">
             <Crown className="h-10 w-10 text-muted-foreground" />
           </div>
           <h1 className="text-2xl font-bold">{t("membership.title")}</h1>

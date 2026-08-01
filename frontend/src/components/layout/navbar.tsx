@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils/cn";
 import { PanelLeft, LogOut, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LocaleSwitcher } from "@/components/layout/locale-switcher";
+import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { useAuth } from "@/providers/auth-provider";
 import { useTranslations } from "next-intl";
 
@@ -17,7 +18,7 @@ export function Navbar({ title, onToggleSidebar }: NavbarProps) {
   const { user, logout } = useAuth();
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-[#2b2f36] bg-[#0a0b0d] px-4">
+    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-instrument-rule bg-instrument px-4">
       {/* Left: Sidebar toggle */}
       <Button
         variant="ghost"
@@ -38,7 +39,7 @@ export function Navbar({ title, onToggleSidebar }: NavbarProps) {
       <div className="flex items-center gap-3 shrink-0">
         {/* Backend status indicator — the whole pill goes on phones, not just
             its label, or it crowds the title out below ~400px. */}
-        <div className="hidden items-center gap-2 rounded-lg border border-white/5 bg-deep-slate/30 px-3 py-1.5 sm:flex">
+        <div className="hidden items-center gap-2 rounded-lg border border-hairline/5 bg-deep-slate/30 px-3 py-1.5 sm:flex">
           <span
             className={cn(
               "relative flex h-2 w-2",
@@ -65,7 +66,7 @@ export function Navbar({ title, onToggleSidebar }: NavbarProps) {
 
         {/* User info + logout */}
         {user && (
-          <div className="flex items-center gap-2 rounded-lg border border-white/5 bg-deep-slate/30 px-3 py-1.5">
+          <div className="flex items-center gap-2 rounded-lg border border-hairline/5 bg-deep-slate/30 px-3 py-1.5">
             <User className="h-3 w-3 text-fractal-400" />
             <span className="text-xs text-muted-foreground hidden sm:inline">
               {user.creatorProfile?.displayName ?? user.email}
@@ -82,6 +83,7 @@ export function Navbar({ title, onToggleSidebar }: NavbarProps) {
           </div>
         )}
 
+        <ThemeToggle />
         <LocaleSwitcher />
       </div>
     </header>

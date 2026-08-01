@@ -56,14 +56,78 @@ export function isPublicPath(pathname: string): boolean { … }
 
 - **仪器风格（琥珀色）** — `.public-instrument`、`.auth-instrument`、`.scientific-studio`、
   `.instrument-panel`、`.instrument-kicker`、`.instrument-control`、`.instrument-note`、
-  `.instrument-rule`、`.scientific-canvas`。琥珀 `#f0a030`、分隔线 `#2b2f36`、1–2px 圆角、
-  等宽大写 kicker、48px 坐标纸。用于公开页面、登录注册、`/studio`、侧边栏与顶栏。
+  `.instrument-rule`、`.scientific-canvas`。1–2px 圆角、等宽大写 kicker、48px 坐标纸。
+  用于公开页面、登录注册、`/studio`、侧边栏与顶栏。颜色一律走
+  `--instrument-*` token（`bg-instrument`、`border-instrument-rule` 等），
+  不要再写 `#f0a030` / `#2b2f36` 这类字面值。
 - **深空玻璃（紫青）** — `.fractal-ambient`、`.glass-panel*`、`.gradient-text`、`.btn-glow`、
   `.canvas-glow`，以及 `fractal.*` / `neon.*` / `deep.*` 调色板。`Card` 就是 `.glass-panel`。
   用于会员页与商业化页面。
 
-只有 `:root` 一套 token，没有 `.dark {}` 块——`<html className="dark">` 是写死的，
-当前没有浅色主题。
+## Theming / 明暗主题
+
+`:root` 是浅色，`.dark` 是深色，`ThemeProvider` 在 `<html>` 上切 class。
+可选值 `light` / `dark` / `system`，存在 localStorage 的 `fractal-studio-theme`，
+默认跟随系统。切换控件是 `ThemeToggle`，挂在 `PublicHeader`、`Navbar` 和 `(auth)` layout
+的 `LocaleSwitcher` 旁边。
+
+### 写新样式时要知道的三件事
+
+**1. 一部分 token 表示"方向"而不是颜色。** 全站原本写满了 `bg-white/5`、
+`border-white/10`、`text-white/60`，它们的含义是"相对表面往反方向走一档"，不是白色。
+这些已经换成会随主题翻转的 `wash` / `hairline` / `ink`：
+
+| 原来 | 现在 |
+|---|---|
+| `bg-white/5` | `bg-wash/5` |
+| `border-white/10` | `border-hairline/10` |
+| `text-white/60`、`text-white` | `text-ink/60`、`text-ink` |
+
+透明度照旧，只有方向变。**新代码不要再写 `text-white` 这类字面值**，除非那段文字确实压在
+彩色块上（见第 3 条）。
+
+需要注意一个不对称：**同一个 alpha 在浅色下拿到的对比度比深色低**（浅背景上做 alpha
+合成本来就更吃亏），所以两种主题下同一个 class 的可读性不一样。实测值（对
+`--instrument-bg`）：
+
+| class | 浅色 | 深色 |
+|---|---|---|
+| `text-ink/80` | 10.6:1 | 12.6:1 |
+| `text-ink/60` | 5.1:1 | 7.3:1 |
+| `text-ink/50` | 3.6:1 | 5.3:1 |
+| `text-ink/45` | 3.1:1 | 4.5:1 |
+| `text-ink/35` | 2.3:1 | 3.1:1 |
+
+因此定了一条线：**要读的正文一律 `/60` 起**（浅色 5.1:1，过 AA），`/45` 及以下只留给
+装饰性内容——等宽大写 kicker、计数、分隔点、坐标读数。本轮已经把副标题、表单标签、
+侧边栏导航项、页脚链接、正文段落从 `/35`–`/45` 提到了 `/60`；`--ink` 在浅色下也压到接近
+纯黑，就是为了把这条曲线整体抬起来。
+
+**2. `amber.*` 与 `fractal.*` 的色号表示对比度，浅色主题下整条色阶是反的。**
+`text-amber-100` 是"最亮的强调文字"，在纸面上必须变成最深的棕色，所以
+`--amber-100` 在 `:root` 里是深棕、在 `.dark` 里才是浅黄。`fractal` 同理，`500` 是枢轴
+（两种表面上都够对比度，不动）。想加新色号，按这个约定写两套值，不要只写一套。
+
+**3. 有三类颜色故意不跟随主题**，改动时不要"顺手统一"：
+
+- **画布 HUD** — `interactive-fractal-canvas.tsx` 里的 `bg-black/75`、`border-white/20`
+  等压在渲染出来的分形图上，图是什么颜色都要能读，所以两种主题下都保持深色。
+  这个文件整体被排除在迁移之外。
+- **配方参数** — `studio/page.tsx` 的 `interiorColor`、`invalidColor`、gradient stops
+  是作品数据，不是 UI 配色。
+- **彩色块上的文字** — 会员页与支付结果页压在琥珀渐变圆上的图标保持 `text-white`；
+  紫色按钮用 `text-primary-foreground`。品牌实心块用 `bg-brand` + `text-brand-ink`。
+
+### 首屏不闪
+
+`src/lib/theme.ts` 的 `THEME_INIT_SCRIPT` 由根 layout 内联进 `<head>`，在首次绘制前
+读 localStorage 并写好 class 与 `color-scheme`；`<html>` 因此带 `suppressHydrationWarning`，
+且**服务端不再写死 `className="dark"`**。这段脚本无法被 import，所以
+`tests/e2e/theme.spec.ts` 直接把它塞进桩 DOM 执行，保证它和 `resolveTheme` 不会漂移
+（该测试不申请浏览器 fixture，可离线跑）。
+
+`viewport.themeColor` 按 `prefers-color-scheme` 给两个值。它跟随系统而非应用内选择——
+浏览器在任何 JS 执行前就要读它，读不到用户存的偏好。
 
 ## Responsive strategy / 响应式策略
 

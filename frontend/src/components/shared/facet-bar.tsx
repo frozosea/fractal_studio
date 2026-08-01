@@ -59,7 +59,7 @@ export function FacetBar({ facets, selection, onChange, disabled }: FacetBarProp
     <div className="space-y-2">
       {rows.map(({ facet, values }) => (
         <div key={facet} className="flex items-center gap-3">
-          <span className="w-16 shrink-0 font-mono text-[10px] uppercase tracking-[0.14em] text-white/30">
+          <span className="w-16 shrink-0 font-mono text-[10px] uppercase tracking-[0.14em] text-ink/30">
             {tFacets(facet)}
           </span>
           {/* Only this row scrolls; the page never moves sideways. */}
@@ -78,18 +78,18 @@ export function FacetBar({ facets, selection, onChange, disabled }: FacetBarProp
                     "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition-colors duration-150 disabled:opacity-40 coarse:py-2",
                     isActive
                       ? "border-amber-400/60 bg-amber-400/10 text-amber-200"
-                      : "border-white/10 text-white/55 hover:border-white/20 hover:text-white/80",
+                      : "border-hairline/10 text-ink/55 hover:border-hairline/20 hover:text-ink/80",
                   )}
                 >
                   {swatch && (
                     <span
                       aria-hidden="true"
-                      className="h-2.5 w-4 shrink-0 rounded-sm border border-white/10"
+                      className="h-2.5 w-4 shrink-0 rounded-sm border border-hairline/10"
                       style={{ background: swatch }}
                     />
                   )}
                   {label(facet, value)}
-                  <span className="text-white/30">{count}</span>
+                  <span className="text-ink/30">{count}</span>
                 </button>
               );
             })}

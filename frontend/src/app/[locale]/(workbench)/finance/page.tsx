@@ -73,14 +73,14 @@ export default function FinancePage() {
       </div>
       {error && <p className="text-red-400">{error}</p>}
       {rows.length === 0 && (
-        <p className="rounded-xl border border-dashed border-white/15 p-6 text-sm text-muted-foreground">
+        <p className="rounded-xl border border-dashed border-hairline/15 p-6 text-sm text-muted-foreground">
           {t("finance.empty")}
         </p>
       )}
 
       <div className="space-y-3">
         {rows.map((row) => (
-          <article key={row.id} className="rounded-xl border border-white/10 p-4">
+          <article key={row.id} className="rounded-xl border border-hairline/10 p-4">
             {/* Stacks under `sm`: an amount, a status and two buttons do not fit
                 on one line at phone width. */}
             <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">

@@ -63,10 +63,10 @@ export function RenderMeta({ render, className }: RenderMetaProps) {
     render.viewScale && render.viewScale > 0 ? Math.log10(BASE_SCALE / render.viewScale) : null;
 
   return (
-    <p className={cn("flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono text-[11px] text-white/40", className)}>
+    <p className={cn("flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono text-[11px] text-ink/60", className)}>
       {parts.map((part, index) => (
         <span key={`${part}-${index}`} className="whitespace-nowrap">
-          {index > 0 && <span className="mr-1.5 text-white/20">·</span>}
+          {index > 0 && <span className="mr-1.5 text-ink/20">·</span>}
           {part}
         </span>
       ))}

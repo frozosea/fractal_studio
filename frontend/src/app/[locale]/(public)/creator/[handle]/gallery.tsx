@@ -53,13 +53,13 @@ export function CreatorGallery({ handle }: { handle: string }) {
       {isLoading && (
         <div className="grid gap-4 lg:gap-5" style={CARD_GRID_STYLE} aria-label={t("marketplace.loading")}>
           {Array.from({ length: 6 }, (_, index) => (
-            <div key={index} className="aspect-[4/3] animate-pulse rounded-xl bg-white/5" />
+            <div key={index} className="aspect-[4/3] animate-pulse rounded-xl bg-wash/5" />
           ))}
         </div>
       )}
 
       {!isLoading && items.length === 0 && !error && (
-        <p className="rounded-xl border border-dashed border-white/15 p-6 text-sm text-muted-foreground">
+        <p className="rounded-xl border border-dashed border-hairline/15 p-6 text-sm text-muted-foreground">
           {tCreator("empty")}
         </p>
       )}

@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { Link, usePathname } from "@/i18n/navigation";
 import { Button } from "@/components/ui/button";
 import { LocaleSwitcher } from "@/components/layout/locale-switcher";
+import { ThemeToggle } from "@/components/layout/theme-toggle";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,15 +31,15 @@ export function PublicHeader() {
 
   return (
     <header
-      className="sticky top-0 z-40 border-b border-[#2b2f36] bg-[#090a0c]/92 backdrop-blur"
+      className="sticky top-0 z-40 border-b border-instrument-rule bg-instrument/92 backdrop-blur"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 sm:px-8">
         <Link href="/" className="flex shrink-0 items-center gap-2.5" aria-label={t("nav.home")}>
-          <span className="flex h-7 w-7 items-center justify-center bg-amber-400 text-xs font-bold text-black">
+          <span className="flex h-7 w-7 items-center justify-center bg-brand text-xs font-bold text-brand-ink">
             F
           </span>
-          <span className="text-sm font-semibold tracking-wide text-white">Fractal Studio</span>
+          <span className="text-sm font-semibold tracking-wide text-ink">Fractal Studio</span>
         </Link>
 
         {/* Desktop links */}
@@ -50,7 +51,7 @@ export function PublicHeader() {
               aria-current={isCurrent(link.href) ? "page" : undefined}
               className={cn(
                 "px-3 py-1.5 text-sm transition-colors duration-150",
-                isCurrent(link.href) ? "text-amber-300" : "text-white/50 hover:text-white/80",
+                isCurrent(link.href) ? "text-amber-300" : "text-ink/50 hover:text-ink/80",
               )}
             >
               {t(`nav.${link.key}`)}
@@ -59,6 +60,7 @@ export function PublicHeader() {
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
+          <ThemeToggle />
           <LocaleSwitcher />
           {isAuthenticated ? (
             <Button asChild size="sm" className="coarse:h-10">
