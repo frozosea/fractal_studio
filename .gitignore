@@ -25,6 +25,7 @@
 # Local Codex/agent state
 /.codex
 /.codex/
+/.claude/
 
 
 # Frontend deps/build
