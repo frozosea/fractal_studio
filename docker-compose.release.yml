@@ -16,6 +16,12 @@ services:
     ports: !override
       - "127.0.0.1:${COMPUTE_PORT:-18101}:18080"
 
+  compute-gateway-db:
+    ports: !reset []
+
+  compute-gateway:
+    ports: !reset []
+
   alipay-stub:
     ports: !override
       - "127.0.0.1:${ALIPAY_STUB_PORT:-18102}:8000"

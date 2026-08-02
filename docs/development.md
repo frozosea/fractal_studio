@@ -38,7 +38,7 @@ Browser requests use the same public origin:
 
 ```text
 Browser -> http://localhost:3010/platform/v1/* -> Next reverse proxy -> Platform
-Platform worker -> http://compute:18080/compute/v1/* -> C++ Compute
+Platform worker -> http://compute-gateway:8080/compute/v1/* -> Compute Gateway -> C++ Compute
 ```
 
 Platform session authentication is the `fs_session` HttpOnly cookie. Mutating

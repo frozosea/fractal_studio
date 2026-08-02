@@ -1,0 +1,31 @@
+[project]
+name = "fractal-compute-gateway"
+version = "0.1.0"
+description = "Private stateful router for Fractal Studio Compute nodes"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.16,<2",
+  "asyncpg>=0.30,<1",
+  "fastapi>=0.115,<1",
+  "greenlet>=3.1,<4",
+  "httpx>=0.28,<1",
+  "pydantic-settings>=2.7,<3",
+  "psycopg[binary]>=3.2,<4",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+  "ruff>=0.9,<1",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
