@@ -36,7 +36,7 @@ function statusConfig(status: PaymentStatus, t: ReturnType<typeof useTranslation
       badgeVariant: "running",
     },
     success: {
-      icon: <CheckCircle className="h-12 w-12 text-green-400" />,
+      icon: <CheckCircle className="h-12 w-12 text-emerald-400" />,
       title: t("paymentResult.success.title"),
       description: t("paymentResult.success.description"),
       badge: t("paymentResult.success.badge"),
@@ -50,7 +50,7 @@ function statusConfig(status: PaymentStatus, t: ReturnType<typeof useTranslation
       badgeVariant: "warning",
     },
     closed: {
-      icon: <XCircle className="h-12 w-12 text-gray-400" />,
+      icon: <XCircle className="h-12 w-12 text-muted-foreground" />,
       title: t("paymentResult.closed.title"),
       description: t("paymentResult.closed.description"),
       badge: t("paymentResult.closed.badge"),
@@ -64,7 +64,7 @@ function statusConfig(status: PaymentStatus, t: ReturnType<typeof useTranslation
       badgeVariant: "destructive",
     },
     not_found: {
-      icon: <XCircle className="h-12 w-12 text-gray-400" />,
+      icon: <XCircle className="h-12 w-12 text-muted-foreground" />,
       title: t("paymentResult.notFound.title"),
       description: t("paymentResult.notFound.description"),
       badge: t("paymentResult.notFound.badge"),
@@ -166,7 +166,7 @@ export default function PaymentResultPage() {
       <div className="w-full max-w-md space-y-6 text-center">
         <div className="flex justify-center">
           {isMembership ? (
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shadow-lg shadow-amber-500/20">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-amber-500 shadow-lg shadow-amber-500/20">
               {/* On the amber gradient, so white in both themes. */}
               <svg className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />

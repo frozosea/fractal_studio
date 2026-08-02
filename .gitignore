@@ -32,6 +32,9 @@
 /frontend/node_modules/
 /frontend/dist/
 /frontend/*.tsbuildinfo
+# frontend/.gitignore already covers /frontend/.next; this catches a stray
+# build run from the repo root, which leaves trace files here instead.
+/.next/
 
 # Python caches and local environments
 __pycache__/

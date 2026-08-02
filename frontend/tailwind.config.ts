@@ -1,6 +1,15 @@
 import type { Config } from "tailwindcss";
 import plugin from "tailwindcss/plugin";
 
+const RAMP_STEPS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950] as const;
+
+/** A full 50–950 scale wired to `--<name>-<step>` custom properties. */
+function rampVars(name: string): Record<string, string> {
+  return Object.fromEntries(
+    RAMP_STEPS.map((step) => [step, `rgb(var(--${name}-${step}) / <alpha-value>)`]),
+  );
+}
+
 const config: Config = {
   darkMode: ["class"],
   future: {
@@ -36,16 +45,17 @@ const config: Config = {
         hairline: "rgb(var(--hairline) / <alpha-value>)",
         ink: "rgb(var(--ink) / <alpha-value>)",
 
-        // Amber is this project's accent, and its shade number encodes
-        // contrast against the surface rather than lightness, so the ramp is
-        // inverted in the light theme. See the note in globals.css.
-        amber: {
-          100: "rgb(var(--amber-100) / <alpha-value>)",
-          200: "rgb(var(--amber-200) / <alpha-value>)",
-          300: "rgb(var(--amber-300) / <alpha-value>)",
-          400: "rgb(var(--amber-400) / <alpha-value>)",
-          500: "rgb(var(--amber-500) / <alpha-value>)",
-        },
+        // Amber is this project's accent, red and emerald its failure and
+        // success states. In all three the shade number encodes contrast
+        // against the surface rather than lightness, so each ramp mirrors
+        // about 500 in the light theme. See the note in globals.css.
+        //
+        // Every step is listed even where the app uses only a few: `extend`
+        // deep-merges with Tailwind's defaults, so any step left out keeps its
+        // stock literal and the scale reverses direction partway up.
+        amber: rampVars("amber"),
+        red: rampVars("red"),
+        emerald: rampVars("emerald"),
         // A solid accent fill has to stay amber in both themes — inverting it
         // would turn the logo mark into a brown square. Only its ink flips.
         brand: {
@@ -89,19 +99,7 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-        fractal: {
-          50: "rgb(var(--fractal-50) / <alpha-value>)",
-          100: "rgb(var(--fractal-100) / <alpha-value>)",
-          200: "rgb(var(--fractal-200) / <alpha-value>)",
-          300: "rgb(var(--fractal-300) / <alpha-value>)",
-          400: "rgb(var(--fractal-400) / <alpha-value>)",
-          500: "rgb(var(--fractal-500) / <alpha-value>)",
-          600: "rgb(var(--fractal-600) / <alpha-value>)",
-          700: "rgb(var(--fractal-700) / <alpha-value>)",
-          800: "rgb(var(--fractal-800) / <alpha-value>)",
-          900: "rgb(var(--fractal-900) / <alpha-value>)",
-          950: "rgb(var(--fractal-950) / <alpha-value>)",
-        },
+        fractal: rampVars("fractal"),
         neon: {
           purple: "rgb(var(--neon-purple) / <alpha-value>)",
           cyan: "rgb(var(--neon-cyan) / <alpha-value>)",

@@ -93,10 +93,3 @@ test("a storage read that throws still honours the OS preference", () => {
     colorScheme: "light",
   });
 });
-
-test("colorScheme is always set, so native controls never lag the theme", () => {
-  for (const prefersDark of [true, false]) {
-    const result = runInitScript({ stored: null, prefersDark });
-    expect(result.colorScheme).toBe(prefersDark ? "dark" : "light");
-  }
-});

@@ -58,7 +58,7 @@ export default function MembershipPage() {
     return (
       <div className="flex min-h-[60dvh] items-center justify-center">
         <div className="w-full max-w-lg space-y-8 text-center">
-          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shadow-lg shadow-amber-500/20">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-amber-500 shadow-lg shadow-amber-500/20">
             {/* Sits on the amber gradient, not on the page surface, so it
                 stays white in both themes. */}
             <Crown className="h-10 w-10 text-white" />
@@ -117,7 +117,7 @@ export default function MembershipPage() {
                 t("membership.benefitExport"),
               ].map((b, i) => (
                 <li key={i} className="flex items-center gap-2 text-sm">
-                  <Check className="h-4 w-4 shrink-0 text-green-400" />
+                  <Check className="h-4 w-4 shrink-0 text-emerald-400" />
                   {b}
                 </li>
               ))}

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useMediaQuery } from "@/lib/hooks/use-media-query";
 import {
   DARK_MEDIA_QUERY,
   THEME_STORAGE_KEY,
@@ -26,10 +27,6 @@ interface ThemeContextValue {
 
 const ThemeContext = React.createContext<ThemeContextValue | null>(null);
 
-function systemPrefersDark(): boolean {
-  return window.matchMedia(DARK_MEDIA_QUERY).matches;
-}
-
 function readStoredTheme(): Theme {
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -50,31 +47,31 @@ function applyTheme(resolved: ResolvedTheme) {
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = React.useState<Theme>("system");
-  const [resolvedTheme, setResolvedTheme] = React.useState<ResolvedTheme>("dark");
   const [ready, setReady] = React.useState(false);
 
-  // THEME_INIT_SCRIPT has already put the right class on <html>; this only
-  // tells React what it chose, so no re-apply is needed here.
+  // Subscribing through the shared hook rather than a local matchMedia
+  // listener: it is tearing-safe, and it means the OS flipping to dark at
+  // sunset re-renders us for free while the preference is "system".
+  const systemPrefersDark = useMediaQuery(DARK_MEDIA_QUERY);
+
+  // Derived, not state. Holding it separately would mean writing it on mount,
+  // on every OS change and in setTheme, with three chances to drift from
+  // `theme`.
+  const resolvedTheme = resolveTheme(theme, systemPrefersDark);
+
   React.useEffect(() => {
-    const stored = readStoredTheme();
-    setThemeState(stored);
-    setResolvedTheme(resolveTheme(stored, systemPrefersDark()));
+    setThemeState(readStoredTheme());
     setReady(true);
   }, []);
 
-  // Track the OS while the preference is "system" — someone flipping their
-  // desktop to dark at sunset should see the app follow without a reload.
+  // THEME_INIT_SCRIPT already applied the right class before first paint, so
+  // nothing is touched until the stored preference has been read — otherwise
+  // the pre-hydration render, which cannot know it, would clobber the class.
+  // After that this one effect covers both a user pick and an OS change.
   React.useEffect(() => {
-    if (theme !== "system") return;
-    const media = window.matchMedia(DARK_MEDIA_QUERY);
-    const onChange = () => {
-      const next: ResolvedTheme = media.matches ? "dark" : "light";
-      setResolvedTheme(next);
-      applyTheme(next);
-    };
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, [theme]);
+    if (!ready) return;
+    applyTheme(resolvedTheme);
+  }, [ready, resolvedTheme]);
 
   const setTheme = React.useCallback((next: Theme) => {
     setThemeState(next);
@@ -83,9 +80,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // A rejected write costs persistence, not the switch itself.
     }
-    const resolved = resolveTheme(next, systemPrefersDark());
-    setResolvedTheme(resolved);
-    applyTheme(resolved);
   }, []);
 
   const value = React.useMemo<ThemeContextValue>(

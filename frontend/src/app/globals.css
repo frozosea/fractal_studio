@@ -77,13 +77,48 @@
        surface — on paper the same roles need dark browns. `brand` is separate
        because a solid accent fill must stay recognisably amber in both
        themes; only its ink flips. */
+    --amber-50: 69 26 3;
     --amber-100: 107 47 8;
     --amber-200: 125 60 7;
     --amber-300: 144 73 10;
     --amber-400: 163 86 11;
     --amber-500: 180 97 12;
+    --amber-600: 251 191 36;
+    --amber-700: 252 211 77;
+    --amber-800: 253 230 138;
+    --amber-900: 254 243 199;
+    --amber-950: 255 251 235;
     --brand: 217 138 26;
     --brand-ink: 26 16 2;
+
+    /* Status ramps mirror about 500 for the same reason as amber. They must be
+       defined for every step, not just the ones in use: `extend` deep-merges
+       with Tailwind's defaults, so a half-overridden scale would silently
+       reverse direction partway up and `text-red-600` would read lighter than
+       `text-red-500`. */
+    --red-50: 69 10 10;
+    --red-100: 127 29 29;
+    --red-200: 153 27 27;
+    --red-300: 185 28 28;
+    --red-400: 220 38 38;
+    --red-500: 239 68 68;
+    --red-600: 248 113 113;
+    --red-700: 252 165 165;
+    --red-800: 254 202 202;
+    --red-900: 254 226 226;
+    --red-950: 254 242 242;
+
+    --emerald-50: 2 44 34;
+    --emerald-100: 6 78 59;
+    --emerald-200: 6 95 70;
+    --emerald-300: 4 120 87;
+    --emerald-400: 5 150 105;
+    --emerald-500: 16 185 129;
+    --emerald-600: 52 211 153;
+    --emerald-700: 110 231 183;
+    --emerald-800: 167 243 208;
+    --emerald-900: 209 250 229;
+    --emerald-950: 236 253 245;
 
     /* ─── Purple ramp, inverted for the same reason as amber. 500 is the
            pivot: it carries text on either surface, so it does not move. ─── */
@@ -201,13 +236,45 @@
     --hairline: 255 255 255;
     --ink: 255 255 255;
 
+    --amber-50: 255 251 235;
     --amber-100: 254 243 199;
     --amber-200: 253 230 138;
     --amber-300: 252 211 77;
     --amber-400: 251 191 36;
     --amber-500: 245 158 11;
+    --amber-600: 217 119 6;
+    --amber-700: 180 83 9;
+    --amber-800: 146 64 14;
+    --amber-900: 120 53 15;
+    --amber-950: 69 26 3;
     --brand: 240 160 48;
     --brand-ink: 10 11 13;
+
+    /* Stock Tailwind values — the dark theme is what these ramps were authored
+       against, so it is the identity case. */
+    --red-50: 254 242 242;
+    --red-100: 254 226 226;
+    --red-200: 254 202 202;
+    --red-300: 252 165 165;
+    --red-400: 248 113 113;
+    --red-500: 239 68 68;
+    --red-600: 220 38 38;
+    --red-700: 185 28 28;
+    --red-800: 153 27 27;
+    --red-900: 127 29 29;
+    --red-950: 69 10 10;
+
+    --emerald-50: 236 253 245;
+    --emerald-100: 209 250 229;
+    --emerald-200: 167 243 208;
+    --emerald-300: 110 231 183;
+    --emerald-400: 52 211 153;
+    --emerald-500: 16 185 129;
+    --emerald-600: 5 150 105;
+    --emerald-700: 4 120 87;
+    --emerald-800: 6 95 70;
+    --emerald-900: 6 78 59;
+    --emerald-950: 2 44 34;
 
     --fractal-50: 245 240 255;
     --fractal-100: 237 229 255;
@@ -332,14 +399,21 @@
   }
 
   /* The starfield is dark-only: white pinpricks on paper just look like dust,
-     and darkening them to suit the light theme reads as dirt on the screen. */
-  .dark .fractal-ambient::after {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    pointer-events: none;
+     and darkening them to suit the light theme reads as dirt on the screen.
+     It re-declares the blooms rather than living on its own ::after — an
+     identically positioned layer running the identical animation would be
+     promoted to a second full-viewport compositor texture and drift in
+     lockstep with the first, costing the memory for no visible difference.
+     The 400px tile keeps each pinprick from rasterising over the whole
+     viewport. */
+  .dark .fractal-ambient::before {
     background:
+      radial-gradient(ellipse 60% 50% at 15% 25%,
+        hsl(271 85% 55% / var(--ambient-bloom-alpha)) 0%, transparent 70%),
+      radial-gradient(ellipse 50% 55% at 85% 65%,
+        hsl(178 75% 50% / var(--ambient-bloom-alpha-soft)) 0%, transparent 70%),
+      radial-gradient(ellipse 40% 40% at 55% 45%,
+        hsl(271 85% 55% / var(--ambient-bloom-alpha-soft)) 0%, transparent 65%),
       radial-gradient(1px 1px at 10% 20%, hsl(0 0% 100% / 0.12) 0%, transparent 100%),
       radial-gradient(1px 1px at 30% 60%, hsl(0 0% 100% / 0.08) 0%, transparent 100%),
       radial-gradient(1px 1px at 55% 15%, hsl(0 0% 100% / 0.10) 0%, transparent 100%),
@@ -348,7 +422,15 @@
       radial-gradient(1px 1px at 20% 85%, hsl(0 0% 100% / 0.07) 0%, transparent 100%),
       radial-gradient(1px 1px at 45% 40%, hsl(0 0% 100% / 0.05) 0%, transparent 100%),
       radial-gradient(1px 1px at 95% 10%, hsl(0 0% 100% / 0.08) 0%, transparent 100%);
-    animation: aurora-drift 60s ease-in-out infinite;
+    background-size: 100% 100%, 100% 100%, 100% 100%, 400px 400px;
+  }
+
+  /* The ambient layer is decorative and runs forever; honour a request to
+     stop it. */
+  @media (prefers-reduced-motion: reduce) {
+    .fractal-ambient::before {
+      animation: none;
+    }
   }
 
   .fractal-ambient > * {

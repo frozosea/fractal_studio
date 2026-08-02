@@ -29,21 +29,28 @@ export function ThemeToggle() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="gap-1.5 px-2 text-xs" aria-label={t("label")}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-1.5 px-2 text-xs coarse:h-10"
+          aria-label={t("label")}
+        >
           {/* The stored preference is unknown until the client reads it, so the
               slot is held open rather than filled with a guess that would swap
               under the user a frame later. */}
           {ready ? <Icon className="h-3.5 w-3.5" /> : <span className="h-3.5 w-3.5" aria-hidden />}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[8rem]">
+      {/* Geometry and the current-item colour match LocaleSwitcher deliberately
+          — the two menus sit side by side in every shell. */}
+      <DropdownMenuContent align="end" className="min-w-[100px]">
         {options.map((option) => {
           const OptionIcon = option.icon;
           return (
             <DropdownMenuItem
               key={option.value}
               onClick={() => setTheme(option.value)}
-              className={cn("gap-2", ready && theme === option.value && "text-amber-300")}
+              className={cn("gap-2", theme === option.value && "text-fractal-400")}
             >
               <OptionIcon className="h-3.5 w-3.5" />
               {t(option.value)}
