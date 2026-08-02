@@ -292,9 +292,33 @@ pnpm test:e2e
 git diff --check
 ```
 
+## 明暗主题测试 / Theme
+
+两个文件，分工不同：
+
+- `tests/e2e/theme.spec.ts` —— 不申请浏览器 fixture，可离线跑。它把内联的
+  `THEME_INIT_SCRIPT` 字符串塞进桩 DOM 执行，和 `resolveTheme` 跑同一张真值表，
+  防止这段"无法被 import 的代码"和解析规则漂移。
+- `tests/e2e/theme-switch.spec.ts` —— 真浏览器，真点击。断言跟随系统、切换后
+  **背景真的重绘**（只掉 `.dark` class 但 token 没翻会被抓到）、写入 localStorage、
+  刷新后保持，以及浅色下没有残留的深色面板。
+
+**这些用系统装的 Google Chrome，不是 Playwright 自带的 Chromium**——本机
+`npx playwright install` 下不下来，但 `/usr/bin/google-chrome` 是有的，所以 spec 里写了
+`test.use({ channel: "chrome" })`。没装 Chrome 的机器上这个文件会起不来，`theme.spec.ts`
+不受影响。
+
+跑之前要有一个**当前构建**的服务器；对着旧构建跑，第一条断言会因为找不到切换按钮而失败：
+
+```bash
+pnpm build && pnpm start -p 3222
+E2E_BASE_URL=http://localhost:3222 pnpm exec playwright test theme-switch.spec.ts --project=chromium
+```
+
 ## Known Gaps / 已知缺口
 
-- 目前没有自动浏览器视觉回归测试（截图对比）。
+- 目前没有自动浏览器视觉回归测试（截图对比）。主题测试断言的是计算出来的颜色，
+  不是像素。
 - Playwright 的 `mobile` project 会在 Pixel 5 视口上断言公开页面可匿名访问且没有横向溢出，
   但只覆盖公开页面；工作台页面的窄屏布局仍依赖人工 QA。
 - 3D canvas 和 video export 更依赖手动验证，因为产物较大、运行时间较长。
