@@ -28,14 +28,14 @@ class InlineFrameClient:
         self.requests: list[dict[str, object]] = []
 
     async def render_map_inline(self, request_body: dict[str, object], *, timeout_seconds: float) -> InlineComputeFrame:
-        assert timeout_seconds == 8.0
+        assert timeout_seconds == 30.0
         self.requests.append(request_body)
         return self.frame
 
 
 class FailingInlineFrameClient:
     async def render_map_inline(self, _: dict[str, object], *, timeout_seconds: float) -> InlineComputeFrame:
-        assert timeout_seconds == 8.0
+        assert timeout_seconds == 30.0
         raise ComputeClientError("compute_unavailable")
 
 

@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     node_offline_after_seconds: float = Field(default=15, ge=5, le=600)
     create_connect_timeout_seconds: float = Field(default=2, gt=0, le=30)
     create_read_timeout_seconds: float = Field(default=15, gt=0, le=300)
-    preview_timeout_seconds: float = Field(default=8, gt=0, le=60)
+    preview_timeout_seconds: float = Field(default=25, gt=0, le=60)
     preview_queue_timeout_seconds: float = Field(default=3, gt=0, le=30)
     artifact_read_timeout_seconds: float = Field(default=300, gt=0, le=900)
     compute_gateway_bootstrap_nodes_json: str = "[]"

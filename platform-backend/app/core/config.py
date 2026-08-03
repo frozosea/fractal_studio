@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     preview_max_width: int = Field(default=1024, ge=1, le=1024)
     preview_max_height: int = Field(default=1024, ge=1, le=1024)
     preview_max_pixels: int = Field(default=1_048_576, ge=1, le=1_048_576)
+    preview_compute_timeout_seconds: float = Field(default=30.0, gt=0, le=60)
     preview_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
     render_quota_max_active: int = Field(default=3, ge=1, le=100)
     # Lifetime export cap for accounts without an active membership. Members
