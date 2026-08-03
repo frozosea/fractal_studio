@@ -111,6 +111,11 @@ export interface StudioImageKindCapabilities {
   orbitProgram: boolean;
 }
 
+export interface PreviewJob {
+  id: string;
+  status: "queued" | "deferred" | "rendering" | "completed" | "stale";
+}
+
 /** Free PNG exports left. `limit`/`remaining` are null for members: unmetered. */
 export interface ExportAllowance {
   member: boolean;
@@ -665,9 +670,38 @@ export const platform = {
     creatorProfile: (handle: string, displayName: string) => request<PlatformUser>("/v1/me/creator-profile", { method: "PATCH", body: json({ handle, displayName }) }, { csrf: true, idempotency: true }),
   },
   studio: {
-    preview: async (canonicalSpec: FractalSpec, width = 512, height = 512, signal?: AbortSignal): Promise<Blob> => {
-      const response = await request<Response>("/v1/studio/preview", { method: "POST", body: json({ canonicalSpec, width, height }), signal }, { csrf: true, raw: true });
-      return response.blob();
+    preview: async (
+      canonicalSpec: FractalSpec,
+      width = 512,
+      height = 512,
+      signal?: AbortSignal,
+      channel: "main" | "julia_picker" = "main",
+      onStatus?: (status: PreviewJob["status"]) => void,
+    ): Promise<Blob> => {
+      const job = await request<PreviewJob>("/v1/studio/preview-jobs", { method: "POST", body: json({ canonicalSpec, width, height, channel }), signal }, { csrf: true });
+      onStatus?.(job.status);
+      for (;;) {
+        if (signal?.aborted) throw new DOMException("Preview request aborted", "AbortError");
+        const current = job.status === "completed" ? job : await request<PreviewJob>(`/v1/studio/preview-jobs/${job.id}`, { signal });
+        onStatus?.(current.status);
+        if (current.status === "completed") {
+          const response = await request<Response>(`/v1/studio/preview-jobs/${job.id}/image`, { signal }, { raw: true });
+          return response.blob();
+        }
+        if (current.status === "stale") throw new DOMException("Preview superseded", "AbortError");
+        await new Promise<void>((resolve, reject) => {
+          const finish = () => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+          };
+          const timer = window.setTimeout(finish, 250);
+          const onAbort = () => {
+            window.clearTimeout(timer);
+            reject(new DOMException("Preview request aborted", "AbortError"));
+          };
+          signal?.addEventListener("abort", onAbort, { once: true });
+        });
+      }
     },
     capabilities: () => request<StudioCapabilities>("/v1/studio/capabilities"),
     exportAllowance: () => request<ExportAllowance>("/v1/me/export-allowance"),

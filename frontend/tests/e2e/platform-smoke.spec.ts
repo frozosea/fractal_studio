@@ -11,7 +11,7 @@ test("browser registers through Platform and explores an interactive real Comput
     if (pathname === "/platform/v1/me/favorites") favoriteRequests.push(request.url());
   });
   page.on("response", async (response) => {
-    if (new URL(response.url()).pathname === "/platform/v1/studio/preview" && response.request().method() === "POST") {
+    if (new URL(response.url()).pathname === "/platform/v1/studio/preview-jobs" && response.request().method() === "POST") {
       const spec = (await response.request().postDataJSON()).canonicalSpec as Record<string, unknown>;
       previewSpecs.push(spec);
       previewScales.push(Number(spec.scale));

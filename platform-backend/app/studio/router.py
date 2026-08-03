@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from app.auth.models import AccessPrincipal
@@ -12,8 +12,8 @@ from app.core.access_middleware import enforce_origin_and_csrf, require_principa
 from app.core.db import get_engine
 from app.infrastructure.compute.compute_client import ComputeClientError
 from app.studio.capability_service import studio_capabilities
-from app.studio.models import PreviewInput, RecipeInput, RenderJobCreateInput
-from app.studio.preview_service import PreviewService
+from app.studio.models import PreviewInput, PreviewJobInput, RecipeInput, RenderJobCreateInput
+from app.studio.preview_service import PreviewJobService, PreviewService
 from app.studio.quota_service import RenderQuotaService
 from app.studio.recipe_service import canonicalize_spec, create_or_reuse, list_recipes
 from app.studio.render_job_service import create as create_render_job
@@ -100,6 +100,44 @@ async def preview(
         status_code=status.HTTP_200_OK,
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.post("/studio/preview-jobs", status_code=status.HTTP_202_ACCEPTED)
+async def create_preview_job(
+    payload: PreviewJobInput,
+    request: Request,
+    principal: AccessPrincipal = Depends(require_principal),
+) -> dict[str, object]:
+    enforce_origin_and_csrf(request, principal)
+    job_id, job_status = await PreviewJobService().submit(
+        owner_id=principal.user_id, session_id=principal.session_id, channel=payload.channel,
+        canonical=canonicalize_spec(payload.canonical_spec), width=payload.width, height=payload.height,
+    )
+    return {"data": {"id": job_id, "status": job_status}}
+
+
+@router.get("/studio/preview-jobs/{job_id}")
+async def get_preview_job(
+    job_id: UUID, principal: AccessPrincipal = Depends(require_principal),
+) -> dict[str, object]:
+    value = await PreviewJobService().status(
+        job_id=str(job_id), owner_id=principal.user_id, session_id=principal.session_id
+    )
+    if value is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="preview_not_found")
+    return {"data": value}
+
+
+@router.get("/studio/preview-jobs/{job_id}/image", response_class=Response)
+async def get_preview_image(
+    job_id: UUID, principal: AccessPrincipal = Depends(require_principal),
+) -> Response:
+    image = await PreviewJobService().image(
+        job_id=str(job_id), owner_id=principal.user_id, session_id=principal.session_id
+    )
+    if image is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="preview_not_ready")
+    return Response(content=image, media_type="image/png", headers={"Cache-Control": "private, max-age=60"})
 
 
 @router.post("/render-jobs")

@@ -182,6 +182,10 @@ class PreviewInput(RecipeInput):
     height: int = Field(ge=64)
 
 
+class PreviewJobInput(PreviewInput):
+    channel: Literal["main", "julia_picker"] = "main"
+
+
 class RecipeView(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

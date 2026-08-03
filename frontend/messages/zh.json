@@ -381,6 +381,7 @@
       "selectHintTouch": "轻触：选择 c · 单指拖拽：平移 · 双指：缩放",
       "detail": "次迭代",
       "rendering": "正在计算预览",
+      "queued": "预览排队中",
       "zoomOut": "缩小",
       "zoomIn": "放大",
       "panPreview": "移动预览",

@@ -192,6 +192,7 @@ export default function StudioPage() {
   const [preview, setPreview] = useState<string | null>(null);
   const [juliaPickerPreview, setJuliaPickerPreview] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [previewQueued, setPreviewQueued] = useState(false);
   const [capabilities, setCapabilities] = useState<StudioCapabilities>(fallbackCapabilities);
   const [output, setOutput] = useState({ preset: "square", width: 1024, height: 1024 });
   const [explorationReady, setExplorationReady] = useState(false);
@@ -206,8 +207,6 @@ export default function StudioPage() {
   const previewRef = useRef<string | null>(null);
   const juliaPickerPreviewRef = useRef<string | null>(null);
   const lastPreviewAtRef = useRef(0);
-  const previewInFlightRef = useRef(false);
-  const previewQueuedRef = useRef(false);
   const previewGenerationRef = useRef(0);
   const explorationRef = useRef<StudioExplorationSession | null>(null);
   const explorationStorageKey = user?.id ? `fractal-studio:exploration:v1:${user.id}` : null;
@@ -345,27 +344,28 @@ export default function StudioPage() {
 
   useEffect(() => {
     if (!explorationReady) return;
+    // Stop polling previous request immediately. Its Redis job is superseded by
+    // the one below, so workers discard it before publishing a stale frame.
+    abortRef.current?.abort();
     const generation = ++previewGenerationRef.current;
     const controller = new AbortController();
     const minimumInterval = mode === "julia" ? juliaPreviewMinIntervalMs : previewMinIntervalMs;
     const wait = Math.max(previewDebounceMs, lastPreviewAtRef.current + minimumInterval - Date.now());
     const timer = window.setTimeout(async () => {
-      // Compute cannot cancel an already-running native render. Coalesce edits
-      // locally so stale previews do not consume every Gateway slot.
-      if (previewInFlightRef.current) {
-        previewQueuedRef.current = true;
-        return;
-      }
-      previewInFlightRef.current = true;
       abortRef.current = controller;
       setPreviewing(true);
+      setPreviewQueued(false);
       setError(null);
       setNotice(null);
       lastPreviewAtRef.current = Date.now();
       try {
         const [blob, pickerBlob] = await Promise.all([
-          platform.studio.preview(canonical, previewSize.width, previewSize.height, controller.signal),
-          ...(mode === "julia" ? [platform.studio.preview(juliaPickerCanonical, previewSize.width, previewSize.height, controller.signal)] : []),
+          platform.studio.preview(canonical, previewSize.width, previewSize.height, controller.signal, "main", (jobStatus) => {
+            if (jobStatus === "queued" || jobStatus === "deferred") setPreviewQueued(true);
+          }),
+          ...(mode === "julia" ? [platform.studio.preview(juliaPickerCanonical, previewSize.width, previewSize.height, controller.signal, "julia_picker", (jobStatus) => {
+            if (jobStatus === "queued" || jobStatus === "deferred") setPreviewQueued(true);
+          })] : []),
         ]);
         if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
         const url = URL.createObjectURL(blob);
@@ -388,17 +388,16 @@ export default function StudioPage() {
           setError(`${t("errors.preview")} (${errorCode(reason) ?? "request_failed"})`);
         }
       } finally {
-        previewInFlightRef.current = false;
         if (abortRef.current === controller) abortRef.current = null;
-        if (!controller.signal.aborted && generation === previewGenerationRef.current) setPreviewing(false);
-        if (previewQueuedRef.current && !controller.signal.aborted) {
-          previewQueuedRef.current = false;
-          setRetryTick((current) => current + 1);
+        if (!controller.signal.aborted && generation === previewGenerationRef.current) {
+          setPreviewing(false);
+          setPreviewQueued(false);
         }
       }
     }, wait);
     return () => {
       window.clearTimeout(timer);
+      controller.abort();
     };
   }, [canonical, explorationReady, juliaPickerCanonical, juliaPickerSpecKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
 
@@ -909,7 +908,7 @@ export default function StudioPage() {
                   exportHeight={previewSize.height}
                   exportWidth={previewSize.width}
                   height={previewSize.height}
-                  labels={{ alt: t("canvas.parameterAlt"), empty: t("canvas.empty"), hint: t("canvas.selectHint"), hintTouch: t("canvas.selectHintTouch"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetParameter"), frame: t("canvas.parameterFrame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
+                  labels={{ alt: t("canvas.parameterAlt"), empty: t("canvas.empty"), hint: t("canvas.selectHint"), hintTouch: t("canvas.selectHintTouch"), detail: t("canvas.detail"), rendering: previewQueued ? t("canvas.queued") : t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetParameter"), frame: t("canvas.parameterFrame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
                   onChange={updateJuliaPickerViewport}
                   onNavigationStart={() => undefined}
                   onPointSelect={({ re, im }) => update({ juliaRe: re, juliaIm: im })}
@@ -928,7 +927,7 @@ export default function StudioPage() {
                   exportHeight={output.height}
                   exportWidth={output.width}
                   height={previewSize.height}
-                  labels={{ alt: t("canvas.juliaAlt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetJulia"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
+                  labels={{ alt: t("canvas.juliaAlt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: previewQueued ? t("canvas.queued") : t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetJulia"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
                   onChange={updateViewport}
                   onNavigationStart={() => undefined}
                   onReset={resetJuliaViewport}
@@ -945,7 +944,7 @@ export default function StudioPage() {
               exportHeight={output.height}
               exportWidth={output.width}
               height={previewSize.height}
-              labels={{ alt: t("canvas.alt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("reset"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
+              labels={{ alt: t("canvas.alt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: previewQueued ? t("canvas.queued") : t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("reset"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
               onChange={updateViewport}
               onNavigationStart={() => undefined}
               onReset={reset}

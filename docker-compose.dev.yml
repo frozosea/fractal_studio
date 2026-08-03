@@ -225,6 +225,24 @@ services:
       redis:
         condition: service_healthy
 
+  preview-worker:
+    # Reuse API image in development; source is bind-mounted below.
+    image: fractal-studio-dev-api
+    command: ["uv", "run", "--no-sync", "python", "-m", "app.studio.preview_worker"]
+    restart: unless-stopped
+    environment: *platform-env
+    volumes:
+      - ./platform-backend:/app
+      - ./alipay_app_private.pem:/app/alipay_app_private.pem:ro
+      - ./alipay_sandbox_public.pem:/app/alipay_sandbox_public.pem:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      compute-gateway:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   frontend:
     build:
       context: .

@@ -13,6 +13,7 @@ from app.studio.compute_request_mapper import map_preview_v1
 from app.studio.quota_service import PreviewRateLimiter
 from app.studio.recipe_service import CanonicalRecipe
 from app.studio.rgba_png_encoder import InvalidRgbaFrame, encode_rgba8_png
+from app.studio.preview_queue import PreviewQueueUnavailable, RedisPreviewQueue
 
 
 class PreviewService:
@@ -63,3 +64,37 @@ class PreviewService:
             or width * height > self._settings.preview_max_pixels
         ):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="preview_dimensions_exceeded")
+
+
+class PreviewJobService:
+    """Admission API for asynchronous latest-wins interactive previews."""
+
+    def __init__(self, queue: RedisPreviewQueue | None = None) -> None:
+        self._queue = queue or RedisPreviewQueue()
+
+    async def submit(
+        self, *, owner_id: UUID, session_id: UUID, channel: str, canonical: CanonicalRecipe, width: int, height: int
+    ) -> tuple[str, str]:
+        PreviewService()._validate_dimensions(width, height)
+        request = map_preview_v1(canonical.spec, width=width, height=height, request_id=uuid4())
+        try:
+            return await self._queue.submit(
+                owner_id=owner_id, session_id=session_id, channel=channel, request=request,
+                spec_hash=canonical.sha256, width=width, height=height,
+            )
+        except PreviewQueueUnavailable as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="preview_queue_unavailable") from error
+
+    async def status(self, *, job_id: str, owner_id: UUID, session_id: UUID) -> dict[str, str] | None:
+        try:
+            job = await self._queue.get(job_id=job_id, owner_id=owner_id, session_id=session_id)
+        except PreviewQueueUnavailable as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="preview_queue_unavailable") from error
+        return {"id": job.id, "status": job.status} if job is not None else None
+
+    async def image(self, *, job_id: str, owner_id: UUID, session_id: UUID) -> bytes | None:
+        try:
+            job = await self._queue.get(job_id=job_id, owner_id=owner_id, session_id=session_id)
+            return await self._queue.image(job) if job is not None else None
+        except PreviewQueueUnavailable as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="preview_queue_unavailable") from error

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     preview_max_pixels: int = Field(default=1_048_576, ge=1, le=1_048_576)
     preview_compute_timeout_seconds: float = Field(default=30.0, gt=0, le=60)
     preview_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
+    preview_queue_max_pending: int = Field(default=10_000, ge=1, le=100_000)
+    preview_cache_ttl_seconds: int = Field(default=60, ge=1, le=3600)
+    preview_request_ttl_seconds: int = Field(default=120, ge=10, le=3600)
+    preview_worker_concurrency: int = Field(default=4, ge=1, le=64)
     render_quota_max_active: int = Field(default=3, ge=1, le=100)
     # Lifetime export cap for accounts without an active membership. Members
     # are not counted against it.

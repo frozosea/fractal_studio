@@ -381,6 +381,7 @@
       "selectHintTouch": "tap: choose c · one-finger drag: pan · two fingers: zoom",
       "detail": "iterations",
       "rendering": "Computing preview",
+      "queued": "Preview queued",
       "zoomOut": "Zoom out",
       "zoomIn": "Zoom in",
       "panPreview": "Pan preview",
