@@ -112,7 +112,7 @@ def test_preview_mapper_bounds_export_sized_compute_work() -> None:
 
     request = map_preview_v1(canonical.spec, width=64, height=64, request_id=UUID(int=1))
 
-    assert request["payload"]["iterations"] == 4096
+    assert request["payload"]["iterations"] == 512
     assert request["payload"]["pairwiseCap"] == 128
     assert canonical.spec["iterations"] == 1_000_000
     assert canonical.spec["pairwiseCap"] == 1_000_000

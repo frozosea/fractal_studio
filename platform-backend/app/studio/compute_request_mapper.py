@@ -8,7 +8,10 @@ from uuid import UUID
 COMPUTE_SCHEMA_VERSION = 1
 PREVIEW_MAPPING_VERSION = "compute-v1-preview-v2"
 RENDER_MAPPING_VERSION = "compute-v1-render-v1"
-PREVIEW_MAX_ITERATIONS = 4096
+# Preview is interactive work, not an export. 768² pixels × thousands of
+# iterations can occupy every Compute slot for minutes (especially exp/sin
+# maps), preventing any newer viewport from being shown.
+PREVIEW_MAX_ITERATIONS = 512
 PREVIEW_MAX_PAIRWISE_CAP = 128
 COMPUTE_RUNS_ROUTE = "/compute/v1/runs"
 COMPUTE_PREVIEWS_ROUTE = "/compute/v1/previews"

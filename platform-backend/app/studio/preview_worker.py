@@ -8,6 +8,7 @@ import signal
 
 from app.core.config import get_settings
 from app.infrastructure.compute.compute_client import ComputeClient, ComputeClientError
+from app.studio.compute_request_mapper import PREVIEW_MAX_ITERATIONS
 from app.studio.preview_queue import PreviewQueueUnavailable, RedisPreviewQueue
 from app.studio.rgba_png_encoder import InvalidRgbaFrame, encode_rgba8_png
 
@@ -22,7 +23,17 @@ async def _run_one(queue: RedisPreviewQueue, compute: ComputeClient, stop: async
             job = await queue.claim()
             if job is None:
                 continue
-            frame = await compute.render_map_inline(job.request, timeout_seconds=settings.preview_compute_timeout_seconds)
+            payload = job.request.get("payload")
+            request = job.request
+            # Jobs submitted before a deploy can carry the previous, expensive
+            # preview limit. Apply the bound again at execution time so they
+            # cannot hold every worker slot indefinitely.
+            if isinstance(payload, dict):
+                request = {
+                    **job.request,
+                    "payload": {**payload, "iterations": min(int(payload.get("iterations", 1)), PREVIEW_MAX_ITERATIONS)},
+                }
+            frame = await compute.render_map_inline(request, timeout_seconds=settings.preview_compute_timeout_seconds)
             if frame.width <= 0 or frame.height <= 0:
                 raise InvalidRgbaFrame("invalid_compute_frame")
             await queue.complete(job, encode_rgba8_png(rgba=frame.rgba, width=frame.width, height=frame.height))
@@ -56,6 +67,7 @@ async def run() -> None:
     queue = RedisPreviewQueue(settings)
     compute = ComputeClient(settings)
     try:
+        await queue.recover_interrupted()
         await asyncio.gather(*(_run_one(queue, compute, stop) for _ in range(settings.preview_worker_concurrency)))
     finally:
         await queue.close()

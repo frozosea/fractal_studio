@@ -31,6 +31,7 @@ class PreviewJob:
 class RedisPreviewQueue:
     _QUEUE = "studio-preview:v1:queue"
     _DEFERRED = "studio-preview:v1:deferred"
+    _RECOVERY_LOCK = "studio-preview:v1:recovery-lock"
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
@@ -173,6 +174,32 @@ class RedisPreviewQueue:
             latest = await self._redis.get(latest_key)
             if latest:
                 await self._redis.lpush(self._QUEUE, latest)
+
+    async def recover_interrupted(self) -> int:
+        """Requeue jobs left in `rendering` by a restarted worker process."""
+        try:
+            if not await self._redis.set(self._RECOVERY_LOCK, "1", ex=30, nx=True):
+                return 0
+            recovered = 0
+            async for job_key in self._redis.scan_iter(match="studio-preview:v1:job:*"):
+                values = await self._redis.hgetall(job_key)
+                if values.get("status") != "rendering":
+                    continue
+                job_id = job_key.rsplit(":", 1)[-1]
+                owner_id, session_id, channel = UUID(values["ownerId"]), UUID(values["sessionId"]), values["channel"]
+                latest_key = self._latest_key(owner_id, session_id, channel)
+                if await self._redis.get(latest_key) != job_id:
+                    await self._redis.hset(job_key, "status", "stale")
+                    continue
+                await self._redis.hset(job_key, "status", "queued")
+                await self._redis.set(
+                    self._queued_key(owner_id, session_id, channel), "1", ex=self._settings.preview_request_ttl_seconds
+                )
+                await self._redis.lpush(self._QUEUE, job_id)
+                recovered += 1
+            return recovered
+        except (RedisError, KeyError, ValueError) as error:
+            raise PreviewQueueUnavailable("preview_queue_unavailable") from error
 
     async def close(self) -> None:
         await self._redis.aclose()
