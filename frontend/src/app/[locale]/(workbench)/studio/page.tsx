@@ -44,7 +44,7 @@ import {
 type ImageMode = "map" | "julia" | "transitionPair" | "transitionMulti" | "formula" | "sequence";
 type SequenceOrbit = Extract<OrbitProgram, { type: "sequence" }>;
 type StudioExplorationSession = {
-  version: 1;
+  version: 2;
   spec: FractalSpec;
   juliaPickerSpec: FractalSpec;
   mode: ImageMode;
@@ -111,7 +111,7 @@ function parseExplorationSession(raw: string | null): StudioExplorationSession |
   try {
     const value = JSON.parse(raw) as Partial<StudioExplorationSession>;
     if (
-      value.version !== 1
+      value.version !== 2
       || value.spec?.version !== 1
       || value.juliaPickerSpec?.version !== 1
       || !value.mode
@@ -251,7 +251,7 @@ export default function StudioPage() {
 
   useEffect(() => {
     if (!explorationReady || !explorationStorageKey) return;
-    const snapshot: StudioExplorationSession = { version: 1, spec, juliaPickerSpec, mode, output };
+    const snapshot: StudioExplorationSession = { version: 2, spec, juliaPickerSpec, mode, output };
     explorationRef.current = snapshot;
     const timer = window.setTimeout(() => {
       try { window.sessionStorage.setItem(explorationStorageKey, JSON.stringify(snapshot)); } catch { /* ignore */ }
@@ -453,6 +453,43 @@ export default function StudioPage() {
       ...(patch.centerRe === undefined ? {} : { centerReStr: String(patch.centerRe) }),
       ...(patch.centerIm === undefined ? {} : { centerImStr: String(patch.centerIm) }),
     }));
+  };
+  const changeVariant = (variant: string) => {
+    const bailout = defaultBailoutForVariant(variant);
+    const parameterPlane: Partial<FractalSpec> = {
+      variant,
+      bailout,
+      centerRe: -0.75,
+      centerIm: 0,
+      centerReStr: "-0.75",
+      centerImStr: "0",
+      scale: 3,
+      iterations: 512,
+      rotationDeg: 0,
+      julia: false,
+      transitionMode: "off",
+      orbitProgram: null,
+      metric: "escape",
+      smooth: false,
+    };
+
+    // A viewport belongs to a formula. Reusing a deep coordinate from the
+    // previous formula often points at an empty region and looks like a blank
+    // image, even though rendering succeeded.
+    setJuliaPickerSpec((current) => ({ ...current, ...parameterPlane }));
+    setSpec((current) => mode === "julia"
+      ? {
+        ...current,
+        ...parameterPlane,
+        centerRe: 0,
+        centerIm: 0,
+        centerReStr: "0",
+        centerImStr: "0",
+        julia: true,
+        juliaRe: -0.8,
+        juliaIm: 0.156,
+      }
+      : { ...current, ...parameterPlane });
   };
 
   const selectMode = (next: ImageMode) => {
@@ -700,7 +737,7 @@ export default function StudioPage() {
             {(mode === "map" || mode === "julia") && (
               <>
                 <Control label={t("variant")}>
-                  <select className={selectClass} value={spec.variant} onChange={(event) => update({ variant: event.target.value, bailout: defaultBailoutForVariant(event.target.value) })}>
+                  <select className={selectClass} value={spec.variant} onChange={(event) => changeVariant(event.target.value)}>
                     {availableVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}
                   </select>
                 </Control>
