@@ -70,7 +70,7 @@ test("browser registers through Platform and explores an interactive real Comput
   await page.getByRole("button", { name: "Map", exact: true }).click();
   await page.getByLabel("Dynamic coloring").selectOption("eq_full");
   await expect.poll(() => previewSpecs.some((spec) => spec.colorMode === "eq_full")).toBe(true);
-  await expect(page.getByLabel("Custom gradient")).toBeDisabled();
+  await expect(page.getByLabel("Custom gradient")).toBeEnabled();
 
   await page.goto("/zh/studio");
   await expect(page.locator("main").getByRole("heading", { name: "分形工作室" })).toBeVisible();

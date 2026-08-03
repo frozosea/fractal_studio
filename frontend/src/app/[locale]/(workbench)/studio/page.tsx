@@ -206,6 +206,9 @@ export default function StudioPage() {
   const previewRef = useRef<string | null>(null);
   const juliaPickerPreviewRef = useRef<string | null>(null);
   const lastPreviewAtRef = useRef(0);
+  const previewInFlightRef = useRef(false);
+  const previewQueuedRef = useRef(false);
+  const previewGenerationRef = useRef(0);
   const explorationRef = useRef<StudioExplorationSession | null>(null);
   const explorationStorageKey = user?.id ? `fractal-studio:exploration:v1:${user.id}` : null;
 
@@ -342,12 +345,19 @@ export default function StudioPage() {
 
   useEffect(() => {
     if (!explorationReady) return;
-    abortRef.current?.abort();
+    const generation = ++previewGenerationRef.current;
     const controller = new AbortController();
-    abortRef.current = controller;
     const minimumInterval = mode === "julia" ? juliaPreviewMinIntervalMs : previewMinIntervalMs;
     const wait = Math.max(previewDebounceMs, lastPreviewAtRef.current + minimumInterval - Date.now());
     const timer = window.setTimeout(async () => {
+      // Compute cannot cancel an already-running native render. Coalesce edits
+      // locally so stale previews do not consume every Gateway slot.
+      if (previewInFlightRef.current) {
+        previewQueuedRef.current = true;
+        return;
+      }
+      previewInFlightRef.current = true;
+      abortRef.current = controller;
       setPreviewing(true);
       setError(null);
       setNotice(null);
@@ -357,7 +367,7 @@ export default function StudioPage() {
           platform.studio.preview(canonical, previewSize.width, previewSize.height, controller.signal),
           ...(mode === "julia" ? [platform.studio.preview(juliaPickerCanonical, previewSize.width, previewSize.height, controller.signal)] : []),
         ]);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
         const url = URL.createObjectURL(blob);
         if (previewRef.current) URL.revokeObjectURL(previewRef.current);
         previewRef.current = url;
@@ -369,8 +379,8 @@ export default function StudioPage() {
           setJuliaPickerPreview(pickerUrl);
         }
       } catch (reason) {
-        if (controller.signal.aborted) return;
-        if (reason instanceof PlatformApiError && reason.status === 429) {
+        if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+        if (reason instanceof PlatformApiError && (reason.status === 429 || reason.status === 503)) {
           lastPreviewAtRef.current = Date.now() + minimumInterval;
           setNotice(t("errors.previewRate"));
           setRetryTick((current) => current + 1);
@@ -378,12 +388,17 @@ export default function StudioPage() {
           setError(`${t("errors.preview")} (${errorCode(reason) ?? "request_failed"})`);
         }
       } finally {
-        if (!controller.signal.aborted) setPreviewing(false);
+        previewInFlightRef.current = false;
+        if (abortRef.current === controller) abortRef.current = null;
+        if (!controller.signal.aborted && generation === previewGenerationRef.current) setPreviewing(false);
+        if (previewQueuedRef.current && !controller.signal.aborted) {
+          previewQueuedRef.current = false;
+          setRetryTick((current) => current + 1);
+        }
       }
     }, wait);
     return () => {
       window.clearTimeout(timer);
-      controller.abort();
     };
   }, [canonical, explorationReady, juliaPickerCanonical, juliaPickerSpecKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
 

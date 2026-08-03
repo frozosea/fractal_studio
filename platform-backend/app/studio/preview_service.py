@@ -48,7 +48,9 @@ class PreviewService:
                 raise InvalidRgbaFrame("compute_frame_dimensions_mismatch")
             return encode_rgba8_png(rgba=frame.rgba, width=width, height=height)
         except ComputeClientError as error:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error.code) from error
+            unavailable = {"compute_timeout", "compute_unavailable"}
+            response_status = status.HTTP_503_SERVICE_UNAVAILABLE if error.code in unavailable else status.HTTP_502_BAD_GATEWAY
+            raise HTTPException(status_code=response_status, detail=error.code) from error
         except InvalidRgbaFrame as error:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="compute_invalid_frame") from error
 
