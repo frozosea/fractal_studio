@@ -45,7 +45,9 @@ class Settings(BaseSettings):
     preview_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
     preview_queue_max_pending: int = Field(default=10_000, ge=1, le=100_000)
     preview_cache_ttl_seconds: int = Field(default=60, ge=1, le=3600)
-    preview_request_ttl_seconds: int = Field(default=120, ge=10, le=3600)
+    # Jobs must outlive gateway retries. A short TTL turned a temporarily busy
+    # Compute cluster into `preview_not_found` in the browser.
+    preview_request_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     preview_worker_concurrency: int = Field(default=4, ge=1, le=64)
     render_quota_max_active: int = Field(default=3, ge=1, le=100)
     # Lifetime export cap for accounts without an active membership. Members

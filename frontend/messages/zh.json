@@ -473,6 +473,7 @@
       "capabilities": "无法读取渲染器能力",
       "job": "无法刷新导出任务",
       "previewRate": "预览请求正在排队，稍后会自动继续渲染。",
+      "previewQueued": "预览已重新提交，正在等待计算资源。",
       "preview": "预览失败",
       "export": "无法创建 PNG 导出任务",
       "cancel": "无法取消导出任务",

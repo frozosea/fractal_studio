@@ -473,6 +473,7 @@
       "capabilities": "Could not read renderer capabilities",
       "job": "Could not refresh the export job",
       "previewRate": "Preview requests are catching up; rendering will resume automatically.",
+      "previewQueued": "Preview was resubmitted and is waiting for Compute capacity.",
       "preview": "Preview failed",
       "export": "Could not create the PNG export",
       "cancel": "Could not cancel the export",

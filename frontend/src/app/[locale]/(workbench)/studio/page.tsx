@@ -410,7 +410,13 @@ export default function StudioPage() {
         }
       } catch (reason) {
         if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
-        if (reason instanceof PlatformApiError && (reason.status === 429 || reason.status === 503)) {
+        if (reason instanceof PlatformApiError && reason.code === "preview_not_found") {
+          // Redis may have restarted or an old job may have expired while this
+          // tab was suspended. Resubmit current viewport without exposing an
+          // internal queue identifier as a user-facing error.
+          setNotice(t("errors.previewQueued"));
+          setRetryTick((current) => current + 1);
+        } else if (reason instanceof PlatformApiError && (reason.status === 429 || reason.status === 503)) {
           lastPreviewAtRef.current = Date.now() + minimumInterval;
           setNotice(t("errors.previewRate"));
           setRetryTick((current) => current + 1);
