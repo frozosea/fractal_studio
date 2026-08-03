@@ -229,6 +229,15 @@ class GatewayService:
             for item in caps.get("jobs", []):
                 if isinstance(item, dict) and isinstance(item.get("kind"), str):
                     jobs.setdefault(str(item["kind"]), item)
+
+        # Studio uses these blocks to decide which controls can be shown. Only
+        # expose a block when every eligible worker reports the same contract:
+        # a request may be routed to any of them.
+        shared_metadata: dict[str, object] = {}
+        for key in ("coloring", "orbitPrograms", "orbitCompatibility", "customFormula"):
+            blocks = [caps.get(key) for caps in values]
+            if blocks and all(isinstance(block, dict) for block in blocks) and all(block == blocks[0] for block in blocks[1:]):
+                shared_metadata[key] = blocks[0]
         async with self._sessions() as session:
             ready = False
             for node in nodes:
@@ -245,6 +254,7 @@ class GatewayService:
             "previewKinds": previews,
             "jobs": list(jobs.values()),
             "gateway": {"healthyNodes": len(nodes), "ready": ready},
+            **shared_metadata,
         }
 
     async def preview(self, envelope: dict[str, object]) -> tuple[bytes, str, dict[str, str]]:

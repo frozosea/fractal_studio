@@ -40,6 +40,14 @@ class FakeNodeClient:
             "persistentKinds": ["map_image"],
             "previewKinds": ["map_image"],
             "jobs": [{"kind": "map_image", "engines": ["openmp", "cuda"], "scalars": ["fp32", "fp64"]}],
+            "coloring": {
+                "builtInColorMaps": ["classic_cos", "viridis", "spectral1530"],
+                "staticImageColorModes": ["direct", "eq_full", "eq_center"],
+                "customGradient": True,
+                "customGradientKinds": ["map_image"],
+                "customGradientMaxStops": 16,
+            },
+            "orbitPrograms": {"formula": True, "sequence": True},
         }
 
     async def preview(
@@ -188,6 +196,14 @@ async def test_sticky_routing_replay_manifest_and_artifact_stream(
     await _add_node(service, "node-b")
     capabilities = await service.capabilities()
     assert capabilities["gateway"] == {"healthyNodes": 2, "ready": True}
+    assert capabilities["coloring"] == {
+        "builtInColorMaps": ["classic_cos", "viridis", "spectral1530"],
+        "staticImageColorModes": ["direct", "eq_full", "eq_center"],
+        "customGradient": True,
+        "customGradientKinds": ["map_image"],
+        "customGradientMaxStops": 16,
+    }
+    assert capabilities["orbitPrograms"] == {"formula": True, "sequence": True}
     preview, media_type, headers = await service.preview(_request("preview-no-key"))
     assert preview == b"preview"
     assert media_type == "application/octet-stream"

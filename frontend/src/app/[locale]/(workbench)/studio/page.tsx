@@ -312,6 +312,7 @@ export default function StudioPage() {
       // Older Compute capability payloads do not advertise Studio's static
       // coloring names. Keep usable UI controls instead of rendering an empty
       // select until every worker has upgraded.
+      colorMaps: remote.colorMaps.length ? remote.colorMaps : fallbackCapabilities.colorMaps,
       colorModes: remote.colorModes.length ? remote.colorModes : fallbackCapabilities.colorModes,
     })).catch((reason: unknown) => {
       setError(`${t("errors.capabilities")} (${errorCode(reason) ?? "request_failed"})`);
