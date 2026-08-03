@@ -99,7 +99,7 @@ class GatewayService:
         self._settings = settings or get_settings()
         self._upstream = upstream or ComputeNodeClient(self._settings)
         self._preview_in_flight: dict[UUID, int] = defaultdict(int)
-        self._preview_lock = asyncio.Lock()
+        self._preview_slots = asyncio.Condition()
 
     async def upsert_node(self, node_key: str, payload: NodeUpsertInput) -> dict[str, object]:
         if not NODE_KEY.fullmatch(node_key):
@@ -262,19 +262,32 @@ class GatewayService:
         payload = envelope["payload"]
         assert isinstance(payload, dict)
         nodes = await self._eligible_nodes(kind=kind, payload=payload, persistent=False)
-        async with self._preview_lock:
-            available = [node for node in nodes if self._preview_in_flight[node.id] < node.max_preview_slots]
-            if not available:
-                raise GatewayError(503, "COMPUTE_CAPACITY_EXHAUSTED", "no Compute preview capacity is available")
-            node = min(available, key=lambda item: (self._preview_in_flight[item.id] / item.max_preview_slots, item.node_key))
-            self._preview_in_flight[node.id] += 1
+        deadline = asyncio.get_running_loop().time() + self._settings.preview_queue_timeout_seconds
+        async with self._preview_slots:
+            while True:
+                available = [node for node in nodes if self._preview_in_flight[node.id] < node.max_preview_slots]
+                if available:
+                    node = min(
+                        available,
+                        key=lambda item: (self._preview_in_flight[item.id] / item.max_preview_slots, item.node_key),
+                    )
+                    self._preview_in_flight[node.id] += 1
+                    break
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise GatewayError(503, "COMPUTE_CAPACITY_EXHAUSTED", "no Compute preview capacity is available")
+                try:
+                    await asyncio.wait_for(self._preview_slots.wait(), timeout=remaining)
+                except TimeoutError as error:
+                    raise GatewayError(503, "COMPUTE_CAPACITY_EXHAUSTED", "no Compute preview capacity is available") from error
         try:
             return await self._upstream.preview(node, envelope)
         except UpstreamError as error:
             raise self._unavailable_error(error) from error
         finally:
-            async with self._preview_lock:
+            async with self._preview_slots:
                 self._preview_in_flight[node.id] = max(0, self._preview_in_flight[node.id] - 1)
+                self._preview_slots.notify(1)
 
     async def create_run(self, envelope: dict[str, object]) -> dict[str, object]:
         kind, key = _require_envelope(envelope, durable=True)

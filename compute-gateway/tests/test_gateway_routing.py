@@ -30,6 +30,9 @@ class FakeNodeClient:
         self.created: list[tuple[str, str]] = []
         self._runs: dict[tuple[str, str], str] = {}
         self._counter = 0
+        self.block_previews = False
+        self.preview_started = asyncio.Event()
+        self.release_previews = asyncio.Event()
 
     async def health(self, _: ComputeNode) -> int:
         return 1
@@ -54,6 +57,9 @@ class FakeNodeClient:
         self, node: ComputeNode, _: dict[str, object]
     ) -> tuple[bytes, str, dict[str, str]]:
         assert node.node_key in {"node-a", "node-b"}
+        if self.block_previews:
+            self.preview_started.set()
+            await self.release_previews.wait()
         return b"preview", "application/octet-stream", {"X-FSD-Pixel-Format": "rgba8"}
 
     async def create_run(self, node: ComputeNode, envelope: dict[str, object]) -> UpstreamReply:
@@ -165,14 +171,14 @@ async def gateway() -> AsyncIterator[tuple[GatewayService, FakeNodeClient]]:
     await engine.dispose()
 
 
-async def _add_node(gateway: GatewayService, key: str, slots: int = 1) -> None:
+async def _add_node(gateway: GatewayService, key: str, slots: int = 1, preview_slots: int = 2) -> None:
     await gateway.upsert_node(
         key,
         NodeUpsertInput.model_validate(
             {
                 "baseUrl": f"http://{key}.internal:18080",
                 "maxDurableSlots": slots,
-                "maxPreviewSlots": 2,
+                "maxPreviewSlots": preview_slots,
                 "enabled": True,
             }
         ),
@@ -262,6 +268,22 @@ async def test_concurrent_requests_use_separate_nodes(gateway: tuple[GatewayServ
     )
 
     assert {node for node, _ in fake.created} == {"node-a", "node-b"}
+
+
+async def test_preview_waits_for_a_slot_before_rejecting(gateway: tuple[GatewayService, FakeNodeClient]) -> None:
+    service, fake = gateway
+    await _add_node(service, "node-a", preview_slots=1)
+    fake.block_previews = True
+
+    first = asyncio.create_task(service.preview(_request("preview-first")))
+    await fake.preview_started.wait()
+    second = asyncio.create_task(service.preview(_request("preview-second")))
+    await asyncio.sleep(0)
+    assert not second.done()
+
+    fake.release_previews.set()
+    assert (await first)[0] == b"preview"
+    assert (await second)[0] == b"preview"
 
 
 async def test_rejected_run_releases_the_reserved_slot(gateway: tuple[GatewayService, FakeNodeClient]) -> None:
