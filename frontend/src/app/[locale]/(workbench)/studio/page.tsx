@@ -179,6 +179,16 @@ function formatCoordinate(value: number | undefined): string {
   return Number.isFinite(numeric) ? numeric.toPrecision(12).replace(/(?:\.0+|(?:(\.\d*?)0+))(?=e|$)/, "$1") : "0";
 }
 
+function safeScale(value: number | undefined, fallback = 3): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(minScale, parsed) : fallback;
+}
+
+function hasInvalidScale(value: number | undefined): boolean {
+  const parsed = Number(value);
+  return !Number.isFinite(parsed) || parsed <= 0;
+}
+
 /** Modes that require membership — gated for non-members */
 const MEMBER_ONLY_MODES: ReadonlySet<ImageMode> = new Set(["transitionMulti", "formula", "sequence"]);
 
@@ -262,7 +272,7 @@ export default function StudioPage() {
       ...spec,
       centerRe: Number.isFinite(centerRe) ? centerRe : Number(spec.centerRe ?? 0),
       centerIm: Number.isFinite(centerIm) ? centerIm : Number(spec.centerIm ?? 0),
-      scale: Math.max(minScale, Number(spec.scale ?? 3)),
+      scale: safeScale(spec.scale),
       iterations: Math.max(1, Math.round(Number(spec.iterations ?? 512))),
       smooth: spec.metric === "escape" ? false : Boolean(spec.smooth),
       bailout: Math.max(0.01, Number(spec.bailout ?? 2)),
@@ -282,7 +292,7 @@ export default function StudioPage() {
       centerIm: Number.isFinite(centerIm) ? centerIm : Number(juliaPickerSpec.centerIm ?? 0),
       centerReStr: juliaPickerSpec.centerReStr ?? String(juliaPickerSpec.centerRe ?? 0),
       centerImStr: juliaPickerSpec.centerImStr ?? String(juliaPickerSpec.centerIm ?? 0),
-      scale: Math.max(minScale, Number(juliaPickerSpec.scale ?? 3)),
+      scale: safeScale(juliaPickerSpec.scale),
       julia: false,
       transitionMode: "off",
       orbitProgram: null,
@@ -290,6 +300,26 @@ export default function StudioPage() {
       smooth: false,
     };
   }, [canonical, juliaPickerSpec]);
+
+  // Old session snapshots could contain a literal zero scale. Restore a whole
+  // usable viewport, not only the number: its saved centre was normally made
+  // by panning while the effective scale was near zero too.
+  useEffect(() => {
+    if (!explorationReady) return;
+    const pickerWasInvalid = hasInvalidScale(juliaPickerSpec.scale);
+    setSpec((current) => {
+      if (hasInvalidScale(current.scale)) {
+        return {
+          ...current, centerRe: -0.75, centerIm: 0, centerReStr: "-0.75", centerImStr: "0", scale: 3,
+          ...(current.julia ? { juliaRe: -0.8, juliaIm: 0.156 } : {}),
+        };
+      }
+      return pickerWasInvalid && current.julia ? { ...current, juliaRe: -0.8, juliaIm: 0.156 } : current;
+    });
+    setJuliaPickerSpec((current) => hasInvalidScale(current.scale)
+      ? { ...current, centerRe: -0.75, centerIm: 0, centerReStr: "-0.75", centerImStr: "0", scale: 3 }
+      : current);
+  }, [explorationReady, juliaPickerSpec.scale]);
   const specKey = JSON.stringify(canonical);
   const juliaPickerSpecKey = JSON.stringify(juliaPickerCanonical);
   const zoomLevel = Math.max(0, Math.log2(3 / Number(canonical.scale ?? 3)));
