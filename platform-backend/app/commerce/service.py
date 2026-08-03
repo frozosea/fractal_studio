@@ -285,7 +285,9 @@ class CommerceService:
                 if reversal.status in {"applied", "manual_review"}:
                     return
                 if amount != attempt.order_amount:
-                    await repository.mark_reversal_manual_review(connection, reversal_id=reversal.id, order_id=attempt.order_id)
+                    await repository.mark_reversal_manual_review(
+                        connection, reversal_id=reversal.id, order_id=attempt.order_id, revoke_entitlements=True
+                    )
                     await self._audit(connection, "payment.reversal_manual_review", attempt, request_id_value)
                     return
                 for item in attempt.items:

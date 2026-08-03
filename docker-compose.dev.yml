@@ -48,22 +48,35 @@ services:
       /bin/sh -ec 'until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done; mc mb --ignore-existing "local/$$S3_BUCKET";'
 
   compute:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      additional_contexts:
-        cuda-toolkit: ./.cuda-toolkit
+    image: fractal-studio-dev-compute
     restart: unless-stopped
-    runtime: nvidia
-    gpus: all
     environment:
-      FSD_STARTUP_BENCHMARK: "quick"
+      FSD_STARTUP_BENCHMARK: "off"
       FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
-      FSD_RENDERER_VERSION: compose-dev
+      FSD_RENDERER_VERSION: compose-dev-a
       FSD_ENABLE_LEGACY_API: "0"
       FSD_ENABLE_LEGACY_FORMULA_COMPILER: "0"
+      FSD_RENDER_THREADS: "2"
     ports: ["${COMPUTE_PORT:-18101}:18080"]
-    volumes: [compute-runtime:/workspace/fractal_studio/runtime]
+    volumes: [compute-a-runtime:/workspace/fractal_studio/runtime]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18080/compute/v1/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  compute-b:
+    image: fractal-studio-dev-compute
+    restart: unless-stopped
+    environment:
+      FSD_STARTUP_BENCHMARK: "off"
+      FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
+      FSD_RENDERER_VERSION: compose-dev-b
+      FSD_ENABLE_LEGACY_API: "0"
+      FSD_ENABLE_LEGACY_FORMULA_COMPILER: "0"
+      FSD_RENDER_THREADS: "2"
+    ports: ["${COMPUTE_B_PORT:-18104}:18080"]
+    volumes: [compute-b-runtime:/workspace/fractal_studio/runtime]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18080/compute/v1/health"]
       interval: 2s
@@ -95,6 +108,8 @@ services:
       COMPUTE_GATEWAY_SERVICE_KEY: ${COMPUTE_GATEWAY_SERVICE_KEY:-dev-gateway-key-change-me}
       COMPUTE_GATEWAY_ADMIN_KEY: ${COMPUTE_GATEWAY_ADMIN_KEY:-dev-gateway-admin-key-change-me}
       COMPUTE_UPSTREAM_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
+    volumes:
+      - ./compute-gateway:/app
     depends_on:
       compute-gateway-db:
         condition: service_healthy
@@ -106,8 +121,10 @@ services:
     restart: unless-stopped
     environment:
       <<: *gateway-env
-      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://compute:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true}]'
+      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://compute:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://compute-b:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true}]'
     ports: ["${COMPUTE_GATEWAY_PORT:-18103}:8080"]
+    volumes:
+      - ./compute-gateway:/app
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/compute/v1/health', timeout=2).read()"]
       interval: 2s
@@ -117,6 +134,8 @@ services:
       compute-gateway-migrate:
         condition: service_completed_successfully
       compute:
+        condition: service_healthy
+      compute-b:
         condition: service_healthy
 
   alipay-stub:
@@ -159,6 +178,8 @@ services:
       PAYMENT_RECONCILE_DELAY_SECONDS: "1"
       OUTBOX_POLL_INTERVAL_SECONDS: "0.5"
       OUTBOX_SCHEDULE_INTERVAL_SECONDS: "1"
+    volumes:
+      - ./platform-backend:/app
     depends_on:
       postgres:
         condition: service_healthy
@@ -171,6 +192,7 @@ services:
     environment: *platform-env
     ports: ["${PLATFORM_PORT:-18100}:8000"]
     volumes:
+      - ./platform-backend:/app
       - ./alipay_app_private.pem:/app/alipay_app_private.pem:ro
       - ./alipay_sandbox_public.pem:/app/alipay_sandbox_public.pem:ro
     depends_on:
@@ -190,6 +212,7 @@ services:
     restart: unless-stopped
     environment: *platform-env
     volumes:
+      - ./platform-backend:/app
       - ./alipay_app_private.pem:/app/alipay_app_private.pem:ro
       - ./alipay_sandbox_public.pem:/app/alipay_sandbox_public.pem:ro
     depends_on:
@@ -224,7 +247,8 @@ volumes:
   platform-postgres:
   platform-redis:
   platform-minio:
-  compute-runtime:
+  compute-a-runtime:
+  compute-b-runtime:
   compute-gateway-postgres:
   frontend-node-modules:
   frontend-next-cache:

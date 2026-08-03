@@ -306,7 +306,14 @@ export default function StudioPage() {
   useEffect(refreshAllowance, [refreshAllowance]);
 
   useEffect(() => {
-    void platform.studio.capabilities().then(setCapabilities).catch((reason: unknown) => {
+    void platform.studio.capabilities().then((remote) => setCapabilities({
+      ...fallbackCapabilities,
+      ...remote,
+      // Older Compute capability payloads do not advertise Studio's static
+      // coloring names. Keep usable UI controls instead of rendering an empty
+      // select until every worker has upgraded.
+      colorModes: remote.colorModes.length ? remote.colorModes : fallbackCapabilities.colorModes,
+    })).catch((reason: unknown) => {
       setError(`${t("errors.capabilities")} (${errorCode(reason) ?? "request_failed"})`);
     });
     return () => {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 from collections.abc import AsyncIterator
@@ -21,7 +22,7 @@ if TEST_DATABASE_URL:
     from app.models import ComputeNode, ComputeRun, NodeProbe, RunArtifact
     from app.schemas import NodeUpsertInput
     from app.services import GatewayService
-    from app.upstream import UpstreamReply
+    from app.upstream import UpstreamError, UpstreamReply
 
 
 class FakeNodeClient:
@@ -49,6 +50,8 @@ class FakeNodeClient:
 
     async def create_run(self, node: ComputeNode, envelope: dict[str, object]) -> UpstreamReply:
         key = str(envelope["idempotencyKey"])
+        if key == "platform-job:rejected":
+            raise UpstreamError("COMPUTE_REJECTED", status_code=422)
         route_key = (node.node_key, key)
         if route_key not in self._runs:
             self._counter += 1
@@ -199,6 +202,11 @@ async def test_sticky_routing_replay_manifest_and_artifact_stream(
     assert replay["data"]["computeRunId"] == str(first_id)
     assert fake.created == [("node-a", "platform-job:one"), ("node-b", "platform-job:two")]
 
+    await service.reconcile_active_runs()
+    nodes = {item["nodeKey"]: item for item in await service.list_nodes()}
+    assert nodes["node-a"]["usedDurableSlots"] == 0
+    assert nodes["node-b"]["usedDurableSlots"] == 0
+
     status = await service.get_run(first_id)
     assert status["data"]["computeRunId"] == str(first_id)
     assert status["data"]["status"] == "completed"
@@ -225,6 +233,48 @@ async def test_reused_idempotency_key_with_different_payload_conflicts(
         await service.create_run(_request("platform-job:one", width=128))
     assert raised.value.status_code == 409
     assert raised.value.code == "IDEMPOTENCY_CONFLICT"
+
+
+async def test_concurrent_requests_use_separate_nodes(gateway: tuple[GatewayService, FakeNodeClient]) -> None:
+    service, fake = gateway
+    await _add_node(service, "node-a")
+    await _add_node(service, "node-b")
+
+    await asyncio.gather(
+        service.create_run(_request("platform-job:concurrent-a")),
+        service.create_run(_request("platform-job:concurrent-b")),
+    )
+
+    assert {node for node, _ in fake.created} == {"node-a", "node-b"}
+
+
+async def test_rejected_run_releases_the_reserved_slot(gateway: tuple[GatewayService, FakeNodeClient]) -> None:
+    service, _ = gateway
+    await _add_node(service, "node-a")
+
+    with pytest.raises(GatewayError) as raised:
+        await service.create_run(_request("platform-job:rejected"))
+
+    assert raised.value.status_code == 422
+    assert (await service.list_nodes())[0]["usedDurableSlots"] == 0
+
+
+async def test_reconciliation_resubmits_an_allocating_run(
+    gateway: tuple[GatewayService, FakeNodeClient],
+) -> None:
+    service, fake = gateway
+    await _add_node(service, "node-a")
+    request = _request("platform-job:recovery")
+    await service._reserve_or_replay(
+        request,
+        kind="map_image",
+        idempotency_key="platform-job:recovery",
+        request_hash=hashlib.sha256(b"recovery").hexdigest(),
+    )
+
+    await service.reconcile_active_runs()
+
+    assert fake.created == [("node-a", "platform-job:recovery")]
 
 
 async def test_draining_node_never_accepts_a_new_run(gateway: tuple[GatewayService, FakeNodeClient]) -> None:

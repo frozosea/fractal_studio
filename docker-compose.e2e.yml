@@ -1,0 +1,43 @@
+# Overlay for a real, local user-flow test. Compute stays real and is reached
+# only through compute-gateway; Alipay is deterministic only at payment edge.
+services:
+  api:
+    environment:
+      ALIPAY_STUB_MODE: "true"
+      ALIPAY_APP_ID: dev-stub
+      ALIPAY_SELLER_ID: dev-stub
+      ALIPAY_STUB_PUBLIC_KEY_URL: http://alipay-stub:8000/test/public-key
+      ALIPAY_GATEWAY_URL: http://alipay-stub:8000/gateway.do
+      PAYMENT_RECONCILE_DELAY_SECONDS: "1"
+      PAYMENT_RECONCILE_PENDING_SECONDS: "5"
+      PAYMENT_RECONCILE_SWEEP_SECONDS: "30"
+      OUTBOX_POLL_INTERVAL_SECONDS: "0.2"
+      OUTBOX_SCHEDULE_INTERVAL_SECONDS: "1"
+      PREVIEW_RATE_LIMIT_PER_MINUTE: "30"
+
+  worker:
+    environment:
+      ALIPAY_STUB_MODE: "true"
+      ALIPAY_APP_ID: dev-stub
+      ALIPAY_SELLER_ID: dev-stub
+      ALIPAY_STUB_PUBLIC_KEY_URL: http://alipay-stub:8000/test/public-key
+      ALIPAY_GATEWAY_URL: http://alipay-stub:8000/gateway.do
+      PAYMENT_RECONCILE_DELAY_SECONDS: "1"
+      PAYMENT_RECONCILE_PENDING_SECONDS: "5"
+      PAYMENT_RECONCILE_SWEEP_SECONDS: "30"
+      OUTBOX_POLL_INTERVAL_SECONDS: "0.2"
+      OUTBOX_SCHEDULE_INTERVAL_SECONDS: "1"
+
+  e2e-fixtures:
+    image: fractal-studio-dev-api
+    command: ["uv", "run", "--no-sync", "python", "scripts/e2e_bootstrap.py"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://fractal:fractal_dev_password@postgres:5432/fractal_platform
+      E2E_API_URL: http://api:8000
+      E2E_FINANCE_EMAIL: ${E2E_FINANCE_EMAIL:-finance-operator@e2e.invalid}
+      E2E_FINANCE_PASSWORD: ${E2E_FINANCE_PASSWORD:-e2e-finance-password-01}
+      E2E_DISABLED_EMAIL: ${E2E_DISABLED_EMAIL:-disabled-user@e2e.invalid}
+      E2E_DISABLED_PASSWORD: ${E2E_DISABLED_PASSWORD:-e2e-disabled-password-01}
+    depends_on:
+      api:
+        condition: service_started

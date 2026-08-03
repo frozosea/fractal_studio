@@ -151,12 +151,19 @@ def map_durable_v1(
         # Custom gradients ship for 2D preview/PNG only, see docs/coloring_contract.md.
         if "colorProgram" in payload:
             raise ValueError("color_program_unsupported_for_output")
+        # zoom_video uses the ln-map colour contract, while the Studio's
+        # static-image controls expose the friendlier direct/eq_* names.
+        # Do not forward ``colorMode``: Compute treats it as lnMapColorMode
+        # when the explicit field is absent.
+        color_mode = str(payload.pop("colorMode"))
+        ln_map_color_mode = {"direct": "escape", "eq_full": "hist_eq", "eq_center": "row_eq"}[color_mode]
         payload.update(
             {
                 "fps": output_spec["fps"],
                 "durationSec": output_spec["durationSeconds"],
                 # Jobs stored before depthOctaves existed keep the historical constant.
                 "depthOctaves": output_spec.get("depthOctaves", 20.0),
+                "lnMapColorMode": ln_map_color_mode,
             }
         )
     elif kind == "hs_mesh":

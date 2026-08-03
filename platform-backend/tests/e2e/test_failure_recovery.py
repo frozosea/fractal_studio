@@ -18,7 +18,10 @@ from tests.e2e.release_helpers import (
 )
 
 
-pytestmark = pytest.mark.skipif(not os.getenv("E2E_API_URL"), reason="set E2E_API_URL")
+pytestmark = pytest.mark.skipif(
+    not os.getenv("E2E_API_URL") or os.getenv("E2E_REAL_COMPUTE_PLATFORM"),
+    reason="requires the Compute failure-injection stub; real Compute rejects synthetic failure variants",
+)
 
 
 @pytest.mark.asyncio

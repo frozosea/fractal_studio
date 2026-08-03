@@ -187,6 +187,35 @@ class GatewayService:
                         .values(state="node_lost", terminal_at=_now())
                     )
             await session.execute(delete(NodeProbe).where(NodeProbe.checked_at < _now() - timedelta(days=7)))
+        await self.reconcile_active_runs()
+
+    async def reconcile_active_runs(self) -> None:
+        """Refresh durable run state so a lost poller cannot leak node capacity."""
+        async with self._sessions() as session:
+            routes = (
+                await session.execute(
+                    select(ComputeRun, ComputeNode)
+                    .join(ComputeNode, ComputeNode.id == ComputeRun.node_id)
+                    .where(ComputeRun.state.in_(ACTIVE_RUN_STATES))
+                )
+            ).all()
+        for run, node in routes:
+            if run.node_run_id is None:
+                try:
+                    await self._submit_allocating(run.gateway_run_id)
+                except GatewayError:
+                    # Keep the reservation sticky. The next reconciliation uses
+                    # the same idempotency key, so retrying is safe.
+                    pass
+                continue
+            assert run.node_run_id is not None
+            try:
+                reply = await self._upstream.run_status(node, run.node_run_id)
+                data = self._response_data(reply.body)
+                await self._save_status(run.gateway_run_id, data)
+            except UpstreamError as error:
+                if error.code == "COMPUTE_RUN_NOT_FOUND":
+                    await self._handle_route_error(run, error)
 
     async def capabilities(self) -> dict[str, object]:
         nodes = await self._eligible_nodes(kind=None, payload={}, persistent=False)
@@ -332,11 +361,11 @@ class GatewayService:
                 if existing.request_sha256 != request_hash:
                     raise GatewayError(409, "IDEMPOTENCY_CONFLICT", "idempotencyKey was reused with a different Compute request")
                 return existing
-            nodes = (
-                await session.execute(
-                    select(ComputeNode).where(ComputeNode.state == "active").with_for_update(skip_locked=True)
-                )
-            ).scalars().all()
+            # Do not lock the full pool here.  With ``SKIP LOCKED`` that made
+            # concurrent callers see no candidates while the first caller was
+            # still evaluating every node.  We only lock a node immediately
+            # before reserving a slot on it.
+            nodes = (await session.execute(select(ComputeNode).where(ComputeNode.state == "active"))).scalars().all()
             candidates: list[tuple[float, ComputeNode]] = []
             for node in nodes:
                 if not self._healthy(node) or not _node_supports(node, kind=kind, payload=payload, persistent=True):
@@ -346,19 +375,36 @@ class GatewayService:
                     candidates.append((used / node.max_durable_slots, node))
             if not candidates:
                 raise GatewayError(503, "COMPUTE_CAPACITY_EXHAUSTED", "no healthy compatible Compute node has capacity")
-            _, node = min(candidates, key=lambda item: (item[0], item[1].last_assigned_at or datetime.min.replace(tzinfo=UTC), item[1].node_key))
-            node.last_assigned_at = _now()
-            run = ComputeRun(
-                idempotency_key=idempotency_key,
-                request_sha256=request_hash,
-                node_id=node.id,
-                kind=kind,
-                request_json=envelope,
-                state="allocating",
-            )
-            session.add(run)
-            await session.flush()
-            return run
+            for _, candidate in sorted(
+                candidates,
+                key=lambda item: (item[0], item[1].last_assigned_at or datetime.min.replace(tzinfo=UTC), item[1].node_key),
+            ):
+                node = (
+                    await session.execute(
+                        select(ComputeNode)
+                        .where(ComputeNode.id == candidate.id)
+                        .with_for_update(skip_locked=True)
+                    )
+                ).scalar_one_or_none()
+                if node is None:
+                    continue
+                if not self._healthy(node) or not _node_supports(node, kind=kind, payload=payload, persistent=True):
+                    continue
+                if await self._active_run_count(session, node.id) >= node.max_durable_slots:
+                    continue
+                node.last_assigned_at = _now()
+                run = ComputeRun(
+                    idempotency_key=idempotency_key,
+                    request_sha256=request_hash,
+                    node_id=node.id,
+                    kind=kind,
+                    request_json=envelope,
+                    state="allocating",
+                )
+                session.add(run)
+                await session.flush()
+                return run
+            raise GatewayError(503, "COMPUTE_CAPACITY_EXHAUSTED", "no healthy compatible Compute node has capacity")
 
     async def _submit_allocating(self, gateway_run_id: UUID) -> ComputeRun:
         run, node = await self._load_route(gateway_run_id)
@@ -367,6 +413,20 @@ class GatewayService:
         try:
             reply = await self._upstream.create_run(node, run.request_json)
         except UpstreamError as error:
+            if error.code == "COMPUTE_REJECTED":
+                # Validation errors are final for this exact idempotency key.
+                # Leaving the reservation in ``allocating`` would leak a
+                # durable slot forever and block the rest of the pool.
+                async with self._sessions() as session, session.begin():
+                    locked = (
+                        await session.execute(
+                            select(ComputeRun)
+                            .where(ComputeRun.gateway_run_id == gateway_run_id)
+                            .with_for_update()
+                        )
+                    ).scalar_one()
+                    locked.state = "failed"
+                    locked.terminal_at = _now()
             raise await self._handle_route_error(run, error) from error
         data = self._response_data(reply.body)
         node_run_id = data.get("computeRunId")

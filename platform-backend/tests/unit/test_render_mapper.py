@@ -155,6 +155,8 @@ def test_durable_video_and_mesh_mappers_allow_only_contract_routes() -> None:
         30.0,
         60,
     )
+    assert video["payload"]["lnMapColorMode"] == "escape"
+    assert "colorMode" not in video["payload"]
     assert (mesh_route, mesh["kind"], mesh["payload"]["resolution"]) == (
         "/compute/v1/runs",
         "hs_mesh",

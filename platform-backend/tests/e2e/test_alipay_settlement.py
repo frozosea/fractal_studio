@@ -100,7 +100,7 @@ async def test_signed_notification_reconcile_close_and_reversal(e2e_api_url: str
             "/v1/checkout", headers={"Idempotency-Key": "alipay-already-owned"}, json=checkout_payload
         )
         assert duplicate.status_code == 409
-        assert duplicate.json()["detail"] == "asset_already_owned"
+        assert duplicate.json()["error"]["code"] == "asset_already_owned"
 
         engine = create_async_engine(os.environ["E2E_DATABASE_URL"])
         try:
@@ -187,7 +187,7 @@ async def test_signed_notification_reconcile_close_and_reversal(e2e_api_url: str
         engine = create_async_engine(os.environ["E2E_DATABASE_URL"])
         try:
             async with engine.connect() as connection:
-                for target in (partial_data, paid_out_data):
+                for target, active_entitlements in ((partial_data, 0), (paid_out_data, 1)):
                     assert await connection.scalar(text("""
                         SELECT status::text FROM refund_reversals
                         WHERE payment_attempt_id = CAST(:attempt_id AS uuid)
@@ -196,6 +196,6 @@ async def test_signed_notification_reconcile_close_and_reversal(e2e_api_url: str
                         SELECT count(*) FROM entitlements WHERE order_item_id = (
                           SELECT id FROM order_items WHERE order_id = CAST(:order_id AS uuid)
                         ) AND status = 'active'
-                    """), {"order_id": target["order"]["id"]}) == 1
+                    """), {"order_id": target["order"]["id"]}) == active_entitlements
         finally:
             await engine.dispose()

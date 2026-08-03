@@ -38,7 +38,14 @@ Browser requests use the same public origin:
 
 ```text
 Browser -> http://localhost:3010/platform/v1/* -> Next reverse proxy -> Platform
-Platform worker -> http://compute-gateway:8080/compute/v1/* -> Compute Gateway -> C++ Compute
+Platform worker -> http://compute-gateway:8080/compute/v1/* -> Compute Gateway -> Compute A / Compute B
+```
+
+Run full user E2E with two real CPU Compute nodes (payment edge uses local
+Alipay stub):
+
+```bash
+./scripts/e2e-dev-gateway.sh
 ```
 
 Platform session authentication is the `fs_session` HttpOnly cookie. Mutating

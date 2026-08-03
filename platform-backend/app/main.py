@@ -139,6 +139,7 @@ _PUBLIC_DETAIL_CODES = {
     "admin_scope_only",
     "last_admin",
     "payout_request_pending",
+    "asset_already_owned",
 }
 
 
