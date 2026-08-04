@@ -24,15 +24,18 @@
   :root {
     color-scheme: light;
 
-    /* ─── Warm paper foundation ─── */
-    --background: 40 20% 98%;
-    --foreground: 222 25% 12%;
+    /* ─── Paper foundation ───
+       Values from the instrument palette in 34906670 (frontend/src/assets/
+       tokens.css). Cooler and darker than a plain near-white, and panels sit
+       *below* the field rather than above it — the recessed look is what makes
+       it read as instrumentation instead of a document. */
+    --background: 60 14% 94%;   /* #f2f2ee */
+    --foreground: 0 0% 9%;      /* #161616 */
 
-    /* ─── Cards read as raised paper, not glass ─── */
-    --card: 0 0% 100%;
-    --card-foreground: 222 25% 12%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 25% 12%;
+    --card: 60 12% 90%;         /* #e8e8e2 */
+    --card-foreground: 0 0% 9%;
+    --popover: 60 12% 90%;
+    --popover-foreground: 0 0% 9%;
 
     /* ─── Accents darkened until they carry text on white ─── */
     --primary: 271 72% 46%;
@@ -41,8 +44,8 @@
     --secondary-foreground: 0 0% 100%;
 
     /* ─── Low-saturation neutrals ─── */
-    --muted: 40 14% 93%;
-    --muted-foreground: 222 12% 38%;
+    --muted: 60 9% 85%;         /* #ddddd6 */
+    --muted-foreground: 0 0% 33%; /* #555555 */
 
     /* ─── Accent: subdued purple wash ─── */
     --accent: 271 44% 93%;
@@ -52,9 +55,9 @@
     --destructive: 0 62% 44%;
     --destructive-foreground: 0 0% 100%;
 
-    /* ─── Borders: barely visible ─── */
-    --border: 40 12% 86%;
-    --input: 40 12% 86%;
+    /* ─── Borders: 1px rules, the palette's structural element ─── */
+    --border: 60 6% 75%;        /* #c4c4bc */
+    --input: 60 6% 75%;
     --ring: 271 72% 46%;
 
     /* ─── Glass radius ─── */
@@ -66,9 +69,9 @@
        measures ~3.3:1 here against ~4.5:1 on the dark theme. Every step of
        darkness recovers part of that; see the tier note in docs/frontend.md
        before using an alpha below /55 for text that has to be read. */
-    --wash: 10 12 16;
-    --hairline: 10 12 16;
-    --ink: 10 12 16;
+    --wash: 22 22 22;
+    --hairline: 22 22 22;
+    --ink: 22 22 22;
 
     /* ─── Amber accent ramp ───
        Throughout this app the amber shade number encodes *contrast against
@@ -138,20 +141,23 @@
     --neon-cyan: 15 118 110;
 
     /* ─── Surfaces behind popovers, inputs and the app shell ─── */
-    --surface-raised: 255 255 255;
-    --surface-sunken: 246 245 242;
-    --surface-indigo: 240 238 234;
+    --surface-raised: 232 232 226;   /* #e8e8e2 */
+    --surface-sunken: 242 242 238;   /* #f2f2ee */
+    --surface-indigo: 221 221 214;   /* #ddddd6 */
 
     /* ─── Instrument language (amber laboratory) ─── */
-    --instrument-bg: 250 249 247;
-    --instrument-panel: 255 255 255;
-    --instrument-panel-raised: 243 241 236;
-    --instrument-rule: 217 212 203;
-    --instrument-amber: 163 93 0;
-    --instrument-ink: 28 30 34;
-    --instrument-control-border: 203 198 188;
-    --instrument-mode-bg: 247 245 241;
-    --instrument-canvas-border: 198 193 184;
+    --instrument-bg: 242 242 238;            /* #f2f2ee */
+    --instrument-panel: 221 221 214;         /* #ddddd6 — recessed, below the field */
+    --instrument-panel-raised: 232 232 226;  /* #e8e8e2 */
+    --instrument-rule: 196 196 188;          /* #c4c4bc */
+    /* The reference keeps the accent identical in both themes rather than
+       darkening it for paper, so the amber is the one colour that does not
+       move. It is a fill/edge/active-state colour here, not a text colour. */
+    --instrument-amber: 240 160 48;          /* #f0a030 */
+    --instrument-ink: 22 22 22;              /* #161616 */
+    --instrument-control-border: 171 171 162; /* #ababa2 */
+    --instrument-mode-bg: 232 232 226;
+    --instrument-canvas-border: 171 171 162;
     /* Graph-paper grid: ink lines on paper read at a higher alpha than the
        white lines that draw the same grid on black. */
     --instrument-grid: 17 20 26;
@@ -183,14 +189,14 @@
     --gradient-subtle-to: 222 25% 25%;
 
     /* ─── Ambient background ─── */
-    --ambient-base: 40 20% 98%;
-    --ambient-base-edge: 40 16% 95%;
+    --ambient-base: 60 14% 94%;
+    --ambient-base-edge: 60 12% 90%;
     --ambient-bloom-alpha: 0.07;
     --ambient-bloom-alpha-soft: 0.05;
 
     /* ─── Scrollbars & selection ─── */
-    --scrollbar-thumb: 40 8% 76%;
-    --scrollbar-thumb-hover: 40 8% 62%;
+    --scrollbar-thumb: 60 5% 65%;   /* #ababa2 */
+    --scrollbar-thumb-hover: 60 5% 52%;
     --selection-bg: 271 72% 46%;
     --selection-alpha: 0.18;
     --selection-fg: 222 25% 12%;

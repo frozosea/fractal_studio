@@ -28,15 +28,17 @@ async function choose(page: import("@playwright/test").Page, option: string) {
 }
 
 test.describe("theme switching", () => {
-  test("with nothing stored the page follows the OS", async ({ browser }) => {
+  test("with nothing stored the page is dark whatever the OS says", async ({ browser }) => {
+    // Dark is the default, so a light desktop must not drag the app light on
+    // a first visit — only picking "跟随系统" hands the OS that authority.
     for (const scheme of ["dark", "light"] as const) {
       const context = await browser.newContext({ colorScheme: scheme });
       const page = await context.newPage();
       await page.goto("/zh");
 
       const state = await readTheme(page);
-      expect(state.dark).toBe(scheme === "dark");
-      expect(state.colorScheme).toBe(scheme);
+      expect(state.dark, `OS ${scheme}`).toBe(true);
+      expect(state.colorScheme).toBe("dark");
       await context.close();
     }
   });
@@ -84,8 +86,14 @@ test.describe("theme switching", () => {
 
   test("the light theme does not leave dark surfaces behind", async ({ browser }) => {
     const context = await browser.newContext({ colorScheme: "light" });
+    // Dark is the default, so the OS preference alone will not get us there —
+    // the light theme has to be chosen, before the pre-paint script runs.
+    await context.addInitScript(() => {
+      localStorage.setItem("fractal-studio-theme", "light");
+    });
     const page = await context.newPage();
     await page.goto("/zh");
+    expect((await readTheme(page)).dark, "fixture failed to select light").toBe(false);
 
     // The migration's failure mode is a token that never flipped, which shows
     // up as a near-black panel sitting on paper.
@@ -95,7 +103,7 @@ test.describe("theme switching", () => {
           const bg = getComputedStyle(el).backgroundColor;
           const m = bg.match(/^rgba?\((\d+), (\d+), (\d+)(?:, ([\d.]+))?/);
           if (!m) return false;
-          const [r, g, b] = [m[1], m[2], m[3]].map(Number);
+          const [r = 0, g = 0, b = 0] = [m[1], m[2], m[3]].map(Number);
           const alpha = m[4] === undefined ? 1 : Number(m[4]);
           return alpha > 0.5 && (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.35;
         })

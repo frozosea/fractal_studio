@@ -58,14 +58,16 @@ const cases: Array<{
   prefersDark: boolean;
   expected: "light" | "dark";
 }> = [
-  { name: "nothing stored follows a dark OS", stored: null, prefersDark: true, expected: "dark" },
-  { name: "nothing stored follows a light OS", stored: null, prefersDark: false, expected: "light" },
+  // Dark is the app default, so an untouched browser gets it whatever the OS
+  // says. Only an explicit "system" hands the choice to the OS.
+  { name: "nothing stored defaults to dark on a dark OS", stored: null, prefersDark: true, expected: "dark" },
+  { name: "nothing stored defaults to dark on a light OS", stored: null, prefersDark: false, expected: "dark" },
   { name: "an explicit dark choice beats a light OS", stored: "dark", prefersDark: false, expected: "dark" },
   { name: "an explicit light choice beats a dark OS", stored: "light", prefersDark: true, expected: "light" },
   { name: '"system" follows a dark OS', stored: "system", prefersDark: true, expected: "dark" },
   { name: '"system" follows a light OS', stored: "system", prefersDark: false, expected: "light" },
-  // Anything unrecognised must behave like "system", not pin one theme.
-  { name: "a corrupt value falls back to the OS", stored: "chartreuse", prefersDark: true, expected: "dark" },
+  // A corrupt value is not a licence to pin light; it falls back to the default.
+  { name: "a corrupt value falls back to the default", stored: "chartreuse", prefersDark: false, expected: "dark" },
 ];
 
 for (const testCase of cases) {
@@ -80,16 +82,14 @@ for (const testCase of cases) {
   });
 }
 
-test("a storage read that throws still honours the OS preference", () => {
-  // Safari's private mode throws on getItem. Catching too widely here would
-  // skip the matchMedia branch entirely and hand those users a light page on a
-  // dark desktop.
-  expect(runInitScript({ stored: null, prefersDark: true, storageThrows: true })).toEqual({
-    dark: true,
-    colorScheme: "dark",
-  });
-  expect(runInitScript({ stored: null, prefersDark: false, storageThrows: true })).toEqual({
-    dark: false,
-    colorScheme: "light",
-  });
+test("a storage read that throws still lands on the default", () => {
+  // Safari's private mode throws on getItem. Those users cannot have a stored
+  // preference at all, so they must get the default rather than a blank page
+  // or a half-applied theme.
+  for (const prefersDark of [true, false]) {
+    expect(runInitScript({ stored: null, prefersDark, storageThrows: true })).toEqual({
+      dark: true,
+      colorScheme: "dark",
+    });
+  }
 });

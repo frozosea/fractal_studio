@@ -18,13 +18,14 @@ export function isTheme(value: unknown): value is Theme {
 
 /**
  * The one rule both the init script and the provider follow: an explicit
- * choice wins, anything else follows the OS. Corrupt storage therefore behaves
- * like "system" rather than silently pinning the light theme.
+ * light/dark choice wins, "system" follows the OS, and everything else — no
+ * stored preference at all, or a corrupt value — falls back to dark, which is
+ * this app's default.
  */
 export function resolveTheme(stored: string | null, systemPrefersDark: boolean): ResolvedTheme {
-  if (stored === "dark") return "dark";
   if (stored === "light") return "light";
-  return systemPrefersDark ? "dark" : "light";
+  if (stored === "system") return systemPrefersDark ? "dark" : "light";
+  return "dark";
 }
 
 /**
@@ -42,6 +43,6 @@ export function resolveTheme(stored: string | null, systemPrefersDark: boolean):
  */
 export const THEME_INIT_SCRIPT = `(function(){var s=null;try{s=localStorage.getItem(${JSON.stringify(
   THEME_STORAGE_KEY,
-)});}catch(_){}var d=s==="dark"||(s!=="light"&&window.matchMedia(${JSON.stringify(
+)});}catch(_){}var d=s!=="light"&&(s!=="system"||window.matchMedia(${JSON.stringify(
   DARK_MEDIA_QUERY,
 )}).matches),e=document.documentElement;e.classList.toggle("dark",d);e.style.colorScheme=d?"dark":"light";})();`;

@@ -34,7 +34,7 @@ function readStoredTheme(): Theme {
   } catch {
     // Private-mode Safari throws rather than returning null.
   }
-  return "system";
+  return "dark";
 }
 
 function applyTheme(resolved: ResolvedTheme) {
