@@ -66,7 +66,6 @@ const cases: Array<{
   { name: "an explicit light choice beats a dark OS", stored: "light", prefersDark: true, expected: "light" },
   { name: '"system" follows a dark OS', stored: "system", prefersDark: true, expected: "dark" },
   { name: '"system" follows a light OS', stored: "system", prefersDark: false, expected: "light" },
-  // A corrupt value is not a licence to pin light; it falls back to the default.
   { name: "a corrupt value falls back to the default", stored: "chartreuse", prefersDark: false, expected: "dark" },
 ];
 

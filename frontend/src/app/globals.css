@@ -37,19 +37,18 @@
     --popover: 60 12% 90%;
     --popover-foreground: 0 0% 9%;
 
-    /* ─── Accents darkened until they carry text on white ─── */
-    --primary: 271 72% 46%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 178 72% 28%;
-    --secondary-foreground: 0 0% 100%;
+    /* ─── One accent, as in the original instrument UI ─── */
+    --primary: 35 68% 33%;       /* #8a5e20: readable amber for text */
+    --primary-foreground: 60 14% 94%;
+    --secondary: 60 5% 52%;     /* neutral controls, never cyan */
+    --secondary-foreground: 0 0% 9%;
 
     /* ─── Low-saturation neutrals ─── */
     --muted: 60 9% 85%;         /* #ddddd6 */
     --muted-foreground: 0 0% 33%; /* #555555 */
 
-    /* ─── Accent: subdued purple wash ─── */
-    --accent: 271 44% 93%;
-    --accent-foreground: 271 60% 28%;
+    --accent: 36 45% 86%;
+    --accent-foreground: 35 68% 27%;
 
     /* ─── Soft destructive (never harsh red) ─── */
     --destructive: 0 62% 44%;
@@ -58,7 +57,7 @@
     /* ─── Borders: 1px rules, the palette's structural element ─── */
     --border: 60 6% 75%;        /* #c4c4bc */
     --input: 60 6% 75%;
-    --ring: 271 72% 46%;
+    --ring: 35 68% 33%;
 
     /* ─── Glass radius ─── */
     --radius: 0.75rem;
@@ -123,22 +122,21 @@
     --emerald-900: 209 250 229;
     --emerald-950: 236 253 245;
 
-    /* ─── Purple ramp, inverted for the same reason as amber. 500 is the
-           pivot: it carries text on either surface, so it does not move. ─── */
-    --fractal-50: 31 7 80;
-    --fractal-100: 62 18 126;
-    --fractal-200: 82 20 158;
-    --fractal-300: 101 22 194;
-    --fractal-400: 124 34 224;
-    --fractal-500: 147 51 255;
-    --fractal-600: 168 120 255;
-    --fractal-700: 196 168 255;
-    --fractal-800: 220 207 255;
-    --fractal-900: 237 229 255;
-    --fractal-950: 245 240 255;
+    /* Legacy `fractal-*` roles now follow the single amber accent ramp. */
+    --fractal-50: 69 26 3;
+    --fractal-100: 107 47 8;
+    --fractal-200: 125 60 7;
+    --fractal-300: 144 73 10;
+    --fractal-400: 163 86 11;
+    --fractal-500: 180 97 12;
+    --fractal-600: 217 138 26;
+    --fractal-700: 240 160 48;
+    --fractal-800: 251 191 36;
+    --fractal-900: 252 211 77;
+    --fractal-950: 254 243 199;
 
-    --neon-purple: 124 34 224;
-    --neon-cyan: 15 118 110;
+    --neon-purple: 163 93 0;
+    --neon-cyan: 138 94 32;
 
     /* ─── Surfaces behind popovers, inputs and the app shell ─── */
     --surface-raised: 232 232 226;   /* #e8e8e2 */
@@ -182,11 +180,10 @@
     --glass-shadow-alpha: 0.16;
     --glass-shadow-alpha-soft: 0.1;
 
-    /* Gradient text has to survive a white background. */
-    --gradient-from: 271 72% 46%;
-    --gradient-mid: 271 72% 40%;
-    --gradient-to: 178 72% 30%;
-    --gradient-subtle-to: 222 25% 25%;
+    --gradient-from: 35 68% 33%;
+    --gradient-mid: 35 78% 27%;
+    --gradient-to: 0 0% 20%;
+    --gradient-subtle-to: 0 0% 20%;
 
     /* ─── Ambient background ─── */
     --ambient-base: 60 14% 94%;
@@ -197,7 +194,7 @@
     /* ─── Scrollbars & selection ─── */
     --scrollbar-thumb: 60 5% 65%;   /* #ababa2 */
     --scrollbar-thumb-hover: 60 5% 52%;
-    --selection-bg: 271 72% 46%;
+    --selection-bg: 35 68% 33%;
     --selection-alpha: 0.18;
     --selection-fg: 222 25% 12%;
   }
@@ -386,22 +383,14 @@
     );
   }
 
-  /* Three aurora-like blooms — very faint, very slow drift. Present in both
-     themes; on paper they read as a warm tint rather than a glow. */
+  /* The light instrument theme is deliberately flat: no coloured aurora. */
   .fractal-ambient::before {
     content: "";
     position: fixed;
     inset: 0;
     z-index: 0;
     pointer-events: none;
-    background:
-      radial-gradient(ellipse 60% 50% at 15% 25%,
-        hsl(271 85% 55% / var(--ambient-bloom-alpha)) 0%, transparent 70%),
-      radial-gradient(ellipse 50% 55% at 85% 65%,
-        hsl(178 75% 50% / var(--ambient-bloom-alpha-soft)) 0%, transparent 70%),
-      radial-gradient(ellipse 40% 40% at 55% 45%,
-        hsl(271 85% 55% / var(--ambient-bloom-alpha-soft)) 0%, transparent 65%);
-    animation: aurora-drift 60s ease-in-out infinite;
+    background: none;
   }
 
   /* The starfield is dark-only: white pinpricks on paper just look like dust,
@@ -467,37 +456,37 @@
 
   .glass-panel-purple {
     @apply rounded-xl border;
-    border-color: hsl(271 60% 45% / 0.16);
+    border-color: rgb(var(--brand) / 0.22);
     background: linear-gradient(
       135deg,
-      hsl(271 60% 45% / 0.12) 0%,
+      rgb(var(--brand) / 0.10) 0%,
       rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 40%,
       rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 60%,
-      hsl(271 60% 45% / 0.08) 100%
+      rgb(var(--brand) / 0.06) 100%
     );
     backdrop-filter: blur(20px) saturate(120%);
     -webkit-backdrop-filter: blur(20px) saturate(120%);
     box-shadow:
       0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
-      0 4px 24px hsl(271 60% 35% / var(--glass-shadow-alpha-soft)),
+      0 4px 24px rgb(var(--brand) / var(--glass-shadow-alpha-soft)),
       0 1px 4px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
   }
 
   .glass-panel-cyan {
     @apply rounded-xl border;
-    border-color: hsl(178 60% 40% / 0.14);
+    border-color: rgb(var(--brand) / 0.18);
     background: linear-gradient(
       135deg,
-      hsl(178 60% 35% / 0.10) 0%,
+      rgb(var(--brand) / 0.08) 0%,
       rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 40%,
       rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 60%,
-      hsl(178 60% 35% / 0.06) 100%
+      rgb(var(--brand) / 0.04) 100%
     );
     backdrop-filter: blur(20px) saturate(120%);
     -webkit-backdrop-filter: blur(20px) saturate(120%);
     box-shadow:
       0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
-      0 4px 24px hsl(178 60% 30% / var(--glass-shadow-alpha-soft)),
+      0 4px 24px rgb(var(--brand) / var(--glass-shadow-alpha-soft)),
       0 1px 4px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
   }
 

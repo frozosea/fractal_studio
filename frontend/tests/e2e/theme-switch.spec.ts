@@ -29,8 +29,7 @@ async function choose(page: import("@playwright/test").Page, option: string) {
 
 test.describe("theme switching", () => {
   test("with nothing stored the page is dark whatever the OS says", async ({ browser }) => {
-    // Dark is the default, so a light desktop must not drag the app light on
-    // a first visit — only picking "跟随系统" hands the OS that authority.
+    // Dark is the default. Only choosing "跟随系统" hands the OS authority.
     for (const scheme of ["dark", "light"] as const) {
       const context = await browser.newContext({ colorScheme: scheme });
       const page = await context.newPage();
@@ -43,8 +42,7 @@ test.describe("theme switching", () => {
     }
   });
 
-  // Pinned dark, so "picking light" is a real change and the final "follow the
-  // system" step has a known answer. A Playwright context is light by default.
+  // Use a dark system preference so the final "follow system" step is known.
   test("choosing a theme repaints, persists, and survives a reload", async ({ browser }) => {
     const context = await browser.newContext({ colorScheme: "dark" });
     const page = await context.newPage();

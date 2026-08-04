@@ -24,6 +24,7 @@ export function isTheme(value: unknown): value is Theme {
  */
 export function resolveTheme(stored: string | null, systemPrefersDark: boolean): ResolvedTheme {
   if (stored === "light") return "light";
+  if (stored === "dark") return "dark";
   if (stored === "system") return systemPrefersDark ? "dark" : "light";
   return "dark";
 }

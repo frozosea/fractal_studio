@@ -120,8 +120,8 @@ const config: Config = {
         "2xl": "1.25rem",
       },
       boxShadow: {
-        "glow-purple": "0 0 30px hsl(271 91% 65% / 0.2), 0 0 60px hsl(271 91% 65% / 0.08)",
-        "glow-cyan": "0 0 30px hsl(178 84% 58% / 0.15), 0 0 60px hsl(178 84% 58% / 0.06)",
+        "glow-purple": "0 0 30px rgb(var(--brand) / 0.18), 0 0 60px rgb(var(--brand) / 0.07)",
+        "glow-cyan": "0 0 30px rgb(var(--brand) / 0.14), 0 0 60px rgb(var(--brand) / 0.05)",
         "glow-canvas":
           "0 0 40px hsl(271 91% 65% / 0.1), 0 0 80px hsl(178 84% 58% / 0.06), inset 0 0 60px hsl(222 47% 11% / 0.3)",
         // Cast against `--glass-shadow`, which is near-black on the dark theme

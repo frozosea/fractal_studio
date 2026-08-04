@@ -36,14 +36,14 @@ function Badge({ className, variant, ...props }: BadgeProps) {
     variant === "fractal" || variant === "gradient"
       ? {
           background:
-            "linear-gradient(135deg, hsl(271 85% 45% / 0.25) 0%, hsl(271 60% 30% / 0.15) 100%)",
-          boxShadow: "0 0 12px hsl(271 85% 50% / 0.08)",
+            "linear-gradient(135deg, rgb(var(--brand) / 0.25) 0%, rgb(var(--brand) / 0.12) 100%)",
+          boxShadow: "0 0 12px rgb(var(--brand) / 0.08)",
         }
       : variant === "neon" || variant === "gradient-cyan"
         ? {
             background:
-              "linear-gradient(135deg, hsl(178 75% 40% / 0.20) 0%, hsl(178 60% 25% / 0.12) 100%)",
-            boxShadow: "0 0 12px hsl(178 75% 50% / 0.06)",
+              "linear-gradient(135deg, rgb(var(--brand) / 0.20) 0%, rgb(var(--brand) / 0.10) 100%)",
+            boxShadow: "0 0 12px rgb(var(--brand) / 0.06)",
           }
         : undefined;
 
