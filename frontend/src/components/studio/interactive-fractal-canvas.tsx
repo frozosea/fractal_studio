@@ -389,9 +389,9 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
     {previewing && <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/25"><span className="flex items-center gap-2 border border-white/15 bg-black/80 px-3 py-1.5 text-sm"><LoaderCircle className="h-4 w-4 animate-spin" /> {labels.rendering}</span></div>}
     {/* `size="sm"` is 32px, under the 44px touch minimum, so widen on coarse input. */}
     <div className="absolute right-3 top-3 flex overflow-hidden border border-white/20 bg-black/80">
-      <Button aria-label={labels.zoomOut} title={labels.zoomOut} size="sm" variant="ghost" className="rounded-none coarse:h-11 coarse:w-11" onClick={() => zoomCentered(2)}><Minus className="h-4 w-4" /></Button>
-      <Button aria-label={labels.zoomIn} title={labels.zoomIn} size="sm" variant="ghost" className="rounded-none border-x border-white/15 coarse:h-11 coarse:w-11" onClick={() => zoomCentered(0.35)}><Plus className="h-4 w-4" /></Button>
-      <Button aria-label={labels.reset} title={labels.reset} size="sm" variant="ghost" className="rounded-none coarse:h-11 coarse:w-11" onClick={() => { clearPreview(); onReset(); }}><RotateCcw className="h-4 w-4" /></Button>
+      <Button aria-label={labels.zoomOut} title={labels.zoomOut} size="sm" variant="ghost" className="rounded-none text-white/70 hover:bg-white/10 hover:text-white coarse:h-11 coarse:w-11" onClick={() => zoomCentered(2)}><Minus className="h-4 w-4" /></Button>
+      <Button aria-label={labels.zoomIn} title={labels.zoomIn} size="sm" variant="ghost" className="rounded-none border-x border-white/15 text-white/70 hover:bg-white/10 hover:text-white coarse:h-11 coarse:w-11" onClick={() => zoomCentered(0.35)}><Plus className="h-4 w-4" /></Button>
+      <Button aria-label={labels.reset} title={labels.reset} size="sm" variant="ghost" className="rounded-none text-white/70 hover:bg-white/10 hover:text-white coarse:h-11 coarse:w-11" onClick={() => { clearPreview(); onReset(); }}><RotateCcw className="h-4 w-4" /></Button>
     </div>
   </div>;
 }
