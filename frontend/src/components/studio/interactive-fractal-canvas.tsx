@@ -381,7 +381,7 @@ export function InteractiveFractalCanvas({ spec, preview, previewing, width, hei
       <span>{coarsePointer ? labels.hintTouch : labels.hint}</span><span>{spec.iterations} {labels.detail}</span>
     </div>
     <span className="pointer-events-none absolute left-3 top-3 border border-amber-300/30 bg-black/75 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-200/80">{labels.frame} {exportWidth}×{exportHeight}</span>
-    {previewTransform && <span className="pointer-events-none absolute left-3 top-11 border border-cyan-300/30 bg-black/75 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-cyan-100/80">
+    {previewTransform && <span className="pointer-events-none absolute left-3 top-11 border border-amber-300/30 bg-black/75 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-100/80">
       {[previewTransform.panning ? labels.panPreview : null, previewTransform.zooming ? labels.zoomPreview : null]
         .filter(Boolean)
         .join(" · ")}

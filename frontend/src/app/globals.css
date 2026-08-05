@@ -59,8 +59,7 @@
     --input: 60 6% 75%;
     --ring: 35 68% 33%;
 
-    /* ─── Glass radius ─── */
-    --radius: 0.75rem;
+    --radius: 2px;
 
     /* ─── Contrast direction: toward ink on light, toward light on dark ───
        `--ink` is pushed nearly to black on purpose. The same alpha buys less
@@ -165,7 +164,7 @@
     --instrument-bevel: 17 20 26;
     --instrument-bevel-alpha: 0.05;
 
-    /* ─── Deep-space glass ─── */
+    /* Compatibility surface tokens. Panels are opaque instrument plates. */
     --glass-tint: 255 255 255;
     --glass-tint-deep: 250 249 252;
     --glass-alpha: 0.78;
@@ -202,38 +201,35 @@
   .dark {
     color-scheme: dark;
 
-    /* ─── Deep Indigo Foundation ─── */
-    --background: 228 50% 8%;
-    --foreground: 220 30% 88%;
+    /* Original scientific-instrument palette. */
+    --background: 220 13% 5%;       /* #0a0b0d */
+    --foreground: 220 12% 86%;      /* #d7dae0 */
 
-    /* ─── 3D Glass Cards ─── */
-    --card: 228 45% 10%;
-    --card-foreground: 220 30% 88%;
-    --popover: 228 45% 9%;
-    --popover-foreground: 220 30% 88%;
+    --card: 220 18% 9%;             /* #13161c */
+    --card-foreground: 220 12% 86%;
+    --popover: 220 18% 9%;
+    --popover-foreground: 220 12% 86%;
 
-    /* ─── Neon Accents: purple + cyan, never harsh ─── */
-    --primary: 271 85% 62%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 178 75% 54%;
-    --secondary-foreground: 228 50% 8%;
+    --primary: 35 85% 56%;          /* #f0a030 */
+    --primary-foreground: 220 13% 5%;
+    --secondary: 216 8% 20%;
+    --secondary-foreground: 220 12% 86%;
 
     /* ─── Low-saturation neutrals ─── */
-    --muted: 226 22% 18%;
-    --muted-foreground: 220 16% 58%;
+    --muted: 216 12% 13%;
+    --muted-foreground: 216 8% 53%; /* #7c8490 */
 
-    /* ─── Accent: subdued purple wash ─── */
-    --accent: 271 40% 24%;
-    --accent-foreground: 220 30% 88%;
+    --accent: 35 45% 15%;
+    --accent-foreground: 35 85% 56%;
 
     /* ─── Soft destructive (never harsh red) ─── */
     --destructive: 0 55% 50%;
     --destructive-foreground: 0 0% 96%;
 
     /* ─── Borders: barely visible ─── */
-    --border: 226 22% 16%;
-    --input: 226 22% 16%;
-    --ring: 271 85% 62%;
+    --border: 213 13% 14%;          /* #1f2328 */
+    --input: 213 13% 14%;
+    --ring: 35 85% 56%;
 
     --wash: 255 255 255;
     --hairline: 255 255 255;
@@ -279,24 +275,24 @@
     --emerald-900: 6 78 59;
     --emerald-950: 2 44 34;
 
-    --fractal-50: 245 240 255;
-    --fractal-100: 237 229 255;
-    --fractal-200: 220 207 255;
-    --fractal-300: 196 168 255;
-    --fractal-400: 168 120 255;
-    --fractal-500: 147 51 255;
-    --fractal-600: 124 34 224;
-    --fractal-700: 101 22 194;
-    --fractal-800: 82 20 158;
-    --fractal-900: 62 18 126;
-    --fractal-950: 31 7 80;
+    --fractal-50: 255 251 235;
+    --fractal-100: 254 243 199;
+    --fractal-200: 253 230 138;
+    --fractal-300: 252 211 77;
+    --fractal-400: 251 191 36;
+    --fractal-500: 245 158 11;
+    --fractal-600: 217 119 6;
+    --fractal-700: 180 83 9;
+    --fractal-800: 146 64 14;
+    --fractal-900: 120 53 15;
+    --fractal-950: 69 26 3;
 
-    --neon-purple: 147 51 255;
-    --neon-cyan: 54 240 232;
+    --neon-purple: 240 160 48;
+    --neon-cyan: 240 160 48;
 
-    --surface-raised: 30 41 59;
-    --surface-sunken: 9 14 26;
-    --surface-indigo: 15 23 42;
+    --surface-raised: 19 22 28;
+    --surface-sunken: 10 11 13;
+    --surface-indigo: 17 19 24;
 
     /* ─── Instrument language (amber laboratory) ─── */
     --instrument-bg: 9 10 12;
@@ -325,21 +321,21 @@
     --glass-shadow-alpha: 0.4;
     --glass-shadow-alpha-soft: 0.3;
 
-    --gradient-from: 271 85% 70%;
-    --gradient-mid: 271 85% 50%;
-    --gradient-to: 178 75% 55%;
-    --gradient-subtle-to: 220 30% 80%;
+    --gradient-from: 35 85% 56%;
+    --gradient-mid: 35 72% 43%;
+    --gradient-to: 220 12% 86%;
+    --gradient-subtle-to: 216 8% 53%;
 
     /* ─── Ambient background ─── */
-    --ambient-base: 228 50% 6%;
-    --ambient-base-edge: 228 50% 4%;
-    --ambient-bloom-alpha: 0.05;
-    --ambient-bloom-alpha-soft: 0.04;
+    --ambient-base: 220 13% 5%;
+    --ambient-base-edge: 220 13% 4%;
+    --ambient-bloom-alpha: 0;
+    --ambient-bloom-alpha-soft: 0;
 
     /* ─── Scrollbars & selection ─── */
     --scrollbar-thumb: 226 22% 20%;
     --scrollbar-thumb-hover: 226 22% 28%;
-    --selection-bg: 271 85% 55%;
+    --selection-bg: 35 85% 56%;
     --selection-alpha: 0.25;
     --selection-fg: 0 0% 100%;
   }
@@ -357,10 +353,13 @@
     overscroll-behavior-y: none;
     /* The grey flash on tap adds nothing over the explicit hover/active states. */
     -webkit-tap-highlight-color: transparent;
+    overflow-x: clip;
   }
 
   html {
     @apply scroll-smooth;
+    max-width: 100%;
+    overflow-x: clip;
   }
 
   /* ─── Subdued focus ring, never harsh ─── */
@@ -403,12 +402,6 @@
      viewport. */
   .dark .fractal-ambient::before {
     background:
-      radial-gradient(ellipse 60% 50% at 15% 25%,
-        hsl(271 85% 55% / var(--ambient-bloom-alpha)) 0%, transparent 70%),
-      radial-gradient(ellipse 50% 55% at 85% 65%,
-        hsl(178 75% 50% / var(--ambient-bloom-alpha-soft)) 0%, transparent 70%),
-      radial-gradient(ellipse 40% 40% at 55% 45%,
-        hsl(271 85% 55% / var(--ambient-bloom-alpha-soft)) 0%, transparent 65%),
       radial-gradient(1px 1px at 10% 20%, hsl(0 0% 100% / 0.12) 0%, transparent 100%),
       radial-gradient(1px 1px at 30% 60%, hsl(0 0% 100% / 0.08) 0%, transparent 100%),
       radial-gradient(1px 1px at 55% 15%, hsl(0 0% 100% / 0.10) 0%, transparent 100%),
@@ -417,7 +410,7 @@
       radial-gradient(1px 1px at 20% 85%, hsl(0 0% 100% / 0.07) 0%, transparent 100%),
       radial-gradient(1px 1px at 45% 40%, hsl(0 0% 100% / 0.05) 0%, transparent 100%),
       radial-gradient(1px 1px at 95% 10%, hsl(0 0% 100% / 0.08) 0%, transparent 100%);
-    background-size: 100% 100%, 100% 100%, 100% 100%, 400px 400px;
+    background-size: 400px 400px;
   }
 
   /* The ambient layer is decorative and runs forever; honour a request to
@@ -433,86 +426,39 @@
     z-index: 1;
   }
 
-  /* ─── 3D Glass Panels: layered depth, soft glow, no harsh edges ─── */
+  /* Legacy class names retained for callers; their rendering is now flat. */
 
   .glass-panel {
-    @apply rounded-xl border;
-    border-color: rgb(var(--glass-edge) / var(--glass-edge-alpha));
-    background: linear-gradient(
-      135deg,
-      rgb(var(--glass-tint) / var(--glass-alpha)) 0%,
-      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 50%,
-      rgb(var(--glass-tint) / var(--glass-alpha)) 100%
-    );
-    backdrop-filter: blur(20px) saturate(120%);
-    -webkit-backdrop-filter: blur(20px) saturate(120%);
-    box-shadow:
-      0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
-      0 4px 24px rgb(var(--glass-shadow) / var(--glass-shadow-alpha)),
-      0 1px 4px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
+    border: 1px solid rgb(var(--instrument-rule));
+    border-radius: 2px;
+    background: rgb(var(--instrument-panel));
+    box-shadow: 0 1px 0 rgb(var(--instrument-bevel) / var(--instrument-bevel-alpha)) inset;
   }
 
   /* ─── Gradient-tinted glass variants ─── */
 
   .glass-panel-purple {
-    @apply rounded-xl border;
-    border-color: rgb(var(--brand) / 0.22);
-    background: linear-gradient(
-      135deg,
-      rgb(var(--brand) / 0.10) 0%,
-      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 40%,
-      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 60%,
-      rgb(var(--brand) / 0.06) 100%
-    );
-    backdrop-filter: blur(20px) saturate(120%);
-    -webkit-backdrop-filter: blur(20px) saturate(120%);
-    box-shadow:
-      0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
-      0 4px 24px rgb(var(--brand) / var(--glass-shadow-alpha-soft)),
-      0 1px 4px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
+    border: 1px solid rgb(var(--instrument-rule));
+    border-left-color: rgb(var(--instrument-amber) / 0.65);
+    border-radius: 2px;
+    background: rgb(var(--instrument-panel));
   }
 
   .glass-panel-cyan {
-    @apply rounded-xl border;
-    border-color: rgb(var(--brand) / 0.18);
-    background: linear-gradient(
-      135deg,
-      rgb(var(--brand) / 0.08) 0%,
-      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 40%,
-      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 60%,
-      rgb(var(--brand) / 0.04) 100%
-    );
-    backdrop-filter: blur(20px) saturate(120%);
-    -webkit-backdrop-filter: blur(20px) saturate(120%);
-    box-shadow:
-      0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
-      0 4px 24px rgb(var(--brand) / var(--glass-shadow-alpha-soft)),
-      0 1px 4px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
+    border: 1px solid rgb(var(--instrument-rule));
+    border-left-color: rgb(var(--instrument-amber) / 0.45);
+    border-radius: 2px;
+    background: rgb(var(--instrument-panel));
   }
 
   /* ─── Gradient text ─── */
 
   .gradient-text {
-    background: linear-gradient(
-      135deg,
-      hsl(var(--gradient-from)) 0%,
-      hsl(var(--gradient-mid)) 40%,
-      hsl(var(--gradient-to)) 100%
-    );
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: rgb(var(--instrument-ink));
   }
 
   .gradient-text-subtle {
-    background: linear-gradient(
-      135deg,
-      hsl(var(--gradient-mid)) 0%,
-      hsl(var(--gradient-subtle-to)) 100%
-    );
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: rgb(var(--instrument-ink) / 0.72);
   }
 
   /* ─── Gradient underline / accent line ─── */
@@ -527,14 +473,7 @@
     left: 0;
     right: 0;
     height: 1px;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      hsl(var(--gradient-mid) / 0.4) 20%,
-      hsl(var(--gradient-to) / 0.3) 50%,
-      hsl(var(--gradient-mid) / 0.4) 80%,
-      transparent 100%
-    );
+    background: rgb(var(--instrument-rule));
   }
 
   /* ─── Gradient button glow ─── */
@@ -548,12 +487,7 @@
     inset: -2px;
     border-radius: inherit;
     padding: 1px;
-    background: linear-gradient(
-      135deg,
-      hsl(var(--gradient-mid) / 0.6) 0%,
-      hsl(var(--gradient-to) / 0.4) 50%,
-      hsl(var(--gradient-mid) / 0.6) 100%
-    );
+    background: rgb(var(--instrument-amber) / 0.55);
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
@@ -566,27 +500,14 @@
   }
 
   .glass-panel-sm {
-    @apply rounded-lg border;
-    border-color: rgb(var(--glass-edge) / var(--glass-edge-alpha));
-    background: linear-gradient(
-      135deg,
-      rgb(var(--glass-tint) / var(--glass-alpha-deep)) 0%,
-      rgb(var(--glass-tint-deep) / var(--glass-alpha-deep)) 100%
-    );
-    backdrop-filter: blur(16px) saturate(110%);
-    -webkit-backdrop-filter: blur(16px) saturate(110%);
-    box-shadow:
-      0 1px 0 0 rgb(255 255 255 / var(--glass-bevel-alpha)) inset,
-      0 2px 16px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft)),
-      0 1px 3px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
+    border: 1px solid rgb(var(--instrument-rule));
+    border-radius: 2px;
+    background: rgb(var(--instrument-panel-raised));
   }
 
   /* ─── Fractal canvas glow: soft, meditative, never blinding ─── */
   .canvas-glow {
-    box-shadow:
-      0 0 60px hsl(271 85% 55% / 0.08),
-      0 0 120px hsl(178 75% 50% / 0.04),
-      inset 0 0 60px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
+    box-shadow: 0 0 0 1px rgb(var(--instrument-canvas-border));
   }
 }
 
@@ -741,9 +662,7 @@
 .scientific-canvas {
   border: 1px solid rgb(var(--instrument-canvas-border));
   border-radius: 1px;
-  box-shadow:
-    0 0 0 1px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft)),
-    0 18px 40px rgb(var(--glass-shadow) / var(--glass-shadow-alpha));
+  box-shadow: 0 0 0 1px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft));
 }
 
 /* Public marketing pages share the laboratory language with auth and the 2D
@@ -786,9 +705,19 @@
   border: 1px solid rgb(var(--instrument-rule));
   border-radius: 2px;
   background: rgb(var(--instrument-panel) / 0.96);
-  box-shadow:
-    0 1px 0 rgb(var(--instrument-bevel) / var(--instrument-bevel-alpha)) inset,
-    0 24px 70px rgb(var(--glass-shadow) / var(--glass-shadow-alpha));
+  box-shadow: 0 1px 0 rgb(var(--instrument-bevel) / var(--instrument-bevel-alpha)) inset;
+}
+
+.workbench-instrument,
+.public-instrument,
+.auth-instrument {
+  font-variant-numeric: tabular-nums;
+}
+
+.workbench-instrument [class*="bg-gradient"],
+.public-instrument [class*="bg-gradient"],
+.auth-instrument [class*="bg-gradient"] {
+  background-image: none !important;
 }
 
 .auth-control {

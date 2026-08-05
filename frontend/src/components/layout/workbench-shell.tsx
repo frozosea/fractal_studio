@@ -14,8 +14,6 @@ interface WorkbenchShellProps {
 export function WorkbenchShell({ children, title }: WorkbenchShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
-  // Same threshold as the `md:` classes below, read from one place rather than
-  // duplicated as a magic number in a click handler.
   const isMobile = useIsMobile();
 
   React.useEffect(() => {
@@ -39,7 +37,7 @@ export function WorkbenchShell({ children, title }: WorkbenchShellProps) {
     // indicator, so the shell has to pad itself back out. The sidebar is fixed
     // to the viewport and therefore needs its own insets.
     <div
-      className="flex h-[100dvh] overflow-hidden bg-deep-void"
+      className="workbench-instrument flex h-[100dvh] overflow-hidden bg-instrument"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       <Sidebar
@@ -50,7 +48,7 @@ export function WorkbenchShell({ children, title }: WorkbenchShellProps) {
       {mobileSidebarOpen && (
         <button
           type="button"
-          className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm md:hidden"
+          className="fixed inset-0 z-30 bg-black/70 md:hidden"
           aria-label="Close navigation"
           onClick={() => setMobileSidebarOpen(false)}
         />

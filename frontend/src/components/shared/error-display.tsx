@@ -15,11 +15,11 @@ export function ErrorDisplay({ message, onRetry, className, fullPage = false }: 
   const content = (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-4 rounded-2xl border border-red-500/20 bg-red-500/5 p-8 text-center",
+        "flex flex-col items-center justify-center gap-4 rounded-sm border border-red-500/25 bg-red-500/5 p-8 text-center",
         className
       )}
     >
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10">
+      <div className="flex h-12 w-12 items-center justify-center border border-red-500/30 bg-red-500/10">
         <AlertTriangle className="h-6 w-6 text-red-400" />
       </div>
       <div className="space-y-1">

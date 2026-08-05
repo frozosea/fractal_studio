@@ -35,7 +35,7 @@ export function ListingCard({
   className,
 }: ListingCardProps) {
   return (
-    <article className={cn("min-w-0 overflow-hidden rounded-xl border border-hairline/10", className)}>
+    <article className={cn("min-w-0 overflow-hidden rounded-sm border border-instrument-rule bg-instrument-panel", className)}>
       <div className="aspect-[4/3] bg-wash/5">
         {previewUrl ? (
           <img

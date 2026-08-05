@@ -31,7 +31,7 @@ export function PublicHeader() {
 
   return (
     <header
-      className="sticky top-0 z-40 border-b border-instrument-rule bg-instrument/92 backdrop-blur"
+      className="sticky top-0 z-40 border-b border-instrument-rule bg-instrument"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 sm:px-8">

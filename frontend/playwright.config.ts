@@ -13,7 +13,7 @@ export default defineConfig({
     // The desktop project owns the full journey; the mobile one only runs the
     // layout checks, which is where a small viewport actually tells you
     // something the desktop run cannot.
-    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /\.mobile\.spec\.ts$/ },
-    { name: "mobile", use: { ...devices["Pixel 5"] }, testMatch: /\.mobile\.spec\.ts$/ },
+    { name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chrome" }, testIgnore: /\.mobile\.spec\.ts$/ },
+    { name: "mobile", use: { ...devices["Pixel 5"], channel: "chrome", locale: "zh-CN" }, testMatch: /\.mobile\.spec\.ts$/ },
   ],
 });

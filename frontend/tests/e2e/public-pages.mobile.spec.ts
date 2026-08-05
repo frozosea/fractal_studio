@@ -35,7 +35,7 @@ test.describe("public pages on a phone", () => {
   test("the header collapses its links into a menu", async ({ page }) => {
     await page.goto("/");
     // The inline nav is hidden below `md`; the menu button replaces it.
-    await expect(page.getByRole("navigation").getByRole("link", { name: "教程" })).toBeHidden();
+    await expect(page.locator("header").getByRole("navigation").getByRole("link", { name: "教程" })).toBeHidden();
     await page.getByRole("button", { name: "站点导航" }).click();
     await expect(page.getByRole("menuitem", { name: "教程" })).toBeVisible();
   });

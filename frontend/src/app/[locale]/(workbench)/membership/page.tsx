@@ -58,7 +58,7 @@ export default function MembershipPage() {
     return (
       <div className="flex min-h-[60dvh] items-center justify-center">
         <div className="w-full max-w-lg space-y-8 text-center">
-          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-amber-500 shadow-lg shadow-amber-500/20">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center border border-brand/45 bg-brand/10">
             {/* Sits on the amber gradient, not on the page surface, so it
                 stays white in both themes. */}
             <Crown className="h-10 w-10 text-white" />
@@ -98,8 +98,8 @@ export default function MembershipPage() {
         </div>
 
         {/* Price card */}
-        <Card className="overflow-hidden border-fractal-600/30 bg-gradient-to-b from-fractal-950/40 to-deep-void">
-          <div className="bg-gradient-to-r from-fractal-600 to-fractal-500 px-6 py-2">
+        <Card className="overflow-hidden border-brand/35">
+          <div className="border-b border-brand/35 bg-brand/10 px-6 py-2">
             <Badge variant="fractal" className="text-xs">{t("membership.lifetime")}</Badge>
           </div>
           <div className="space-y-4 p-6">

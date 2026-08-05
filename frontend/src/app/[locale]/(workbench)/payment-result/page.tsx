@@ -166,7 +166,7 @@ export default function PaymentResultPage() {
       <div className="w-full max-w-md space-y-6 text-center">
         <div className="flex justify-center">
           {isMembership ? (
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-amber-500 shadow-lg shadow-amber-500/20">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center border border-brand/45 bg-brand/10">
               {/* On the amber gradient, so white in both themes. */}
               <svg className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
@@ -211,7 +211,7 @@ export default function PaymentResultPage() {
         {!isMembership && latestOrder?.status === "fulfilled" && <DownloadSection order={latestOrder} />}
 
         {isMembership && (
-          <div className="rounded-xl bg-gradient-to-b from-amber-500/10 to-transparent p-5 ring-1 ring-amber-500/20">
+          <div className="rounded-sm border border-amber-500/20 bg-amber-500/5 p-5">
             <p className="text-lg font-semibold text-amber-200">{t("paymentResult.membershipWelcome")}</p>
           </div>
         )}

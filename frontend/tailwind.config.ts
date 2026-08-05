@@ -114,23 +114,21 @@ const config: Config = {
       },
       borderRadius: {
         lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
-        xl: "1rem",
-        "2xl": "1.25rem",
+        md: "2px",
+        sm: "1px",
+        xl: "2px",
+        "2xl": "2px",
       },
       boxShadow: {
-        "glow-purple": "0 0 30px rgb(var(--brand) / 0.18), 0 0 60px rgb(var(--brand) / 0.07)",
-        "glow-cyan": "0 0 30px rgb(var(--brand) / 0.14), 0 0 60px rgb(var(--brand) / 0.05)",
-        "glow-canvas":
-          "0 0 40px hsl(271 91% 65% / 0.1), 0 0 80px hsl(178 84% 58% / 0.06), inset 0 0 60px hsl(222 47% 11% / 0.3)",
+        "glow-purple": "none",
+        "glow-cyan": "none",
+        "glow-canvas": "none",
         // Cast against `--glass-shadow`, which is near-black on the dark theme
         // and a soft grey-violet on paper — a 30%-black drop shadow that reads
         // as depth on black reads as grime on white.
-        glass:
-          "0 8px 32px rgb(var(--glass-shadow) / var(--glass-shadow-alpha)), 0 2px 8px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft))",
-        "glass-sm": "0 4px 16px rgb(var(--glass-shadow) / var(--glass-shadow-alpha-soft))",
-        float: "0 12px 40px rgb(var(--glass-shadow) / calc(var(--glass-shadow-alpha) * 1.25))",
+        glass: "none",
+        "glass-sm": "none",
+        float: "none",
       },
       keyframes: {
         "accordion-down": {

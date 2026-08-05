@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils/cn";
 
 const badgeVariants = cva(
-  "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 gap-1.5",
+  "inline-flex items-center rounded-sm border px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider transition-colors focus:outline-none focus:ring-1 focus:ring-ring gap-1.5",
   {
     variants: {
       variant: {
@@ -32,25 +32,9 @@ export interface BadgeProps
     VariantProps<typeof badgeVariants> {}
 
 function Badge({ className, variant, ...props }: BadgeProps) {
-  const gradientStyle =
-    variant === "fractal" || variant === "gradient"
-      ? {
-          background:
-            "linear-gradient(135deg, rgb(var(--brand) / 0.25) 0%, rgb(var(--brand) / 0.12) 100%)",
-          boxShadow: "0 0 12px rgb(var(--brand) / 0.08)",
-        }
-      : variant === "neon" || variant === "gradient-cyan"
-        ? {
-            background:
-              "linear-gradient(135deg, rgb(var(--brand) / 0.20) 0%, rgb(var(--brand) / 0.10) 100%)",
-            boxShadow: "0 0 12px rgb(var(--brand) / 0.06)",
-          }
-        : undefined;
-
   return (
     <div
       className={cn(badgeVariants({ variant }), className)}
-      style={gradientStyle}
       {...props}
     >
       {variant === "running" && (

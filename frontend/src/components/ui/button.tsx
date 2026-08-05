@@ -6,31 +6,31 @@ import { cn } from "@/lib/utils/cn";
 import { Loader2 } from "lucide-react";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-normal tracking-wide ring-offset-background transition-all duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/30 focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-40 gap-2",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-sm border text-xs font-medium uppercase tracking-[0.08em] ring-offset-background transition-colors duration-100 focus-visible:outline-none focus-visible:border-brand focus-visible:ring-1 focus-visible:ring-brand/20 disabled:pointer-events-none disabled:opacity-40 gap-2",
   {
     variants: {
       variant: {
         default:
-          "bg-wash/[0.08] text-ink/80 hover:bg-wash/[0.12] border border-hairline/[0.06]",
+          "border-instrument-rule bg-instrument-raised text-ink/75 hover:border-brand/50 hover:text-brand",
         destructive:
-          "bg-red-500/10 text-red-400/80 hover:bg-red-500/15 border border-red-500/10",
+          "border-red-500/35 bg-red-500/5 text-red-400 hover:bg-red-500/10",
         outline:
-          "border border-hairline/[0.08] bg-transparent text-ink/60 hover:bg-wash/[0.04] hover:text-ink/85",
+          "border-instrument-rule bg-transparent text-ink/60 hover:border-brand/40 hover:text-ink/90",
         secondary:
-          "bg-wash/[0.04] text-ink/55 hover:bg-wash/[0.07] hover:text-ink/75",
+          "border-instrument-rule bg-instrument text-ink/55 hover:bg-instrument-raised hover:text-ink/80",
         ghost:
-          "text-ink/60 hover:bg-wash/[0.04] hover:text-ink/85",
-        link: "text-primary/80 underline-offset-4 hover:underline",
+          "border-transparent text-ink/60 hover:border-instrument-rule hover:bg-instrument-raised hover:text-ink/85",
+        link: "border-transparent text-brand underline-offset-4 hover:underline",
         fractal:
-          "bg-primary/85 text-primary-foreground hover:bg-primary/75",
+          "border-brand/60 bg-brand/10 text-brand hover:bg-brand/16",
         neon:
-          "bg-transparent border border-primary/30 text-primary hover:bg-primary/[0.06]",
+          "border-brand/45 bg-transparent text-brand hover:bg-brand/[0.08]",
       },
       size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        lg: "h-11 rounded-lg px-8 text-sm",
-        icon: "h-9 w-9",
+        default: "h-9 px-3 py-2",
+        sm: "h-8 px-2.5 text-[11px]",
+        lg: "h-10 px-5 text-xs",
+        icon: "h-8 w-8",
       },
     },
     defaultVariants: { variant: "default", size: "default" },
