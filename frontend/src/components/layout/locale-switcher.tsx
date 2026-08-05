@@ -1,10 +1,8 @@
 "use client";
-import * as React from "react";
 import { cn } from "@/lib/utils/cn";
-import { usePathname, useRouter } from "@/i18n/navigation";
 import { useSearchParams } from "next/navigation";
 import { useLocale } from "next-intl";
-import { Globe } from "lucide-react";
+import { Check, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -20,38 +18,51 @@ const locales = [
 
 export function LocaleSwitcher() {
   const locale = useLocale();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
-  const router = useRouter();
-  const [pendingLocale, startTransition] = React.useTransition();
 
   const currentLocale = locales.find((l) => l.code === locale) ?? locales[0];
 
   const handleSwitch = (newLocale: (typeof locales)[number]["code"]) => {
     if (newLocale === locale) return;
+    // Keep next-intl's locale detection from redirecting the unprefixed
+    // default-locale URL back to the previously selected locale.
+    document.cookie = `NEXT_LOCALE=${newLocale}; Path=/; Max-Age=31536000; SameSite=Lax`;
     const query = searchParams.toString();
     const hash = typeof window === "undefined" ? "" : window.location.hash;
-    const href = `${pathname}${query ? `?${query}` : ""}${hash}`;
-    startTransition(() => router.replace(href, { locale: newLocale }));
+    const strippedPath = window.location.pathname.replace(/^\/(?:zh|en)(?=\/|$)/, "") || "/";
+    const localizedPath = newLocale === "zh"
+      ? strippedPath
+      : `/en${strippedPath === "/" ? "" : strippedPath}`;
+    window.location.assign(`${localizedPath}${query ? `?${query}` : ""}${hash}`);
   };
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="gap-1.5 px-2 text-xs">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 border-instrument-rule bg-instrument-panel px-2 font-mono text-[11px] text-ink/60 hover:border-brand/45 hover:text-brand coarse:h-10"
+          aria-label={`Language: ${currentLocale.name}`}
+          title={`Language: ${currentLocale.name}`}
+        >
           <Globe className="h-3.5 w-3.5" />
           {currentLocale.label}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[100px]">
+      <DropdownMenuContent align="end" className="min-w-[132px]">
         {locales.map((l) => (
           <DropdownMenuItem
             key={l.code}
-            disabled={pendingLocale || locale === l.code}
-            onClick={() => handleSwitch(l.code)}
-            className={cn(locale === l.code && "text-fractal-400")}
+            onSelect={() => handleSwitch(l.code)}
+            aria-current={locale === l.code ? "true" : undefined}
+            className={cn(
+              "gap-2 border-l border-transparent",
+              locale === l.code && "border-brand bg-brand/[0.08] text-brand",
+            )}
           >
-            {l.name}
+            <span className="flex-1">{l.name}</span>
+            {locale === l.code && <Check className="h-3 w-3" aria-hidden />}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

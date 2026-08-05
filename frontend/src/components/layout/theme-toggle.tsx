@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useTranslations } from "next-intl";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Check, Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -30,10 +30,11 @@ export function ThemeToggle() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="ghost"
-          size="sm"
-          className="gap-1.5 px-2 text-xs coarse:h-10"
+          variant="outline"
+          size="icon"
+          className="h-8 w-8 border-instrument-rule bg-instrument-panel text-ink/60 hover:border-brand/45 hover:text-brand coarse:h-10 coarse:w-10"
           aria-label={t("label")}
+          title={`${t("label")}: ${t(theme)}`}
         >
           {/* The stored preference is unknown until the client reads it, so the
               slot is held open rather than filled with a guess that would swap
@@ -43,17 +44,22 @@ export function ThemeToggle() {
       </DropdownMenuTrigger>
       {/* Geometry and the current-item colour match LocaleSwitcher deliberately
           — the two menus sit side by side in every shell. */}
-      <DropdownMenuContent align="end" className="min-w-[100px]">
+      <DropdownMenuContent align="end" className="min-w-[132px]">
         {options.map((option) => {
           const OptionIcon = option.icon;
           return (
             <DropdownMenuItem
               key={option.value}
-              onClick={() => setTheme(option.value)}
-              className={cn("gap-2", theme === option.value && "text-fractal-400")}
+              onSelect={() => setTheme(option.value)}
+              aria-current={theme === option.value ? "true" : undefined}
+              className={cn(
+                "gap-2 border-l border-transparent",
+                theme === option.value && "border-brand bg-brand/[0.08] text-brand",
+              )}
             >
               <OptionIcon className="h-3.5 w-3.5" />
-              {t(option.value)}
+              <span className="flex-1">{t(option.value)}</span>
+              {theme === option.value && <Check className="h-3 w-3" aria-hidden />}
             </DropdownMenuItem>
           );
         })}

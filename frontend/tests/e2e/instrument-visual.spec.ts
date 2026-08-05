@@ -21,6 +21,13 @@ test("public, auth, and workbench surfaces keep the instrument visual language",
   expect(rootStyles).toEqual({ background: "9 10 12", amber: "240 160 48", headerBlur: "none" });
   await expect(page).toHaveScreenshot("landing-dark.png", { animations: "disabled", mask: MASKS(page) });
 
+  await page.getByRole("button", { name: "Language: English" }).click();
+  await expect(page.getByRole("menuitem", { name: "English" })).toHaveAttribute("aria-current", "true");
+  await page.getByRole("menuitem", { name: "中文" }).click();
+  await page.waitForURL((url) => url.pathname === "/");
+  await expect(page.getByRole("button", { name: "Language: 中文" })).toBeVisible();
+  await page.goto("/en");
+
   await page.evaluate(() => localStorage.setItem("fractal-studio-theme", "light"));
   await page.reload();
   await expect(page.locator("html")).not.toHaveClass(/dark/);
