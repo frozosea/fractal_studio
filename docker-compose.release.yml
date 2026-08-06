@@ -25,6 +25,18 @@ services:
 
   compute-gateway:
     ports: !reset []
+    volumes: !reset []
+
+  compute-gateway-migrate:
+    volumes: !reset []
+
+  migrate:
+    environment:
+      APP_ENV: production
+      SESSION_COOKIE_SECURE: "true"
+      CORS_ORIGINS: ${FSD_API_ORIGIN:-https://fractal.kevin0412.top}
+      S3_SERVER_SIDE_ENCRYPTION: AES256
+    volumes: !reset []
 
   alipay-stub:
     ports: !override
@@ -32,9 +44,35 @@ services:
 
   api:
     environment:
+      APP_ENV: production
       SESSION_COOKIE_SECURE: "true"
+      CORS_ORIGINS: ${FSD_API_ORIGIN:-https://fractal.kevin0412.top}
+      S3_SERVER_SIDE_ENCRYPTION: AES256
     ports: !override
       - "127.0.0.1:${PLATFORM_PORT:-18100}:8000"
+    volumes: !override
+      - ./alipay_app_private.pem:/run/secrets/alipay_app_private.pem:ro
+      - ./alipay_sandbox_public.pem:/run/secrets/alipay_sandbox_public.pem:ro
+
+  worker:
+    environment:
+      APP_ENV: production
+      SESSION_COOKIE_SECURE: "true"
+      CORS_ORIGINS: ${FSD_API_ORIGIN:-https://fractal.kevin0412.top}
+      S3_SERVER_SIDE_ENCRYPTION: AES256
+    volumes: !override
+      - ./alipay_app_private.pem:/run/secrets/alipay_app_private.pem:ro
+      - ./alipay_sandbox_public.pem:/run/secrets/alipay_sandbox_public.pem:ro
+
+  preview-worker:
+    environment:
+      APP_ENV: production
+      SESSION_COOKIE_SECURE: "true"
+      CORS_ORIGINS: ${FSD_API_ORIGIN:-https://fractal.kevin0412.top}
+      S3_SERVER_SIDE_ENCRYPTION: AES256
+    volumes: !override
+      - ./alipay_app_private.pem:/run/secrets/alipay_app_private.pem:ro
+      - ./alipay_sandbox_public.pem:/run/secrets/alipay_sandbox_public.pem:ro
 
   frontend:
     build:

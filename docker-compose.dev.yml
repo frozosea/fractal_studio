@@ -55,6 +55,8 @@ services:
       additional_contexts:
         cuda-toolkit: ./.cuda-toolkit
     restart: unless-stopped
+    runtime: nvidia
+    gpus: all
     environment:
       FSD_STARTUP_BENCHMARK: "off"
       FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
@@ -73,6 +75,8 @@ services:
   compute-b:
     image: fractal-studio-dev-compute
     restart: unless-stopped
+    runtime: nvidia
+    gpus: all
     environment:
       FSD_STARTUP_BENCHMARK: "off"
       FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
@@ -155,11 +159,11 @@ services:
       context: ./platform-backend
     command: ["uv", "run", "--no-sync", "alembic", "-c", "alembic.ini", "upgrade", "head"]
     environment: &platform-env
-      APP_ENV: development
+      APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+asyncpg://fractal:fractal_dev_password@postgres:5432/fractal_platform
       MIGRATION_DATABASE_URL: postgresql+psycopg://fractal:fractal_dev_password@postgres:5432/fractal_platform
       REDIS_URL: redis://redis:6379/0
-      SESSION_SECRET: dev-session-secret-change-me-32-bytes-minimum
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret-change-me-32-bytes-minimum}
       SESSION_COOKIE_SECURE: "false"
       API_ORIGIN: ${FSD_API_ORIGIN:-http://localhost:3010}
       CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3010},${FSD_API_ORIGIN:-http://localhost:3010}
