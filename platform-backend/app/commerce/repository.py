@@ -397,12 +397,27 @@ async def create_or_get_reversal(
 
 
 async def mark_reversal_manual_review(
-    connection: AsyncConnection, *, reversal_id: UUID, order_id: UUID
+    connection: AsyncConnection, *, reversal_id: UUID, order_id: UUID, revoke_entitlements: bool = False
 ) -> None:
     await connection.execute(
         text("UPDATE refund_reversals SET status = 'manual_review' WHERE id = :id AND status = 'detected'"),
         {"id": reversal_id},
     )
+    if revoke_entitlements:
+        # Partial refund means customer access must stop while finance resolves
+        # the payment discrepancy. Full-refund ledger failures keep access until
+        # a financial operator decides the case.
+        await connection.execute(
+            text(
+                """
+                UPDATE entitlements
+                SET status = 'revoked', revoked_at = COALESCE(revoked_at, now())
+                WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = :order_id)
+                  AND status = 'active'
+                """
+            ),
+            {"order_id": order_id},
+        )
     await connection.execute(text("UPDATE orders SET status = 'payment_exception' WHERE id = :id"), {"id": order_id})
 
 

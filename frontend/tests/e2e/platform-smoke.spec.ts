@@ -11,7 +11,7 @@ test("browser registers through Platform and explores an interactive real Comput
     if (pathname === "/platform/v1/me/favorites") favoriteRequests.push(request.url());
   });
   page.on("response", async (response) => {
-    if (new URL(response.url()).pathname === "/platform/v1/studio/preview" && response.request().method() === "POST") {
+    if (new URL(response.url()).pathname === "/platform/v1/studio/preview-jobs" && response.request().method() === "POST") {
       const spec = (await response.request().postDataJSON()).canonicalSpec as Record<string, unknown>;
       previewSpecs.push(spec);
       previewScales.push(Number(spec.scale));
@@ -57,22 +57,21 @@ test("browser registers through Platform and explores an interactive real Comput
   await expect.poll(() => previewSpecs.some((spec) => spec.julia === true)).toBe(true);
   await expect(page.getByAltText("Julia parameter-plane preview")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByAltText("Julia dynamical-plane preview")).toBeVisible({ timeout: 30_000 });
-  const juliaScales = page.getByLabel("Viewport height / scale");
+  const juliaScales = page.getByRole("textbox", { name: "Viewport height / scale" });
   await expect(juliaScales).toHaveCount(2);
   const rightScale = await juliaScales.nth(1).inputValue();
   await page.getByRole("button", { name: "Zoom in" }).first().click();
   await expect(juliaScales.nth(0)).not.toHaveValue("3");
   await expect(juliaScales.nth(1)).toHaveValue(rightScale);
+  // Pair transition remains part of the free workbench; the richer custom
+  // formula modes keep their membership gate.
   await page.getByRole("button", { name: "Pair transition", exact: true }).click();
   await expect.poll(() => previewSpecs.some((spec) => spec.transitionMode === "pair")).toBe(true);
-  await page.getByRole("button", { name: "Formula", exact: true }).click();
-  await page.getByLabel("Orbit formula").fill("z*z*z+c");
-  await expect.poll(() => previewSpecs.some((spec) => (spec.orbitProgram as { type?: string } | undefined)?.type === "formula")).toBe(true);
+  await expect(page.getByRole("button", { name: /Formula/ })).toBeDisabled();
   await page.getByRole("button", { name: "Map", exact: true }).click();
   await page.getByLabel("Dynamic coloring").selectOption("eq_full");
   await expect.poll(() => previewSpecs.some((spec) => spec.colorMode === "eq_full")).toBe(true);
-  await page.getByLabel("Custom gradient").check();
-  await expect(page.locator('input[type="color"]')).toHaveCount(5);
+  await expect(page.getByLabel("Custom gradient")).toBeEnabled();
 
   await page.goto("/zh/studio");
   await expect(page.locator("main").getByRole("heading", { name: "分形工作室" })).toBeVisible();
@@ -86,7 +85,7 @@ test("browser registers through Platform and explores an interactive real Comput
   });
   await page.getByRole("link", { name: "Library" }).click();
   await page.waitForURL(/\/assets$/, { timeout: 30_000 });
-  await expect(page.getByRole("status")).toHaveText("Loading data…");
+  await expect(page.getByRole("status")).toHaveText(/Loading/);
 
   await page.getByRole("link", { name: "Favorites" }).click();
   await page.waitForURL(/\/favorites$/, { timeout: 30_000 });

@@ -1,0 +1,420 @@
+openapi: 3.1.0
+info:
+  title: Fractal Studio Compute Gateway MVP API
+  version: 0.1.0
+  description: |
+    Private stateful routing gateway for multiple C++ Compute nodes.
+    It preserves the Compute v1 contract consumed by Platform while hiding
+    node-local run IDs, URLs, runtime directories, and upstream credentials.
+servers:
+  - url: http://compute-gateway:8080
+    description: Private Docker network only
+tags:
+  - name: compute
+  - name: operations
+paths:
+  /compute/v1/health:
+    get:
+      tags: [compute]
+      summary: Gateway liveness probe
+      security: []
+      responses:
+        '200':
+          description: Gateway process is live
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /compute/v1/capabilities:
+    get:
+      tags: [compute]
+      summary: Aggregate capability projection of schedulable nodes
+      security: [{ GatewayBearer: [] }]
+      responses:
+        '200':
+          description: Capability projection
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Capabilities' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /compute/v1/previews:
+    post:
+      tags: [compute]
+      summary: Route a stateless short preview to a compatible node
+      security: [{ GatewayBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PreviewRequest' }
+      responses:
+        '200':
+          description: Upstream preview payload; binary RGBA8 or JSON according to Compute v1 kind
+          headers:
+            X-FSD-Width: { schema: { type: integer } }
+            X-FSD-Height: { schema: { type: integer } }
+            X-FSD-Pixel-Format: { schema: { type: string, enum: [rgba8] } }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            application/json:
+              schema: { type: object }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/CapacityExhausted' }
+  /compute/v1/runs:
+    post:
+      tags: [compute]
+      summary: Reserve a node and create or replay a durable run
+      security: [{ GatewayBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DurableRunRequest' }
+      responses:
+        '202':
+          description: Gateway-owned durable run accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/CapacityExhausted' }
+  /compute/v1/runs/{computeRunId}:
+    parameters:
+      - $ref: '#/components/parameters/ComputeRunId'
+    get:
+      tags: [compute]
+      summary: Resolve a Gateway run and get its current node status
+      security: [{ GatewayBearer: [] }]
+      responses:
+        '200':
+          description: Current normalized run status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/RunNotFound' }
+        '502': { $ref: '#/components/responses/NodeLost' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /compute/v1/runs/{computeRunId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/ComputeRunId'
+    post:
+      tags: [compute]
+      summary: Forward cooperative cancellation to the run owner node
+      security: [{ GatewayBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '202':
+          description: Cancellation state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CancelEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/RunNotFound' }
+        '502': { $ref: '#/components/responses/NodeLost' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /compute/v1/runs/{computeRunId}/manifest:
+    parameters:
+      - $ref: '#/components/parameters/ComputeRunId'
+    get:
+      tags: [compute]
+      summary: Read completed manifest and rewrite artifact IDs
+      security: [{ GatewayBearer: [] }]
+      responses:
+        '200':
+          description: Completed manifest
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Manifest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/RunNotFound' }
+        '409':
+          description: Run is not completed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '502': { $ref: '#/components/responses/NodeLost' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /compute/v1/artifacts:
+    get:
+      tags: [compute]
+      summary: Stream a validated artifact from its owner node
+      security: [{ GatewayBearer: [] }]
+      parameters:
+        - name: artifactId
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-fA-F-]{36}:[^/\\.][^/\\]*$'
+        - name: Range
+          in: header
+          required: false
+          schema: { type: string, example: bytes=0-1023 }
+      responses:
+        '200':
+          description: Full artifact byte stream
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '206':
+          description: Single requested byte range
+          headers:
+            Content-Range: { schema: { type: string } }
+            Accept-Ranges: { schema: { type: string, enum: [bytes] } }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/ArtifactNotFound' }
+        '502': { $ref: '#/components/responses/NodeLost' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /internal/v1/nodes:
+    get:
+      tags: [operations]
+      summary: List nodes and Gateway capacity state
+      security: [{ GatewayAdminBearer: [] }]
+      responses:
+        '200':
+          description: Node records without upstream credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/NodeView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /internal/v1/nodes/{nodeKey}:
+    parameters:
+      - $ref: '#/components/parameters/NodeKey'
+    put:
+      tags: [operations]
+      summary: Create or update an operational Compute node
+      security: [{ GatewayAdminBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpsertNodeRequest' }
+      responses:
+        '200':
+          description: Node saved and successfully probed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /internal/v1/nodes/{nodeKey}/drain:
+    parameters:
+      - $ref: '#/components/parameters/NodeKey'
+    post:
+      tags: [operations]
+      summary: Stop new assignments while preserving existing routes
+      security: [{ GatewayAdminBearer: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/NodeViewResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NodeNotFound' }
+  /internal/v1/nodes/{nodeKey}/activate:
+    parameters:
+      - $ref: '#/components/parameters/NodeKey'
+    post:
+      tags: [operations]
+      summary: Probe and activate a node
+      security: [{ GatewayAdminBearer: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/NodeViewResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NodeNotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /internal/v1/nodes/{nodeKey}/disable:
+    parameters:
+      - $ref: '#/components/parameters/NodeKey'
+    post:
+      tags: [operations]
+      summary: Disable new assignments immediately
+      security: [{ GatewayAdminBearer: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/NodeViewResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NodeNotFound' }
+components:
+  securitySchemes:
+    GatewayBearer: { type: http, scheme: bearer }
+    GatewayAdminBearer: { type: http, scheme: bearer }
+  parameters:
+    ComputeRunId:
+      name: computeRunId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    NodeKey:
+      name: nodeKey
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$' }
+  responses:
+    Unauthorized:
+      description: Missing or invalid private service credential
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    ValidationError:
+      description: Invalid request or unsafe artifact identifier
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    IdempotencyConflict:
+      description: Key was reused with a different `{kind,payload}` body
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    RunNotFound:
+      description: Unknown Gateway run
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    NodeNotFound:
+      description: Unknown Compute node
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    ArtifactNotFound:
+      description: Unknown Gateway artifact
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    CapacityExhausted:
+      description: No healthy compatible node currently has capacity
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Unavailable:
+      description: Assigned node or Gateway dependency is temporarily unavailable
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    NodeLost:
+      description: Assigned node is permanently unavailable; run must be recreated
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    NodeViewResponse:
+      description: Updated node state
+      content: { application/json: { schema: { $ref: '#/components/schemas/NodeView' } } }
+  schemas:
+    Health:
+      type: object
+      required: [schemaVersion, status, service]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        status: { type: string, const: ok }
+        service: { type: string, const: compute-gateway }
+    ComputeEnvelope:
+      type: object
+      required: [schemaVersion, kind, payload]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        kind: { type: string, minLength: 1, maxLength: 64 }
+        payload: { type: object }
+    PreviewRequest:
+      allOf:
+        - $ref: '#/components/schemas/ComputeEnvelope'
+    DurableRunRequest:
+      allOf:
+        - $ref: '#/components/schemas/ComputeEnvelope'
+        - type: object
+          required: [idempotencyKey]
+          properties:
+            idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    Artifact:
+      type: object
+      required: [artifactId, name, kind, mediaType, sizeBytes, sha256]
+      properties:
+        artifactId: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        mediaType: { type: string, enum: [image/png, video/mp4, model/gltf-binary, application/sla] }
+        sizeBytes: { type: integer, minimum: 1, maximum: 524288000 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+    RunData:
+      type: object
+      required: [computeRunId, status, progress, artifacts]
+      properties:
+        computeRunId: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, completed, failed, cancelled] }
+        progress:
+          type: object
+          required: [percent]
+          properties: { percent: { type: integer, minimum: 0, maximum: 100 } }
+        artifacts:
+          type: array
+          items: { $ref: '#/components/schemas/Artifact' }
+    RunEnvelope:
+      type: object
+      required: [schemaVersion, data]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        data: { $ref: '#/components/schemas/RunData' }
+    CancelEnvelope:
+      type: object
+      required: [schemaVersion, data]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        data:
+          type: object
+          required: [computeRunId, status, accepted, cancelRequested]
+          properties:
+            computeRunId: { type: string, format: uuid }
+            status: { type: string }
+            accepted: { type: boolean }
+            cancelRequested: { type: boolean }
+    Manifest:
+      type: object
+      required: [computeRunId, status, artifacts]
+      properties:
+        computeRunId: { type: string, format: uuid }
+        status: { type: string, const: completed }
+        artifacts:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/Artifact' }
+    Capabilities:
+      type: object
+      required: [schemaVersion, rendererVersion, persistentKinds, previewKinds, jobs, gateway]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        rendererVersion: { type: string, const: gateway }
+        persistentKinds: { type: array, items: { type: string } }
+        previewKinds: { type: array, items: { type: string } }
+        jobs: { type: array, items: { type: object } }
+        gateway:
+          type: object
+          required: [healthyNodes, ready]
+          properties:
+            healthyNodes: { type: integer, minimum: 0 }
+            ready: { type: boolean }
+    UpsertNodeRequest:
+      type: object
+      required: [baseUrl, maxDurableSlots, maxPreviewSlots, enabled]
+      properties:
+        baseUrl: { type: string, format: uri }
+        maxDurableSlots: { type: integer, minimum: 1, maximum: 64 }
+        maxPreviewSlots: { type: integer, minimum: 1, maximum: 64 }
+        enabled: { type: boolean }
+    NodeView:
+      type: object
+      required: [nodeKey, state, maxDurableSlots, usedDurableSlots, maxPreviewSlots, healthy]
+      properties:
+        nodeKey: { type: string }
+        state: { type: string, enum: [active, draining, offline, disabled] }
+        maxDurableSlots: { type: integer }
+        usedDurableSlots: { type: integer }
+        maxPreviewSlots: { type: integer }
+        healthy: { type: boolean }
+        lastHealthyAt: { type: [string, 'null'], format: date-time }
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object }

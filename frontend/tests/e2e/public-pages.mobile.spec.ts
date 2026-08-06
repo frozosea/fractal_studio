@@ -35,14 +35,14 @@ test.describe("public pages on a phone", () => {
   test("the header collapses its links into a menu", async ({ page }) => {
     await page.goto("/");
     // The inline nav is hidden below `md`; the menu button replaces it.
-    await expect(page.locator("header").getByRole("navigation").getByRole("link", { name: "教程" })).toBeHidden();
-    await page.getByRole("button", { name: "站点导航" }).click();
-    await expect(page.getByRole("menuitem", { name: "教程" })).toBeVisible();
+    await expect(page.locator("header nav").getByRole("link", { name: /Tutorial|教程/ })).toBeHidden();
+    await page.getByRole("button", { name: /Site navigation|站点导航/ }).click();
+    await expect(page.getByRole("menuitem", { name: /Tutorial|教程/ })).toBeVisible();
   });
 
   test("the landing page reaches the tutorial and the help page", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("link", { name: "查看教程" }).first().click();
+    await page.getByRole("link", { name: /Read the tutorial|查看教程/ }).first().click();
     await expect(page).toHaveURL(/\/tutorial$/);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);

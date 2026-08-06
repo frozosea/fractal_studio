@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 
 from app.core.config import Settings
-from app.infrastructure.compute.compute_client import InlineComputeFrame
+from app.infrastructure.compute.compute_client import ComputeClientError, InlineComputeFrame
 from app.infrastructure.redis.quota_store import PreviewQuotaUnavailable
 from app.studio.compute_request_mapper import PREVIEW_MAPPING_VERSION, map_preview_v1
 from app.studio.models import FractalSpec
@@ -28,9 +28,15 @@ class InlineFrameClient:
         self.requests: list[dict[str, object]] = []
 
     async def render_map_inline(self, request_body: dict[str, object], *, timeout_seconds: float) -> InlineComputeFrame:
-        assert timeout_seconds == 8.0
+        assert timeout_seconds == 30.0
         self.requests.append(request_body)
         return self.frame
+
+
+class FailingInlineFrameClient:
+    async def render_map_inline(self, _: dict[str, object], *, timeout_seconds: float) -> InlineComputeFrame:
+        assert timeout_seconds == 30.0
+        raise ComputeClientError("compute_unavailable")
 
 
 class UnavailableLimiter:
@@ -106,7 +112,7 @@ def test_preview_mapper_bounds_export_sized_compute_work() -> None:
 
     request = map_preview_v1(canonical.spec, width=64, height=64, request_id=UUID(int=1))
 
-    assert request["payload"]["iterations"] == 4096
+    assert request["payload"]["iterations"] == 512
     assert request["payload"]["pairwiseCap"] == 128
     assert canonical.spec["iterations"] == 1_000_000
     assert canonical.spec["pairwiseCap"] == 1_000_000
@@ -215,3 +221,16 @@ async def test_preview_fails_closed_when_redis_is_unavailable() -> None:
 
     assert getattr(error.value, "status_code", None) == 503
     assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_preview_exposes_busy_compute_as_retryable_service_unavailable() -> None:
+    service = PreviewService(
+        settings=_settings(), rate_limiter=AllowedLimiter(), compute_client=FailingInlineFrameClient()  # type: ignore[arg-type]
+    )
+    canonical = canonicalize_spec(FractalSpec.model_validate({"version": 1}))
+
+    with pytest.raises(Exception) as error:
+        await service.render(owner_id=UUID(int=1), canonical=canonical, width=64, height=64)
+
+    assert getattr(error.value, "status_code", None) == 503

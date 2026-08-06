@@ -44,7 +44,7 @@ import {
 type ImageMode = "map" | "julia" | "transitionPair" | "transitionMulti" | "formula" | "sequence";
 type SequenceOrbit = Extract<OrbitProgram, { type: "sequence" }>;
 type StudioExplorationSession = {
-  version: 1;
+  version: 2;
   spec: FractalSpec;
   juliaPickerSpec: FractalSpec;
   mode: ImageMode;
@@ -111,7 +111,7 @@ function parseExplorationSession(raw: string | null): StudioExplorationSession |
   try {
     const value = JSON.parse(raw) as Partial<StudioExplorationSession>;
     if (
-      value.version !== 1
+      value.version !== 2
       || value.spec?.version !== 1
       || value.juliaPickerSpec?.version !== 1
       || !value.mode
@@ -179,6 +179,16 @@ function formatCoordinate(value: number | undefined): string {
   return Number.isFinite(numeric) ? numeric.toPrecision(12).replace(/(?:\.0+|(?:(\.\d*?)0+))(?=e|$)/, "$1") : "0";
 }
 
+function safeScale(value: number | undefined, fallback = 3): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(minScale, parsed) : fallback;
+}
+
+function hasInvalidScale(value: number | undefined): boolean {
+  const parsed = Number(value);
+  return !Number.isFinite(parsed) || parsed <= 0;
+}
+
 /** Modes that require membership — gated for non-members */
 const MEMBER_ONLY_MODES: ReadonlySet<ImageMode> = new Set(["transitionMulti", "formula", "sequence"]);
 
@@ -192,6 +202,7 @@ export default function StudioPage() {
   const [preview, setPreview] = useState<string | null>(null);
   const [juliaPickerPreview, setJuliaPickerPreview] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [previewQueued, setPreviewQueued] = useState(false);
   const [capabilities, setCapabilities] = useState<StudioCapabilities>(fallbackCapabilities);
   const [output, setOutput] = useState({ preset: "square", width: 1024, height: 1024 });
   const [explorationReady, setExplorationReady] = useState(false);
@@ -206,6 +217,7 @@ export default function StudioPage() {
   const previewRef = useRef<string | null>(null);
   const juliaPickerPreviewRef = useRef<string | null>(null);
   const lastPreviewAtRef = useRef(0);
+  const previewGenerationRef = useRef(0);
   const explorationRef = useRef<StudioExplorationSession | null>(null);
   const explorationStorageKey = user?.id ? `fractal-studio:exploration:v1:${user.id}` : null;
 
@@ -239,7 +251,7 @@ export default function StudioPage() {
 
   useEffect(() => {
     if (!explorationReady || !explorationStorageKey) return;
-    const snapshot: StudioExplorationSession = { version: 1, spec, juliaPickerSpec, mode, output };
+    const snapshot: StudioExplorationSession = { version: 2, spec, juliaPickerSpec, mode, output };
     explorationRef.current = snapshot;
     const timer = window.setTimeout(() => {
       try { window.sessionStorage.setItem(explorationStorageKey, JSON.stringify(snapshot)); } catch { /* ignore */ }
@@ -260,7 +272,7 @@ export default function StudioPage() {
       ...spec,
       centerRe: Number.isFinite(centerRe) ? centerRe : Number(spec.centerRe ?? 0),
       centerIm: Number.isFinite(centerIm) ? centerIm : Number(spec.centerIm ?? 0),
-      scale: Math.max(minScale, Number(spec.scale ?? 3)),
+      scale: safeScale(spec.scale),
       iterations: Math.max(1, Math.round(Number(spec.iterations ?? 512))),
       smooth: spec.metric === "escape" ? false : Boolean(spec.smooth),
       bailout: Math.max(0.01, Number(spec.bailout ?? 2)),
@@ -280,7 +292,7 @@ export default function StudioPage() {
       centerIm: Number.isFinite(centerIm) ? centerIm : Number(juliaPickerSpec.centerIm ?? 0),
       centerReStr: juliaPickerSpec.centerReStr ?? String(juliaPickerSpec.centerRe ?? 0),
       centerImStr: juliaPickerSpec.centerImStr ?? String(juliaPickerSpec.centerIm ?? 0),
-      scale: Math.max(minScale, Number(juliaPickerSpec.scale ?? 3)),
+      scale: safeScale(juliaPickerSpec.scale),
       julia: false,
       transitionMode: "off",
       orbitProgram: null,
@@ -288,6 +300,26 @@ export default function StudioPage() {
       smooth: false,
     };
   }, [canonical, juliaPickerSpec]);
+
+  // Old session snapshots could contain a literal zero scale. Restore a whole
+  // usable viewport, not only the number: its saved centre was normally made
+  // by panning while the effective scale was near zero too.
+  useEffect(() => {
+    if (!explorationReady) return;
+    const pickerWasInvalid = hasInvalidScale(juliaPickerSpec.scale);
+    setSpec((current) => {
+      if (hasInvalidScale(current.scale)) {
+        return {
+          ...current, centerRe: -0.75, centerIm: 0, centerReStr: "-0.75", centerImStr: "0", scale: 3,
+          ...(current.julia ? { juliaRe: -0.8, juliaIm: 0.156 } : {}),
+        };
+      }
+      return pickerWasInvalid && current.julia ? { ...current, juliaRe: -0.8, juliaIm: 0.156 } : current;
+    });
+    setJuliaPickerSpec((current) => hasInvalidScale(current.scale)
+      ? { ...current, centerRe: -0.75, centerIm: 0, centerReStr: "-0.75", centerImStr: "0", scale: 3 }
+      : current);
+  }, [explorationReady, juliaPickerSpec.scale]);
   const specKey = JSON.stringify(canonical);
   const juliaPickerSpecKey = JSON.stringify(juliaPickerCanonical);
   const zoomLevel = Math.max(0, Math.log2(3 / Number(canonical.scale ?? 3)));
@@ -306,7 +338,15 @@ export default function StudioPage() {
   useEffect(refreshAllowance, [refreshAllowance]);
 
   useEffect(() => {
-    void platform.studio.capabilities().then(setCapabilities).catch((reason: unknown) => {
+    void platform.studio.capabilities().then((remote) => setCapabilities({
+      ...fallbackCapabilities,
+      ...remote,
+      // Older Compute capability payloads do not advertise Studio's static
+      // coloring names. Keep usable UI controls instead of rendering an empty
+      // select until every worker has upgraded.
+      colorMaps: remote.colorMaps.length ? remote.colorMaps : fallbackCapabilities.colorMaps,
+      colorModes: remote.colorModes.length ? remote.colorModes : fallbackCapabilities.colorModes,
+    })).catch((reason: unknown) => {
       setError(`${t("errors.capabilities")} (${errorCode(reason) ?? "request_failed"})`);
     });
     return () => {
@@ -334,22 +374,30 @@ export default function StudioPage() {
 
   useEffect(() => {
     if (!explorationReady) return;
+    // Stop polling previous request immediately. Its Redis job is superseded by
+    // the one below, so workers discard it before publishing a stale frame.
     abortRef.current?.abort();
+    const generation = ++previewGenerationRef.current;
     const controller = new AbortController();
-    abortRef.current = controller;
     const minimumInterval = mode === "julia" ? juliaPreviewMinIntervalMs : previewMinIntervalMs;
     const wait = Math.max(previewDebounceMs, lastPreviewAtRef.current + minimumInterval - Date.now());
     const timer = window.setTimeout(async () => {
+      abortRef.current = controller;
       setPreviewing(true);
+      setPreviewQueued(false);
       setError(null);
       setNotice(null);
       lastPreviewAtRef.current = Date.now();
       try {
         const [blob, pickerBlob] = await Promise.all([
-          platform.studio.preview(canonical, previewSize.width, previewSize.height, controller.signal),
-          ...(mode === "julia" ? [platform.studio.preview(juliaPickerCanonical, previewSize.width, previewSize.height, controller.signal)] : []),
+          platform.studio.preview(canonical, previewSize.width, previewSize.height, controller.signal, "main", (jobStatus) => {
+            if (jobStatus === "queued" || jobStatus === "deferred") setPreviewQueued(true);
+          }),
+          ...(mode === "julia" ? [platform.studio.preview(juliaPickerCanonical, previewSize.width, previewSize.height, controller.signal, "julia_picker", (jobStatus) => {
+            if (jobStatus === "queued" || jobStatus === "deferred") setPreviewQueued(true);
+          })] : []),
         ]);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
         const url = URL.createObjectURL(blob);
         if (previewRef.current) URL.revokeObjectURL(previewRef.current);
         previewRef.current = url;
@@ -361,8 +409,14 @@ export default function StudioPage() {
           setJuliaPickerPreview(pickerUrl);
         }
       } catch (reason) {
-        if (controller.signal.aborted) return;
-        if (reason instanceof PlatformApiError && reason.status === 429) {
+        if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+        if (reason instanceof PlatformApiError && reason.code === "preview_not_found") {
+          // Redis may have restarted or an old job may have expired while this
+          // tab was suspended. Resubmit current viewport without exposing an
+          // internal queue identifier as a user-facing error.
+          setNotice(t("errors.previewQueued"));
+          setRetryTick((current) => current + 1);
+        } else if (reason instanceof PlatformApiError && (reason.status === 429 || reason.status === 503)) {
           lastPreviewAtRef.current = Date.now() + minimumInterval;
           setNotice(t("errors.previewRate"));
           setRetryTick((current) => current + 1);
@@ -370,7 +424,11 @@ export default function StudioPage() {
           setError(`${t("errors.preview")} (${errorCode(reason) ?? "request_failed"})`);
         }
       } finally {
-        if (!controller.signal.aborted) setPreviewing(false);
+        if (abortRef.current === controller) abortRef.current = null;
+        if (!controller.signal.aborted && generation === previewGenerationRef.current) {
+          setPreviewing(false);
+          setPreviewQueued(false);
+        }
       }
     }, wait);
     return () => {
@@ -395,6 +453,43 @@ export default function StudioPage() {
       ...(patch.centerRe === undefined ? {} : { centerReStr: String(patch.centerRe) }),
       ...(patch.centerIm === undefined ? {} : { centerImStr: String(patch.centerIm) }),
     }));
+  };
+  const changeVariant = (variant: string) => {
+    const bailout = defaultBailoutForVariant(variant);
+    const parameterPlane: Partial<FractalSpec> = {
+      variant,
+      bailout,
+      centerRe: -0.75,
+      centerIm: 0,
+      centerReStr: "-0.75",
+      centerImStr: "0",
+      scale: 3,
+      iterations: 512,
+      rotationDeg: 0,
+      julia: false,
+      transitionMode: "off",
+      orbitProgram: null,
+      metric: "escape",
+      smooth: false,
+    };
+
+    // A viewport belongs to a formula. Reusing a deep coordinate from the
+    // previous formula often points at an empty region and looks like a blank
+    // image, even though rendering succeeded.
+    setJuliaPickerSpec((current) => ({ ...current, ...parameterPlane }));
+    setSpec((current) => mode === "julia"
+      ? {
+        ...current,
+        ...parameterPlane,
+        centerRe: 0,
+        centerIm: 0,
+        centerReStr: "0",
+        centerImStr: "0",
+        julia: true,
+        juliaRe: -0.8,
+        juliaIm: 0.156,
+      }
+      : { ...current, ...parameterPlane });
   };
 
   const selectMode = (next: ImageMode) => {
@@ -642,7 +737,7 @@ export default function StudioPage() {
             {(mode === "map" || mode === "julia") && (
               <>
                 <Control label={t("variant")}>
-                  <select className={selectClass} value={spec.variant} onChange={(event) => update({ variant: event.target.value, bailout: defaultBailoutForVariant(event.target.value) })}>
+                  <select className={selectClass} value={spec.variant} onChange={(event) => changeVariant(event.target.value)}>
                     {availableVariants.map((item) => <option key={item} value={item}>{t(`variants.${item}.name`)}</option>)}
                   </select>
                 </Control>
@@ -886,7 +981,7 @@ export default function StudioPage() {
                   exportHeight={previewSize.height}
                   exportWidth={previewSize.width}
                   height={previewSize.height}
-                  labels={{ alt: t("canvas.parameterAlt"), empty: t("canvas.empty"), hint: t("canvas.selectHint"), hintTouch: t("canvas.selectHintTouch"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetParameter"), frame: t("canvas.parameterFrame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
+                  labels={{ alt: t("canvas.parameterAlt"), empty: t("canvas.empty"), hint: t("canvas.selectHint"), hintTouch: t("canvas.selectHintTouch"), detail: t("canvas.detail"), rendering: previewQueued ? t("canvas.queued") : t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetParameter"), frame: t("canvas.parameterFrame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
                   onChange={updateJuliaPickerViewport}
                   onNavigationStart={() => undefined}
                   onPointSelect={({ re, im }) => update({ juliaRe: re, juliaIm: im })}
@@ -905,7 +1000,7 @@ export default function StudioPage() {
                   exportHeight={output.height}
                   exportWidth={output.width}
                   height={previewSize.height}
-                  labels={{ alt: t("canvas.juliaAlt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetJulia"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
+                  labels={{ alt: t("canvas.juliaAlt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: previewQueued ? t("canvas.queued") : t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("resetJulia"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
                   onChange={updateViewport}
                   onNavigationStart={() => undefined}
                   onReset={resetJuliaViewport}
@@ -922,7 +1017,7 @@ export default function StudioPage() {
               exportHeight={output.height}
               exportWidth={output.width}
               height={previewSize.height}
-              labels={{ alt: t("canvas.alt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("reset"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
+              labels={{ alt: t("canvas.alt"), empty: t("canvas.empty"), hint: t("canvas.hint"), hintTouch: t("canvas.hintTouch"), detail: t("canvas.detail"), rendering: previewQueued ? t("canvas.queued") : t("canvas.rendering"), zoomOut: t("canvas.zoomOut"), zoomIn: t("canvas.zoomIn"), reset: t("reset"), frame: t("canvas.frame"), panPreview: t("canvas.panPreview"), zoomPreview: t("canvas.zoomPreview") }}
               onChange={updateViewport}
               onNavigationStart={() => undefined}
               onReset={reset}

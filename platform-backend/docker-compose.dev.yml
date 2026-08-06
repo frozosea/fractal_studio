@@ -173,6 +173,28 @@ services:
         condition: service_healthy
     stop_grace_period: 15s
 
+  preview-worker:
+    build:
+      context: .
+    command:
+      ["uv", "run", "--no-sync", "watchfiles", "--filter", "python", "uv run --no-sync python -m app.studio.preview_worker", "app"]
+    environment: *platform_env
+    volumes:
+      - .:/app
+      - /app/.venv
+    tmpfs:
+      - /tmp:size=1073741824,mode=1777
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 15s
+
   compute-stub:
     profiles: ["e2e"]
     build:

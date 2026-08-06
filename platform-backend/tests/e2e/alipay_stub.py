@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import base64
 import json
-import urllib.parse
 from decimal import Decimal
 from typing import Any
 
 import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 
@@ -223,14 +222,16 @@ async def notification(body: dict[str, Any]) -> dict[str, str]:
     return fields
 
 
-@app.post("/gateway.do")
+@app.post("/gateway.do", response_model=None)
 async def gateway(
     method: str = Form(...),
     biz_content: str = Form(...),
     notify_url: str = Form(default="", alias="notify_url"),
     return_url: str = Form(default="", alias="return_url"),
-) -> HTMLResponse:
-    """Browser-facing form endpoint. Returns a simulated Alipay cashier page."""
+) -> HTMLResponse | dict[str, object]:
+    """Serve both browser checkout and Alipay's JSON API on its shared endpoint."""
+    if method in {"alipay.trade.query", "alipay.trade.close"}:
+        return _gateway_json_response(method, biz_content)
     payload = json.loads(biz_content)
     out_trade_no = str(payload["out_trade_no"])
     trade = _trade(out_trade_no)
@@ -285,8 +286,7 @@ async def gateway_close(body: dict[str, Any]) -> dict[str, object]:
 
 # ---- Legacy JSON gateway path (kept for E2E test compatibility) ----
 
-@app.post("/gateway.do/json")
-async def gateway_json(method: str = Form(...), biz_content: str = Form(...)) -> dict[str, object]:
+def _gateway_json_response(method: str, biz_content: str) -> dict[str, object]:
     payload = json.loads(biz_content)
     out_trade_no = str(payload["out_trade_no"])
     trade = _trade(out_trade_no)
@@ -296,3 +296,7 @@ async def gateway_json(method: str = Form(...), biz_content: str = Form(...)) ->
     response: dict[str, str] = {"code": "10000", "msg": "Success", **trade}
     raw_response = json.dumps(response, separators=(",", ":"), ensure_ascii=False)
     return {response_key: response, "sign": _sign(raw_response)}
+
+@app.post("/gateway.do/json")
+async def gateway_json(method: str = Form(...), biz_content: str = Form(...)) -> dict[str, object]:
+    return _gateway_json_response(method, biz_content)

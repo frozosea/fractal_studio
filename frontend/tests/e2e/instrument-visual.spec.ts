@@ -4,6 +4,37 @@ test.use({ channel: "chrome", colorScheme: "dark" });
 test.describe.configure({ mode: "serial" });
 
 const MASKS = (page: Page) => [page.locator("img"), page.locator("canvas")];
+const VISUAL_FACETS = [
+  { facet: "colorMap", value: "custom_gradient", count: 25 },
+  { facet: "colorMap", value: "inferno", count: 6 },
+  { facet: "colorMap", value: "twilight", count: 6 },
+  { facet: "colorMap", value: "ember_blue", count: 3 },
+  { facet: "colorMap", value: "classic_cos", count: 2 },
+  { facet: "colorMap", value: "hs_rainbow", count: 1 },
+  { facet: "colorMap", value: "hsv_wheel", count: 1 },
+  { facet: "colorMap", value: "spectral1530", count: 1 },
+  { facet: "colorMap", value: "tri765", count: 1 },
+  { facet: "colorMap", value: "viridis", count: 1 },
+  { facet: "depth", value: "le1024", count: 17 },
+  { facet: "depth", value: "gt2048", count: 15 },
+  { facet: "depth", value: "le512", count: 11 },
+  { facet: "depth", value: "le2048", count: 6 },
+  { facet: "resolution", value: "gt8mp", count: 31 },
+  { facet: "resolution", value: "le8mp", count: 16 },
+  { facet: "resolution", value: "le1mp", count: 2 },
+  { facet: "variant", value: "mandelbrot", count: 24 },
+  { facet: "variant", value: "custom", count: 8 },
+  { facet: "variant", value: "burning_ship", count: 5 },
+  { facet: "variant", value: "buffalo", count: 3 },
+  { facet: "variant", value: "celtic", count: 2 },
+  { facet: "variant", value: "celtic_ship", count: 1 },
+  { facet: "variant", value: "cos_z", count: 1 },
+  { facet: "variant", value: "cosh_z", count: 1 },
+  { facet: "variant", value: "heart", count: 1 },
+  { facet: "variant", value: "perp_buffalo", count: 1 },
+  { facet: "variant", value: "perp_ship", count: 1 },
+  { facet: "variant", value: "sin_z", count: 1 },
+] as const;
 
 test("public, auth, and workbench surfaces keep the instrument visual language", async ({ page }) => {
   await page.goto("/en");
@@ -64,6 +95,10 @@ test("public, auth, and workbench surfaces keep the instrument visual language",
   await page.route("**/platform/v1/explore?**", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({ data: [], page: { nextCursor: null } }),
+  }));
+  await page.route("**/platform/v1/explore/facets", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ data: VISUAL_FACETS }),
   }));
   await page.evaluate(() => localStorage.setItem("fractal-studio-theme", "dark"));
   await page.goto("/en/studio");

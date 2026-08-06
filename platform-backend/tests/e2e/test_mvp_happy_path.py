@@ -61,10 +61,10 @@ async def test_full_mvp_happy_path() -> None:
         assert operator_row["qrUrl"] and operator_row["qrExpiresAt"]
         settled = await operator.post(
             f"/internal/v1/payout-requests/{payout_id}/mark-paid",
-            headers={"Idempotency-Key": "happy-payout-paid"},
-            json={"externalReference": "e2e-manual-transfer-001"},
+                headers={"Idempotency-Key": f"happy-payout-paid-{payout_id}"},
+                json={"externalReference": f"e2e-manual-transfer-{payout_id}"},
         )
-        assert settled.status_code == 200 and settled.json()["data"]["status"] == "paid"
+        assert settled.status_code == 200 and settled.json()["data"]["status"] == "paid", settled.text
 
 
 async def _order(client: httpx.AsyncClient, order_id: str) -> dict[str, object]:

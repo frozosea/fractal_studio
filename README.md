@@ -28,7 +28,8 @@ Default URLs:
 
 - Frontend: `http://localhost:3010`
 - Platform API: `http://localhost:18100`
-- Private Compute: `http://localhost:18101`
+- Private Compute A: `http://localhost:18101`
+- Private Compute B: `http://localhost:18104`
 
 Manual backend/frontend commands, dependencies, runtime directories, and troubleshooting are in [docs/development.md](docs/development.md). Test and QA flow is in [docs/testing.md](docs/testing.md).
 

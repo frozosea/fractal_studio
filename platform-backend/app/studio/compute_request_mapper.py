@@ -8,7 +8,10 @@ from uuid import UUID
 COMPUTE_SCHEMA_VERSION = 1
 PREVIEW_MAPPING_VERSION = "compute-v1-preview-v2"
 RENDER_MAPPING_VERSION = "compute-v1-render-v1"
-PREVIEW_MAX_ITERATIONS = 4096
+# Preview is interactive work, not an export. 768² pixels × thousands of
+# iterations can occupy every Compute slot for minutes (especially exp/sin
+# maps), preventing any newer viewport from being shown.
+PREVIEW_MAX_ITERATIONS = 512
 PREVIEW_MAX_PAIRWISE_CAP = 128
 COMPUTE_RUNS_ROUTE = "/compute/v1/runs"
 COMPUTE_PREVIEWS_ROUTE = "/compute/v1/previews"
@@ -151,12 +154,19 @@ def map_durable_v1(
         # Custom gradients ship for 2D preview/PNG only, see docs/coloring_contract.md.
         if "colorProgram" in payload:
             raise ValueError("color_program_unsupported_for_output")
+        # zoom_video uses the ln-map colour contract, while the Studio's
+        # static-image controls expose the friendlier direct/eq_* names.
+        # Do not forward ``colorMode``: Compute treats it as lnMapColorMode
+        # when the explicit field is absent.
+        color_mode = str(payload.pop("colorMode"))
+        ln_map_color_mode = {"direct": "escape", "eq_full": "hist_eq", "eq_center": "row_eq"}[color_mode]
         payload.update(
             {
                 "fps": output_spec["fps"],
                 "durationSec": output_spec["durationSeconds"],
                 # Jobs stored before depthOctaves existed keep the historical constant.
                 "depthOctaves": output_spec.get("depthOctaves", 20.0),
+                "lnMapColorMode": ln_map_color_mode,
             }
         )
     elif kind == "hs_mesh":

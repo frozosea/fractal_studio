@@ -11,12 +11,12 @@ import pytest
 
 def _optional_database_url() -> str | None:
     """Live DB assertions are enabled only when test runner may access development PostgreSQL."""
-    return os.getenv("E2E_DATABASE_URL")
+    value = os.getenv("E2E_DATABASE_URL")
+    return value.replace("postgresql+asyncpg://", "postgresql://", 1) if value else None
 
 
 def test_recipes_are_immutable_deduplicated_and_cursor_listed(e2e_api_url: str) -> None:
     suffix = uuid.uuid4().hex[:10]
-    request_id = str(uuid.uuid4())
     with httpx.Client(base_url=e2e_api_url, timeout=10, trust_env=False) as client:
         registered = client.post(
             "/v1/auth/register",
@@ -26,10 +26,11 @@ def test_recipes_are_immutable_deduplicated_and_cursor_listed(e2e_api_url: str) 
 
         created = client.post(
             "/v1/recipes",
-            headers={"Idempotency-Key": "recipe-0001", "X-Request-ID": request_id},
+            headers={"Idempotency-Key": "recipe-0001"},
             json={"canonicalSpec": {"version": 1, "seed": 42}},
         )
         assert created.status_code == 201
+        request_id = created.headers["X-Request-ID"]
         recipe_id = created.json()["data"]["id"]
 
         same_recipe = client.post(

@@ -59,7 +59,10 @@ async def test_checkout_creates_frozen_pending_order_and_never_settles(e2e_api_u
         replay = await buyer.post("/v1/checkout", headers={"Idempotency-Key": "checkout-one"}, json=payload)
         assert replay.status_code == 201 and replay.json()["data"]["order"]["id"] == order_id
         assert (await buyer.post("/v1/checkout", headers={"Idempotency-Key": "checkout-tamper"}, json={**payload, "amount": "0.01"})).status_code == 422
-        assert (await buyer.post("/v1/checkout", headers={"Idempotency-Key": "checkout-active"}, json=payload)).status_code == 409
+        retry = await buyer.post("/v1/checkout", headers={"Idempotency-Key": "checkout-active"}, json=payload)
+        assert retry.status_code == 201, retry.text
+        assert retry.json()["data"]["order"]["id"] != order_id
+        order_id = retry.json()["data"]["order"]["id"]
         assert (await buyer.get(f"/v1/orders/{order_id}")).json()["data"]["id"] == order_id
         assert (await other.post("/v1/auth/register", json={
             "email": f"checkout-other-{suffix}@example.test", "password": "correct-horse-01"
