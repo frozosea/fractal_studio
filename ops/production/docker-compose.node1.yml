@@ -5,9 +5,11 @@ services:
     restart: unless-stopped
     runtime: nvidia
     gpus: all
-    env_file: /etc/fractal-node1-prod/compute.env
     environment:
       FSD_STARTUP_BENCHMARK: "off"
+      FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:?set in /etc/fractal-node1-prod/compute.env}
+      FSD_RENDERER_VERSION: ${FSD_RENDERER_VERSION:?set in /etc/fractal-node1-prod/compute.env}
+      FSD_RENDER_THREADS: ${FSD_RENDER_THREADS:-2}
       FSD_ENABLE_LEGACY_API: "0"
       FSD_ENABLE_LEGACY_FORMULA_COMPILER: "0"
     ports: ["10.66.0.2:18080:18080"]
