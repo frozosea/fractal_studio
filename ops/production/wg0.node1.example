@@ -1,0 +1,9 @@
+[Interface]
+Address = 10.66.0.2/24
+PrivateKey = REPLACE_NODE1_PRIVATE_KEY
+
+[Peer]
+PublicKey = REPLACE_VPS_PUBLIC_KEY
+Endpoint = REPLACE_VPS_PUBLIC_IP:51820
+AllowedIPs = 10.66.0.1/32
+PersistentKeepalive = 25

@@ -1,0 +1,18 @@
+name: fractal-node1-prod
+services:
+  compute:
+    image: ${COMPUTE_IMAGE:?immutable Git-SHA image required}
+    restart: unless-stopped
+    runtime: nvidia
+    gpus: all
+    env_file: /etc/fractal-node1-prod/compute.env
+    environment:
+      FSD_STARTUP_BENCHMARK: "off"
+      FSD_ENABLE_LEGACY_API: "0"
+      FSD_ENABLE_LEGACY_FORMULA_COMPILER: "0"
+    ports: ["10.66.0.2:18080:18080"]
+    volumes: [/srv/fractal-node1-prod/runtime:/workspace/fractal_studio/runtime]
+    healthcheck: {test: [CMD, curl, -fsS, "http://127.0.0.1:18080/compute/v1/health"], interval: 5s, timeout: 3s, retries: 30}
+    logging:
+      driver: json-file
+      options: {max-size: "50m", max-file: "5"}

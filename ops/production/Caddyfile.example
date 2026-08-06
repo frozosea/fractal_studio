@@ -1,0 +1,21 @@
+fractalstudio.cn {
+	encode zstd gzip
+	handle_path /platform/* {
+		reverse_proxy 127.0.0.1:28100
+	}
+	handle_path /storage/* {
+		reverse_proxy 127.0.0.1:29010
+	}
+	handle {
+		reverse_proxy 127.0.0.1:23010
+	}
+}
+
+www.fractalstudio.cn {
+	redir https://fractalstudio.cn{uri} 308
+}
+
+# Keep the existing FRP listener/port here; this hostname is development only.
+fractal.kevin0412.top {
+	reverse_proxy 127.0.0.1:REPLACE_WITH_FRP_DEV_PORT
+}

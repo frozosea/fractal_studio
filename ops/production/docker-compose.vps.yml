@@ -1,0 +1,132 @@
+name: fractal-prod
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "20m", max-file: "5"}
+x-platform-env: &platform-env
+  APP_ENV: production
+  DATABASE_URL: postgresql+asyncpg://fractal:${PLATFORM_DB_PASSWORD:?set in /etc/fractal-prod/vps.env}@postgres:5432/fractal_platform
+  MIGRATION_DATABASE_URL: postgresql+psycopg://fractal:${PLATFORM_DB_PASSWORD:?set in /etc/fractal-prod/vps.env}@postgres:5432/fractal_platform
+  REDIS_URL: redis://redis:6379/0
+  SESSION_SECRET: ${SESSION_SECRET:?set in /etc/fractal-prod/vps.env}
+  SESSION_COOKIE_SECURE: "true"
+  API_ORIGIN: https://fractalstudio.cn
+  CORS_ORIGINS: https://fractalstudio.cn
+  COMPUTE_BASE_URL: http://compute-gateway:8080
+  COMPUTE_SERVICE_KEY: ${COMPUTE_GATEWAY_SERVICE_KEY:?set in /etc/fractal-prod/vps.env}
+  S3_ENDPOINT_URL: http://minio:9000
+  S3_PUBLIC_ENDPOINT_URL: https://fractalstudio.cn/storage
+  S3_BUCKET: fractal-platform
+  S3_REGION: us-east-1
+  S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in /etc/fractal-prod/vps.env}
+  S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set in /etc/fractal-prod/vps.env}
+  S3_SERVER_SIDE_ENCRYPTION: AES256
+  ALIPAY_STUB_MODE: "false"
+  ALIPAY_APP_ID: ${ALIPAY_APP_ID:?set in /etc/fractal-prod/vps.env}
+  ALIPAY_SELLER_ID: ${ALIPAY_SELLER_ID:?set in /etc/fractal-prod/vps.env}
+  ALIPAY_GATEWAY_URL: ${ALIPAY_GATEWAY_URL:-https://openapi.alipay.com/gateway.do}
+  ALIPAY_NOTIFY_URL: https://fractalstudio.cn/platform/v1/webhooks/alipay
+  ALIPAY_RETURN_URL: https://fractalstudio.cn/payment-result
+  ALIPAY_PRIVATE_KEY_PATH: /run/secrets/alipay_app_private.pem
+  ALIPAY_PUBLIC_KEY_PATH: /run/secrets/alipay_public.pem
+x-platform-service: &platform-service
+  image: ${PLATFORM_IMAGE:?immutable Git-SHA image required}
+  restart: unless-stopped
+  env_file: /etc/fractal-prod/vps.env
+  environment: *platform-env
+  volumes:
+    - /etc/fractal-prod/secrets/alipay_app_private.pem:/run/secrets/alipay_app_private.pem:ro
+    - /etc/fractal-prod/secrets/alipay_public.pem:/run/secrets/alipay_public.pem:ro
+  logging: *logging
+  mem_limit: 768m
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: /etc/fractal-prod/vps.env
+    environment: {POSTGRES_DB: fractal_platform, POSTGRES_USER: fractal, POSTGRES_PASSWORD: "${PLATFORM_DB_PASSWORD}"}
+    volumes: [/srv/fractal-prod/postgres:/var/lib/postgresql/data]
+    healthcheck: {test: [CMD-SHELL, "pg_isready -U fractal -d fractal_platform"], interval: 5s, timeout: 3s, retries: 30}
+    logging: *logging
+    mem_limit: 768m
+  gateway-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: /etc/fractal-prod/vps.env
+    environment: {POSTGRES_DB: compute_gateway, POSTGRES_USER: gateway, POSTGRES_PASSWORD: "${GATEWAY_DB_PASSWORD}"}
+    volumes: [/srv/fractal-prod/gateway-postgres:/var/lib/postgresql/data]
+    healthcheck: {test: [CMD-SHELL, "pg_isready -U gateway -d compute_gateway"], interval: 5s, timeout: 3s, retries: 30}
+    logging: *logging
+    mem_limit: 384m
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, "yes"]
+    restart: unless-stopped
+    volumes: [/srv/fractal-prod/redis:/data]
+    healthcheck: {test: [CMD, redis-cli, ping], interval: 5s, timeout: 3s, retries: 30}
+    logging: *logging
+    mem_limit: 256m
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data
+    restart: unless-stopped
+    env_file: /etc/fractal-prod/vps.env
+    ports: ["127.0.0.1:29010:9000"]
+    volumes: [/srv/fractal-prod/minio:/data]
+    logging: *logging
+    mem_limit: 512m
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    env_file: /etc/fractal-prod/vps.env
+    entrypoint: /bin/sh -ec 'until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done; mc mb --ignore-existing local/fractal-platform'
+    depends_on: [minio]
+  gateway-migrate:
+    image: ${GATEWAY_IMAGE:?immutable Git-SHA image required}
+    command: [uv, run, --no-sync, alembic, -c, alembic.ini, upgrade, head]
+    env_file: /etc/fractal-prod/vps.env
+    environment: &gateway-env
+      DATABASE_URL: postgresql+asyncpg://gateway:${GATEWAY_DB_PASSWORD}@gateway-db:5432/compute_gateway
+      COMPUTE_GATEWAY_SERVICE_KEY: ${COMPUTE_GATEWAY_SERVICE_KEY}
+      COMPUTE_GATEWAY_ADMIN_KEY: ${COMPUTE_GATEWAY_ADMIN_KEY}
+      COMPUTE_UPSTREAM_SERVICE_KEY: ${COMPUTE_UPSTREAM_SERVICE_KEY}
+      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://10.66.0.2:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://10.66.0.3:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":false}]'
+    depends_on: {gateway-db: {condition: service_healthy}}
+  compute-gateway:
+    image: ${GATEWAY_IMAGE:?immutable Git-SHA image required}
+    restart: unless-stopped
+    env_file: /etc/fractal-prod/vps.env
+    environment: *gateway-env
+    depends_on: {gateway-migrate: {condition: service_completed_successfully}}
+    healthcheck: {test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/compute/v1/health', timeout=2)"], interval: 5s, timeout: 3s, retries: 30}
+    logging: *logging
+    mem_limit: 384m
+  migrate:
+    <<: *platform-service
+    command: [uv, run, --no-sync, alembic, -c, alembic.ini, upgrade, head]
+    restart: "no"
+    depends_on: {postgres: {condition: service_healthy}}
+  api:
+    <<: *platform-service
+    command: [uv, run, --no-sync, uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000"]
+    ports: ["127.0.0.1:28100:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+  worker:
+    <<: *platform-service
+    command: [uv, run, --no-sync, python, -m, app.outbox.worker]
+    depends_on: {migrate: {condition: service_completed_successfully}, redis: {condition: service_healthy}}
+  preview-worker:
+    <<: *platform-service
+    command: [uv, run, --no-sync, python, -m, app.studio.preview_worker]
+    depends_on: {migrate: {condition: service_completed_successfully}, redis: {condition: service_healthy}}
+  frontend:
+    image: ${FRONTEND_IMAGE:?immutable Git-SHA image required}
+    restart: unless-stopped
+    environment: {NODE_ENV: production, NEXT_PUBLIC_PLATFORM_API_URL: /platform, PLATFORM_INTERNAL_URL: "http://api:8000"}
+    ports: ["127.0.0.1:23010:3000"]
+    depends_on: {api: {condition: service_started}}
+    logging: *logging
+    mem_limit: 512m

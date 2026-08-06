@@ -107,7 +107,9 @@ class GatewayService:
         base_url = str(payload.base_url).rstrip("/")
         async with self._sessions() as session, session.begin():
             node = (
-                await session.execute(select(ComputeNode).where(ComputeNode.node_key == node_key).with_for_update())
+                await session.execute(
+                    select(ComputeNode).where(ComputeNode.node_key == node_key).with_for_update()
+                )
             ).scalar_one_or_none()
             if node is None:
                 node = ComputeNode(node_key=node_key, base_url=base_url)
@@ -118,6 +120,40 @@ class GatewayService:
             node.state = "offline" if payload.enabled else "disabled"
         if payload.enabled:
             await self.probe_node(node_key, activate_on_success=True)
+        return await self.node_view(node_key)
+
+    async def bootstrap_node(self, node_key: str, payload: NodeUpsertInput) -> dict[str, object]:
+        """Apply declarative node configuration without resetting persisted state.
+
+        Bootstrap runs after every Gateway restart.  It may move an endpoint (for
+        example from a Docker DNS name to WireGuard), but must not undo an
+        operator's draining/disabled decision or turn a healthy node offline.
+        """
+        if not NODE_KEY.fullmatch(node_key):
+            raise GatewayError(422, "COMPUTE_VALIDATION_ERROR", "invalid node key")
+        base_url = str(payload.base_url).rstrip("/")
+        created = False
+        async with self._sessions() as session, session.begin():
+            node = (
+                await session.execute(select(ComputeNode).where(ComputeNode.node_key == node_key).with_for_update())
+            ).scalar_one_or_none()
+            if node is None:
+                node = ComputeNode(node_key=node_key, base_url=base_url)
+                session.add(node)
+                created = True
+            node.base_url = base_url
+            node.max_durable_slots = payload.max_durable_slots
+            node.max_preview_slots = payload.max_preview_slots
+            if created:
+                node.state = "offline" if payload.enabled else "disabled"
+            elif not payload.enabled:
+                node.state = "disabled"
+        # New enabled nodes are activated only after a successful probe. Existing
+        # offline nodes are also reactivated by probe_node; active/draining and
+        # disabled state is otherwise preserved.
+        view = await self.node_view(node_key)
+        if payload.enabled and (created or view["state"] == "offline"):
+            await self.probe_node(node_key)
         return await self.node_view(node_key)
 
     async def set_node_state(self, node_key: str, state: str) -> dict[str, object]:

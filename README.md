@@ -24,6 +24,10 @@ Release mode prebuilds the frontend and runs `next start` without source mounts:
 docker compose -f docker-compose.dev.yml -f docker-compose.release.yml up -d --build
 ```
 
+The split VPS/Node 1 production topology is defined separately under
+[`ops/production`](ops/production/README.md). It uses immutable prebuilt images
+and must not be combined with the development/release overlay above.
+
 Default URLs:
 
 - Frontend: `http://localhost:3010`

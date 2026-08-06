@@ -36,7 +36,7 @@ async def _bootstrap_nodes() -> None:
         if not isinstance(node_key, str):
             continue
         with suppress(GatewayError):
-            await service.upsert_node(node_key, NodeUpsertInput.model_validate(item))
+            await service.bootstrap_node(node_key, NodeUpsertInput.model_validate(item))
 
 
 @asynccontextmanager

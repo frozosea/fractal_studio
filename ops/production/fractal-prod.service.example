@@ -1,0 +1,17 @@
+[Unit]
+Description=Fractal Studio VPS production control plane
+Requires=docker.service
+After=network-online.target docker.service wg-quick@wg0.service
+Wants=network-online.target wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/fractal-prod
+EnvironmentFile=/etc/fractal-prod/vps.env
+ExecStart=/usr/bin/docker compose -f docker-compose.vps.yml up -d --no-build
+ExecStop=/usr/bin/docker compose -f docker-compose.vps.yml stop
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

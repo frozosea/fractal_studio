@@ -14,7 +14,7 @@ TEST_DATABASE_URL = os.getenv("GATEWAY_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DATABASE_URL, reason="set GATEWAY_TEST_DATABASE_URL")
 
 if TEST_DATABASE_URL:
-    from sqlalchemy import delete
+    from sqlalchemy import delete, select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     from app.config import Settings
@@ -323,3 +323,47 @@ async def test_draining_node_never_accepts_a_new_run(gateway: tuple[GatewayServi
 
     await service.create_run(_request("platform-job:drain"))
     assert fake.created == [("node-b", "platform-job:drain")]
+
+
+async def test_zero_nodes_are_healthy_but_capacity_endpoints_fail_without_reservation(
+    gateway: tuple[GatewayService, FakeNodeClient],
+) -> None:
+    service, _ = gateway
+    operations = (
+        service.capabilities,
+        lambda: service.preview(_request("preview-offline")),
+        lambda: service.create_run(_request("platform-job:offline")),
+    )
+    for operation in operations:
+        with pytest.raises(GatewayError) as raised:
+            await operation()
+        assert raised.value.status_code == 503
+        assert raised.value.code == "COMPUTE_CAPACITY_EXHAUSTED"
+    async with service._sessions() as session:
+        assert await service._active_run_count(session, UUID(int=0)) == 0
+
+
+async def test_bootstrap_updates_address_without_overwriting_operator_state(
+    gateway: tuple[GatewayService, FakeNodeClient],
+) -> None:
+    service, _ = gateway
+    await _add_node(service, "node-a")
+    await service.set_node_state("node-a", "draining")
+    payload = NodeUpsertInput.model_validate(
+        {
+            "baseUrl": "http://10.66.0.2:18080",
+            "maxDurableSlots": 1,
+            "maxPreviewSlots": 2,
+            "enabled": True,
+        }
+    )
+    view = await service.bootstrap_node("node-a", payload)
+    assert view["state"] == "draining"
+    async with service._sessions() as session:
+        node = (
+            await session.execute(select(ComputeNode).where(ComputeNode.node_key == "node-a"))
+        ).scalar_one()
+        assert node.base_url == "http://10.66.0.2:18080"
+
+    await service.set_node_state("node-a", "disabled")
+    assert (await service.bootstrap_node("node-a", payload))["state"] == "disabled"

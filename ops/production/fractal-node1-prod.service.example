@@ -1,0 +1,17 @@
+[Unit]
+Description=Fractal Studio Node 1 production Compute
+Requires=wg-quick@wg0.service snap.docker.dockerd.service
+After=network-online.target wg-quick@wg0.service snap.docker.dockerd.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/fractal-node1-prod
+EnvironmentFile=/etc/fractal-node1-prod/compute.env
+ExecStart=/snap/bin/docker compose -f docker-compose.node1.yml up -d --no-build
+ExecStop=/snap/bin/docker compose -f docker-compose.node1.yml stop
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
