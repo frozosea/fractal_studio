@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/fractal-node1-prod
+WorkingDirectory=/var/snap/docker/common/fractal-node1-prod
 EnvironmentFile=/etc/fractal-node1-prod/compute.env
 ExecStart=/snap/bin/docker compose -f docker-compose.node1.yml up -d --no-build
 ExecStop=/snap/bin/docker compose -f docker-compose.node1.yml stop

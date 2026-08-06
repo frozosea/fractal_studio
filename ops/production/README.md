@@ -39,6 +39,12 @@ Place the templates as follows:
 /srv/fractal-node1-prod/runtime
 ```
 
+Strictly confined Snap Docker cannot read Compose files from `/opt`. Keep the
+authoritative copy there, mirror the non-secret Compose file under
+`/var/snap/docker/common/fractal-node1-prod`, and set `COMPUTE_RUNTIME_PATH` to
+a directory below Snap's `common` directory. The systemd unit loads secrets
+from `/etc` before invoking Compose; secrets are never copied into Snap storage.
+
 Validate rendered configuration before any start:
 
 ```bash
