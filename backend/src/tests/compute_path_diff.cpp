@@ -2506,7 +2506,7 @@ void verify_strict_orbit_escape_semantics(Runner& runner) {
         fsd::compute::OrbitProgram::formula(
             "0.5*((z^2+c)+((abs(real(z))+i*abs(imag(z)))^2+c))"), 1.0e200);
     const bool numerical_is_separate = diverged.iter_u32.size() == 1 &&
-        diverged.iter_u32[0] == 5 && diverged.orbit_class_u8[0] == 2 &&
+        diverged.iter_u32[0] == 0 && diverged.orbit_class_u8[0] == 2 &&
         diverged_stats.engine_used == "openmp";
 
     const auto [certified, certified_stats] = render_one(

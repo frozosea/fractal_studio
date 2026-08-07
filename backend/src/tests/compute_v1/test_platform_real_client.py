@@ -37,13 +37,18 @@ def test_real_platform_compute_client_calls_cpp(client: _TestComputeClient) -> N
     )
     platform_client = compute_client_type(settings)
 
-    preview = platform_preview()
+    preview_payload = platform_preview()
+    preview_payload.update({"engine": "openmp", "scalarType": "fp64"})
+    preview = client.envelope("map_image", preview_payload)
     frame = asyncio.run(platform_client.render_map_inline(preview, timeout_seconds=15))
     assert (frame.width, frame.height, len(frame.rgba)) == (64, 64, 64 * 64 * 4)
 
-    durable = platform_map()
+    durable_payload = platform_map()
+    durable_payload.update({"engine": "openmp", "scalarType": "fp64"})
+    durable = client.envelope("map_image", durable_payload)
+    durable["idempotencyKey"] = f"platform-client:{durable_payload['clientJobId']}"
     status = asyncio.run(platform_client.create_durable_run(
-        route="/api/map/render", request_body=durable
+        route="/compute/v1/runs", request_body=durable
     ))
     deadline = time.monotonic() + 15
     while status.status not in {"completed", "failed", "cancelled"}:
@@ -52,5 +57,7 @@ def test_real_platform_compute_client_calls_cpp(client: _TestComputeClient) -> N
         time.sleep(0.02)
 
     assert status.status == "completed"
-    assert status.client_job_id == durable["clientJobId"]
-    assert {artifact.media_type for artifact in status.artifacts} >= {"image/png"}
+    assert status.run_id
+    manifest = asyncio.run(platform_client.get_run_manifest(run_id=status.run_id))
+    assert manifest.status == "completed"
+    assert {artifact.media_type for artifact in manifest.artifacts} >= {"image/png"}
