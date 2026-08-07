@@ -6,10 +6,11 @@ import io
 from uuid import UUID
 
 import pytest
+import httpx
 from PIL import Image
 
 from app.core.config import Settings
-from app.infrastructure.compute.compute_client import ComputeClientError, InlineComputeFrame
+from app.infrastructure.compute.compute_client import ComputeClient, ComputeClientError, InlineComputeFrame
 from app.infrastructure.redis.quota_store import PreviewQuotaUnavailable
 from app.studio.compute_request_mapper import PREVIEW_MAPPING_VERSION, map_preview_v1
 from app.studio.models import FractalSpec
@@ -42,6 +43,17 @@ class FailingInlineFrameClient:
 class UnavailableLimiter:
     async def allow(self, _user_id: UUID) -> bool:
         raise PreviewQuotaUnavailable("redis_unavailable")
+
+
+def test_compute_client_preserves_gateway_capacity_exhaustion() -> None:
+    response = httpx.Response(
+        503,
+        json={"error": {"code": "COMPUTE_CAPACITY_EXHAUSTED"}},
+        request=httpx.Request("GET", "http://gateway/compute/v1/capabilities"),
+    )
+
+    with pytest.raises(ComputeClientError, match="compute_capacity_exhausted"):
+        ComputeClient._raise_for_status(response)
 
 
 def _settings() -> Settings:
@@ -234,3 +246,4 @@ async def test_preview_exposes_busy_compute_as_retryable_service_unavailable() -
         await service.render(owner_id=UUID(int=1), canonical=canonical, width=64, height=64)
 
     assert getattr(error.value, "status_code", None) == 503
+    assert getattr(error.value, "detail", None) == "COMPUTE_CAPACITY_EXHAUSTED"

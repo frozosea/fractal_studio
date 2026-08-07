@@ -49,9 +49,10 @@ class PreviewService:
                 raise InvalidRgbaFrame("compute_frame_dimensions_mismatch")
             return encode_rgba8_png(rgba=frame.rgba, width=width, height=height)
         except ComputeClientError as error:
-            unavailable = {"compute_timeout", "compute_unavailable"}
+            unavailable = {"compute_capacity_exhausted", "compute_timeout", "compute_unavailable"}
             response_status = status.HTTP_503_SERVICE_UNAVAILABLE if error.code in unavailable else status.HTTP_502_BAD_GATEWAY
-            raise HTTPException(status_code=response_status, detail=error.code) from error
+            detail = "COMPUTE_CAPACITY_EXHAUSTED" if error.code in unavailable else error.code
+            raise HTTPException(status_code=response_status, detail=detail) from error
         except InvalidRgbaFrame as error:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="compute_invalid_frame") from error
 
@@ -69,13 +70,27 @@ class PreviewService:
 class PreviewJobService:
     """Admission API for asynchronous latest-wins interactive previews."""
 
-    def __init__(self, queue: RedisPreviewQueue | None = None) -> None:
+    def __init__(
+        self,
+        queue: RedisPreviewQueue | None = None,
+        compute_client: ComputeClient | None = None,
+    ) -> None:
         self._queue = queue or RedisPreviewQueue()
+        self._compute_client = compute_client or ComputeClient()
 
     async def submit(
         self, *, owner_id: UUID, session_id: UUID, channel: str, canonical: CanonicalRecipe, width: int, height: int
     ) -> tuple[str, str]:
         PreviewService()._validate_dimensions(width, height)
+        try:
+            await self._compute_client.capabilities()
+        except ComputeClientError as error:
+            if error.code in {"compute_capacity_exhausted", "compute_timeout", "compute_unavailable"}:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="COMPUTE_CAPACITY_EXHAUSTED",
+                ) from error
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error.code) from error
         request = map_preview_v1(canonical.spec, width=width, height=height, request_id=uuid4())
         try:
             return await self._queue.submit(

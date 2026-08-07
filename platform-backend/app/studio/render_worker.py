@@ -169,7 +169,9 @@ class RenderWorker:
         if job.status != "cancel_requested":
             return
         if not job.compute_run_id:
-            raise RescheduleOutboxEvent(delay_seconds=1)
+            async with get_engine().begin() as connection:
+                await render_job_repository.cancel_and_release(connection, job_id=job_id)
+            return
         try:
             await self._compute.cancel_run(run_id=job.compute_run_id)
         except ComputeClientError as error:

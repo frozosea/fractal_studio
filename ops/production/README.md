@@ -54,6 +54,13 @@ docker compose --env-file /etc/fractal-node1-prod/compute.env \
   -f /opt/fractal-node1-prod/docker-compose.node1.yml config --quiet
 ```
 
+The Platform uploads private objects with S3 `AES256` server-side encryption.
+MinIO therefore requires a persistent static KMS master key. Generate it once,
+store `MINIO_KMS_SECRET_KEY=fractal-prod:<base64-32-byte-key>` in the mode-0600
+`/etc/fractal-prod/vps.env`, and include that file in the encrypted host-config
+backup. Never rotate or remove this value without first following MinIO's key
+rotation procedure; encrypted objects depend on it.
+
 The Node 1 service template encodes `wg0 -> Snap Docker -> production Compose`.
 The VPS template encodes network/WireGuard/Docker ordering. Adjust the Docker
 unit/binary only if the installed host uses a different package.

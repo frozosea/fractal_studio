@@ -24,3 +24,20 @@ def test_registration_conflict_keeps_public_domain_code() -> None:
     assert response.body == (
         b'{"error":{"code":"email_already_registered","message":"email already registered","details":{}}}'
     )
+
+
+def test_compute_capacity_error_keeps_explicit_public_code() -> None:
+    request = Request({"type": "http", "method": "POST", "path": "/v1/render-jobs", "headers": []})
+
+    response = asyncio.run(
+        platform_http_exception_handler(
+            request,
+            HTTPException(status_code=503, detail="COMPUTE_CAPACITY_EXHAUSTED"),
+        )
+    )
+
+    assert response.status_code == 503
+    assert response.body == (
+        b'{"error":{"code":"COMPUTE_CAPACITY_EXHAUSTED",'
+        b'"message":"COMPUTE CAPACITY EXHAUSTED","details":{}}}'
+    )

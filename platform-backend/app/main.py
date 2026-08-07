@@ -128,6 +128,7 @@ _DEFAULT_ERROR_CODE = {
 }
 
 _PUBLIC_DETAIL_CODES = {
+    "COMPUTE_CAPACITY_EXHAUSTED",
     "email_already_registered",
     "export_quota_exhausted",
     "handle_already_registered",

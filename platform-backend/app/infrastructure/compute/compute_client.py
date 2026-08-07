@@ -160,6 +160,8 @@ class ComputeClient:
             raise ComputeClientError("compute_run_not_found")
         if response.status_code == httpx.codes.CONFLICT:
             raise ComputeClientError("compute_conflict")
+        if response.status_code == httpx.codes.SERVICE_UNAVAILABLE and code == "compute_capacity_exhausted":
+            raise ComputeClientError(code)
         if response.status_code >= httpx.codes.INTERNAL_SERVER_ERROR:
             raise ComputeClientError("compute_unavailable")
         raise ComputeClientError(code)
@@ -170,6 +172,8 @@ class ComputeClient:
             error = response.json().get("error", {})
             code = error.get("code") if isinstance(error, dict) else None
             if isinstance(code, str) and code:
+                if code.upper() == "COMPUTE_CAPACITY_EXHAUSTED":
+                    return "compute_capacity_exhausted"
                 return f"compute_{code.lower()}"
         except (TypeError, ValueError):
             pass

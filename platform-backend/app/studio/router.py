@@ -32,7 +32,15 @@ async def get_studio_capabilities(
     try:
         return {"data": await studio_capabilities()}
     except ComputeClientError as error:
-        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"error": {"code": error.code, "message": "Compute capabilities unavailable"}})
+        code = (
+            "COMPUTE_CAPACITY_EXHAUSTED"
+            if error.code in {"compute_capacity_exhausted", "compute_timeout", "compute_unavailable"}
+            else error.code
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"error": {"code": code, "message": "Compute capabilities unavailable"}},
+        )
 
 
 @router.get("/me/export-allowance")

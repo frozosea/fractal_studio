@@ -72,6 +72,8 @@ services:
     command: server /data
     restart: unless-stopped
     env_file: /etc/fractal-prod/vps.env
+    environment:
+      MINIO_KMS_SECRET_KEY: ${MINIO_KMS_SECRET_KEY:?set fractal-prod:<base64-32-byte-key> in /etc/fractal-prod/vps.env}
     ports: ["127.0.0.1:29010:9000"]
     volumes: [/srv/fractal-prod/minio:/data]
     logging: *logging

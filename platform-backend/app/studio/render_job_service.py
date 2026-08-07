@@ -13,6 +13,7 @@ from app.outbox.models import NewOutboxEvent
 from app.outbox.service import TransactionalOutboxService
 from app.studio import render_job_repository
 from app.studio.compute_request_mapper import PUBLIC_MAPPING_ERRORS, RENDER_MAPPING_VERSION, map_durable_v1
+from app.infrastructure.compute.compute_client import ComputeClient, ComputeClientError
 from app.studio.models import RenderJobCreateInput, RenderJobView
 from app.studio.quota_service import RenderQuotaService
 
@@ -30,7 +31,12 @@ def _view(job: render_job_repository.RenderJobRecord) -> RenderJobView:
 
 
 async def create(
-    *, principal: AccessPrincipal, payload: RenderJobCreateInput, idempotency_key: str, request: Request
+    *,
+    principal: AccessPrincipal,
+    payload: RenderJobCreateInput,
+    idempotency_key: str,
+    request: Request,
+    compute_client: ComputeClient | None = None,
 ) -> tuple[dict[str, object], int, dict[str, str]]:
     output_spec = payload.output.model_dump(mode="json", by_alias=True, exclude_none=True)
     async with get_engine().begin() as connection:
@@ -56,6 +62,15 @@ async def create(
         except (KeyError, TypeError, ValueError) as error:
             detail = str(error) if str(error) in PUBLIC_MAPPING_ERRORS else "unsupported_render_output"
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail) from error
+        try:
+            await (compute_client or ComputeClient()).capabilities()
+        except ComputeClientError as error:
+            if error.code in {"compute_capacity_exhausted", "compute_timeout", "compute_unavailable"}:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="COMPUTE_CAPACITY_EXHAUSTED",
+                ) from error
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error.code) from error
         job = await render_job_repository.create(
             connection,
             job_id=job_id,
