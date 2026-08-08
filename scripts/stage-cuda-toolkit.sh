@@ -7,7 +7,7 @@ target_dir="$toolkit_dir/targets/x86_64-linux"
 
 if [ ! -x "$toolkit_dir/bin/nvcc" ] || [ ! -d "$target_dir/include" ]; then
     echo "CUDA Toolkit not found at $toolkit_dir" >&2
-    echo "Set CUDA_TOOLKIT_DIR to a CUDA 13 installation and retry." >&2
+    echo "Set CUDA_TOOLKIT_DIR to the required CUDA installation and retry." >&2
     exit 1
 fi
 
