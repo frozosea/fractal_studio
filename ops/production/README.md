@@ -18,6 +18,9 @@ files, WireGuard private keys, Alipay keys, Caddy configuration and data under
   starting it.
 - Node 1 development must use a different Compose project, ports, secrets,
   runtime and volumes. It may share the GPU, but nothing else.
+- Additional nodes reuse the Compute-only template with explicit
+  `COMPOSE_PROJECT_NAME`, `COMPUTE_BIND_IP` and `COMPUTE_RUNTIME_PATH` values.
+  Never let two nodes share a project name, bind address, runtime or env file.
 
 ## Host preparation
 

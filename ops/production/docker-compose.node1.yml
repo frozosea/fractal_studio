@@ -1,4 +1,4 @@
-name: fractal-node1-prod
+name: ${COMPOSE_PROJECT_NAME:-fractal-node1-prod}
 services:
   compute:
     image: ${COMPUTE_IMAGE:?immutable Git-SHA image required}
@@ -12,7 +12,7 @@ services:
       FSD_RENDER_THREADS: ${FSD_RENDER_THREADS:-2}
       FSD_ENABLE_LEGACY_API: "0"
       FSD_ENABLE_LEGACY_FORMULA_COMPILER: "0"
-    ports: ["10.66.0.2:18080:18080"]
+    ports: ["${COMPUTE_BIND_IP:-10.66.0.2}:18080:18080"]
     volumes: ["${COMPUTE_RUNTIME_PATH:-/srv/fractal-node1-prod/runtime}:/workspace/fractal_studio/runtime"]
     healthcheck: {test: [CMD, curl, -fsS, "http://127.0.0.1:18080/compute/v1/health"], interval: 5s, timeout: 3s, retries: 30}
     logging:
