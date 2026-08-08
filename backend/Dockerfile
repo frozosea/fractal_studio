@@ -37,7 +37,7 @@ RUN printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire
         libsqlite3-0 libssl3 libgomp1 libmpfr6 ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=bind,from=cuda-toolkit,source=/,target=/usr/local/cuda-toolkit \
-    cp -a /usr/local/cuda-toolkit/targets/x86_64-linux/lib/libcudart.so.13* /usr/local/lib/ \
+    cp -a /usr/local/cuda-toolkit/targets/x86_64-linux/lib/libcudart.so* /usr/local/lib/ \
     && ldconfig
 ENV FSD_ENABLE_LEGACY_API=0 \
     FSD_ENABLE_LEGACY_FORMULA_COMPILER=0 \
