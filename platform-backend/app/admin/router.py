@@ -29,7 +29,11 @@ def _encode_cursor(
         "filters": filters,
         "after": {"createdAt": created_at.isoformat(), "id": str(item_id)},
     }
-    return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode().rstrip("=")
+    return (
+        base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode())
+        .decode()
+        .rstrip("=")
+    )
 
 
 def _decode_cursor(
@@ -59,6 +63,14 @@ async def statistics(
 ) -> dict[str, object]:
     view = await AdminService().statistics()
     return {"data": view.model_dump(mode="json", by_alias=True)}
+
+
+@router.get("/compute-nodes")
+async def compute_nodes(
+    principal: AccessPrincipal = Depends(require_role("admin")),
+) -> dict[str, object]:
+    views = await AdminService().compute_nodes()
+    return {"data": [view.model_dump(mode="json", by_alias=True) for view in views]}
 
 
 @router.get("/users")

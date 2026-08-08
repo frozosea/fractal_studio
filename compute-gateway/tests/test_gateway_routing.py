@@ -40,6 +40,16 @@ class FakeNodeClient:
     async def capabilities(self, _: ComputeNode) -> dict[str, object]:
         return {
             "schemaVersion": 1,
+            "rendererVersion": "test-renderer-sm61",
+            "hardware": {
+                "cuda": {
+                    "name": "Test GPU",
+                    "runtime": True,
+                    "computeCapability": {"major": 6, "minor": 1},
+                    "totalVramBytes": 2_000_000_000,
+                    "freeVramBytes": 1_000_000_000,
+                }
+            },
             "persistentKinds": ["map_image"],
             "previewKinds": ["map_image"],
             "jobs": [{"kind": "map_image", "engines": ["openmp", "cuda"], "scalars": ["fp32", "fp64"]}],
@@ -228,6 +238,15 @@ async def test_sticky_routing_replay_manifest_and_artifact_stream(
     nodes = {item["nodeKey"]: item for item in await service.list_nodes()}
     assert nodes["node-a"]["usedDurableSlots"] == 0
     assert nodes["node-b"]["usedDurableSlots"] == 0
+    assert nodes["node-a"]["usedPreviewSlots"] == 0
+    assert nodes["node-a"]["rendererVersion"] == "test-renderer-sm61"
+    assert nodes["node-a"]["gpu"] == {
+        "name": "Test GPU",
+        "runtime": True,
+        "computeCapability": {"major": 6, "minor": 1},
+        "totalVramBytes": 2_000_000_000,
+        "freeVramBytes": 1_000_000_000,
+    }
 
     status = await service.get_run(first_id)
     assert status["data"]["computeRunId"] == str(first_id)

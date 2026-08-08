@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { BarChart3, Boxes, RefreshCw, ShoppingBag, Users } from "lucide-react";
+import { BarChart3, Boxes, Cpu, RefreshCw, ShoppingBag, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import {
   platform,
   PlatformApiError,
   type AdminListing,
+  type AdminComputeNode,
   type AdminStatistics,
   type AdminUser,
 } from "@/lib/api/platform";
@@ -39,6 +40,7 @@ export default function AdminPage() {
   const [statistics, setStatistics] = useState<AdminStatistics | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [listings, setListings] = useState<AdminListing[]>([]);
+  const [computeNodes, setComputeNodes] = useState<AdminComputeNode[]>([]);
   const [nextUserCursor, setNextUserCursor] = useState<string | null>(null);
   const [nextListingCursor, setNextListingCursor] = useState<string | null>(null);
   const [userQuery, setUserQuery] = useState("");
@@ -59,6 +61,7 @@ export default function AdminPage() {
   }).format(new Date(value));
 
   const loadStatistics = async () => setStatistics(await platform.admin.statistics());
+  const loadComputeNodes = async () => setComputeNodes(await platform.admin.computeNodes());
   const loadUsers = async (append = false) => {
     const value = await platform.admin.users(
       { query: userQuery.trim(), status: userStatus, role: userRole },
@@ -79,7 +82,7 @@ export default function AdminPage() {
     setLoading(true);
     setError(null);
     try {
-      await Promise.all([loadStatistics(), loadUsers(), loadListings()]);
+      await Promise.all([loadStatistics(), loadComputeNodes(), loadUsers(), loadListings()]);
     } catch (reason) {
       setError(errorText(reason));
     } finally {
@@ -177,9 +180,10 @@ export default function AdminPage() {
       </div>
 
       <Tabs defaultValue="accounts" className="space-y-4">
-        <TabsList className="grid w-full max-w-md grid-cols-3">
+        <TabsList className="grid w-full max-w-2xl grid-cols-4">
           <TabsTrigger value="accounts">{t("tabs.accounts")}</TabsTrigger>
           <TabsTrigger value="market">{t("tabs.market")}</TabsTrigger>
+          <TabsTrigger value="compute">{t("tabs.compute")}</TabsTrigger>
           <TabsTrigger value="details">{t("tabs.details")}</TabsTrigger>
         </TabsList>
 
@@ -257,6 +261,32 @@ export default function AdminPage() {
             {!loading && listings.length === 0 && <p className="rounded-xl border border-dashed border-hairline/10 p-8 text-center text-sm text-muted-foreground xl:col-span-2">{t("market.empty")}</p>}
           </div>
           {nextListingCursor && <div className="flex justify-center"><Button variant="outline" onClick={() => void loadListings(true)}>{t("loadMore")}</Button></div>}
+        </TabsContent>
+
+        <TabsContent value="compute" className="space-y-4">
+          <div className="grid gap-4 xl:grid-cols-2">
+            {computeNodes.map((node) => {
+              const bytesToGiB = (value?: number | null) => value == null ? t("compute.unknown") : `${(value / 1024 ** 3).toFixed(1)} GiB`;
+              return <article key={node.nodeKey} className="rounded-xl border border-hairline/10 bg-wash/[0.02] p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div><h2 className="font-medium text-ink/90">{node.nodeKey}</h2><p className="mt-1 text-xs text-muted-foreground">{node.gpu?.name ?? t("compute.unknownGpu")}</p></div>
+                  <div className="flex gap-2"><Badge variant={node.healthy ? "success" : "error"}>{t(node.healthy ? "compute.healthy" : "compute.unhealthy")}</Badge><Badge variant="outline">{t(`compute.state.${node.state}`)}</Badge></div>
+                </div>
+                <dl className="mt-5 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+                  {[
+                    [t("compute.durableSlots"), `${node.usedDurableSlots} / ${node.maxDurableSlots}`],
+                    [t("compute.previewSlots"), `${node.usedPreviewSlots} / ${node.maxPreviewSlots}`],
+                    [t("compute.vram"), `${bytesToGiB(node.gpu?.freeVramBytes)} / ${bytesToGiB(node.gpu?.totalVramBytes)}`],
+                    [t("compute.cuda"), node.gpu?.runtime ? node.gpu.computeCapability ? `sm_${node.gpu.computeCapability.major}${node.gpu.computeCapability.minor}` : t("compute.available") : t("compute.unavailable")],
+                    [t("compute.renderer"), node.rendererVersion ?? t("compute.unknown")],
+                    [t("compute.lastHealthy"), node.lastHealthyAt ? formatDate(node.lastHealthyAt) : t("compute.never")],
+                    [t("compute.lastAssigned"), node.lastAssignedAt ? formatDate(node.lastAssignedAt) : t("compute.never")],
+                  ].map(([label, value]) => <div key={label} className="flex justify-between gap-4"><dt className="text-muted-foreground">{label}</dt><dd className="text-right text-ink/85">{value}</dd></div>)}
+                </dl>
+              </article>;
+            })}
+            {!loading && computeNodes.length === 0 && <p className="rounded-xl border border-dashed border-hairline/10 p-8 text-center text-sm text-muted-foreground xl:col-span-2"><Cpu className="mx-auto mb-2 h-5 w-5" />{t("compute.empty")}</p>}
+          </div>
         </TabsContent>
 
         <TabsContent value="details">

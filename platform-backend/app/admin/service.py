@@ -7,12 +7,14 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
+import httpx
 from fastapi import HTTPException, Request, status
 
 from app.admin import repository
 from app.admin.models import (
     AdminListingModerationInput,
     AdminListingView,
+    AdminComputeNodeView,
     AdminStatisticsView,
     AdminUserUpdateInput,
     AdminUserView,
@@ -25,6 +27,7 @@ from app.assets.ports import AssetReader
 from app.assets.reader import AssetReadService
 from app.auth.models import AccessPrincipal
 from app.core import audit_writer, idempotency_service
+from app.core.config import get_settings
 from app.core.db import get_engine
 from app.core.request_context import request_id
 from app.marketplace.models import PreviewView
@@ -111,6 +114,32 @@ class AdminService:
                 failed=values["render_jobs_failed"],
             ),
         )
+
+    async def compute_nodes(self) -> list[AdminComputeNodeView]:
+        settings = get_settings()
+        if not settings.compute_gateway_admin_key:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="compute_admin_unavailable",
+            )
+        try:
+            async with httpx.AsyncClient(
+                base_url=settings.compute_base_url,
+                headers={"Authorization": f"Bearer {settings.compute_gateway_admin_key}"},
+                timeout=httpx.Timeout(10.0, connect=settings.compute_connect_timeout_seconds),
+                trust_env=False,
+            ) as client:
+                response = await client.get("/internal/v1/nodes")
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                    raise ValueError("invalid compute node response")
+                return [AdminComputeNodeView.model_validate(row) for row in payload["data"]]
+        except (httpx.HTTPError, ValueError, TypeError) as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="compute_admin_unavailable",
+            ) from error
 
     async def list_users(
         self,

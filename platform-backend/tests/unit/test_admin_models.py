@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 import pytest
 
-from app.admin.models import AdminListingModerationInput, AdminUserUpdateInput
+from app.admin.models import AdminComputeNodeView, AdminListingModerationInput, AdminUserUpdateInput
 from app.admin.repository import AdminUserRecord
 from app.admin.router import _decode_cursor, _encode_cursor
 from app.admin.service import _ensure_admin_creator_separation
@@ -80,3 +80,31 @@ def test_creator_cannot_be_promoted_to_administrator() -> None:
         _ensure_admin_creator_separation(creator, {"admin"})
     assert error.value.status_code == 409
     assert error.value.detail == "admin_creator_role_conflict"
+
+
+def test_compute_node_view_exposes_safe_operational_fields_only() -> None:
+    view = AdminComputeNodeView.model_validate(
+        {
+            "nodeKey": "compute-b",
+            "baseUrl": "http://10.66.0.3:18080",
+            "state": "active",
+            "healthy": True,
+            "maxDurableSlots": 1,
+            "usedDurableSlots": 0,
+            "maxPreviewSlots": 2,
+            "usedPreviewSlots": 1,
+            "rendererVersion": "renderer-sm61",
+            "gpu": {
+                "name": "GTX 1050",
+                "runtime": True,
+                "computeCapability": {"major": 6, "minor": 1},
+                "totalVramBytes": 2_000_000_000,
+                "freeVramBytes": 1_000_000_000,
+            },
+        }
+    )
+    payload = view.model_dump(mode="json", by_alias=True)
+    assert payload["nodeKey"] == "compute-b"
+    assert payload["usedPreviewSlots"] == 1
+    assert payload["gpu"]["computeCapability"] == {"major": 6, "minor": 1}
+    assert "baseUrl" not in payload

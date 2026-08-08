@@ -905,7 +905,7 @@
       "loadMore": "Load more",
       "requestFailed": "The administration request failed. Please try again.",
       "requestWithCode": "The administration request failed ({code}).",
-      "tabs": { "accounts": "Accounts", "market": "Marketplace", "details": "Statistics" },
+      "tabs": { "accounts": "Accounts", "market": "Marketplace", "compute": "Compute nodes", "details": "Statistics" },
       "stats": {
         "users": "Registered users",
         "usersHint": "{active} active, {newCount} joined in the last 30 days",
@@ -943,6 +943,24 @@
         "unpublish": "Unpublish",
         "archive": "Archive and remove",
         "empty": "No listings match these filters."
+      },
+      "compute": {
+        "healthy": "Healthy",
+        "unhealthy": "Unavailable",
+        "durableSlots": "Render slots",
+        "previewSlots": "Preview slots",
+        "vram": "VRAM (free / total)",
+        "cuda": "CUDA",
+        "renderer": "Renderer version",
+        "lastHealthy": "Last healthy",
+        "lastAssigned": "Last assignment",
+        "available": "Available",
+        "unavailable": "Unavailable",
+        "unknown": "Unknown",
+        "unknownGpu": "GPU not reported",
+        "never": "Never",
+        "empty": "No compute nodes are registered.",
+        "state": { "active": "Active", "draining": "Draining", "offline": "Offline", "disabled": "Disabled" }
       },
       "confirmDisable": "Disable {email}? All of their sessions will be revoked immediately.",
       "confirmGrantMembership": "Grant membership to {email}?",

@@ -905,7 +905,7 @@
       "loadMore": "加载更多",
       "requestFailed": "管理请求失败，请稍后重试。",
       "requestWithCode": "管理请求失败（{code}）。",
-      "tabs": { "accounts": "账号管理", "market": "市场管理", "details": "统计详情" },
+      "tabs": { "accounts": "账号管理", "market": "市场管理", "compute": "计算节点", "details": "统计详情" },
       "stats": {
         "users": "注册用户",
         "usersHint": "{active} 个活跃，近 30 天新增 {newCount}",
@@ -943,6 +943,24 @@
         "unpublish": "下架",
         "archive": "归档移除",
         "empty": "没有找到符合条件的上架项。"
+      },
+      "compute": {
+        "healthy": "健康",
+        "unhealthy": "不可用",
+        "durableSlots": "渲染槽位",
+        "previewSlots": "预览槽位",
+        "vram": "显存（可用 / 总量）",
+        "cuda": "CUDA",
+        "renderer": "渲染器版本",
+        "lastHealthy": "最近健康时间",
+        "lastAssigned": "最近分配任务",
+        "available": "可用",
+        "unavailable": "不可用",
+        "unknown": "未知",
+        "unknownGpu": "未报告 GPU",
+        "never": "从未",
+        "empty": "尚未注册计算节点。",
+        "state": { "active": "已启用", "draining": "正在排空", "offline": "离线", "disabled": "已禁用" }
       },
       "confirmDisable": "停用 {email}？该账号的所有会话会立即失效。",
       "confirmGrantMembership": "为 {email} 开通会员？",

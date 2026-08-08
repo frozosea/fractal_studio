@@ -28,6 +28,7 @@ def _principal(*roles: str) -> AccessPrincipal:
         "/v1/auth/session-token",
         "/v1/auth/csrf-token",
         "/internal/v1/admin/statistics",
+        "/internal/v1/admin/compute-nodes",
         "/internal/v1/admin/users/00000000-0000-4000-8000-000000000001",
     ],
 )

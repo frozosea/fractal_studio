@@ -608,14 +608,28 @@ class GatewayService:
             session.add(NodeProbe(node_id=node_id, healthy=healthy, latency_ms=latency_ms, error_code=error_code))
 
     def _node_view(self, node: ComputeNode, used_durable_slots: int) -> dict[str, object]:
+        capabilities = node.capabilities_json or {}
+        hardware = capabilities.get("hardware") if isinstance(capabilities, dict) else None
+        cuda = hardware.get("cuda") if isinstance(hardware, dict) else None
         return {
             "nodeKey": node.node_key,
             "state": node.state,
             "maxDurableSlots": node.max_durable_slots,
             "usedDurableSlots": used_durable_slots,
             "maxPreviewSlots": node.max_preview_slots,
+            "usedPreviewSlots": self._preview_in_flight[node.id],
             "healthy": self._healthy(node),
             "lastHealthyAt": node.last_healthy_at,
+            "lastAssignedAt": node.last_assigned_at,
+            "capabilitiesAt": node.capabilities_at,
+            "rendererVersion": capabilities.get("rendererVersion") if isinstance(capabilities, dict) else None,
+            "gpu": {
+                "name": cuda.get("name"),
+                "runtime": bool(cuda.get("runtime")),
+                "computeCapability": cuda.get("computeCapability"),
+                "totalVramBytes": cuda.get("totalVramBytes"),
+                "freeVramBytes": cuda.get("freeVramBytes"),
+            } if isinstance(cuda, dict) else None,
         }
 
     def _healthy(self, node: ComputeNode) -> bool:

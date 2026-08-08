@@ -133,6 +133,33 @@ class ComputeStatistics(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class AdminComputeGpuView(BaseModel):
+    name: str | None = None
+    runtime: bool
+    compute_capability: dict[str, int] | None = Field(default=None, alias="computeCapability")
+    total_vram_bytes: int | None = Field(default=None, alias="totalVramBytes")
+    free_vram_bytes: int | None = Field(default=None, alias="freeVramBytes")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AdminComputeNodeView(BaseModel):
+    node_key: str = Field(alias="nodeKey")
+    state: Literal["active", "draining", "offline", "disabled"]
+    healthy: bool
+    max_durable_slots: int = Field(alias="maxDurableSlots")
+    used_durable_slots: int = Field(alias="usedDurableSlots")
+    max_preview_slots: int = Field(alias="maxPreviewSlots")
+    used_preview_slots: int = Field(alias="usedPreviewSlots")
+    renderer_version: str | None = Field(default=None, alias="rendererVersion")
+    gpu: AdminComputeGpuView | None = None
+    last_healthy_at: datetime | None = Field(default=None, alias="lastHealthyAt")
+    last_assigned_at: datetime | None = Field(default=None, alias="lastAssignedAt")
+    capabilities_at: datetime | None = Field(default=None, alias="capabilitiesAt")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class AdminStatisticsView(BaseModel):
     generated_at: datetime = Field(alias="generatedAt")
     users: UserStatistics

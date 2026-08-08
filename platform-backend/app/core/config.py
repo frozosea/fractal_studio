@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     compute_base_url: str = "http://localhost:8080"
     compute_service_key: str = ""
+    compute_gateway_admin_key: str = ""
     compute_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     compute_read_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     s3_endpoint_url: str = ""
@@ -92,7 +93,10 @@ class Settings(BaseSettings):
 
     @property
     def trusted_origins(self) -> set[str]:
-        return {self.api_origin, *(origin.strip() for origin in self.cors_origins.split(",") if origin.strip())}
+        return {
+            self.api_origin,
+            *(origin.strip() for origin in self.cors_origins.split(",") if origin.strip()),
+        }
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
@@ -102,6 +106,8 @@ class Settings(BaseSettings):
             raise ValueError("SESSION_COOKIE_SECURE must be true in production")
         if len(self.session_secret) < 32 or self.session_secret.startswith("dev-"):
             raise ValueError("SESSION_SECRET must be a non-development secret in production")
+        if len(self.compute_gateway_admin_key) < 32:
+            raise ValueError("COMPUTE_GATEWAY_ADMIN_KEY must be configured in production")
         if not self.api_origin.startswith("https://"):
             raise ValueError("API_ORIGIN must use HTTPS in production")
         if any(origin.startswith("http://localhost") for origin in self.trusted_origins):
@@ -112,11 +118,21 @@ class Settings(BaseSettings):
             raise ValueError("S3_SSE_KMS_KEY_ID is required for aws:kms")
         if self.alipay_stub_mode:
             raise ValueError("ALIPAY_STUB_MODE must be false in production")
-        if not all((self.alipay_app_id, self.alipay_seller_id, self.alipay_private_key_path,
-                    self.alipay_public_key_path, self.alipay_notify_url, self.alipay_return_url)):
+        if not all(
+            (
+                self.alipay_app_id,
+                self.alipay_seller_id,
+                self.alipay_private_key_path,
+                self.alipay_public_key_path,
+                self.alipay_notify_url,
+                self.alipay_return_url,
+            )
+        ):
             raise ValueError("Alipay production configuration is required")
         if not self.alipay_notify_url.startswith("https://") or "?" in self.alipay_notify_url:
-            raise ValueError("ALIPAY_NOTIFY_URL must be a public HTTPS URL without query parameters")
+            raise ValueError(
+                "ALIPAY_NOTIFY_URL must be a public HTTPS URL without query parameters"
+            )
         return self
 
 

@@ -281,6 +281,27 @@ export interface AdminStatistics {
   };
 }
 
+export interface AdminComputeNode {
+  nodeKey: string;
+  state: "active" | "draining" | "offline" | "disabled";
+  healthy: boolean;
+  maxDurableSlots: number;
+  usedDurableSlots: number;
+  maxPreviewSlots: number;
+  usedPreviewSlots: number;
+  rendererVersion?: string | null;
+  gpu?: {
+    name?: string | null;
+    runtime: boolean;
+    computeCapability?: { major: number; minor: number } | null;
+    totalVramBytes?: number | null;
+    freeVramBytes?: number | null;
+  } | null;
+  lastHealthyAt?: string | null;
+  lastAssignedAt?: string | null;
+  capabilitiesAt?: string | null;
+}
+
 export interface AdminUser {
   id: string;
   email: string;
@@ -774,6 +795,7 @@ export const platform = {
   },
   admin: {
     statistics: () => request<AdminStatistics>("/internal/v1/admin/statistics"),
+    computeNodes: () => request<AdminComputeNode[]>("/internal/v1/admin/compute-nodes"),
     users: (filters: { query?: string; status?: AdminUser["status"] | "all"; role?: "admin" | "creator" | "finance_operator" | "all" } = {}, cursor?: string | null) => {
       const params = new URLSearchParams({ limit: "100" });
       if (filters.query) params.set("q", filters.query);

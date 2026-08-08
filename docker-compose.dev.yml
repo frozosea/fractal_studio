@@ -169,6 +169,7 @@ services:
       CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3010},${FSD_API_ORIGIN:-http://localhost:3010}
       COMPUTE_BASE_URL: http://compute-gateway:8080
       COMPUTE_SERVICE_KEY: ${COMPUTE_GATEWAY_SERVICE_KEY:-dev-gateway-key-change-me}
+      COMPUTE_GATEWAY_ADMIN_KEY: ${COMPUTE_GATEWAY_ADMIN_KEY:-dev-gateway-admin-key-change-me}
       S3_ENDPOINT_URL: http://minio:9000
       S3_PUBLIC_ENDPOINT_URL: ${FSD_S3_PUBLIC_ENDPOINT_URL:-http://localhost:19010}
       S3_BUCKET: fractal-platform
