@@ -14,6 +14,12 @@ fi
 mkdir -p "$stage_dir/targets/x86_64-linux/lib"
 cp -a "$toolkit_dir/bin" "$stage_dir/"
 cp -a "$toolkit_dir/nvvm" "$stage_dir/"
+# Conda CUDA's nvcc profile resolves NVVM below targets/x86_64-linux, while
+# NVIDIA's system toolkit resolves the same files from the top-level nvvm.
+# Keep one staged copy and expose both layouts.
+if [ ! -e "$stage_dir/targets/x86_64-linux/nvvm" ]; then
+    ln -s ../../nvvm "$stage_dir/targets/x86_64-linux/nvvm"
+fi
 cp -a "$target_dir/include" "$stage_dir/targets/x86_64-linux/"
 cp -a "$target_dir/lib/stubs" "$stage_dir/targets/x86_64-linux/lib/"
 cp -a "$target_dir"/lib/libcudart.so* "$stage_dir/targets/x86_64-linux/lib/"
