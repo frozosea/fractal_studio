@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.admin.router import router as admin_router
+from app.ai.router import router as ai_router
 from app.auth.router import router as auth_router
 from app.assets.router import router as assets_router
 from app.commerce.router import router as commerce_router
@@ -41,6 +42,7 @@ app.add_middleware(
     expose_headers=["X-Session-Token"],
 )
 app.include_router(auth_router)
+app.include_router(ai_router)
 app.include_router(studio_router)
 app.include_router(assets_router)
 app.include_router(marketplace_router)
@@ -128,6 +130,14 @@ _DEFAULT_ERROR_CODE = {
 }
 
 _PUBLIC_DETAIL_CODES = {
+    "AI_DISABLED",
+    "AI_PROVIDER_UNAVAILABLE",
+    "AI_TRIAL_EXHAUSTED",
+    "ai_concurrency_exhausted",
+    "ai_conversation_not_found",
+    "ai_image_dimensions_invalid",
+    "ai_image_invalid",
+    "ai_message_not_found",
     "COMPUTE_CAPACITY_EXHAUSTED",
     "email_already_registered",
     "export_quota_exhausted",

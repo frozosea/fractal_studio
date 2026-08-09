@@ -90,6 +90,17 @@ class Settings(BaseSettings):
     payout_qr_rejected_retention_days: int = Field(default=30, ge=1, le=3650)
     payout_qr_paid_retention_days: int = Field(default=90, ge=1, le=3650)
     payout_qr_cleanup_retry_delay_seconds: int = Field(default=300, ge=30, le=86_400)
+    ai_enabled: bool = False
+    ai_runtime_role: str = "api"
+    siliconflow_api_key: str = ""
+    siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
+    siliconflow_model: str = "Qwen/Qwen3.6-35B-A3B"
+    ai_free_lifetime_limit: int = Field(default=10, ge=1, le=1000)
+    ai_history_ttl_days: int = Field(default=90, ge=1, le=3650)
+    ai_max_user_message_chars: int = Field(default=4000, ge=1, le=20000)
+    ai_max_output_tokens: int = Field(default=1500, ge=64, le=8192)
+    ai_max_image_bytes: int = Field(default=1_048_576, ge=1024, le=10_485_760)
+    ai_max_concurrent_per_user: int = Field(default=2, ge=1, le=10)
 
     @property
     def trusted_origins(self) -> set[str]:
@@ -100,6 +111,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
+        if self.ai_enabled and self.ai_runtime_role == "api" and not self.siliconflow_api_key:
+            raise ValueError("SILICONFLOW_API_KEY is required when AI_ENABLED=true")
         if self.app_env != "production":
             return self
         if not self.session_cookie_secure:
