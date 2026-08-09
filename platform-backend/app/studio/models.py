@@ -183,7 +183,7 @@ class PreviewInput(RecipeInput):
 
 
 class PreviewJobInput(PreviewInput):
-    channel: Literal["main", "julia_picker"] = "main"
+    channel: Literal["main", "julia_picker", "ai_candidate"] = "main"
 
 
 class RecipeView(BaseModel):

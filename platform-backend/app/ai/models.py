@@ -44,7 +44,8 @@ class MessageView(BaseModel):
 
 
 _BOUNDED_NUMBERS: dict[str, tuple[float, float]] = {
-    "centerRe": (-1e9, 1e9), "centerIm": (-1e9, 1e9), "scale": (1e-15, 1e9),
+    "centerRe": (-1e9, 1e9), "centerIm": (-1e9, 1e9),
+    "scale": (3 / (2**41), 1e9),
     "iterations": (1, 1_000_000), "cyclesPerOctave": (1e-9, 64),
     "rotationDeg": (-360, 360), "pairwiseCap": (1, 1_000_000),
     "juliaRe": (-1e9, 1e9), "juliaIm": (-1e9, 1e9), "bailout": (1e-9, 1e9),
@@ -54,6 +55,11 @@ _BOOLS = {"smooth", "julia"}
 _ENUM_CAPABILITIES = {
     "variant": "variants", "colorMap": "colorMaps", "metric": "metrics",
     "engine": "engines", "scalarType": "scalars", "colorMode": "colorModes",
+}
+_IMAGE_KIND_CAPABILITIES = {
+    "metric": ("metrics", "escape"),
+    "engine": ("engines", "auto"),
+    "scalarType": ("scalars", "auto"),
 }
 _ENUMS = {
     "transitionMode": {"off", "pair", "multi"},
@@ -87,8 +93,20 @@ def validate_studio_suggestion(raw: object, context: dict[str, object]) -> dict[
         patch = {key: value for key, value in patch.items() if current.get(key) != value}
     if not patch:
         return None
+    merged = {**current, **patch} if isinstance(current, dict) else dict(patch)
+    if "imageKinds" in capabilities:
+        image_kinds = capabilities.get("imageKinds")
+        if not isinstance(image_kinds, dict):
+            return None
+        kind_name = "transition" if merged.get("transitionMode", "off") != "off" else "map"
+        kind = image_kinds.get(kind_name)
+        if not isinstance(kind, dict) or kind.get("enabled") is not True:
+            return None
+        for field, (capability_name, default) in _IMAGE_KIND_CAPABILITIES.items():
+            allowed = kind.get(capability_name)
+            if not isinstance(allowed, list) or merged.get(field, default) not in allowed:
+                return None
     if isinstance(current, dict) and current.get("version") == 1:
-        merged = {**current, **patch}
         if merged.get("metric", "escape") == "escape" and patch.get("smooth") is True:
             return None
         if merged.get("metric", "escape") != "escape" and merged.get("colorMode", "direct") != "direct":
@@ -104,5 +122,8 @@ def validate_studio_suggestion(raw: object, context: dict[str, object]) -> dict[
             return None
     if patch.get("transitionMode") == "multi" and not bool(context.get("member")):
         return None
-    reason = str(raw.get("reason", "AI 建议"))[:500]
+    reason = raw.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return None
+    reason = reason.strip()[:500]
     return {"patch": patch, "reason": reason}

@@ -13,11 +13,15 @@ import pytest
 from app.ai import provider
 
 
-def _settings(*, api_key: str = "sf-test-secret-never-log") -> SimpleNamespace:
+def _settings(
+    *,
+    api_key: str = "sf-test-secret-never-log",
+    model: str = "test/model",
+) -> SimpleNamespace:
     return SimpleNamespace(
         siliconflow_api_key=api_key,
         siliconflow_base_url="https://provider.invalid/v1",
-        siliconflow_model="test/model",
+        siliconflow_model=model,
         ai_max_output_tokens=321,
     )
 
@@ -145,6 +149,7 @@ async def test_forced_patch_sends_bounded_history_image_and_assembles_siliconflo
         "function": {"name": "propose_studio_patch"},
     }
     assert payload["enable_thinking"] is False
+    assert payload["temperature"] == 0.2
     assert payload["tools"][0]["function"]["name"] == "propose_studio_patch"
     assert len(payload["messages"]) == 22
     assert payload["messages"][1]["content"] == "history-2"
@@ -157,7 +162,8 @@ async def test_forced_patch_sends_bounded_history_image_and_assembles_siliconflo
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": "data:image/png;base64," + base64.b64encode(image).decode()
+                    "url": "data:image/png;base64," + base64.b64encode(image).decode(),
+                    "detail": "high",
                 },
             },
         ],
@@ -227,7 +233,7 @@ async def test_normal_text_request_streams_visible_content_with_auto_tool_choice
 
 @pytest.mark.asyncio
 async def test_analysis_phase_omits_tools_entirely(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings()
+    settings = _settings(model="Qwen/Qwen3-VL-32B-Instruct")
     captured: dict[str, Any] = {}
 
     async def handle(request: httpx.Request) -> httpx.Response:
@@ -252,7 +258,39 @@ async def test_analysis_phase_omits_tools_entirely(monkeypatch: pytest.MonkeyPat
     ]
     assert "tools" not in captured["payload"]
     assert "tool_choice" not in captured["payload"]
+    assert "enable_thinking" not in captured["payload"]
     assert events[0] == ("delta", "只描述可见结构")
+
+
+@pytest.mark.asyncio
+async def test_vl_forced_patch_uses_supported_auto_tool_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(model="Qwen/Qwen3-VL-30B-A3B-Instruct")
+    captured: dict[str, Any] = {}
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(200, content=_sse({"choices": []}), request=request)
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    events = [
+        event
+        async for event in provider.stream_completion(
+            text="提出候选",
+            history=[],
+            context={},
+            image=None,
+            image_type=None,
+            force_patch=True,
+            assistant_mode="composition",
+        )
+    ]
+
+    assert captured["payload"]["tool_choice"] == "auto"
+    assert "enable_thinking" not in captured["payload"]
+    assert events == []
 
 
 def test_contextual_tool_schema_uses_capabilities_and_disables_ineffective_smoothing() -> None:
@@ -271,6 +309,42 @@ def test_contextual_tool_schema_uses_capabilities_and_disables_ineffective_smoot
     assert properties["engine"]["enum"] == ["auto", "cuda"]
     assert properties["smooth"] == {"type": "boolean", "const": False}
     assert properties["transitionMode"]["enum"] == ["off", "pair"]
+
+
+def test_exploration_tool_schemas_are_mode_specific_and_capability_bounded() -> None:
+    context = {
+        "spec": {"metric": "escape"},
+        "capabilities": {
+            "metrics": ["escape", "min_abs"],
+            "colorMaps": ["inferno", "ember_blue"],
+            "colorModes": ["direct", "eq_full"],
+            "customGradient": {
+                "enabled": True,
+                "maxStops": 16,
+                "kinds": ["map_image"],
+            },
+        },
+    }
+    location = provider._tool_for_context(context, "location")["function"]["parameters"]
+    assert location["properties"]["axis"]["enum"] == ["position", "scale"]
+    assert location["properties"]["candidates"]["minItems"] == 3
+    location_item = location["properties"]["candidates"]["items"]
+    assert set(location_item["properties"]) == {
+        "label", "reason", "offsetX", "offsetY", "scaleFactor",
+    }
+    assert "centerRe" not in location_item["properties"]
+
+    composition = provider._tool_for_context(context, "composition")["function"]["parameters"]
+    assert composition["properties"]["candidates"]["maxItems"] == 3
+    assert "rotationDelta" in composition["properties"]["candidates"]["items"]["properties"]
+
+    color = provider._tool_for_context(context, "color")["function"]["parameters"]
+    assert color["properties"]["candidates"]["minItems"] == 4
+    patch = color["properties"]["candidates"]["items"]["properties"]["patch"]
+    assert patch["properties"]["colorMap"]["enum"] == ["inferno", "ember_blue"]
+    assert patch["properties"]["smooth"] == {"type": "boolean", "const": False}
+    assert patch["properties"]["colorProgram"]["properties"]["stops"]["maxItems"] == 6
+    assert "iterations" not in patch["properties"]
 
 
 @pytest.mark.asyncio
@@ -381,3 +455,34 @@ async def test_malformed_stream_is_mapped_and_incomplete_tool_call_is_not_emitte
         )
     ]
     assert events == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_tool_call_index_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=_sse({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": {"not": "an integer"},
+                            "function": {"name": "propose_studio_patch", "arguments": "{}"},
+                        }],
+                    },
+                }],
+            }),
+            request=request,
+        )
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    with pytest.raises(provider.ProviderUnavailable, match="invalid provider tool call index"):
+        _ = [
+            event
+            async for event in provider.stream_completion(
+                text="hello", history=[], context={}, image=None, image_type=None
+            )
+        ]
