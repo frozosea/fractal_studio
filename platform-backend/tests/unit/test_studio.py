@@ -80,7 +80,7 @@ def test_preview_mapper_is_pure_and_versioned() -> None:
 
     request = map_preview_v1(canonical.spec, width=64, height=64, request_id=request_id)
 
-    assert PREVIEW_MAPPING_VERSION == "compute-v1-preview-v2"
+    assert PREVIEW_MAPPING_VERSION == "compute-v1-preview-v3"
     assert request == {
         "schemaVersion": 1,
         "kind": "map_image",
@@ -128,6 +128,48 @@ def test_preview_mapper_bounds_export_sized_compute_work() -> None:
     assert request["payload"]["pairwiseCap"] == 128
     assert canonical.spec["iterations"] == 1_000_000
     assert canonical.spec["pairwiseCap"] == 1_000_000
+
+
+def test_preview_mapper_preserves_escape_gradient_band_without_mutating_recipe() -> None:
+    canonical = canonicalize_spec(FractalSpec.model_validate({
+        "version": 1,
+        "iterations": 60_000,
+        "colorMap": None,
+        "colorProgram": {
+            "cycles": 60,
+            "stops": [
+                {"at": 0, "color": "#000000"},
+                {"at": 1, "color": "#ffffff"},
+            ],
+        },
+    }))
+
+    request = map_preview_v1(canonical.spec, width=64, height=64, request_id=UUID(int=1))
+
+    assert request["payload"]["iterations"] == 512
+    assert request["payload"]["colorProgram"]["cycles"] == pytest.approx(60 * 514 / 60_002)
+    assert canonical.spec["iterations"] == 60_000
+    assert canonical.spec["colorProgram"]["cycles"] == 60
+
+
+def test_preview_mapper_does_not_rescale_continuous_field_gradient() -> None:
+    canonical = canonicalize_spec(FractalSpec.model_validate({
+        "version": 1,
+        "iterations": 60_000,
+        "metric": "min_abs",
+        "colorMap": None,
+        "colorProgram": {
+            "cycles": 3,
+            "stops": [
+                {"at": 0, "color": "#000000"},
+                {"at": 1, "color": "#ffffff"},
+            ],
+        },
+    }))
+
+    request = map_preview_v1(canonical.spec, width=64, height=64, request_id=UUID(int=1))
+
+    assert request["payload"]["colorProgram"]["cycles"] == 3
 
 
 def test_mapper_preserves_advanced_2d_controls_and_gradient() -> None:

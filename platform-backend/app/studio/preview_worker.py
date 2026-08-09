@@ -8,7 +8,7 @@ import signal
 
 from app.core.config import get_settings
 from app.infrastructure.compute.compute_client import ComputeClient, ComputeClientError
-from app.studio.compute_request_mapper import PREVIEW_MAX_ITERATIONS
+from app.studio.compute_request_mapper import bound_preview_payload
 from app.studio.preview_queue import PreviewQueueUnavailable, RedisPreviewQueue
 from app.studio.rgba_png_encoder import InvalidRgbaFrame, encode_rgba8_png
 
@@ -31,7 +31,7 @@ async def _run_one(queue: RedisPreviewQueue, compute: ComputeClient, stop: async
             if isinstance(payload, dict):
                 request = {
                     **job.request,
-                    "payload": {**payload, "iterations": min(int(payload.get("iterations", 1)), PREVIEW_MAX_ITERATIONS)},
+                    "payload": bound_preview_payload(payload),
                 }
             frame = await compute.render_map_inline(request, timeout_seconds=settings.preview_compute_timeout_seconds)
             if frame.width <= 0 or frame.height <= 0:

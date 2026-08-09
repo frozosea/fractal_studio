@@ -1,6 +1,6 @@
 # AI 辅助分形探索经验与工作流
 
-最后更新：2026-07-30（Codex 初稿；Claude 补充实测部分）
+最后更新：2026-08-09（Codex 初稿；Claude 补充实测部分；Studio AI 开发复核）
 
 ## 1. 文档目的
 
@@ -366,12 +366,13 @@ input = min(1, raw_field / bailout)
 
 ### 9.8 预览与导出不是同一张图（实测，代价最大的一次）
 
-`map_preview_v1` 把 `iterations` 截断到 `PREVIEW_MAX_ITERATIONS = 4096`，而 durable render 用配方原值，**且两者都不调整 `colorProgram.cycles`**。于是一张写了 6000 次迭代的配方，预览是明亮的沙色，导出后整整暗一档——因为色带位置被压缩了约 1.5 倍（见 5.4）。
+`map_preview_v1` 当前把 `iterations` 截断到 `PREVIEW_MAX_ITERATIONS = 512`，而 durable render 用配方原值。历史实现不调整 `colorProgram.cycles`，曾导致预览与导出明显错色。2026-08-09 起，预览映射只在请求副本中按精确分母比例
+`(previewIterations + 2) / (masterIterations + 2)` 自动缩放 escape `colorProgram.cycles`；canonical spec 与 durable render 不变。
 
 这一条曾让一件作品带着错误配色进入草稿，直到对比母版才发现。两种可靠处理：
 
-- 手工调好的配色，**把配方迭代数压在 4096 以内**，让预览与导出共用同一套映射；
-- 必须超过 4096 时，预览前按 `4096 / iterations` 同比缩小 `cycles`，保持 band 不变，这样预览显示的才是导出会有的颜色。
+- 手工或其它旧客户端若绕过当前 Platform 映射，仍必须自行保持相同的 band；
+- 正常 Studio 预览不要再次手工补偿 cycles，否则会发生双重校正。发布前仍要用母版验收，因为 512 次低成本预览不能证明高迭代细节与最终分辨率效果。
 
 推广的结论是：**预览端点的任何"为交互性能做的限流"都可能让预览失真。** 验收必须以导出母版（或母版的缩略图）为准，用预览做筛选、用母版做验收。
 
@@ -461,7 +462,7 @@ agent 可以自动淘汰技术失败和明显不符合硬约束的候选；主�
 
 | 项 | 实测值 | 备注 |
 |---|---|---|
-| 预览迭代上限 | `4096` | `PREVIEW_MAX_ITERATIONS`，`compute_request_mapper.py`。导出不受此限，见 9.8。 |
+| 预览迭代上限 | `512` | `PREVIEW_MAX_ITERATIONS`，`compute_request_mapper.py`。导出不受此限，见 9.8。 |
 | 预览尺寸上限 | `1024 × 1024`，且总像素 ≤ `1048576` | `preview_max_*` 设置项。 |
 | 预览频率限制 | 30 次 / 分钟 | Redis 计数，超限返回 429。 |
 | 并发导出上限 | 3 | `render_quota_max_active`，超出返回 429。 |

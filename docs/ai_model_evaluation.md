@@ -34,7 +34,9 @@ eventually returns a valid tool call. It was not selected:
 - on a project-specific compatibility question it incorrectly described `min_abs` as an escape
   parameter, invented a nonexistent nested request shape, and failed to finish within 1000 tokens.
 
-Qwen3.6 answered the same compatibility question substantially better and correctly calculated the
-preview colour correction (`60 × 4096 / 60000 ≈ 4.10`). Its wording exposed smaller metric/colouring
-ambiguities, which were fixed by making those field relationships explicit in the system prompt.
+Qwen3.6 answered the same compatibility question substantially better and correctly followed the
+then-provided 4096-iteration premise. A later source audit found the current preview cap is 512, not
+4096. The Platform now derives that value from `PREVIEW_MAX_ITERATIONS` and automatically applies the
+exact escape-gradient correction (`cycles × (previewIterations+2)/(masterIterations+2)`) so the model
+must not repeat a stale hard-coded correction. This regression must be rerun whenever the mapping changes.
 Quality and contract reliability therefore favour Qwen3.6 even when latency is ignored.

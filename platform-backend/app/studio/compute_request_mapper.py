@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from uuid import UUID
 
 
 COMPUTE_SCHEMA_VERSION = 1
-PREVIEW_MAPPING_VERSION = "compute-v1-preview-v2"
+PREVIEW_MAPPING_VERSION = "compute-v1-preview-v3"
 RENDER_MAPPING_VERSION = "compute-v1-render-v1"
 # Preview is interactive work, not an export. 768² pixels × thousands of
 # iterations can occupy every Compute slot for minutes (especially exp/sin
@@ -124,6 +125,32 @@ def _envelope(*, kind: str, payload: dict[str, object], idempotency_key: str | N
     return request
 
 
+def bound_preview_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Copy and bound preview work while preserving escape-gradient colour bands."""
+    bounded = deepcopy(payload)
+    original_iterations = max(1, int(bounded.get("iterations", 1)))
+    preview_iterations = min(original_iterations, PREVIEW_MAX_ITERATIONS)
+    bounded["iterations"] = preview_iterations
+    bounded["pairwiseCap"] = min(
+        int(bounded.get("pairwiseCap", PREVIEW_MAX_PAIRWISE_CAP)),
+        PREVIEW_MAX_PAIRWISE_CAP,
+    )
+    program = bounded.get("colorProgram")
+    if (
+        preview_iterations < original_iterations
+        and bounded.get("metric") == "escape"
+        and isinstance(program, dict)
+        and isinstance(program.get("cycles"), (int, float))
+    ):
+        # Compute maps escape bands with (iter + 1) / (iterations + 2).
+        # Scaling by the exact denominator ratio keeps an early-escaping
+        # pixel at the same point in the colour program as the durable render.
+        program["cycles"] = float(program["cycles"]) * (
+            (preview_iterations + 2) / (original_iterations + 2)
+        )
+    return bounded
+
+
 def map_preview_v1(
     canonical_spec: dict[str, object], *, width: int, height: int, request_id: UUID
 ) -> dict[str, object]:
@@ -133,8 +160,7 @@ def map_preview_v1(
     # A preview is interactive and must not inherit export-sized work limits.
     # Keep the full recipe immutable for durable renders while bounding the two
     # parameters that can otherwise turn a small preview into minutes of work.
-    payload["iterations"] = min(int(payload["iterations"]), PREVIEW_MAX_ITERATIONS)
-    payload["pairwiseCap"] = min(int(payload["pairwiseCap"]), PREVIEW_MAX_PAIRWISE_CAP)
+    payload = bound_preview_payload(payload)
     return _envelope(kind=_static_image_kind(canonical_spec), payload=payload)
 
 
