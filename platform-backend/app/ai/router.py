@@ -12,12 +12,23 @@ from PIL import Image, UnidentifiedImageError
 from sqlalchemy import text as sql
 
 from app.ai.models import ConversationCreate, ConversationUpdate, FeedbackInput
-from app.ai.service import allowance, owned_conversation, stream_message
+from app.ai.provider import AssistantMode
+from app.ai.service import (
+    allowance,
+    ensure_no_active_requests,
+    lock_ai_owner,
+    owned_conversation,
+    recover_expired_requests,
+    scrub_conversation_ledger,
+    stream_message,
+)
 from app.auth.models import AccessPrincipal
 from app.core import idempotency_service
 from app.core.access_middleware import enforce_origin_and_csrf, require_principal
 from app.core.config import get_settings
 from app.core.db import get_engine
+from app.infrastructure.compute.compute_client import ComputeClientError
+from app.studio.capability_service import studio_capabilities
 
 router = APIRouter(prefix="/v1", tags=["ai"])
 
@@ -102,12 +113,20 @@ async def delete_conversation(conversation_id: UUID, request: Request,
                               principal: AccessPrincipal = Depends(require_principal)) -> Response:
     enforce_origin_and_csrf(request, principal)
     async with get_engine().begin() as c:
+        await lock_ai_owner(c, principal.user_id)
+        await recover_expired_requests(c, owner_id=principal.user_id)
         await owned_conversation(c, principal.user_id, conversation_id, lock=True)
         claim = await idempotency_service.claim(c, user_id=principal.user_id,
             scope=f"ai.delete_conversation:{conversation_id}", key=idempotency_key,
             body={"id": str(conversation_id)})
         if response := _replay(claim):
             return response
+        await ensure_no_active_requests(
+            c, owner_id=principal.user_id, conversation_id=conversation_id
+        )
+        await scrub_conversation_ledger(
+            c, owner_id=principal.user_id, conversation_id=conversation_id
+        )
         await c.execute(sql("DELETE FROM ai_conversations WHERE id=:id"), {"id": conversation_id})
         await idempotency_service.complete(c, claim, response_status=204, response_body=None)
     return Response(status_code=204)
@@ -134,25 +153,55 @@ async def delete_all(request: Request, idempotency_key: str = Header(..., alias=
                      principal: AccessPrincipal = Depends(require_principal)) -> Response:
     enforce_origin_and_csrf(request, principal)
     async with get_engine().begin() as c:
+        await lock_ai_owner(c, principal.user_id)
+        await recover_expired_requests(c, owner_id=principal.user_id)
         claim = await idempotency_service.claim(c, user_id=principal.user_id,
             scope="ai.delete_all_conversations", key=idempotency_key, body={})
         if response := _replay(claim):
             return response
+        await ensure_no_active_requests(c, owner_id=principal.user_id)
+        await scrub_conversation_ledger(c, owner_id=principal.user_id)
         await c.execute(sql("DELETE FROM ai_conversations WHERE owner_id=:owner"), {"owner": principal.user_id})
         await idempotency_service.complete(c, claim, response_status=204, response_body=None)
     return Response(status_code=204)
+
+
+def _reject_json_constant(value: str):
+    raise ValueError(f"non-finite JSON number: {value}")
 
 
 def _parse_context(raw: str) -> dict:
     if len(raw.encode()) > 100_000:
         raise HTTPException(status_code=413, detail="payload_too_large")
     try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as error:
+        value = json.loads(raw, parse_constant=_reject_json_constant)
+    except (json.JSONDecodeError, ValueError) as error:
         raise HTTPException(status_code=422, detail="validation_error") from error
     if not isinstance(value, dict):
         raise HTTPException(status_code=422, detail="validation_error")
     return value
+
+
+async def _trusted_context(
+    owner_id: UUID, client_context: dict, *, force_patch: bool
+) -> dict:
+    """Replace browser-asserted authorization and Compute capability fields."""
+
+    context = dict(client_context)
+    async with get_engine().connect() as connection:
+        context["member"] = bool(await connection.scalar(sql(
+            "SELECT 1 FROM memberships WHERE user_id=:owner AND status='active'"
+        ), {"owner": owner_id}))
+    try:
+        context["capabilities"] = await studio_capabilities()
+    except ComputeClientError as error:
+        context["capabilities"] = {}
+        if force_patch:
+            raise HTTPException(
+                status_code=503,
+                detail="COMPUTE_CAPACITY_EXHAUSTED",
+            ) from error
+    return context
 
 
 async def _read_image(upload: UploadFile | None) -> tuple[bytes | None, str | None]:
@@ -179,6 +228,7 @@ async def _read_image(upload: UploadFile | None) -> tuple[bytes | None, str | No
 async def post_message(conversation_id: UUID, request: Request,
                        text: str = Form(...), context: str = Form(default="{}"),
                        request_patch: bool = Form(default=False, alias="requestPatch"),
+                       assistant_mode: AssistantMode = Form(default="chat", alias="assistantMode"),
                        image: UploadFile | None = File(default=None),
                        idempotency_key: str = Header(..., alias="Idempotency-Key"),
                        principal: AccessPrincipal = Depends(require_principal)) -> Response:
@@ -189,20 +239,39 @@ async def post_message(conversation_id: UUID, request: Request,
     user_text = text.strip()
     if not user_text or len(user_text) > settings.ai_max_user_message_chars:
         raise HTTPException(status_code=422, detail="validation_error")
-    parsed_context = _parse_context(context)
+    # Direct unit calls do not run FastAPI's dependency coercion and therefore
+    # see the Form descriptor itself. HTTP requests are still constrained by
+    # the AssistantMode Literal at the boundary.
+    resolved_mode: AssistantMode = (
+        assistant_mode
+        if assistant_mode in {"chat", "location", "color", "composition"}
+        else "chat"
+    )
+    requires_suggestion = request_patch or resolved_mode != "chat"
+    parsed_context = await _trusted_context(
+        principal.user_id,
+        _parse_context(context),
+        force_patch=requires_suggestion,
+    )
     image_data, image_type = await _read_image(image)
+    if resolved_mode != "chat" and image_data is None:
+        raise HTTPException(status_code=422, detail="ai_image_required")
     iterator = stream_message(owner_id=principal.user_id, conversation_id=conversation_id,
         idempotency_key=idempotency_key, user_text=user_text, context=parsed_context,
-        image=image_data, image_type=image_type, force_patch=request_patch)
+        image=image_data, image_type=image_type, force_patch=request_patch,
+        assistant_mode=resolved_mode)
     try:
         first = await anext(iterator)
     except StopAsyncIteration:
         raise HTTPException(status_code=503, detail="AI_PROVIDER_UNAVAILABLE") from None
 
     async def body() -> AsyncIterator[bytes]:
-        yield first
-        async for chunk in iterator:
-            yield chunk
+        try:
+            yield first
+            async for chunk in iterator:
+                yield chunk
+        finally:
+            await iterator.aclose()
     return StreamingResponse(body(), media_type="text/event-stream",
         headers={"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"})
 
@@ -213,12 +282,19 @@ async def feedback(message_id: UUID, payload: FeedbackInput, request: Request,
                    principal: AccessPrincipal = Depends(require_principal)) -> Response:
     enforce_origin_and_csrf(request, principal)
     async with get_engine().begin() as c:
-        conversation_id = await c.scalar(sql(
-            "SELECT c.id FROM ai_messages m JOIN ai_conversations c ON c.id=m.conversation_id "
-            "WHERE m.id=:id AND m.role='assistant' AND c.owner_id=:owner FOR UPDATE"
-        ), {"id": message_id, "owner": principal.user_id})
-        if conversation_id is None:
+        await lock_ai_owner(c, principal.user_id)
+        row = (await c.execute(sql(
+            "SELECT c.id AS conversation_id,r.status FROM ai_messages m "
+            "JOIN ai_conversations c ON c.id=m.conversation_id "
+            "JOIN ai_requests r ON r.assistant_message_id=m.id "
+            "WHERE m.id=:id AND m.role='assistant' AND c.owner_id=:owner "
+            "FOR UPDATE OF c,m,r"
+        ), {"id": message_id, "owner": principal.user_id})).mappings().one_or_none()
+        if row is None:
             raise HTTPException(status_code=404, detail="ai_message_not_found")
+        if row["status"] != "completed":
+            raise HTTPException(status_code=409, detail="ai_message_not_complete")
+        conversation_id = row["conversation_id"]
         body_input = payload.model_dump()
         claim = await idempotency_service.claim(c, user_id=principal.user_id,
             scope=f"ai.feedback:{message_id}", key=idempotency_key, body=body_input)
@@ -229,8 +305,12 @@ async def feedback(message_id: UUID, payload: FeedbackInput, request: Request,
             "ON CONFLICT(message_id) DO UPDATE SET rating=excluded.rating,consent=excluded.consent,created_at=now()"
         ), {"id": uuid4(), "mid": message_id, "owner": principal.user_id,
             "rating": payload.rating, "consent": payload.consent})
-        if payload.consent:
-            await c.execute(sql("UPDATE ai_conversations SET optimization_consent=true WHERE id=:id"), {"id": conversation_id})
+        await c.execute(sql(
+            "UPDATE ai_conversations SET optimization_consent=EXISTS("
+            " SELECT 1 FROM ai_feedback f JOIN ai_messages m ON m.id=f.message_id"
+            " WHERE m.conversation_id=:id AND f.consent"
+            ") WHERE id=:id"
+        ), {"id": conversation_id})
         body = {"data": {"messageId": str(message_id), "rating": payload.rating,
                          "consent": payload.consent}}
         await idempotency_service.complete(c, claim, response_status=200, response_body=body)

@@ -138,6 +138,8 @@ _PUBLIC_DETAIL_CODES = {
     "ai_image_dimensions_invalid",
     "ai_image_invalid",
     "ai_message_not_found",
+    "ai_message_not_complete",
+    "ai_request_in_progress",
     "COMPUTE_CAPACITY_EXHAUSTED",
     "email_already_registered",
     "export_quota_exhausted",
