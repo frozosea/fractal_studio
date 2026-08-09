@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.admin.router import router as admin_router
+from app.ai.listing_router import router as ai_listing_router
 from app.ai.router import router as ai_router
 from app.auth.router import router as auth_router
 from app.assets.router import router as assets_router
@@ -43,6 +44,7 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(ai_router)
+app.include_router(ai_listing_router)
 app.include_router(studio_router)
 app.include_router(assets_router)
 app.include_router(marketplace_router)

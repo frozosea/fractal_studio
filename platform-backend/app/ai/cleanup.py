@@ -60,6 +60,28 @@ async def run_maintenance(connection, *, batch_size: int = 1000) -> int:
     return recovered + deleted
 
 
+async def delete_expired_listing_copy(connection, *, batch_size: int = 1000) -> int:
+    """Drop replay/revision content while retaining ai_requests as the lifetime ledger."""
+
+    result = await connection.execute(
+        text(
+            "WITH expired AS ("
+            " SELECT request_id FROM ai_listing_copy_results "
+            " WHERE expires_at < now() "
+            " ORDER BY expires_at LIMIT :limit FOR UPDATE SKIP LOCKED"
+            "), deleted AS ("
+            " DELETE FROM ai_listing_copy_results "
+            " WHERE request_id IN (SELECT request_id FROM expired) RETURNING request_id"
+            ") UPDATE ai_requests SET idempotency_key=NULL,request_hash=NULL,"
+            "provider_request_id=NULL WHERE id IN (SELECT request_id FROM deleted)"
+        ),
+        {"limit": batch_size},
+    )
+    return result.rowcount or 0
+
+
 class AiHistoryExpiryScheduler:
     async def schedule_due_work(self, service) -> int:
-        return await run_maintenance(service.connection)
+        conversations = await run_maintenance(service.connection)
+        listing_copy = await delete_expired_listing_copy(service.connection)
+        return conversations + listing_copy
