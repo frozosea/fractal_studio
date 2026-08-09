@@ -1010,6 +1010,86 @@
     "adminArchitecture": "Administrator → management API → platform data",
     "architecture": "Browser → Platform → private Compute"
   },
+  "aiAssistant": {
+    "title": "Studio AI assistant",
+    "close": "Close AI assistant",
+    "conversation": "Choose conversation",
+    "newConversation": "New conversation",
+    "rename": "Rename conversation",
+    "renameSave": "Save name",
+    "renameCancel": "Cancel rename",
+    "delete": "Delete conversation",
+    "deleteConfirm": "Delete this conversation and all its messages? This cannot be undone.",
+    "loading": "Loading conversation…",
+    "thinking": "Thinking…",
+    "placeholder": "Ask about colour, parameters, or fractals…",
+    "send": "Send",
+    "stop": "Stop generating",
+    "retry": "Retry",
+    "dismissError": "Dismiss error",
+    "unavailable": "The AI assistant is not enabled",
+    "trialExhausted": "Your free AI trial has been used",
+    "disclaimer": "AI suggestions can be wrong. Parameter changes apply only after confirmation and never start a render or export.",
+    "allowance": {
+      "member": "Unlimited for members",
+      "remaining": "{count} replies left",
+      "loading": "Checking allowance",
+      "unavailable": "AI is not enabled"
+    },
+    "empty": {
+      "title": "Keep exploring the current work",
+      "description": "Discuss parameters, colour, and fractal concepts. AI can only propose parameter changes; you choose whether to apply them."
+    },
+    "quick": {
+      "palette": {
+        "label": "Suggest a colour palette",
+        "prompt": "Recommend a more layered colour treatment for the current parameters and explain why. Propose parameter changes if useful."
+      },
+      "explore": {
+        "label": "Suggest where to explore",
+        "prompt": "Given the current fractal parameters, suggest a worthwhile direction to explore and a cautious set of parameter changes."
+      },
+      "parameters": {
+        "label": "Explain these parameters",
+        "prompt": "Explain in approachable terms how the current Studio parameters affect the image, focusing on the three most important ones."
+      },
+      "knowledge": {
+        "label": "Teach me about fractals",
+        "prompt": "Use the current work to explain one relevant fractal-mathematics concept, concisely and accurately."
+      },
+      "analyse": {
+        "label": "Analyse the current work",
+        "prompt": "Analyse this preview's composition, depth, and colour, then propose an optional set of Studio parameter improvements."
+      }
+    },
+    "feedback": {
+      "good": "Helpful",
+      "bad": "Not helpful",
+      "consent": "If I actively submit feedback, allow this conversation to improve the assistant. Without feedback it will not become an optimisation sample."
+    },
+    "suggestion": {
+      "title": "Parameter suggestion",
+      "apply": "Apply suggestion",
+      "undo": "Restore previous state"
+    },
+    "errors": {
+      "load": "AI conversations could not be loaded. Try again later.",
+      "create": "The conversation could not be created.",
+      "rename": "The conversation could not be renamed.",
+      "delete": "The conversation could not be deleted.",
+      "send": "AI cannot respond right now. Try again later.",
+      "feedback": "Feedback could not be saved.",
+      "consent": "Optimisation consent could not be updated.",
+      "apply": "This suggestion could not be applied.",
+      "undo": "The previous state could not be restored.",
+      "undoChanged": "Studio parameters changed after this suggestion was applied, so undo was blocked to preserve your newer adjustments.",
+      "trial": "Your free AI trial has been used.",
+      "disabled": "The AI assistant is not enabled.",
+      "provider": "The AI service is temporarily unavailable. Try again later.",
+      "concurrency": "Too many AI requests are active. Wait for the current request to finish.",
+      "compute": "Compute capacity is unavailable, so a parameter suggestion cannot be generated right now. Knowledge questions still work."
+    }
+  },
   "common": {
     "theme": {
       "label": "Theme",

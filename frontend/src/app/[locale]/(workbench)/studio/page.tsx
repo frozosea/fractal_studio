@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
+  Bot,
   Braces,
   CheckCircle2,
   Download,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { InteractiveFractalCanvas } from "@/components/studio/interactive-fractal-canvas";
+import { StudioAIAssistant } from "@/components/studio/ai-assistant";
 import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -194,12 +196,14 @@ const MEMBER_ONLY_MODES: ReadonlySet<ImageMode> = new Set(["transitionMulti", "f
 
 export default function StudioPage() {
   const t = useTranslations("studio");
+  const tAI = useTranslations("aiAssistant");
   const { user } = useAuth();
   const isMember = !!user?.member;
   const [spec, setSpec] = useState<FractalSpec>(defaults);
   const [juliaPickerSpec, setJuliaPickerSpec] = useState<FractalSpec>(defaults);
   const [mode, setMode] = useState<ImageMode>("map");
   const [preview, setPreview] = useState<string | null>(null);
+  const [previewContextKey, setPreviewContextKey] = useState<string | null>(null);
   const [juliaPickerPreview, setJuliaPickerPreview] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [previewQueued, setPreviewQueued] = useState(false);
@@ -213,13 +217,36 @@ export default function StudioPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [aiOpen, setAIOpen] = useState(false);
+  const [aiWideLayout, setAIWideLayout] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const previewRef = useRef<string | null>(null);
   const juliaPickerPreviewRef = useRef<string | null>(null);
   const lastPreviewAtRef = useRef(0);
   const previewGenerationRef = useRef(0);
   const explorationRef = useRef<StudioExplorationSession | null>(null);
+  const aiUndoRef = useRef(new Map<string, { patch: Partial<FractalSpec> }>());
   const explorationStorageKey = user?.id ? `fractal-studio:exploration:v1:${user.id}` : null;
+
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1280px)");
+    const sync = () => {
+      setAIWideLayout(query.matches);
+      if (query.matches) setAIOpen(false);
+    };
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!aiOpen || aiWideLayout) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [aiOpen, aiWideLayout]);
 
   useEffect(() => {
     if (!explorationStorageKey) return;
@@ -282,6 +309,10 @@ export default function StudioPage() {
       transitionThetaMilliDeg: Math.round(Number(spec.transitionThetaMilliDeg ?? 0)),
     };
   }, [spec]);
+  const aiContextKey = useMemo(
+    () => JSON.stringify({ spec: canonical, mode, output }),
+    [canonical, mode, output],
+  );
   const juliaPickerCanonical = useMemo<FractalSpec>(() => {
     const { juliaRe: _juliaRe, juliaIm: _juliaIm, ...shared } = canonical;
     const centerRe = Number(juliaPickerSpec.centerReStr ?? juliaPickerSpec.centerRe ?? 0);
@@ -402,6 +433,7 @@ export default function StudioPage() {
         if (previewRef.current) URL.revokeObjectURL(previewRef.current);
         previewRef.current = url;
         setPreview(url);
+        setPreviewContextKey(aiContextKey);
         if (pickerBlob) {
           const pickerUrl = URL.createObjectURL(pickerBlob);
           if (juliaPickerPreviewRef.current) URL.revokeObjectURL(juliaPickerPreviewRef.current);
@@ -435,7 +467,7 @@ export default function StudioPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [canonical, explorationReady, juliaPickerCanonical, juliaPickerSpecKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
+  }, [aiContextKey, canonical, explorationReady, juliaPickerCanonical, juliaPickerSpecKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
 
   const update = (patch: Partial<FractalSpec>) => setSpec((current) => ({ ...current, ...patch }));
   const updateViewport = (patch: Partial<FractalSpec>) => {
@@ -535,6 +567,72 @@ export default function StudioPage() {
     if (next === "transitionMulti") update({ julia: false, transitionMode: "multi", transitionThetaMilliDeg: 0, orbitProgram: null, metric: "escape" });
     if (next === "formula") update({ julia: false, transitionMode: "off", orbitProgram: formulaProgram(), metric: "escape" });
     if (next === "sequence") update({ julia: false, transitionMode: "off", orbitProgram: sequenceProgram(), metric: "escape" });
+  };
+
+  const applyAIStudioPatch = (
+    patch: Partial<FractalSpec>,
+    details: { messageId: string; reason: string; previousSpec: FractalSpec },
+  ) => {
+    if (patch.variant !== undefined && !capabilities.variants.includes(patch.variant)) throw new Error(t("errors.capabilities"));
+    if (patch.colorMap !== undefined && patch.colorMap !== null && !capabilities.colorMaps.includes(patch.colorMap)) throw new Error(t("errors.capabilities"));
+    if (patch.colorMode !== undefined && !capabilities.colorModes.includes(patch.colorMode)) throw new Error(t("errors.capabilities"));
+    if (patch.metric !== undefined && !capabilities.metrics.includes(patch.metric)) throw new Error(t("errors.capabilities"));
+    if (patch.engine !== undefined && !capabilities.engines.includes(patch.engine)) throw new Error(t("errors.capabilities"));
+    if (patch.scalarType !== undefined && !capabilities.scalars.includes(patch.scalarType)) throw new Error(t("errors.capabilities"));
+    if (patch.julia === true && patch.transitionMode && patch.transitionMode !== "off") throw new Error(t("errors.capabilities"));
+
+    let targetMode = mode;
+    if (patch.julia === true) targetMode = "julia";
+    else if (patch.transitionMode === "pair") targetMode = "transitionPair";
+    else if (patch.transitionMode === "multi") targetMode = "transitionMulti";
+    else if ((patch.julia === false && mode === "julia")
+      || (patch.transitionMode === "off" && isTransitionMode(mode))) targetMode = "map";
+
+    // The first assistant refines the current image mode. Switching formula
+    // families or map kinds belongs in an explicit, separately previewed flow.
+    if (targetMode !== mode) throw new Error(t("errors.capabilities"));
+
+    if (isTransitionMode(targetMode) && !capabilities.imageKinds.transition.enabled) throw new Error(t("errors.capabilities"));
+    if (targetMode === "transitionMulti" && !isMember) throw new Error(t("memberLocked"));
+    const targetCapabilities = isTransitionMode(targetMode)
+      ? capabilities.imageKinds.transition
+      : capabilities.imageKinds.map;
+    if (patch.metric !== undefined && !targetCapabilities.metrics.includes(patch.metric)) throw new Error(t("errors.capabilities"));
+    if (patch.engine !== undefined && !targetCapabilities.engines.includes(patch.engine)) throw new Error(t("errors.capabilities"));
+    if (patch.scalarType !== undefined && !targetCapabilities.scalars.includes(patch.scalarType)) throw new Error(t("errors.capabilities"));
+
+    const appliedPatch: Partial<FractalSpec> = {
+      ...patch,
+      ...(patch.centerRe === undefined ? {} : { centerReStr: String(patch.centerRe) }),
+      ...(patch.centerIm === undefined ? {} : { centerImStr: String(patch.centerIm) }),
+    };
+    aiUndoRef.current.clear();
+    aiUndoRef.current.set(details.messageId, { patch: appliedPatch });
+    setSpec((current) => ({
+      ...current,
+      ...appliedPatch,
+    }));
+  };
+
+  const undoAIStudioPatch = (previousSpec: FractalSpec, details: { messageId: string }) => {
+    const snapshot = aiUndoRef.current.get(details.messageId);
+    if (!snapshot) throw new Error(tAI("errors.undo"));
+    const currentValues = spec as unknown as Record<string, unknown>;
+    const previousValues = previousSpec as unknown as Record<string, unknown>;
+    const patchValues = snapshot.patch as unknown as Record<string, unknown>;
+    const unchangedSinceApply = Object.entries(patchValues).every(
+      ([key, value]) => JSON.stringify(currentValues[key]) === JSON.stringify(value),
+    );
+    if (!unchangedSinceApply) throw new Error(tAI("errors.undoChanged"));
+    setSpec((current) => {
+      const restored = { ...current } as unknown as Record<string, unknown>;
+      for (const key of Object.keys(patchValues)) {
+        if (previousValues[key] === undefined) delete restored[key];
+        else restored[key] = previousValues[key];
+      }
+      return restored as unknown as FractalSpec;
+    });
+    aiUndoRef.current.delete(details.messageId);
   };
 
   const reset = () => {
@@ -697,13 +795,18 @@ export default function StudioPage() {
           <h1 className="mt-1 text-2xl font-medium tracking-tight text-ink">{t("title")}</h1>
           <p className="mt-1 max-w-3xl text-sm text-ink/50">{t("subtitle")}</p>
         </div>
-        <div className="flex items-center gap-2 font-mono text-[11px] text-ink/45">
-          <span className="h-1.5 w-1.5 bg-emerald-400" />
-          {t("renderer")}: {capabilities.rendererVersion ?? t("loadingCapabilities")}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button className="xl:hidden" size="sm" variant="fractal" onClick={() => setAIOpen(true)}>
+            <Bot className="h-3.5 w-3.5" />{tAI("title")}
+          </Button>
+          <div className="flex items-center gap-2 font-mono text-[11px] text-ink/45">
+            <span className="h-1.5 w-1.5 bg-emerald-400" />
+            {t("renderer")}: {capabilities.rendererVersion ?? t("loadingCapabilities")}
+          </div>
         </div>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[21rem_minmax(0,1fr)] xl:grid-cols-[23rem_minmax(0,1fr)]">
+      <div className="grid gap-4 lg:grid-cols-[21rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_20rem] 2xl:grid-cols-[23rem_minmax(0,1fr)_22rem]">
         <aside className="space-y-3 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto lg:pr-1">
           <Panel index="01" title={t("sections.imageMode")}>
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
@@ -1022,7 +1125,7 @@ export default function StudioPage() {
               onNavigationStart={() => undefined}
               onReset={reset}
               onZoom={zoom}
-              preview={preview}
+              preview={previewContextKey === aiContextKey ? preview : null}
               previewing={previewing}
               spec={canonical}
               width={previewSize.width}
@@ -1084,6 +1187,35 @@ export default function StudioPage() {
             )}
           </section>
         </main>
+
+        <aside className={aiWideLayout
+          ? "sticky top-4 h-[calc(100dvh-7rem)] min-h-[32rem]"
+          : aiOpen ? "fixed inset-0 z-[70] flex justify-end" : "hidden"
+        }>
+            {!aiWideLayout && (
+              <button
+                type="button"
+                className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+                aria-label={tAI("close")}
+                onClick={() => setAIOpen(false)}
+              />
+            )}
+            <StudioAIAssistant
+              capabilities={capabilities}
+              className={aiWideLayout
+                ? "h-full w-full"
+                : "relative h-dvh w-full border-y-0 border-r-0 shadow-2xl sm:max-w-[28rem]"
+              }
+              disabled={!user}
+              mode={mode}
+              onApplySuggestion={applyAIStudioPatch}
+              onClose={aiWideLayout ? undefined : () => setAIOpen(false)}
+              onUndoSuggestion={undoAIStudioPatch}
+              output={output}
+              preview={preview}
+              spec={canonical}
+            />
+        </aside>
       </div>
     </div>
   );

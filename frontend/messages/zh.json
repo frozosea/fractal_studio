@@ -1010,6 +1010,86 @@
     "adminArchitecture": "管理员 → 管理接口 → 平台数据",
     "architecture": "浏览器 → 平台服务 → 私有计算服务"
   },
+  "aiAssistant": {
+    "title": "Studio AI 助手",
+    "close": "关闭 AI 助手",
+    "conversation": "选择对话",
+    "newConversation": "新对话",
+    "rename": "重命名对话",
+    "renameSave": "保存名称",
+    "renameCancel": "取消重命名",
+    "delete": "删除对话",
+    "deleteConfirm": "删除这个对话及其全部消息？此操作无法撤销。",
+    "loading": "正在载入对话…",
+    "thinking": "正在思考…",
+    "placeholder": "询问配色、参数或分形知识…",
+    "send": "发送",
+    "stop": "停止生成",
+    "retry": "重试",
+    "dismissError": "关闭错误提示",
+    "unavailable": "AI 助手当前未启用",
+    "trialExhausted": "免费 AI 体验次数已用完",
+    "disclaimer": "AI 建议可能有误；参数修改只会在你确认后应用，不会自动渲染或导出。",
+    "allowance": {
+      "member": "会员不限次数",
+      "remaining": "剩余 {count} 次",
+      "loading": "正在查询可用次数",
+      "unavailable": "AI 当前未启用"
+    },
+    "empty": {
+      "title": "从当前作品继续探索",
+      "description": "可以讨论参数、配色和分形原理。AI 只能提出参数建议，你确认后才会应用。"
+    },
+    "quick": {
+      "palette": {
+        "label": "给我一个配色建议",
+        "prompt": "请根据当前参数推荐一套更有层次的配色，并说明理由。如果需要修改参数，请给出建议。"
+      },
+      "explore": {
+        "label": "建议下一步探索",
+        "prompt": "根据当前分形参数，建议一个值得探索的方向，并给出谨慎的参数修改建议。"
+      },
+      "parameters": {
+        "label": "解释当前参数",
+        "prompt": "请用容易理解的方式解释当前 Studio 参数如何影响画面，重点说明最关键的三项。"
+      },
+      "knowledge": {
+        "label": "讲解分形知识",
+        "prompt": "结合当前作品，讲解一个相关的分形数学概念，保持简洁但准确。"
+      },
+      "analyse": {
+        "label": "分析当前作品",
+        "prompt": "请分析这张当前预览图的构图、层次和配色，并提出一组可选的 Studio 参数改进建议。"
+      }
+    },
+    "feedback": {
+      "good": "有帮助",
+      "bad": "没有帮助",
+      "consent": "如果我主动提交反馈，同意将本对话用于改进助手；未提交反馈时不会作为优化样本。"
+    },
+    "suggestion": {
+      "title": "参数建议",
+      "apply": "应用建议",
+      "undo": "恢复应用前状态"
+    },
+    "errors": {
+      "load": "无法载入 AI 对话，请稍后重试。",
+      "create": "无法新建对话。",
+      "rename": "无法重命名对话。",
+      "delete": "无法删除对话。",
+      "send": "AI 暂时无法回复，请稍后重试。",
+      "feedback": "无法保存反馈。",
+      "consent": "无法更新优化授权。",
+      "apply": "无法应用这项建议。",
+      "undo": "无法恢复应用前状态。",
+      "undoChanged": "应用建议后参数又被修改了，为避免覆盖你的新调整，不能直接撤销这条建议。",
+      "trial": "免费 AI 体验次数已用完。",
+      "disabled": "AI 助手当前未启用。",
+      "provider": "AI 服务暂时不可用，请稍后重试。",
+      "concurrency": "同时进行的 AI 请求过多，请等待当前请求结束。",
+      "compute": "当前没有可用的计算能力，暂时无法生成参数建议；知识问答仍可继续。"
+    }
+  },
   "common": {
     "theme": {
       "label": "主题",
