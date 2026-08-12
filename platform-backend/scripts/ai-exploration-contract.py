@@ -37,7 +37,8 @@ MODE_INSTRUCTIONS: dict[ExplorationMode, str] = {
     "location": (
         "基于上面的图像观察，只调用 propose_studio_patch 给出三个位置探索候选。"
         "当前基准会单独显示，三个候选都必须有非零且明显不同的变化。"
-        "严格选择 position 或 scale 单一变量轴；只返回归一化相对位移/缩放，不计算绝对坐标。"
+        "固定使用 position 轴，三个 scaleFactor 必须精确为 1；"
+        "只返回归一化相对位移，不计算绝对坐标。缩放和旋转由构图助手负责。"
     ),
     "color": (
         "基于上面的图像观察，只调用 propose_studio_patch 给出四个视觉上明显不同的调色候选。"

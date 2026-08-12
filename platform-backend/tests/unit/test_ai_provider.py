@@ -332,13 +332,14 @@ def test_exploration_tool_schemas_are_mode_specific_and_capability_bounded() -> 
         },
     }
     location = provider._tool_for_context(context, "location")["function"]["parameters"]
-    assert location["properties"]["axis"]["enum"] == ["position", "scale"]
+    assert location["properties"]["axis"]["const"] == "position"
     assert location["properties"]["candidates"]["minItems"] == 3
     location_item = location["properties"]["candidates"]["items"]
     assert set(location_item["properties"]) == {
         "label", "reason", "offsetX", "offsetY", "scaleFactor",
     }
     assert "centerRe" not in location_item["properties"]
+    assert location_item["properties"]["scaleFactor"]["const"] == 1
 
     composition = provider._tool_for_context(context, "composition")["function"]["parameters"]
     assert composition["properties"]["candidates"]["maxItems"] == 3

@@ -122,8 +122,8 @@ def _navigation_tool(mode: Literal["location", "composition"]) -> dict[str, obje
                     "description": "新视口中心向上为正；不是主体在屏幕上的移动方向",
                 },
                 "scaleFactor": {
-                    "type": "number", "minimum": 0.45, "maximum": 1.8,
-                    "description": "小于1是放大收紧，大于1是缩小视图以显示更多周边",
+                    "type": "number", "const": 1,
+                    "description": "位置探索固定为1；缩放由构图助手负责",
                 },
             },
             ["offsetX", "offsetY", "scaleFactor"],
@@ -131,11 +131,8 @@ def _navigation_tool(mode: Literal["location", "composition"]) -> dict[str, obje
         properties: dict[str, object] = {
             "axis": {
                 "type": "string",
-                "enum": ["position", "scale"],
-                "description": (
-                    "一次只测试一个因果轴。position 时三个 scaleFactor 必须都为 1；"
-                    "scale 时三个 offsetX/offsetY 必须都为 0。"
-                ),
+                "const": "position",
+                "description": "位置探索固定使用 position；缩放和旋转由构图助手负责。",
             },
             "candidates": {"type": "array", "minItems": 3, "maxItems": 3, "items": item},
         }
@@ -143,6 +140,7 @@ def _navigation_tool(mode: Literal["location", "composition"]) -> dict[str, obje
         description = (
             "提出三个相对当前画面的定位候选。offsetX/offsetY 是以视口宽高为单位的归一化偏移，"
             "正 Y 向上；当前基准会单独展示，三个候选都必须有非零且彼此明显不同的变化；"
+            "axis 必须为 position，三个 scaleFactor 必须精确为 1；缩放和旋转留给构图助手。"
             "不要计算或返回绝对复坐标。JSON 数字的小数点必须用英文句点，例如 0.25，禁止写 0,25。"
         )
     else:
