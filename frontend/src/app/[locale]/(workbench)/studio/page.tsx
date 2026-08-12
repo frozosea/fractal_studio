@@ -226,6 +226,12 @@ export default function StudioPage() {
   const previewGenerationRef = useRef(0);
   const explorationRef = useRef<StudioExplorationSession | null>(null);
   const aiUndoRef = useRef(new Map<string, { patch: Partial<FractalSpec> }>());
+  const aiMainPreviewGateRef = useRef<{
+    captureNextInputs: boolean;
+    inputKey: string | null;
+  } | null>(null);
+  const aiDialogRef = useRef<HTMLElement | null>(null);
+  const aiOpenButtonRef = useRef<HTMLButtonElement | null>(null);
   const explorationStorageKey = user?.id ? `fractal-studio:exploration:v1:${user.id}` : null;
 
   useEffect(() => {
@@ -243,8 +249,46 @@ export default function StudioPage() {
     if (!aiOpen || aiWideLayout) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    const dialog = aiDialogRef.current;
+    const focusableSelector = [
+      "button:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "input:not([disabled])",
+      "[href]",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setAIOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
+        .filter((element) => element.getClientRects().length > 0);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+      if (activeIndex < 0 || (!event.shiftKey && activeIndex === focusable.length - 1)) {
+        event.preventDefault();
+        (event.shiftKey ? focusable.at(-1) : focusable[0])?.focus();
+      } else if (event.shiftKey && activeIndex === 0) {
+        event.preventDefault();
+        focusable.at(-1)?.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    const focusFrame = window.requestAnimationFrame(() => dialog?.focus());
     return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = previous;
+      const opener = aiOpenButtonRef.current;
+      if (opener?.isConnected && opener.getClientRects().length > 0) opener.focus();
     };
   }, [aiOpen, aiWideLayout]);
 
@@ -353,6 +397,15 @@ export default function StudioPage() {
   }, [explorationReady, juliaPickerSpec.scale]);
   const specKey = JSON.stringify(canonical);
   const juliaPickerSpecKey = JSON.stringify(juliaPickerCanonical);
+  const mainPreviewInputsKey = useMemo(
+    () => JSON.stringify({
+      spec: canonical,
+      juliaPickerSpec: mode === "julia" ? juliaPickerCanonical : null,
+      mode,
+      previewSize,
+    }),
+    [canonical, juliaPickerCanonical, mode, previewSize],
+  );
   const zoomLevel = Math.max(0, Math.log2(3 / Number(canonical.scale ?? 3)));
   const availableVariants = capabilities.variants.length ? capabilities.variants : [...BUILTIN_VARIANTS];
   const axisVariants = capabilities.axisTransitionVariants.length ? capabilities.axisTransitionVariants : [...AXIS_TRANSITION_VARIANTS];
@@ -405,6 +458,23 @@ export default function StudioPage() {
 
   useEffect(() => {
     if (!explorationReady) return;
+    const aiGate = aiMainPreviewGateRef.current;
+    if (aiGate?.captureNextInputs) {
+      aiGate.captureNextInputs = false;
+      aiGate.inputKey = mainPreviewInputsKey;
+    }
+    if (aiGate?.inputKey === mainPreviewInputsKey) {
+      // Applying or undoing an AI suggestion only changes parameters. Keep this
+      // exact input snapshot gated across retries/effect replays; the next real
+      // manual input change gets a different key and resumes normal auto-preview.
+      abortRef.current?.abort();
+      abortRef.current = null;
+      previewGenerationRef.current += 1;
+      setPreviewing(false);
+      setPreviewQueued(false);
+      return;
+    }
+    aiMainPreviewGateRef.current = null;
     // Stop polling previous request immediately. Its Redis job is superseded by
     // the one below, so workers discard it before publishing a stale frame.
     abortRef.current?.abort();
@@ -467,7 +537,7 @@ export default function StudioPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [aiContextKey, canonical, explorationReady, juliaPickerCanonical, juliaPickerSpecKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
+  }, [aiContextKey, canonical, explorationReady, juliaPickerCanonical, juliaPickerSpecKey, mainPreviewInputsKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
 
   const update = (patch: Partial<FractalSpec>) => setSpec((current) => ({ ...current, ...patch }));
   const updateViewport = (patch: Partial<FractalSpec>) => {
@@ -603,11 +673,27 @@ export default function StudioPage() {
 
     const appliedPatch: Partial<FractalSpec> = {
       ...patch,
-      ...(patch.centerRe === undefined ? {} : { centerReStr: String(patch.centerRe) }),
-      ...(patch.centerIm === undefined ? {} : { centerImStr: String(patch.centerIm) }),
+      // A location candidate may carry both a numeric compatibility value and
+      // an exact decimal coordinate. Never replace the exact string with the
+      // rounded JavaScript number.
+      ...(patch.centerRe === undefined || patch.centerReStr !== undefined
+        ? {} : { centerReStr: String(patch.centerRe) }),
+      ...(patch.centerIm === undefined || patch.centerImStr !== undefined
+        ? {} : { centerImStr: String(patch.centerIm) }),
     };
     aiUndoRef.current.clear();
     aiUndoRef.current.set(details.messageId, { patch: appliedPatch });
+    const currentValues = spec as unknown as Record<string, unknown>;
+    const changesCurrentSpec = Object.entries(appliedPatch).some(
+      ([key, value]) => JSON.stringify(currentValues[key]) !== JSON.stringify(value),
+    );
+    if (!changesCurrentSpec) return;
+    aiMainPreviewGateRef.current = { captureNextInputs: true, inputKey: null };
+    abortRef.current?.abort();
+    abortRef.current = null;
+    previewGenerationRef.current += 1;
+    setPreviewing(false);
+    setPreviewQueued(false);
     setSpec((current) => ({
       ...current,
       ...appliedPatch,
@@ -624,6 +710,19 @@ export default function StudioPage() {
       ([key, value]) => JSON.stringify(currentValues[key]) === JSON.stringify(value),
     );
     if (!unchangedSinceApply) throw new Error(tAI("errors.undoChanged"));
+    const changesCurrentSpec = Object.keys(patchValues).some(
+      (key) => JSON.stringify(currentValues[key]) !== JSON.stringify(previousValues[key]),
+    );
+    if (!changesCurrentSpec) {
+      aiUndoRef.current.delete(details.messageId);
+      return;
+    }
+    aiMainPreviewGateRef.current = { captureNextInputs: true, inputKey: null };
+    abortRef.current?.abort();
+    abortRef.current = null;
+    previewGenerationRef.current += 1;
+    setPreviewing(false);
+    setPreviewQueued(false);
     setSpec((current) => {
       const restored = { ...current } as unknown as Record<string, unknown>;
       for (const key of Object.keys(patchValues)) {
@@ -796,7 +895,7 @@ export default function StudioPage() {
           <p className="mt-1 max-w-3xl text-sm text-ink/50">{t("subtitle")}</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button className="xl:hidden" size="sm" variant="fractal" onClick={() => setAIOpen(true)}>
+          <Button ref={aiOpenButtonRef} className="xl:hidden" size="sm" variant="fractal" onClick={() => setAIOpen(true)}>
             <Bot className="h-3.5 w-3.5" />{tAI("title")}
           </Button>
           <div className="flex items-center gap-2 font-mono text-[11px] text-ink/45">
@@ -1188,15 +1287,21 @@ export default function StudioPage() {
           </section>
         </main>
 
-        <aside className={aiWideLayout
+        <aside
+          ref={aiDialogRef}
+          aria-label={aiWideLayout ? undefined : tAI("title")}
+          aria-modal={aiWideLayout ? undefined : true}
+          role={aiWideLayout ? undefined : "dialog"}
+          tabIndex={aiWideLayout ? undefined : -1}
+          className={aiWideLayout
           ? "sticky top-4 h-[calc(100dvh-7rem)] min-h-[32rem]"
           : aiOpen ? "fixed inset-0 z-[70] flex justify-end" : "hidden"
-        }>
+          }
+        >
             {!aiWideLayout && (
-              <button
-                type="button"
+              <div
                 className="absolute inset-0 bg-black/65 backdrop-blur-sm"
-                aria-label={tAI("close")}
+                aria-hidden="true"
                 onClick={() => setAIOpen(false)}
               />
             )}
@@ -1212,7 +1317,7 @@ export default function StudioPage() {
               onClose={aiWideLayout ? undefined : () => setAIOpen(false)}
               onUndoSuggestion={undoAIStudioPatch}
               output={output}
-              preview={preview}
+              preview={previewContextKey === aiContextKey ? preview : null}
               spec={canonical}
             />
         </aside>

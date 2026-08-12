@@ -7,6 +7,8 @@ import {
   Check,
   Compass,
   Image as ImageIcon,
+  Layers3,
+  ListX,
   MessageSquarePlus,
   Palette,
   Pencil,
@@ -28,9 +30,12 @@ import {
   platform,
   PlatformApiError,
   type AIAllowance,
+  type AIAssistantMode,
   type AIConversation,
   type AIMessage,
   type AIMessageInput,
+  type AIStudioCandidateSet,
+  type AIStudioPatchSuggestion,
   type AIStudioSuggestion,
   type FractalSpec,
   type StudioCapabilities,
@@ -70,6 +75,46 @@ interface AppliedSuggestion {
 const MAX_IMAGE_BYTES = 1024 * 1024;
 const MAX_IMAGE_EDGE = 640;
 const MAX_MESSAGE_CHARS = 4000;
+const CANDIDATE_PREVIEW_EDGE = 256;
+const CANDIDATE_PREVIEW_INTERVAL_MS = 2100;
+
+function isCandidateSet(suggestion: AIStudioSuggestion): suggestion is AIStudioCandidateSet {
+  return "kind" in suggestion && suggestion.kind === "candidate_set";
+}
+
+function sortedWithoutNull(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortedWithoutNull);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, child]) => child !== null && child !== undefined)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([key, child]) => [key, sortedWithoutNull(child)]),
+    );
+  }
+  return value;
+}
+
+function studioContextSignature(
+  spec: FractalSpec,
+  mode: string,
+  output: { width: number; height: number },
+): string {
+  return JSON.stringify({
+    spec: sortedWithoutNull(spec),
+    mode,
+    output: { width: output.width, height: output.height },
+  });
+}
+
+function suggestionContextSignature(suggestion: AIStudioSuggestion): string | null {
+  if (!suggestion.baseSpec || !suggestion.baseMode || !suggestion.baseOutput) return null;
+  return studioContextSignature(suggestion.baseSpec, suggestion.baseMode, suggestion.baseOutput);
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("AI request stopped", "AbortError");
+}
 
 function cloneSpec(spec: FractalSpec): FractalSpec {
   if (typeof structuredClone === "function") return structuredClone(spec);
@@ -86,22 +131,25 @@ function canvasBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   });
 }
 
-async function previewBlob(preview: Blob | string): Promise<Blob> {
+async function previewBlob(preview: Blob | string, signal: AbortSignal): Promise<Blob> {
+  throwIfAborted(signal);
   if (preview instanceof Blob) return preview;
   const url = new URL(preview, window.location.href);
   if (!["blob:", "data:"].includes(url.protocol) && url.origin !== window.location.origin) {
     throw new Error("Only a same-origin Studio preview can be analysed");
   }
-  const response = await fetch(url, { credentials: "omit", cache: "no-store" });
+  const response = await fetch(url, { credentials: "omit", cache: "no-store", signal });
   if (!response.ok) throw new Error("Could not read Studio preview");
   return response.blob();
 }
 
 /** Downscale in browser memory only; no temporary file, object store, or database write. */
-async function preparePreview(preview: Blob | string): Promise<Blob> {
-  const source = await previewBlob(preview);
+async function preparePreview(preview: Blob | string, signal: AbortSignal): Promise<Blob> {
+  const source = await previewBlob(preview, signal);
+  throwIfAborted(signal);
   const bitmap = await createImageBitmap(source);
   try {
+    throwIfAborted(signal);
     let width = bitmap.width;
     let height = bitmap.height;
     const edgeScale = Math.min(1, MAX_IMAGE_EDGE / Math.max(width, height));
@@ -113,12 +161,14 @@ async function preparePreview(preview: Blob | string): Promise<Blob> {
     if (!context) throw new Error("Could not prepare Studio preview");
     let encoded: Blob | null = null;
     for (let attempt = 0; attempt < 5; attempt += 1) {
+      throwIfAborted(signal);
       canvas.width = width;
       canvas.height = height;
       context.fillStyle = "#000";
       context.fillRect(0, 0, width, height);
       context.drawImage(bitmap, 0, 0, width, height);
       encoded = await canvasBlob(canvas, Math.max(0.45, 0.86 - attempt * 0.1));
+      throwIfAborted(signal);
       if (encoded.size <= MAX_IMAGE_BYTES) return encoded;
       width = Math.max(1, Math.round(width * 0.8));
       height = Math.max(1, Math.round(height * 0.8));
@@ -174,6 +224,7 @@ export function StudioAIAssistant({
   const [feedback, setFeedback] = useState<Record<string, -1 | 1>>({});
   const [applied, setApplied] = useState<Record<string, AppliedSuggestion>>({});
   const abortRef = useRef<AbortController | null>(null);
+  const inFlightRef = useRef(false);
   const skipMessageLoadRef = useRef<string | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const selectedIdRef = useRef<string | null>(selectedId);
@@ -182,6 +233,11 @@ export function StudioAIAssistant({
   const exhausted = allowance?.remaining === 0;
   const unavailable = allowance?.enabled === false;
   const blocked = disabled || unavailable;
+  const candidateAspectSupported = candidatePreviewDimensions(output) !== null;
+  const currentContextSignature = useMemo(
+    () => studioContextSignature(spec, mode, output),
+    [mode, output, spec],
+  );
 
   const context = useMemo<AIMessageInput["context"]>(() => ({
     spec,
@@ -189,6 +245,22 @@ export function StudioAIAssistant({
     output,
     capabilities,
   }), [capabilities, mode, output, spec]);
+
+  const beginRequest = useCallback((): AbortController | null => {
+    if (inFlightRef.current) return null;
+    const controller = new AbortController();
+    inFlightRef.current = true;
+    abortRef.current = controller;
+    setSending(true);
+    return controller;
+  }, []);
+
+  const finishRequest = useCallback((controller: AbortController) => {
+    if (abortRef.current !== controller) return;
+    abortRef.current = null;
+    inFlightRef.current = false;
+    setSending(false);
+  }, []);
 
   const refreshConversations = useCallback(async () => {
     const next = await platform.ai.conversations();
@@ -227,6 +299,7 @@ export function StudioAIAssistant({
     return () => {
       active = false;
       abortRef.current?.abort();
+      inFlightRef.current = false;
     };
   }, [t]);
 
@@ -275,7 +348,7 @@ export function StudioAIAssistant({
   }, [t]);
 
   const switchConversation = (conversationId: string) => {
-    if (sending || conversationId === selectedId) return;
+    if (inFlightRef.current || conversationId === selectedId) return;
     setSelectedId(conversationId);
     setMessages([]);
     setFeedback({});
@@ -312,10 +385,27 @@ export function StudioAIAssistant({
     }
   };
 
-  const runRequest = useCallback(async (request: PreparedRequest, retry: boolean) => {
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setSending(true);
+  const removeAllConversations = async () => {
+    if (conversations.length === 0 || !window.confirm(t("deleteAllConfirm"))) return;
+    try {
+      await platform.ai.deleteAllConversations();
+      setConversations([]);
+      setSelectedId(null);
+      setMessages([]);
+      setFeedback({});
+      setLastRequest(null);
+      setError(null);
+      setRenaming(false);
+    } catch (reason) {
+      setError(errorMessage(reason, t("errors.delete")));
+    }
+  };
+
+  const runRequest = useCallback(async (
+    request: PreparedRequest,
+    retry: boolean,
+    controller: AbortController,
+  ) => {
     setError(null);
     setStreamContent("");
     setStreamSuggestion(null);
@@ -333,6 +423,7 @@ export function StudioAIAssistant({
       ]);
     }
     let streamError: string | null = null;
+    let completedResponse = false;
     let streamedText = "";
     let streamedSuggestion: AIStudioSuggestion | null = null;
     try {
@@ -357,13 +448,19 @@ export function StudioAIAssistant({
             setError(event.code === "AI_PROVIDER_UNAVAILABLE" ? t("errors.provider") : event.message);
           } else if (event.type === "done") {
             if (event.allowance) setAllowance(event.allowance);
+            completedResponse = event.partial !== true;
             const completed: AIMessage = {
               id: event.messageId,
               conversationId: request.conversationId,
               role: "assistant",
-              content: streamedText || streamedSuggestion?.reason || "",
-              suggestion: streamedSuggestion,
-              createdAt: new Date().toISOString(),
+              content: (event.message?.content ?? streamedText) || (
+                streamedSuggestion && !isCandidateSet(streamedSuggestion)
+                  ? streamedSuggestion.reason
+                  : ""
+              ),
+              suggestion: event.message?.suggestion ?? streamedSuggestion,
+              status: event.partial === true ? "partial" : "completed",
+              createdAt: event.message?.createdAt ?? new Date().toISOString(),
             };
             setMessages((current) => current.some((message) => message.id === completed.id)
               ? current
@@ -371,9 +468,15 @@ export function StudioAIAssistant({
           }
         },
       );
-      if (!streamError) setLastRequest(null);
+      if (completedResponse) {
+        setLastRequest((current) => current?.idempotencyKey === request.idempotencyKey ? null : current);
+      } else if (!streamError && !controller.signal.aborted) {
+        setError(t("errors.incomplete"));
+      }
     } catch (reason) {
-      if (!(reason instanceof DOMException && reason.name === "AbortError")) {
+      if (reason instanceof Error && reason.name === "AbortError") {
+        setError(t("errors.stopped"));
+      } else {
         if (reason instanceof PlatformApiError && reason.code === "AI_TRIAL_EXHAUSTED") {
           setError(t("errors.trial"));
         } else if (reason instanceof PlatformApiError && reason.code === "AI_DISABLED") {
@@ -389,8 +492,7 @@ export function StudioAIAssistant({
         }
       }
     } finally {
-      abortRef.current = null;
-      setSending(false);
+      finishRequest(controller);
       setStreamContent("");
       setStreamSuggestion(null);
       void Promise.all([
@@ -399,37 +501,56 @@ export function StudioAIAssistant({
         refreshConversations(),
       ]).catch((reason: unknown) => setError(errorMessage(reason, t("errors.load"))));
     }
-  }, [refreshConversations, refreshMessages, t]);
+  }, [finishRequest, refreshConversations, refreshMessages, t]);
 
-  const submit = useCallback(async (text: string, includePreview = false, requestPatch = false) => {
+  const submit = useCallback(async (
+    text: string,
+    includePreview = false,
+    requestPatch = false,
+    assistantMode: AIAssistantMode = "chat",
+  ) => {
     const normalized = text.trim();
-    if (!normalized || sending || blocked || exhausted) return;
+    if (!normalized || inFlightRef.current || blocked || exhausted) return;
+    const controller = beginRequest();
+    if (!controller) return;
+    setLastRequest(null);
     try {
       const conversation = selected ?? await createConversation();
-      const image = includePreview && preview ? await preparePreview(preview) : null;
+      throwIfAborted(controller.signal);
+      const image = includePreview && preview
+        ? await preparePreview(preview, controller.signal)
+        : null;
+      throwIfAborted(controller.signal);
       const request: PreparedRequest = {
         conversationId: conversation.id,
         text: normalized,
         context,
         image,
         requestPatch,
+        assistantMode,
         idempotencyKey: crypto.randomUUID(),
       };
       setLastRequest(request);
       setDraft("");
-      await runRequest(request, false);
+      await runRequest(request, false, controller);
     } catch (reason) {
-      if (reason instanceof PlatformApiError && reason.code === "AI_TRIAL_EXHAUSTED") setError(t("errors.trial"));
+      if (reason instanceof Error && reason.name === "AbortError") setError(t("errors.stopped"));
+      else if (reason instanceof PlatformApiError && reason.code === "AI_TRIAL_EXHAUSTED") setError(t("errors.trial"));
       else if (reason instanceof PlatformApiError && reason.code === "AI_DISABLED") setError(t("errors.disabled"));
       else if (reason instanceof PlatformApiError && reason.code === "AI_PROVIDER_UNAVAILABLE") setError(t("errors.provider"));
       else if (reason instanceof PlatformApiError && reason.code === "ai_concurrency_exhausted") setError(t("errors.concurrency"));
       else setError(errorMessage(reason, t("errors.send")));
+    } finally {
+      // runRequest owns normal completion; this covers conversation/image preparation failures.
+      finishRequest(controller);
     }
-  }, [blocked, context, createConversation, exhausted, preview, runRequest, selected, sending, t]);
+  }, [beginRequest, blocked, context, createConversation, exhausted, finishRequest, preview, runRequest, selected, t]);
 
   const retry = () => {
-    if (!lastRequest || sending) return;
-    void runRequest(lastRequest, true);
+    if (!lastRequest || inFlightRef.current) return;
+    const controller = beginRequest();
+    if (!controller) return;
+    void runRequest(lastRequest, true, controller);
   };
 
   const sendFeedback = async (messageId: string, rating: -1 | 1) => {
@@ -461,7 +582,7 @@ export function StudioAIAssistant({
     }
   };
 
-  const applySuggestion = async (messageId: string, suggestion: AIStudioSuggestion) => {
+  const applySuggestion = async (messageId: string, suggestion: AIStudioPatchSuggestion) => {
     const previousSpec = cloneSpec(spec);
     const previousApplied = applied;
     setApplied({ [messageId]: { previousSpec, busy: true } });
@@ -492,8 +613,11 @@ export function StudioAIAssistant({
   };
 
   const quickActions = [
-    { key: "palette", icon: Palette, image: false, requestPatch: true },
-    { key: "explore", icon: Compass, image: false, requestPatch: true },
+    { key: "location", mode: "location", icon: Compass },
+    { key: "color", mode: "color", icon: Palette },
+    { key: "composition", mode: "composition", icon: Layers3 },
+  ] as const;
+  const chatActions = [
     { key: "parameters", icon: SlidersHorizontal, image: false, requestPatch: false },
     { key: "knowledge", icon: BookOpen, image: false, requestPatch: false },
     { key: "analyse", icon: ImageIcon, image: true, requestPatch: true },
@@ -533,7 +657,10 @@ export function StudioAIAssistant({
               onChange={(event) => setRenameTitle(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") void saveRename();
-                if (event.key === "Escape") setRenaming(false);
+                if (event.key === "Escape") {
+                  event.stopPropagation();
+                  setRenaming(false);
+                }
               }}
             />
             <Button type="button" size="icon" variant="ghost" aria-label={t("renameSave")} onClick={() => void saveRename()}>
@@ -587,12 +714,64 @@ export function StudioAIAssistant({
               variant="ghost"
               disabled={sending || !selected}
               aria-label={t("delete")}
+              title={t("delete")}
               onClick={() => void removeConversation()}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              disabled={sending || conversations.length === 0}
+              aria-label={t("deleteAll")}
+              title={t("deleteAll")}
+              onClick={() => void removeAllConversations()}
+            >
+              <ListX className="h-3.5 w-3.5" />
+            </Button>
           </>
         )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5 border-b border-instrument-rule p-2">
+        {quickActions.map(({ key, mode: assistantMode, icon: Icon }) => (
+          <Button
+            key={key}
+            type="button"
+            className="h-auto min-h-12 flex-col whitespace-normal px-1.5 py-2 text-center normal-case tracking-normal"
+            size="sm"
+            variant="outline"
+            disabled={blocked || exhausted || sending || !preview || !candidateAspectSupported}
+            onClick={() => void submit(t(`quick.${key}.prompt`), true, true, assistantMode)}
+          >
+            <Icon className="h-3.5 w-3.5 shrink-0" />
+            {t(`quick.${key}.label`)}
+          </Button>
+        ))}
+      </div>
+
+      {!candidateAspectSupported && (
+        <p role="alert" className="border-b border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-[10px] leading-4 text-amber-300">
+          {t("candidates.aspectUnsupported")}
+        </p>
+      )}
+
+      <div className="flex flex-wrap gap-1 border-b border-instrument-rule px-2 py-1.5">
+        {chatActions.map(({ key, icon: Icon, image, requestPatch }) => (
+          <Button
+            key={key}
+            type="button"
+            className="h-7 flex-1 whitespace-nowrap px-1.5 text-[10px] normal-case tracking-normal"
+            size="sm"
+            variant="ghost"
+            disabled={blocked || exhausted || sending || (image && !preview)}
+            onClick={() => void submit(t(`quick.${key}.prompt`), image, requestPatch)}
+          >
+            <Icon className="h-3 w-3 shrink-0" />
+            {t(`quick.${key}.label`)}
+          </Button>
+        ))}
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3" aria-live="polite">
@@ -603,22 +782,6 @@ export function StudioAIAssistant({
               <Sparkles className="mx-auto mb-2 h-5 w-5 text-brand/70" />
               <p className="text-sm text-ink/75">{t("empty.title")}</p>
               <p className="mt-1 max-w-[28rem] text-xs leading-5 text-ink/45">{t("empty.description")}</p>
-            </div>
-            <div className="grid w-full grid-cols-2 gap-1.5">
-              {quickActions.map(({ key, icon: Icon, image, requestPatch }) => (
-                <Button
-                  key={key}
-                  type="button"
-                  className={cn("h-auto min-h-9 justify-start whitespace-normal px-2 py-2 text-left normal-case tracking-normal", key === "analyse" && "col-span-2")}
-                  size="sm"
-                  variant="outline"
-                  disabled={blocked || exhausted || sending || (image && !preview)}
-                  onClick={() => void submit(t(`quick.${key}.prompt`), image, requestPatch)}
-                >
-                  <Icon className="h-3.5 w-3.5 shrink-0" />
-                  {t(`quick.${key}.label`)}
-                </Button>
-              ))}
             </div>
           </div>
         )}
@@ -633,16 +796,31 @@ export function StudioAIAssistant({
             )}>
               <p className="whitespace-pre-wrap break-words">{message.content}</p>
               {message.role === "assistant" && message.suggestion && (
-                <SuggestionCard
-                  messageId={message.id}
-                  suggestion={message.suggestion}
-                  currentSpec={applied[message.id]?.previousSpec ?? spec}
-                  applied={applied[message.id]}
-                  onApply={applySuggestion}
-                  onUndo={undoSuggestion}
-                />
+                isCandidateSet(message.suggestion) ? (
+                  <CandidateSetCard
+                    messageId={message.id}
+                    suggestion={message.suggestion}
+                    currentSpec={spec}
+                    currentContextSignature={currentContextSignature}
+                    output={output}
+                    baselinePreview={typeof preview === "string" ? preview : undefined}
+                    applied={applied}
+                    onApply={applySuggestion}
+                    onUndo={undoSuggestion}
+                  />
+                ) : (
+                  <SuggestionCard
+                    messageId={message.id}
+                    suggestion={message.suggestion}
+                    currentSpec={applied[message.id]?.previousSpec ?? spec}
+                    currentContextSignature={currentContextSignature}
+                    applied={applied[message.id]}
+                    onApply={applySuggestion}
+                    onUndo={undoSuggestion}
+                  />
+                )
               )}
-              {message.role === "assistant" && !message.id.startsWith("pending-") && (
+              {message.role === "assistant" && message.status === "completed" && !message.id.startsWith("pending-") && (
                 <div className="mt-2 flex items-center gap-1 border-t border-instrument-rule pt-1.5">
                   <Button
                     type="button"
@@ -677,15 +855,31 @@ export function StudioAIAssistant({
                 ? <p className="whitespace-pre-wrap break-words">{streamContent}<span className="ml-0.5 animate-pulse text-brand">▍</span></p>
                 : <p className="flex items-center gap-2 text-xs text-ink/45"><Sparkles className="h-3.5 w-3.5 animate-pulse" />{t("thinking")}</p>}
               {streamSuggestion && (
-                <SuggestionCard
-                  messageId="streaming"
-                  suggestion={streamSuggestion}
-                  currentSpec={spec}
-                  applied={undefined}
-                  disabled
-                  onApply={applySuggestion}
-                  onUndo={undoSuggestion}
-                />
+                isCandidateSet(streamSuggestion) ? (
+                  <CandidateSetCard
+                    messageId="streaming"
+                    suggestion={streamSuggestion}
+                    currentSpec={spec}
+                    currentContextSignature={currentContextSignature}
+                    output={output}
+                    baselinePreview={typeof preview === "string" ? preview : undefined}
+                    applied={applied}
+                    disabled
+                    onApply={applySuggestion}
+                    onUndo={undoSuggestion}
+                  />
+                ) : (
+                  <SuggestionCard
+                    messageId="streaming"
+                    suggestion={streamSuggestion}
+                    currentSpec={spec}
+                    currentContextSignature={currentContextSignature}
+                    applied={undefined}
+                    disabled
+                    onApply={applySuggestion}
+                    onUndo={undoSuggestion}
+                  />
+                )
               )}
             </div>
           </article>
@@ -763,18 +957,359 @@ export function StudioAIAssistant({
 
 interface SuggestionCardProps {
   messageId: string;
-  suggestion: AIStudioSuggestion;
+  suggestion: AIStudioPatchSuggestion;
   currentSpec: FractalSpec;
+  currentContextSignature: string;
   applied: AppliedSuggestion | undefined;
   disabled?: boolean;
-  onApply: (messageId: string, suggestion: AIStudioSuggestion) => void | Promise<void>;
+  onApply: (messageId: string, suggestion: AIStudioPatchSuggestion) => void | Promise<void>;
   onUndo: (messageId: string) => void | Promise<void>;
+}
+
+type CandidatePreviewState =
+  | { status: "loading" }
+  | { status: "ready"; url: string }
+  | { status: "error" };
+
+function candidatePreviewDimensions(
+  output: { width: number; height: number },
+): { width: number; height: number } | null {
+  const factor = Math.min(1, CANDIDATE_PREVIEW_EDGE / Math.max(output.width, output.height));
+  const dimensions = {
+    width: Math.round(output.width * factor),
+    height: Math.round(output.height * factor),
+  };
+  // The Platform preview contract requires both edges to be at least 64px.
+  // Stretching an extreme aspect ratio to meet that bound would invalidate a
+  // composition comparison, so fail visibly instead.
+  return dimensions.width >= 64 && dimensions.height >= 64 ? dimensions : null;
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", stop);
+      resolve();
+    }, milliseconds);
+    const stop = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Candidate previews stopped", "AbortError"));
+    };
+    signal.addEventListener("abort", stop, { once: true });
+  });
+}
+
+interface CandidateSetCardProps {
+  messageId: string;
+  suggestion: AIStudioCandidateSet;
+  currentSpec: FractalSpec;
+  currentContextSignature: string;
+  output: { width: number; height: number };
+  baselinePreview?: string;
+  applied: Record<string, AppliedSuggestion>;
+  disabled?: boolean;
+  onApply: (messageId: string, suggestion: AIStudioPatchSuggestion) => void | Promise<void>;
+  onUndo: (messageId: string) => void | Promise<void>;
+}
+
+function CandidateSetCard({
+  messageId,
+  suggestion,
+  currentSpec,
+  currentContextSignature,
+  output,
+  baselinePreview,
+  applied,
+  disabled = false,
+  onApply,
+  onUndo,
+}: CandidateSetCardProps) {
+  const t = useTranslations("aiAssistant");
+  const [previews, setPreviews] = useState<Record<string, CandidatePreviewState>>({});
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewUrlsRef = useRef(new Set<string>());
+  const currentSpecRef = useRef(currentSpec);
+  const currentContextSignatureRef = useRef(currentContextSignature);
+  currentSpecRef.current = currentSpec;
+  currentContextSignatureRef.current = currentContextSignature;
+
+  const clearPreviews = useCallback(() => {
+    for (const url of previewUrlsRef.current) URL.revokeObjectURL(url);
+    previewUrlsRef.current.clear();
+    setPreviews({});
+  }, []);
+
+  useEffect(() => () => {
+    previewAbortRef.current?.abort();
+    for (const url of previewUrlsRef.current) URL.revokeObjectURL(url);
+    previewUrlsRef.current.clear();
+  }, []);
+
+  const baseContextSignature = useMemo(
+    () => suggestionContextSignature(suggestion),
+    [suggestion],
+  );
+  const stale = baseContextSignature === null || currentContextSignature !== baseContextSignature;
+  const hasAppliedCandidate = suggestion.candidates.some(
+    (candidate) => Boolean(applied[`${messageId}:${candidate.id}`]),
+  );
+  const previewDimensions = useMemo(() => candidatePreviewDimensions(output), [output]);
+
+  useEffect(() => {
+    previewAbortRef.current?.abort();
+    clearPreviews();
+    setPreviewError(null);
+    setPreviewing(false);
+  }, [baseContextSignature, clearPreviews]);
+
+  useEffect(() => {
+    // Applying one of this card's already-previewed candidates intentionally
+    // changes the Studio baseline. Keep that contact sheet visible as the
+    // user's visual evidence while disabling sibling applies; unrelated stale
+    // history can release its object URLs immediately.
+    if (!stale || hasAppliedCandidate) return;
+    previewAbortRef.current?.abort();
+    clearPreviews();
+    setPreviewing(false);
+  }, [clearPreviews, hasAppliedCandidate, stale]);
+
+  const generatePreviews = async () => {
+    if (disabled || stale || previewing || !previewDimensions || !baseContextSignature) return;
+    const controller = new AbortController();
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = controller;
+    clearPreviews();
+    setPreviewError(null);
+    setPreviewing(true);
+    const dimensions = previewDimensions;
+    let lastRequestStartedAt = 0;
+    try {
+      for (const candidate of suggestion.candidates) {
+        if (currentContextSignatureRef.current !== baseContextSignature) {
+          controller.abort();
+          break;
+        }
+        await abortableDelay(
+          Math.max(0, CANDIDATE_PREVIEW_INTERVAL_MS - (Date.now() - lastRequestStartedAt)),
+          controller.signal,
+        );
+        if (controller.signal.aborted) break;
+        setPreviews((current) => ({ ...current, [candidate.id]: { status: "loading" } }));
+        lastRequestStartedAt = Date.now();
+        try {
+          const blob = await platform.studio.preview(
+            { ...currentSpecRef.current, ...candidate.patch },
+            dimensions.width,
+            dimensions.height,
+            controller.signal,
+            "ai_candidate",
+          );
+          if (controller.signal.aborted) break;
+          const url = URL.createObjectURL(blob);
+          previewUrlsRef.current.add(url);
+          setPreviews((current) => ({ ...current, [candidate.id]: { status: "ready", url } }));
+        } catch (reason) {
+          if (reason instanceof Error && reason.name === "AbortError") throw reason;
+          setPreviews((current) => ({ ...current, [candidate.id]: { status: "error" } }));
+          setPreviewError(t("errors.candidatePreview"));
+        }
+      }
+    } catch (reason) {
+      if (!(reason instanceof Error && reason.name === "AbortError")) {
+        setPreviewError(errorMessage(reason, t("errors.candidatePreview")));
+      }
+    } finally {
+      if (previewAbortRef.current === controller) {
+        previewAbortRef.current = null;
+        setPreviewing(false);
+      }
+    }
+  };
+
+  const everyPreviewReady = suggestion.candidates.every(
+    (candidate) => previews[candidate.id]?.status === "ready",
+  );
+
+  return (
+    <div className="mt-3 border border-brand/25 bg-brand/[0.04] p-2.5">
+      <div className="flex items-start gap-2">
+        <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-brand">
+              {t(`candidates.${suggestion.mode}.title`)}
+            </p>
+            <span className="font-mono text-[9px] text-ink/25" title={suggestion.baseSpecHash}>
+              {suggestion.baseSpecHash.slice(0, 8)}
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs leading-5 text-ink/55">{t("candidates.hint")}</p>
+        </div>
+      </div>
+
+      {stale && (
+        <p role="alert" className="mt-2 border border-amber-500/25 bg-amber-500/[0.06] px-2 py-1.5 text-[11px] leading-4 text-amber-300">
+          {t("candidates.stale")}
+        </p>
+      )}
+
+      {(!stale || hasAppliedCandidate) && (
+        <div className="mt-2.5 grid grid-cols-2 gap-2">
+          {baselinePreview && (
+            <figure className="min-w-0 border border-brand/30 bg-instrument-raised p-1.5">
+              <figcaption className="mb-1.5 truncate font-mono text-[9px] uppercase tracking-wider text-brand/70">
+                {t("candidates.baseline")}
+              </figcaption>
+              <div className="aspect-square overflow-hidden bg-black">
+                {/* The Studio owns this same-origin/object URL; this card never persists it. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  className="h-full w-full object-contain"
+                  src={baselinePreview}
+                  alt={t("candidates.baselineAlt")}
+                />
+              </div>
+            </figure>
+          )}
+          {suggestion.candidates.map((candidate) => {
+            const candidatePreview = previews[candidate.id];
+            return (
+              <figure key={`preview:${candidate.id}`} className="min-w-0 border border-instrument-rule bg-instrument-raised p-1.5">
+                <figcaption className="mb-1.5 flex min-w-0 items-center justify-between gap-1.5">
+                  <span className="truncate text-[10px] font-medium text-ink/70" title={candidate.label}>
+                    {candidate.label}
+                  </span>
+                  <span className="shrink-0 font-mono text-[8px] uppercase text-ink/30">{candidate.id}</span>
+                </figcaption>
+                <div className="flex aspect-square items-center justify-center overflow-hidden bg-black/90">
+                  {candidatePreview?.status === "ready" && (
+                    // This object URL exists only for the life of this card.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      className="h-full w-full object-contain"
+                      src={candidatePreview.url}
+                      alt={t("candidates.previewAlt", { label: candidate.label })}
+                    />
+                  )}
+                  {candidatePreview?.status === "loading" && (
+                    <span className="flex px-2 text-center text-[9px] leading-3 text-ink/45">
+                      <Sparkles className="mr-1 h-3 w-3 shrink-0 animate-pulse" />{t("candidates.previewing")}
+                    </span>
+                  )}
+                  {candidatePreview?.status === "error" && (
+                    <span className="px-2 text-center text-[9px] leading-3 text-red-400">{t("candidates.previewFailed")}</span>
+                  )}
+                  {!candidatePreview && (
+                    <span className="px-2 text-center text-[9px] leading-3 text-ink/35">{t("candidates.verificationPending")}</span>
+                  )}
+                </div>
+              </figure>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-2.5 grid grid-cols-1 gap-2 min-[420px]:grid-cols-2">
+        {suggestion.candidates.map((candidate) => {
+          const applicationKey = `${messageId}:${candidate.id}`;
+          const record = applied[applicationKey];
+          const baseSpec = record?.previousSpec ?? suggestion.baseSpec ?? currentSpec;
+          const changes = Object.entries(candidate.patch);
+          const candidatePreview = previews[candidate.id];
+          const verification = candidatePreview?.status === "ready"
+            ? t("candidates.verificationReady")
+            : candidatePreview?.status === "error"
+              ? t("candidates.verificationFailed")
+              : candidate.verification === "pending"
+                ? t("candidates.verificationPending")
+                : displayValue(candidate.verification);
+          return (
+            <article key={candidate.id} className="flex min-w-0 flex-col border border-instrument-rule bg-instrument-raised p-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-ink/80">{candidate.label}</p>
+                  {candidate.reason && <p className="mt-1 text-[11px] leading-4 text-ink/50">{candidate.reason}</p>}
+                </div>
+                <span className="shrink-0 font-mono text-[9px] uppercase text-ink/30">{candidate.id}</span>
+              </div>
+
+              <dl className="mt-2 space-y-1 border-y border-instrument-rule py-2 font-mono text-[10px]">
+                {changes.map(([key, value]) => (
+                  <div key={key}>
+                    <dt className="truncate text-ink/40" title={key}>{key}</dt>
+                    <dd className="mt-0.5 min-w-0 break-all leading-4 text-ink/65">
+                      <span className="text-red-400/60 line-through">{displayValue(baseSpec[key as keyof FractalSpec])}</span>
+                      <span className="mx-1 text-ink/25">→</span>
+                      <span className="text-brand">{displayValue(value)}</span>
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+
+              {verification !== "—" && verification !== "null" && (
+                <p className="mt-2 text-[10px] leading-4 text-ink/40">
+                  <span className="mr-1 text-ink/55">{t("candidates.verification")}</span>
+                  {verification}
+                </p>
+              )}
+
+              <div className="mt-auto flex justify-end pt-2">
+                {record ? (
+                  <Button type="button" size="sm" variant="outline" loading={record.busy} onClick={() => void onUndo(applicationKey)}>
+                    <Undo2 className="h-3 w-3" />{t("suggestion.undo")}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="fractal"
+                    disabled={disabled || stale || candidatePreview?.status !== "ready" || changes.length === 0}
+                    onClick={() => void onApply(applicationKey, { patch: candidate.patch, reason: candidate.reason })}
+                  >
+                    <Check className="h-3 w-3" />{t("candidates.apply")}
+                  </Button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      {!previewDimensions && !stale && (
+        <p role="alert" className="mt-2.5 border border-amber-500/25 bg-amber-500/[0.06] px-2 py-1.5 text-[11px] leading-4 text-amber-300">
+          {t("candidates.aspectUnsupported")}
+        </p>
+      )}
+
+      {!everyPreviewReady && !stale && previewDimensions && (
+        <div className="mt-2.5 flex items-center justify-between gap-2">
+          <span className="min-w-0 text-[10px] leading-4 text-ink/35">{t("candidates.previewNotice")}</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            loading={previewing}
+            disabled={disabled}
+            onClick={() => void generatePreviews()}
+          >
+            <ImageIcon className="h-3 w-3" />{t("candidates.generatePreviews")}
+          </Button>
+        </div>
+      )}
+      {previewError && <p role="alert" className="mt-2 text-[10px] text-red-400">{previewError}</p>}
+    </div>
+  );
 }
 
 function SuggestionCard({
   messageId,
   suggestion,
   currentSpec,
+  currentContextSignature,
   applied,
   disabled = false,
   onApply,
@@ -782,6 +1317,9 @@ function SuggestionCard({
 }: SuggestionCardProps) {
   const t = useTranslations("aiAssistant");
   const changes = Object.entries(suggestion.patch);
+  const baseContextSignature = suggestionContextSignature(suggestion);
+  const stale = baseContextSignature === null || currentContextSignature !== baseContextSignature;
+  const baseSpec = applied?.previousSpec ?? suggestion.baseSpec ?? currentSpec;
   return (
     <div className="mt-3 border border-brand/25 bg-brand/[0.04] p-2.5">
       <div className="mb-2 flex items-start gap-2">
@@ -791,12 +1329,17 @@ function SuggestionCard({
           {suggestion.reason && <p className="mt-0.5 text-xs leading-5 text-ink/55">{suggestion.reason}</p>}
         </div>
       </div>
+      {stale && !applied && (
+        <p role="alert" className="mb-2 border border-amber-500/25 bg-amber-500/[0.06] px-2 py-1.5 text-[11px] leading-4 text-amber-300">
+          {t("suggestion.stale")}
+        </p>
+      )}
       <dl className="space-y-1 border-y border-instrument-rule py-2 font-mono text-[10px]">
         {changes.map(([key, value]) => (
           <div key={key} className="grid grid-cols-[minmax(5rem,0.7fr)_1fr] gap-2">
             <dt className="truncate text-ink/45" title={key}>{key}</dt>
             <dd className="min-w-0 break-all text-ink/65">
-              <span className="text-red-400/60 line-through">{displayValue(currentSpec[key as keyof FractalSpec])}</span>
+              <span className="text-red-400/60 line-through">{displayValue(baseSpec[key as keyof FractalSpec])}</span>
               <span className="mx-1 text-ink/30">→</span>
               <span className="text-brand">{displayValue(value)}</span>
             </dd>
@@ -809,7 +1352,7 @@ function SuggestionCard({
             <Undo2 className="h-3 w-3" />{t("suggestion.undo")}
           </Button>
         ) : (
-          <Button type="button" size="sm" variant="fractal" disabled={disabled || changes.length === 0} onClick={() => void onApply(messageId, suggestion)}>
+          <Button type="button" size="sm" variant="fractal" disabled={disabled || stale || changes.length === 0} onClick={() => void onApply(messageId, suggestion)}>
             <Check className="h-3 w-3" />{t("suggestion.apply")}
           </Button>
         )}

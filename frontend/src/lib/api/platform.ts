@@ -132,10 +132,38 @@ export interface AIConversation {
   updatedAt: string;
 }
 
-export interface AIStudioSuggestion {
+export type AIStudioMode = "map" | "julia" | "transitionPair" | "transitionMulti" | "formula" | "sequence";
+
+export interface AIStudioSuggestionBaseline {
+  /** Optional only for safe handling of suggestions saved before the baseline protocol existed. */
+  baseSpec?: FractalSpec;
+  baseMode?: AIStudioMode;
+  baseOutput?: { width: number; height: number };
+}
+
+export interface AIStudioPatchSuggestion extends AIStudioSuggestionBaseline {
   patch: Partial<FractalSpec>;
   reason: string;
 }
+
+export type AIAssistantMode = "chat" | "location" | "color" | "composition";
+
+export interface AIStudioCandidate {
+  id: string;
+  label: string;
+  patch: Partial<FractalSpec>;
+  reason: string;
+  verification?: unknown;
+}
+
+export interface AIStudioCandidateSet extends AIStudioSuggestionBaseline {
+  kind: "candidate_set";
+  mode: Exclude<AIAssistantMode, "chat">;
+  baseSpecHash: string;
+  candidates: AIStudioCandidate[];
+}
+
+export type AIStudioSuggestion = AIStudioPatchSuggestion | AIStudioCandidateSet;
 
 export interface AIMessageFeedback {
   rating: -1 | 1;
@@ -149,6 +177,7 @@ export interface AIMessage {
   content: string;
   suggestion: AIStudioSuggestion | null;
   feedback?: AIMessageFeedback | -1 | 1 | null;
+  status?: "completed" | "partial" | "retrying" | null;
   createdAt: string;
 }
 
@@ -167,12 +196,24 @@ export interface AIUsage {
   totalTokens?: number;
 }
 
+export interface AIListingCopyCandidate {
+  title: string;
+  description: string;
+  tags: string[];
+}
+
+export interface AIListingCopyResponse {
+  requestId: string;
+  candidates: AIListingCopyCandidate[];
+  allowance: AIAllowance;
+}
+
 export type AIStreamEvent =
   | { type: "message"; messageId: string; message?: AIMessage }
   | { type: "delta"; content: string }
   | { type: "suggestion"; suggestion: AIStudioSuggestion }
   | { type: "usage"; usage: AIUsage }
-  | { type: "done"; messageId: string; message?: AIMessage; allowance?: AIAllowance }
+  | { type: "done"; messageId: string; message?: AIMessage; allowance?: AIAllowance; partial?: boolean; replayed?: boolean }
   | { type: "error"; code: string; message: string };
 
 export interface AIMessageInput {
@@ -185,6 +226,7 @@ export interface AIMessageInput {
   };
   /** Force the provider's sole Studio-patch tool for an explicit suggestion action. */
   requestPatch?: boolean;
+  assistantMode?: AIAssistantMode;
   image?: Blob | null;
   signal?: AbortSignal;
   /** Reuse this key when retrying a request whose outcome is unknown. */
@@ -664,7 +706,13 @@ async function asError(response: Response): Promise<PlatformApiError> {
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  options: { csrf?: boolean; idempotency?: boolean; raw?: boolean; cookie?: boolean } = {},
+  options: {
+    csrf?: boolean;
+    idempotency?: boolean;
+    idempotencyKey?: string;
+    raw?: boolean;
+    cookie?: boolean;
+  } = {},
 ): Promise<T> {
   reportRequestActivity(1);
   try {
@@ -673,7 +721,8 @@ async function request<T>(
     headers.set("Accept", "application/json");
     const method = (init.method ?? "GET").toUpperCase();
     if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
-    if (options.idempotency) headers.set("Idempotency-Key", idempotencyKey());
+    if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
+    else if (options.idempotency) headers.set("Idempotency-Key", idempotencyKey());
     if (options.csrf) headers.set("X-CSRF-Token", await csrfToken());
     const response = await fetch(`${baseUrl}${path}`, {
       // Only sign-in and sign-out touch the shared cookie, so that reopening
@@ -702,6 +751,75 @@ function objectValue(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function normalizeStudioBaseline(value: Record<string, unknown>): AIStudioSuggestionBaseline {
+  const baseSpec = objectValue(value.baseSpec ?? value.base_spec);
+  const baseMode = value.baseMode ?? value.base_mode;
+  const rawOutput = objectValue(value.baseOutput ?? value.base_output);
+  const width = rawOutput?.width;
+  const height = rawOutput?.height;
+  const validMode = ["map", "julia", "transitionPair", "transitionMulti", "formula", "sequence"]
+    .includes(String(baseMode));
+  const validOutput = typeof width === "number" && Number.isInteger(width) && width >= 64 && width <= 4096
+    && typeof height === "number" && Number.isInteger(height) && height >= 64 && height <= 4096;
+  if (!baseSpec || !validMode || !validOutput) return {};
+  return {
+    baseSpec: baseSpec as unknown as FractalSpec,
+    baseMode: baseMode as AIStudioMode,
+    baseOutput: { width, height },
+  };
+}
+
+function normalizeStudioSuggestion(value: unknown): AIStudioSuggestion | null {
+  const outer = objectValue(value);
+  if (!outer) return null;
+  const candidate = objectValue(outer.candidateSet ?? outer.candidate_set) ?? outer;
+  const patch = objectValue(candidate.patch);
+  if (patch) {
+    return {
+      patch: patch as Partial<FractalSpec>,
+      reason: typeof candidate.reason === "string" ? candidate.reason : "",
+      ...normalizeStudioBaseline(candidate),
+    };
+  }
+  const mode = candidate.mode;
+  const baseSpecHash = candidate.baseSpecHash ?? candidate.base_spec_hash;
+  const baseSpec = objectValue(candidate.baseSpec ?? candidate.base_spec);
+  if (
+    candidate.kind !== "candidate_set"
+    || !["location", "color", "composition"].includes(String(mode))
+    || typeof baseSpecHash !== "string"
+    || !baseSpec
+    || !Array.isArray(candidate.candidates)
+  ) return null;
+  const candidates = candidate.candidates.flatMap((raw, index) => {
+    const item = objectValue(raw);
+    const itemPatch = objectValue(item?.patch);
+    if (!item || !itemPatch) return [];
+    return [{
+      id: typeof item.id === "string" ? item.id : `candidate-${index + 1}`,
+      label: typeof item.label === "string" ? item.label : `Candidate ${index + 1}`,
+      patch: itemPatch as Partial<FractalSpec>,
+      reason: typeof item.reason === "string" ? item.reason : "",
+      ...(item.verification === undefined ? {} : { verification: item.verification }),
+    } satisfies AIStudioCandidate];
+  });
+  if (candidates.length === 0) return null;
+  return {
+    kind: "candidate_set",
+    mode: mode as AIStudioCandidateSet["mode"],
+    baseSpecHash,
+    ...normalizeStudioBaseline(candidate),
+    candidates,
+  };
+}
+
+function normalizeAIMessage(message: AIMessage): AIMessage {
+  return {
+    ...message,
+    suggestion: message.suggestion ? normalizeStudioSuggestion(message.suggestion) : null,
+  };
+}
+
 function normalizeAIStreamEvent(eventName: string, rawData: string): AIStreamEvent | null {
   let parsed: unknown;
   try {
@@ -727,15 +845,8 @@ function normalizeAIStreamEvent(eventName: string, rawData: string): AIStreamEve
   }
   if (type === "suggestion") {
     const candidate = objectValue(payload?.suggestion) ?? payload;
-    const patch = objectValue(candidate?.patch);
-    if (!candidate || !patch) return null;
-    return {
-      type,
-      suggestion: {
-        patch: patch as Partial<FractalSpec>,
-        reason: typeof candidate.reason === "string" ? candidate.reason : "",
-      },
-    };
+    const suggestion = normalizeStudioSuggestion(candidate);
+    return suggestion ? { type, suggestion } : null;
   }
   if (type === "usage") {
     const candidate = objectValue(payload?.usage) ?? payload;
@@ -761,7 +872,8 @@ function normalizeAIStreamEvent(eventName: string, rawData: string): AIStreamEve
     };
   }
   if (type === "message" || type === "done") {
-    const message = objectValue(payload?.message) as unknown as AIMessage | null;
+    const rawMessage = objectValue(payload?.message) as unknown as AIMessage | null;
+    const message = rawMessage ? normalizeAIMessage(rawMessage) : null;
     const messageId = typeof wrapped === "string"
       ? wrapped
       : typeof payload?.messageId === "string"
@@ -775,6 +887,8 @@ function normalizeAIStreamEvent(eventName: string, rawData: string): AIStreamEve
       messageId,
       ...(message ? { message } : {}),
       ...(allowance ? { allowance } : {}),
+      ...(payload?.partial === true ? { partial: true } : {}),
+      ...(payload?.replayed === true ? { replayed: true } : {}),
     };
   }
   return null;
@@ -792,6 +906,7 @@ async function streamAIMessage(
     body.set("text", input.text);
     body.set("context", JSON.stringify(input.context));
     body.set("requestPatch", String(input.requestPatch ?? false));
+    body.set("assistantMode", input.assistantMode ?? "chat");
     if (input.image) {
       const extension = input.image.type === "image/png" ? "png" : "jpg";
       body.set("image", input.image, `studio-preview.${extension}`);
@@ -950,10 +1065,26 @@ export const platform = {
       { method: "DELETE" },
       { csrf: true, idempotency: true },
     ),
-    messages: (conversationId: string) => request<AIMessage[]>(
-      `/v1/ai/conversations/${encodeURIComponent(conversationId)}/messages`,
-    ),
+    messages: async (conversationId: string) => (
+      await request<AIMessage[]>(
+        `/v1/ai/conversations/${encodeURIComponent(conversationId)}/messages`,
+      )
+    ).map(normalizeAIMessage),
     allowance: () => request<AIAllowance>("/v1/me/ai-allowance"),
+    listingCopy: (
+      body: {
+        listingId: string;
+        locale: string;
+        sourceRequestId?: string;
+        instruction?: string;
+      },
+      requestKey: string,
+      signal?: AbortSignal,
+    ) => request<AIListingCopyResponse>(
+      "/v1/ai/listing-copy",
+      { method: "POST", body: json(body), signal },
+      { csrf: true, idempotencyKey: requestKey },
+    ),
     feedback: (messageId: string, rating: -1 | 1, consent: boolean) => request<AIMessageFeedback>(
       `/v1/ai/messages/${encodeURIComponent(messageId)}/feedback`,
       { method: "POST", body: json({ rating, consent }) },
@@ -967,7 +1098,7 @@ export const platform = {
       width = 512,
       height = 512,
       signal?: AbortSignal,
-      channel: "main" | "julia_picker" = "main",
+      channel: "main" | "julia_picker" | "ai_candidate" = "main",
       onStatus?: (status: PreviewJob["status"]) => void,
     ): Promise<Blob> => {
       const job = await request<PreviewJob>("/v1/studio/preview-jobs", { method: "POST", body: json({ canonicalSpec, width, height, channel }), signal }, { csrf: true });

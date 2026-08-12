@@ -794,11 +794,34 @@
       "subtitle": "Review drafts created from your Library, then publish them to Marketplace.",
       "empty": "No listings yet. Create one from a ready item in your Library.",
       "editTitle": "Edit listing",
-      "editHint": "Title, description and price apply to the published listing immediately.",
+      "editHint": "Edit the title, description, tags and price. Changes apply only after you save.",
       "descriptionPlaceholder": "Description — shown on the marketplace card and included in search",
+      "tagsPlaceholder": "Tags (comma-separated)",
       "previewPreparing": "Preview is being prepared",
       "noDescription": "No description",
-      "publicPreviewPreparing": "The public preview is still being prepared."
+      "publicPreviewPreparing": "The public preview is still being prepared.",
+      "aiCopy": {
+        "title": "AI listing copy",
+        "hint": "AI creates three title, description and tag options for this artwork. Choosing one only fills the form; it never saves or publishes automatically.",
+        "generate": "Generate with AI",
+        "generateAgain": "Generate again",
+        "retry": "Retry last request",
+        "stop": "Stop generating",
+        "choicesLabel": "AI copy options",
+        "notSatisfied": "None of these work — give revision notes",
+        "instructionPlaceholder": "For example: make the title more restrained, evoke the deep sea and coral, and avoid exaggerated language.",
+        "rewrite": "Ask AI to revise",
+        "applyHint": "The selected option fills the fields above. Review it and choose Save; AI never saves or publishes for you.",
+        "allowanceMember": "Unlimited for members",
+        "allowanceRemaining": "{count} AI uses left",
+        "errors": {
+          "exhausted": "Your free AI uses are exhausted. Upgrade to continue.",
+          "disabled": "AI listing copy is not enabled yet. You can still edit and publish manually.",
+          "interrupted": "Generation was interrupted. Retry the same request safely without a duplicate charge.",
+          "unavailable": "AI is temporarily unavailable. Please try again later.",
+          "failed": "Copy generation failed. Please try again."
+        }
+      }
     },
     "purchases": {
       "untitled": "Untitled work",
@@ -1020,6 +1043,8 @@
     "renameCancel": "Cancel rename",
     "delete": "Delete conversation",
     "deleteConfirm": "Delete this conversation and all its messages? This cannot be undone.",
+    "deleteAll": "Delete all AI conversations",
+    "deleteAllConfirm": "Delete all your AI conversations and messages? This cannot be undone, and used free replies are not restored.",
     "loading": "Loading conversation…",
     "thinking": "Thinking…",
     "placeholder": "Ask about colour, parameters, or fractals…",
@@ -1029,7 +1054,7 @@
     "dismissError": "Dismiss error",
     "unavailable": "The AI assistant is not enabled",
     "trialExhausted": "Your free AI trial has been used",
-    "disclaimer": "AI suggestions can be wrong. Parameter changes apply only after confirmation and never start a render or export.",
+    "disclaimer": "AI suggestions can be wrong. You confirm candidate previews and parameter changes; they never create a production render, asset, or export.",
     "allowance": {
       "member": "Unlimited for members",
       "remaining": "{count} replies left",
@@ -1038,28 +1063,32 @@
     },
     "empty": {
       "title": "Keep exploring the current work",
-      "description": "Discuss parameters, colour, and fractal concepts. AI can only propose parameter changes; you choose whether to apply them."
+      "description": "Compare real location, colour, or composition candidates, or ask directly about parameters and fractal concepts."
     },
     "quick": {
-      "palette": {
-        "label": "Suggest a colour palette",
-        "prompt": "Recommend a more layered colour treatment for the current parameters and explain why. Propose parameter changes if useful."
+      "location": {
+        "label": "Explore locations",
+        "prompt": "Using the current preview and exact parameters, propose three genuinely worthwhile locations to explore. Keep the fractal family and image mode, and give every candidate a clear visual purpose."
       },
-      "explore": {
-        "label": "Suggest where to explore",
-        "prompt": "Given the current fractal parameters, suggest a worthwhile direction to explore and a cautious set of parameter changes."
+      "color": {
+        "label": "Compare colour",
+        "prompt": "Using the current preview, propose four visibly distinct colour treatments that suit its structure. Explain how each improves depth, focus, or mood."
+      },
+      "composition": {
+        "label": "Refine composition",
+        "prompt": "Using the current preview, propose three composition options. Compare subject placement, negative space, rotation, and field of view without changing the core fractal family."
       },
       "parameters": {
-        "label": "Explain these parameters",
+        "label": "Explain parameters",
         "prompt": "Explain in approachable terms how the current Studio parameters affect the image, focusing on the three most important ones."
       },
       "knowledge": {
-        "label": "Teach me about fractals",
+        "label": "Fractal knowledge",
         "prompt": "Use the current work to explain one relevant fractal-mathematics concept, concisely and accurately."
       },
       "analyse": {
-        "label": "Analyse the current work",
-        "prompt": "Analyse this preview's composition, depth, and colour, then propose an optional set of Studio parameter improvements."
+        "label": "Analyse work",
+        "prompt": "Using only the current preview, analyse composition, depth, and colour, then propose an optional set of Studio parameter improvements."
       }
     },
     "feedback": {
@@ -1070,7 +1099,28 @@
     "suggestion": {
       "title": "Parameter suggestion",
       "apply": "Apply suggestion",
-      "undo": "Restore previous state"
+      "undo": "Restore previous state",
+      "stale": "Studio parameters, image mode, or output size changed after this suggestion was generated. Generate a new suggestion before applying it."
+    },
+    "candidates": {
+      "hint": "Review the parameter differences first, then generate real Compute previews for comparison. Previews never enter your Library.",
+      "location": { "title": "Location candidates" },
+      "color": { "title": "Colour candidates" },
+      "composition": { "title": "Composition candidates" },
+      "stale": "Studio parameters, image mode, or output size no longer match the candidate baseline. Generate new candidates before applying changes.",
+      "baseline": "Current baseline preview",
+      "baselineAlt": "Current artwork preview used as the candidate baseline",
+      "previewing": "Generating a real candidate preview…",
+      "previewAlt": "Real preview of candidate “{label}”",
+      "previewFailed": "This preview failed. You can generate the candidate preview set again.",
+      "verification": "Validation:",
+      "verificationPending": "Awaiting a real preview",
+      "verificationReady": "Real Compute preview succeeded",
+      "verificationFailed": "Real Compute preview failed",
+      "previewNotice": "Temporary previews are generated in sequence at about 256px. They never enter your Library or long-term storage; the short-lived Platform preview cache expires automatically.",
+      "aspectUnsupported": "This custom output is too wide or tall for a faithful 256px candidate preview. Choose a less extreme aspect ratio before comparing composition.",
+      "generatePreviews": "Generate real candidate previews",
+      "apply": "Confirm and apply"
     },
     "errors": {
       "load": "AI conversations could not be loaded. Try again later.",
@@ -1086,6 +1136,9 @@
       "trial": "Your free AI trial has been used.",
       "disabled": "The AI assistant is not enabled.",
       "provider": "The AI service is temporarily unavailable. Try again later.",
+      "stopped": "Generation stopped. Retry the same request without being charged twice.",
+      "incomplete": "The response stream ended unexpectedly. This request was kept so you can retry it.",
+      "candidatePreview": "Some candidate previews could not be generated. Try again later.",
       "concurrency": "Too many AI requests are active. Wait for the current request to finish.",
       "compute": "Compute capacity is unavailable, so a parameter suggestion cannot be generated right now. Knowledge questions still work."
     }
