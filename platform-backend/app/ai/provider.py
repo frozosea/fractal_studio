@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from copy import deepcopy
 from typing import Literal
@@ -88,13 +89,18 @@ def _candidate_item(properties: dict[str, object], required: list[str]) -> dict[
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 60,
-                "description": "使用用户当前语言的短标签",
+                "pattern": "^[^\\\"\\r\\n]+$",
+                "description": "使用用户当前语言的短标签，不含引号或换行",
             },
             "reason": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 500,
-                "description": "使用用户当前语言，并引用图片中真实可见结构解释候选差异",
+                "maxLength": 160,
+                "pattern": "^[^\\\"\\r\\n]+$",
+                "description": (
+                    "用用户当前语言写一句短理由，引用图片中真实可见结构解释差异；"
+                    "不得使用引号、换行、Markdown 或 JSON 片段"
+                ),
             },
             **properties,
         },
@@ -137,7 +143,7 @@ def _navigation_tool(mode: Literal["location", "composition"]) -> dict[str, obje
         description = (
             "提出三个相对当前画面的定位候选。offsetX/offsetY 是以视口宽高为单位的归一化偏移，"
             "正 Y 向上；当前基准会单独展示，三个候选都必须有非零且彼此明显不同的变化；"
-            "不要计算或返回绝对复坐标。"
+            "不要计算或返回绝对复坐标。JSON 数字的小数点必须用英文句点，例如 0.25，禁止写 0,25。"
         )
     else:
         item = _candidate_item(
@@ -166,6 +172,7 @@ def _navigation_tool(mode: Literal["location", "composition"]) -> dict[str, obje
             "提出三个构图候选，只用相对平移、缩放与旋转；offsetX/offsetY 以视口宽高为单位，"
             "正 Y 向上。当前基准会单独展示，所以三个候选都必须有非零变化且彼此明显不同。"
             "不要计算或返回绝对复坐标，也不要改变颜色、公式或计算参数。"
+            "JSON 数字的小数点必须用英文句点，例如 0.25，禁止写 0,25。"
         )
     return {
         "type": "function",
@@ -307,6 +314,38 @@ def _stream_error_is_retryable(chunk: dict[str, object]) -> bool:
     return False
 
 
+def _decode_tool_arguments(arguments: str) -> object:
+    """Decode provider tool JSON, tolerating only literal control characters.
+
+    Some OpenAI-compatible model streams leave a literal newline inside a
+    quoted reason, a trailing comma, or use a locale decimal comma for a
+    numeric property. The narrow fallbacks below handle only those syntax
+    defects; every resulting object still goes through the full Platform
+    validator. We deliberately do not guess at missing braces, quotes,
+    property names or fields.
+    """
+
+    try:
+        return json.loads(arguments)
+    except json.JSONDecodeError as strict_error:
+        try:
+            return json.loads(arguments, strict=False)
+        except json.JSONDecodeError:
+            normalized_numbers = re.sub(
+                r"(:\s*-?\d+),(\d+)(?=\s*[,}])", r"\1.\2", arguments
+            )
+            normalized = re.sub(r",(\s*[}\]])", r"\1", normalized_numbers)
+            if normalized != arguments:
+                try:
+                    return json.loads(normalized, strict=False)
+                except json.JSONDecodeError:
+                    pass
+        raise ProviderUnavailable(
+            "invalid provider tool arguments "
+            f"kind={strict_error.msg} length={len(arguments)} pos={strict_error.pos}"
+        ) from None
+
+
 async def stream_completion(*, text: str, history: list[dict], context: dict, image: bytes | None,
                             image_type: str | None, force_patch: bool = False,
                             disable_tools: bool = False,
@@ -334,7 +373,11 @@ async def stream_completion(*, text: str, history: list[dict], context: dict, im
     )
     payload = {"model": settings.siliconflow_model, "messages": messages, "stream": True,
                "max_tokens": settings.ai_max_output_tokens,
-               "stream_options": {"include_usage": True}, "temperature": 0.2}
+               "stream_options": {"include_usage": True},
+               # Structured exploration must be reproducible: even a small
+               # sampling temperature occasionally makes Qwen emit malformed
+               # tool arguments that the Platform correctly rejects.
+               "temperature": 0 if force_patch else 0.2}
     # SiliconFlow's Qwen3-VL Instruct endpoints reject the text-model-only
     # `enable_thinking` extension. The Instruct variants are already the
     # non-thinking models, so omit the unsupported field for those endpoints.
@@ -420,7 +463,4 @@ async def stream_completion(*, text: str, history: list[dict], context: dict, im
     for call in tool_calls.values():
         if call["name"] != "propose_studio_patch" or not call["arguments"]:
             continue
-        try:
-            yield "suggestion", json.loads(call["arguments"])
-        except json.JSONDecodeError:
-            continue
+        yield "suggestion", _decode_tool_arguments(call["arguments"])

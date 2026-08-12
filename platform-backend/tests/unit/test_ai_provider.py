@@ -154,7 +154,7 @@ async def test_forced_patch_sends_bounded_history_image_and_assembles_siliconflo
         "function": {"name": "propose_studio_patch"},
     }
     assert payload["enable_thinking"] is False
-    assert payload["temperature"] == 0.2
+    assert payload["temperature"] == 0
     assert payload["tools"][0]["function"]["name"] == "propose_studio_patch"
     assert len(payload["messages"]) == 22
     assert payload["messages"][1]["content"] == "history-2"
@@ -224,6 +224,7 @@ async def test_normal_text_request_streams_visible_content_with_auto_tool_choice
 
     payload = captured["payload"]
     assert payload["tool_choice"] == "auto"
+    assert payload["temperature"] == 0.2
     assert payload["enable_thinking"] is False
     assert payload["messages"][-1] == {
         "role": "user",
@@ -534,13 +535,28 @@ async def test_malformed_stream_is_mapped_and_incomplete_tool_call_is_not_emitte
             )
         ]
 
-    events = [
-        event
-        async for event in provider.stream_completion(
-            text="hello", history=[], context={}, image=None, image_type=None
-        )
-    ]
-    assert events == []
+    with pytest.raises(provider.ProviderUnavailable, match="invalid provider tool arguments"):
+        _ = [
+            event
+            async for event in provider.stream_completion(
+                text="hello", history=[], context={}, image=None, image_type=None
+            )
+        ]
+
+
+def test_tool_arguments_tolerate_only_literal_control_characters() -> None:
+    assert provider._decode_tool_arguments('{"patch":{},"reason":"line 1\nline 2"}') == {
+        "patch": {},
+        "reason": "line 1\nline 2",
+    }
+    assert provider._decode_tool_arguments(
+        '{"candidates":[{"label":"A","reason":"short",},],}'
+    ) == {"candidates": [{"label": "A", "reason": "short"}]}
+    assert provider._decode_tool_arguments(
+        '{"offsetX":0,25,"offsetY":-0,15,"scaleFactor":1,0}'
+    ) == {"offsetX": 0.25, "offsetY": -0.15, "scaleFactor": 1.0}
+    with pytest.raises(provider.ProviderUnavailable, match="invalid provider tool arguments"):
+        provider._decode_tool_arguments('{"patch":{},"reason":"unclosed}')
 
 
 @pytest.mark.asyncio
