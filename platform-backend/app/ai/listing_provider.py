@@ -13,7 +13,7 @@ from app.ai.listing_models import (
     FocusedListingCopyToolResult,
     ListingCopyCandidate,
 )
-from app.core.config import Settings, get_settings
+from app.core.config import Settings, get_settings, reveal_secret
 
 
 class ListingProviderUnavailable(Exception):
@@ -290,6 +290,7 @@ async def generate_listing_copy(
     """Call the configured winning model; no mock/fallback output exists."""
 
     resolved = settings or get_settings()
+    api_key = reveal_secret(resolved.siliconflow_api_key)
     image_url = f"data:{image_type};base64,{base64.b64encode(image).decode('ascii')}"
     image_content = {
         "type": "image_url",
@@ -322,7 +323,7 @@ async def generate_listing_copy(
         observation_response = await _post_completion(
             client,
             payload=observation_payload,
-            api_key=resolved.siliconflow_api_key,
+            api_key=api_key,
         )
         observation = _parse_observation(observation_response)
         messages = [
@@ -361,7 +362,7 @@ async def generate_listing_copy(
         response_payload = await _post_completion(
             client,
             payload=request_payload,
-            api_key=resolved.siliconflow_api_key,
+            api_key=api_key,
         )
     completion = _parse_completion(response_payload)
     return ListingCompletion(

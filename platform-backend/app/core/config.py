@@ -3,14 +3,18 @@
 from decimal import Decimal
 from functools import lru_cache
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Runtime settings for the HTTP identity boundary."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        hide_input_in_errors=True,
+    )
 
     app_env: str = "development"
     log_json: bool = False
@@ -92,7 +96,7 @@ class Settings(BaseSettings):
     payout_qr_cleanup_retry_delay_seconds: int = Field(default=300, ge=30, le=86_400)
     ai_enabled: bool = False
     ai_runtime_role: str = "api"
-    siliconflow_api_key: str = ""
+    siliconflow_api_key: SecretStr = SecretStr("")
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
     siliconflow_model: str = "Qwen/Qwen3.6-35B-A3B"
     ai_free_lifetime_limit: int = Field(default=10, ge=1, le=1000)
@@ -111,7 +115,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
-        if self.ai_enabled and self.ai_runtime_role == "api" and not self.siliconflow_api_key:
+        if (
+            self.ai_enabled
+            and self.ai_runtime_role == "api"
+            and not reveal_secret(self.siliconflow_api_key)
+        ):
             raise ValueError("SILICONFLOW_API_KEY is required when AI_ENABLED=true")
         if self.app_env != "production":
             return self
@@ -152,3 +160,14 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def reveal_secret(value: SecretStr | str) -> str:
+    """Reveal a configured secret only at the narrow outbound-call boundary.
+
+    ``str(SecretStr)`` deliberately returns a mask. The temporary ``str`` branch
+    keeps explicit contract-test settings compatible without weakening the
+    production ``Settings`` type.
+    """
+
+    return value.get_secret_value() if isinstance(value, SecretStr) else value

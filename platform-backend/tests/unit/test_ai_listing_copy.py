@@ -11,9 +11,10 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from PIL import Image
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 import app.ai.listing_service as listing_service
+import app.ai.listing_provider as listing_provider
 from app.ai.listing_models import (
     FocusedListingCopyToolResult,
     ListingCopyInput,
@@ -83,6 +84,41 @@ def test_provider_candidates_are_exactly_three_unique_and_listing_compatible() -
     too_long[0]["title"] = "x" * 121
     with pytest.raises(ValidationError):
         ListingCopyToolResult.model_validate({"candidates": too_long})
+
+
+@pytest.mark.asyncio
+async def test_listing_provider_reveals_secret_only_at_each_outbound_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "sf-listing-secret-never-render"
+    outbound_keys: list[str] = []
+
+    async def post_completion(_client, *, payload, api_key):
+        del payload
+        outbound_keys.append(api_key)
+        if len(outbound_keys) == 1:
+            return {"choices": [{"message": {"content": "可信的纯视觉观察"}}]}
+        raise RuntimeError("stop after checking the second outbound key")
+
+    monkeypatch.setattr(listing_provider, "_post_completion", post_completion)
+    settings = SimpleNamespace(
+        siliconflow_api_key=SecretStr(sentinel),
+        siliconflow_base_url="https://provider.invalid/v1",
+        siliconflow_model="test/model",
+        ai_max_output_tokens=512,
+    )
+
+    with pytest.raises(RuntimeError, match="second outbound key"):
+        await listing_provider.generate_listing_copy(
+            locale="zh",
+            listing_context={},
+            image=b"preview",
+            image_type="image/png",
+            settings=settings,  # type: ignore[arg-type]
+        )
+
+    assert outbound_keys == [sentinel, sentinel]
+    assert sentinel not in repr(settings)
 
 
 def test_preview_is_resized_and_kept_below_hard_in_memory_limit() -> None:

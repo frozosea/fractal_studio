@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
 from app.ai import provider
 
@@ -19,11 +20,15 @@ def _settings(
     model: str = "test/model",
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        siliconflow_api_key=api_key,
+        siliconflow_api_key=SecretStr(api_key),
         siliconflow_base_url="https://provider.invalid/v1",
         siliconflow_model=model,
         ai_max_output_tokens=321,
     )
+
+
+def _api_key(settings: SimpleNamespace) -> str:
+    return settings.siliconflow_api_key.get_secret_value()
 
 
 def _sse(*chunks: dict[str, Any]) -> bytes:
@@ -138,7 +143,7 @@ async def test_forced_patch_sends_bounded_history_image_and_assembles_siliconflo
     assert recorded["client_kwargs"]["trust_env"] is False
     assert recorded["client_kwargs"]["base_url"] == settings.siliconflow_base_url
     request = captured["request"]
-    assert request.headers["authorization"] == f"Bearer {settings.siliconflow_api_key}"
+    assert request.headers["authorization"] == f"Bearer {_api_key(settings)}"
     payload = captured["payload"]
     assert payload["model"] == settings.siliconflow_model
     assert payload["max_tokens"] == 321
@@ -168,7 +173,7 @@ async def test_forced_patch_sends_bounded_history_image_and_assembles_siliconflo
             },
         ],
     }
-    assert settings.siliconflow_api_key.encode() not in request.content
+    assert _api_key(settings).encode() not in request.content
     assert events == [
         ("delta", "先看这张图。"),
         ("usage", {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28}),
@@ -358,7 +363,7 @@ async def test_provider_http_failures_are_mapped_without_leaking_the_key(
     async def handle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             status,
-            content=f"upstream accidentally echoed {settings.siliconflow_api_key}".encode(),
+            content=f"upstream accidentally echoed {_api_key(settings)}".encode(),
             request=request,
         )
 
@@ -373,10 +378,91 @@ async def test_provider_http_failures_are_mapped_without_leaking_the_key(
             )
         ]
 
-    assert settings.siliconflow_api_key not in str(raised.value)
-    assert raised.value.__cause__ is None or settings.siliconflow_api_key not in str(
+    assert _api_key(settings) not in str(raised.value)
+    assert raised.value.__cause__ is None or _api_key(settings) not in str(
         raised.value.__cause__
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "retryable"),
+    [(429, True), ("503", True), (401, False)],
+)
+async def test_provider_stream_error_before_output_is_sanitized_and_retryable_only_for_429_503(
+    monkeypatch: pytest.MonkeyPatch,
+    code: int | str,
+    retryable: bool,
+) -> None:
+    settings = _settings()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        error = {
+            "error": {
+                "code": code,
+                "message": f"upstream accidentally echoed {_api_key(settings)}",
+            }
+        }
+        # No space after ``data:`` is valid SSE and must follow the same safe path.
+        body = f"data:{json.dumps(error)}\n\ndata: [DONE]\n\n".encode()
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body,
+            request=request,
+        )
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+
+    with pytest.raises(provider.ProviderUnavailable) as raised:
+        _ = [
+            event
+            async for event in provider.stream_completion(
+                text="hello", history=[], context={}, image=None, image_type=None
+            )
+        ]
+
+    assert str(raised.value) == "provider stream error"
+    assert raised.value.retryable is retryable
+    assert _api_key(settings) not in str(raised.value)
+    assert raised.value.__cause__ is None
+
+
+@pytest.mark.asyncio
+async def test_provider_stream_error_after_visible_delta_is_raised_not_silently_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(
+                {"choices": [{"delta": {"content": "visible partial"}}]},
+                {
+                    "error": {
+                        "status_code": 503,
+                        "message": f"private diagnostic {_api_key(settings)}",
+                    }
+                },
+            ),
+            request=request,
+        )
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    iterator = provider.stream_completion(
+        text="hello", history=[], context={}, image=None, image_type=None
+    )
+
+    assert await anext(iterator) == ("delta", "visible partial")
+    with pytest.raises(provider.ProviderUnavailable) as raised:
+        await anext(iterator)
+    assert str(raised.value) == "provider stream error"
+    assert raised.value.retryable is True
+    assert _api_key(settings) not in str(raised.value)
 
 
 @pytest.mark.asyncio
@@ -387,7 +473,7 @@ async def test_connection_failure_is_mapped_without_exposing_exception_details(
 
     async def handle(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(
-            f"diagnostic contained {settings.siliconflow_api_key}", request=request
+            f"diagnostic contained {_api_key(settings)}", request=request
         )
 
     _install_transport(monkeypatch, httpx.MockTransport(handle))
@@ -402,7 +488,7 @@ async def test_connection_failure_is_mapped_without_exposing_exception_details(
         ]
 
     assert str(raised.value) == "ConnectError"
-    assert settings.siliconflow_api_key not in str(raised.value)
+    assert _api_key(settings) not in str(raised.value)
 
 
 @pytest.mark.asyncio

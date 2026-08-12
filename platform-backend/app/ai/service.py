@@ -75,6 +75,32 @@ async def lock_ai_owner(connection, owner_id: UUID) -> None:
     )
 
 
+async def recompute_conversation_optimization_consent(
+    connection, conversation_id: UUID, *, touch_updated_at: bool = False
+) -> None:
+    """Keep the conversation flag a projection of explicit feedback consent."""
+
+    updated_at = "updated_at=now()," if touch_updated_at else ""
+    await connection.execute(sql(
+        f"UPDATE ai_conversations SET {updated_at}optimization_consent=EXISTS("
+        " SELECT 1 FROM ai_feedback f JOIN ai_messages m ON m.id=f.message_id"
+        " WHERE m.conversation_id=:cid AND f.consent"
+        ") WHERE id=:cid"
+    ), {"cid": conversation_id})
+
+
+async def withdraw_conversation_optimization_consent(
+    connection, conversation_id: UUID
+) -> None:
+    """Atomically opt out every feedback row before recomputing the projection."""
+
+    await connection.execute(sql(
+        "UPDATE ai_feedback f SET consent=false FROM ai_messages m "
+        "WHERE m.id=f.message_id AND m.conversation_id=:cid AND f.consent"
+    ), {"cid": conversation_id})
+    await recompute_conversation_optimization_consent(connection, conversation_id)
+
+
 async def recover_expired_requests(connection, *, owner_id: UUID | None = None) -> int:
     """Release abandoned reservations and retain abandoned visible output."""
 
@@ -347,12 +373,9 @@ async def _persist_result(*, request_id: UUID, conversation_id: UUID, content: s
             "attempt": attempt_started_at, "status": final_status})
         if updated.scalar_one_or_none() is None:
             raise AttemptLost("AI request attempt lost its terminal compare-and-set")
-        await c.execute(sql(
-            "UPDATE ai_conversations SET updated_at=now(),optimization_consent=EXISTS("
-            " SELECT 1 FROM ai_feedback f JOIN ai_messages m ON m.id=f.message_id"
-            " WHERE m.conversation_id=:cid AND f.consent"
-            ") WHERE id=:cid"
-        ), {"cid": conversation_id})
+        await recompute_conversation_optimization_consent(
+            c, conversation_id, touch_updated_at=True
+        )
     return PersistedResult(assistant_message_id, final_status)
 
 

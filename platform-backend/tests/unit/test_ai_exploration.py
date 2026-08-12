@@ -78,6 +78,8 @@ def test_location_candidates_preserve_exact_center_strings() -> None:
     assert result["mode"] == "location"
     assert len(result["baseSpecHash"]) == 64
     assert result["baseSpec"]["centerReStr"] == _context()["spec"]["centerReStr"]
+    assert result["baseMode"] == "map"
+    assert result["baseOutput"] == {"width": 1600, "height": 1200}
     first = result["candidates"][0]
     assert first["id"] == "A" and first["verification"] == "pending"
     assert first["patch"]["centerReStr"].startswith("-0.744443887037151")
@@ -169,6 +171,23 @@ def test_candidate_set_rejects_duplicates_and_untrusted_capabilities() -> None:
     assert validate_candidate_set(raw, context, "location") is None
 
 
+def test_candidate_set_rejects_untrusted_mode_or_output_identity() -> None:
+    raw = {
+        "axis": "position",
+        "candidates": [
+            {"label": "a", "offsetX": -0.2, "offsetY": 0, "scaleFactor": 1, "reason": "a"},
+            {"label": "b", "offsetX": 0, "offsetY": 0.2, "scaleFactor": 1, "reason": "b"},
+            {"label": "c", "offsetX": 0.2, "offsetY": 0, "scaleFactor": 1, "reason": "c"},
+        ],
+    }
+    context = _context()
+    context["mode"] = "julia"
+    assert validate_candidate_set(raw, context, "location") is None
+    context = _context()
+    context["output"] = {"width": 1600.5, "height": 1200}
+    assert validate_candidate_set(raw, context, "location") is None
+
+
 def test_candidate_set_rejects_semantically_tiny_or_wrong_typed_changes() -> None:
     tiny = {
         "axis": "position",
@@ -203,6 +222,7 @@ def test_candidates_enforce_cross_field_membership_and_compute_contracts() -> No
         "type": "formula",
         "formula": {"type": "builtin", "id": "mandelbrot"},
     }
+    context["mode"] = "formula"
     context["capabilities"]["orbitPrograms"] = {"formula": True, "sequence": True}
     raw = {
         "candidates": [

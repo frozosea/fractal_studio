@@ -9,7 +9,9 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 import qrcode
 from starlette.datastructures import Headers, UploadFile
+from starlette.requests import Request
 
+from app.core import access_middleware
 from app.core.config import Settings
 from app.finance.manual_payout_service import ManualPayoutService
 from app.studio.models import FractalSpec
@@ -25,6 +27,40 @@ def test_production_settings_reject_insecure_session_cookie() -> None:
             cors_origins="https://platform.example.test",
             session_cookie_secure=False,
         )
+
+
+def _origin_request(origin: str | None) -> Request:
+    headers = [] if origin is None else [(b"origin", origin.encode())]
+    return Request({"type": "http", "method": "POST", "path": "/v1/auth/login", "headers": headers})
+
+
+def test_login_accepts_each_configured_first_party_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://unused",
+        session_secret="x" * 32,
+        api_origin="https://fractal.example.test",
+        cors_origins="https://fractal.example.test,http://localhost:3010",
+    )
+    monkeypatch.setattr(access_middleware, "get_settings", lambda: settings)
+
+    access_middleware.enforce_same_origin_or_no_origin(
+        _origin_request("https://fractal.example.test")
+    )
+    access_middleware.enforce_same_origin_or_no_origin(_origin_request("http://localhost:3010"))
+    access_middleware.enforce_same_origin_or_no_origin(_origin_request(None))
+
+
+def test_login_rejects_unconfigured_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://unused",
+        session_secret="x" * 32,
+        api_origin="https://fractal.example.test",
+        cors_origins="http://localhost:3010",
+    )
+    monkeypatch.setattr(access_middleware, "get_settings", lambda: settings)
+
+    with pytest.raises(HTTPException, match="untrusted_origin"):
+        access_middleware.enforce_same_origin_or_no_origin(_origin_request("https://evil.test"))
 
 
 def test_julia_recipe_requires_complete_complex_constant() -> None:

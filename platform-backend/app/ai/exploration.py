@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import ValidationError
 
+from app.ai.models import studio_context_identity, studio_spec_supported
 from app.studio.models import ColorProgram, FractalSpec
 from app.studio.recipe_service import canonicalize_spec
 
@@ -52,85 +53,12 @@ def _base_spec(context: dict[str, object]) -> FractalSpec | None:
         return None
 
 
-def _kind_capabilities(
-    spec: FractalSpec, capabilities: dict[str, object]
-) -> tuple[str, dict[str, object]] | None:
-    image_kinds = capabilities.get("imageKinds")
-    if not isinstance(image_kinds, dict):
-        return None
-    key = "transition" if spec.transition_mode != "off" else "map"
-    kind = image_kinds.get(key)
-    if not isinstance(kind, dict) or kind.get("enabled") is not True:
-        return None
-    return ("transition_image" if key == "transition" else "map_image", kind)
-
-
-def _supported(spec: FractalSpec, context: dict[str, object]) -> bool:
-    capabilities = context.get("capabilities")
-    if not isinstance(capabilities, dict):
-        return False
-    resolved = _kind_capabilities(spec, capabilities)
-    if resolved is None:
-        return False
-    kind_name, kind = resolved
-    for value, key in (
-        (spec.metric, "metrics"),
-        (spec.engine, "engines"),
-        (spec.scalar_type, "scalars"),
-    ):
-        allowed = kind.get(key)
-        if not isinstance(allowed, list) or value not in allowed:
-            return False
-    variants = capabilities.get("variants")
-    if not isinstance(variants, list) or spec.variant not in variants:
-        return False
-    if spec.color_map is not None:
-        color_maps = capabilities.get("colorMaps")
-        if not isinstance(color_maps, list) or spec.color_map not in color_maps:
-            return False
-    color_modes = capabilities.get("colorModes")
-    if not isinstance(color_modes, list) or spec.color_mode not in color_modes:
-        return False
-    if spec.transition_mode == "multi" and not bool(context.get("member")):
-        return False
-    if spec.metric != "escape":
-        if spec.color_mode != "direct" or spec.orbit_program is not None:
-            return False
-    if spec.orbit_program is not None:
-        if kind.get("orbitProgram") is not True or not bool(context.get("member")):
-            return False
-        programs = capabilities.get("orbitPrograms")
-        if not isinstance(programs, dict) or programs.get(spec.orbit_program.type) is not True:
-            return False
-    if spec.transition_mode != "off":
-        variants = capabilities.get("axisTransitionVariants")
-        if not isinstance(variants, list):
-            return False
-        referenced = {spec.transition_from, spec.transition_to}
-        referenced.update(leg.variant for leg in spec.transition_legs)
-        if not referenced <= set(variants):
-            return False
-    if spec.color_program is not None:
-        gradient = capabilities.get("customGradient")
-        if not isinstance(gradient, dict) or gradient.get("enabled") is not True:
-            return False
-        kinds = gradient.get("kinds")
-        max_stops = gradient.get("maxStops")
-        if not isinstance(kinds, list) or kind_name not in kinds:
-            return False
-        if not isinstance(max_stops, int) or len(spec.color_program.stops) > max_stops:
-            return False
-    return True
-
-
 def _output_aspect(context: dict[str, object]) -> Decimal | None:
-    output = context.get("output")
-    if not isinstance(output, dict):
+    identity = studio_context_identity(context)
+    if identity is None:
         return None
-    width = _finite_number(output.get("width"))
-    height = _finite_number(output.get("height"))
-    if width is None or height is None or width < 64 or height < 64:
-        return None
+    _, output = identity
+    width, height = output["width"], output["height"]
     # Navigation keeps the exact decimal center strings authoritative.  Do not
     # let the process-wide Decimal precision silently round an aspect ratio
     # before it is applied to a deep-zoom center.
@@ -190,8 +118,13 @@ def _label_reason(raw: dict[str, object]) -> tuple[str, str] | None:
 
 
 def _candidate_result(
-    *, mode: ExplorationMode, base: FractalSpec, candidates: list[dict[str, object]]
-) -> dict[str, object]:
+    *, mode: ExplorationMode, base: FractalSpec, candidates: list[dict[str, object]],
+    context: dict[str, object],
+) -> dict[str, object] | None:
+    identity = studio_context_identity(context)
+    if identity is None:
+        return None
+    base_mode, base_output = identity
     canonical = canonicalize_spec(base)
     return {
         "kind": "candidate_set",
@@ -204,6 +137,8 @@ def _candidate_result(
         "baseSpec": base.model_dump(
             mode="json", by_alias=True, exclude_none=False, exclude_unset=True
         ),
+        "baseMode": base_mode,
+        "baseOutput": base_output,
         "candidates": [
             {
                 "id": chr(ord("A") + index),
@@ -221,7 +156,12 @@ def _navigation_candidates(
     base = _base_spec(context)
     aspect = _output_aspect(context)
     items = raw.get("candidates")
-    if base is None or aspect is None or not _supported(base, context) or not isinstance(items, list):
+    if (
+        base is None
+        or aspect is None
+        or not studio_spec_supported(base, context)
+        or not isinstance(items, list)
+    ):
         return None
     if len(items) != _COUNTS[mode]:
         return None
@@ -297,7 +237,7 @@ def _navigation_candidates(
             candidate_spec = FractalSpec.model_validate(merged)
         except ValidationError:
             return None
-        if not _supported(candidate_spec, context):
+        if not studio_spec_supported(candidate_spec, context):
             return None
         fingerprint = json.dumps(patch, sort_keys=True, separators=(",", ":"))
         if fingerprint in fingerprints:
@@ -305,13 +245,13 @@ def _navigation_candidates(
         fingerprints.add(fingerprint)
         label, reason = text
         candidates.append({"label": label, "patch": patch, "reason": reason})
-    return _candidate_result(mode=mode, base=base, candidates=candidates)
+    return _candidate_result(mode=mode, base=base, candidates=candidates, context=context)
 
 
 def _color_candidates(raw: dict[str, object], context: dict[str, object]) -> dict[str, object] | None:
     base = _base_spec(context)
     items = raw.get("candidates")
-    if base is None or not _supported(base, context) or not isinstance(items, list):
+    if base is None or not studio_spec_supported(base, context) or not isinstance(items, list):
         return None
     if len(items) != _COUNTS["color"]:
         return None
@@ -359,7 +299,7 @@ def _color_candidates(raw: dict[str, object], context: dict[str, object]) -> dic
             candidate_spec = FractalSpec.model_validate(merged)
         except ValidationError:
             return None
-        if not _supported(candidate_spec, context):
+        if not studio_spec_supported(candidate_spec, context):
             return None
         normalized = candidate_spec.model_dump(mode="json", by_alias=True, exclude_none=False)
         effective_patch = {
@@ -375,7 +315,7 @@ def _color_candidates(raw: dict[str, object], context: dict[str, object]) -> dic
         fingerprints.add(fingerprint)
         label, reason = text
         candidates.append({"label": label, "patch": effective_patch, "reason": reason})
-    return _candidate_result(mode="color", base=base, candidates=candidates)
+    return _candidate_result(mode="color", base=base, candidates=candidates, context=context)
 
 
 def validate_candidate_set(

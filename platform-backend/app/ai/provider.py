@@ -8,7 +8,7 @@ from typing import Literal
 
 import httpx
 
-from app.core.config import get_settings
+from app.core.config import get_settings, reveal_secret
 from app.studio.compute_request_mapper import PREVIEW_MAX_ITERATIONS
 
 
@@ -290,6 +290,23 @@ def _tool_for_context(context: dict, assistant_mode: AssistantMode = "chat") -> 
     return tool
 
 
+def _stream_error_is_retryable(chunk: dict[str, object]) -> bool:
+    """Recognize only sanitized HTTP-equivalent retry signals from an SSE error frame."""
+
+    error = chunk.get("error")
+    candidates: list[object] = [chunk.get("status"), chunk.get("status_code")]
+    if isinstance(error, dict):
+        candidates.extend((error.get("status"), error.get("status_code"), error.get("code")))
+    for candidate in candidates:
+        if isinstance(candidate, bool):
+            continue
+        if isinstance(candidate, int) and candidate in {429, 503}:
+            return True
+        if isinstance(candidate, str) and candidate.strip() in {"429", "503"}:
+            return True
+    return False
+
+
 async def stream_completion(*, text: str, history: list[dict], context: dict, image: bytes | None,
                             image_type: str | None, force_patch: bool = False,
                             disable_tools: bool = False,
@@ -327,21 +344,33 @@ async def stream_completion(*, text: str, history: list[dict], context: dict, im
         payload.update({"tools": [_tool_for_context(context, assistant_mode)], "tool_choice": tool_choice})
     tool_calls: dict[int, dict[str, str]] = {}
     timeout = httpx.Timeout(connect=10, read=90, write=20, pool=10)
+    api_key = reveal_secret(settings.siliconflow_api_key)
     try:
         async with httpx.AsyncClient(base_url=settings.siliconflow_base_url, trust_env=False, timeout=timeout) as client:
             async with client.stream("POST", "/chat/completions", json=payload,
-                                     headers={"Authorization": f"Bearer {settings.siliconflow_api_key}"}) as response:
+                                     headers={"Authorization": f"Bearer {api_key}"}) as response:
                 if response.status_code >= 400:
                     raise ProviderUnavailable(
                         f"provider status {response.status_code}",
                         retryable=response.status_code in {429, 503},
                     )
                 async for line in response.aiter_lines():
-                    if not line.startswith("data: ") or line == "data: [DONE]":
+                    if not line.startswith("data:"):
                         continue
-                    chunk = json.loads(line[6:])
+                    data = line[5:].lstrip()
+                    if not data or data == "[DONE]":
+                        continue
+                    chunk = json.loads(data)
                     if not isinstance(chunk, dict):
                         raise ProviderUnavailable("invalid provider stream chunk")
+                    if chunk.get("error") is not None:
+                        # Never interpolate the provider's error body. It may
+                        # contain credentials, request content or private image
+                        # diagnostics. The service owns retry/partial semantics.
+                        raise ProviderUnavailable(
+                            "provider stream error",
+                            retryable=_stream_error_is_retryable(chunk),
+                        )
                     if chunk.get("usage"):
                         if not isinstance(chunk["usage"], dict):
                             raise ProviderUnavailable("invalid provider usage")
