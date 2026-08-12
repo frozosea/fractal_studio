@@ -53,3 +53,38 @@ then-provided 4096-iteration premise. A later source audit found the current pre
 exact escape-gradient correction (`cycles × (previewIterations+2)/(masterIterations+2)`) so the model
 must not repeat a stale hard-coded correction. This regression must be rerun whenever the mapping changes.
 Quality and contract reliability therefore favour Qwen3.6 even when latency is ignored.
+
+## Small-model and on-device cost follow-up
+
+The listing-copy flow is the best candidate for a cheaper model because its output is text-only,
+strictly validated and never auto-published. It is not safe to route it by parameter count alone:
+the user-visible copy must still pass the same real-image initial/revision contract and a human
+quality review against Qwen3.6.
+
+The proposed [Gemma 4 E2B Q4 GGUF](https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/blob/main/gemma-4-E2B_q4_0-it.gguf)
+is 3.35 GB, not roughly 2 GB. Its model card describes E2B as an on-device model and provides a
+mobile-optimized format, but sending the GGUF to every browser is not an acceptable default: first
+load, cache eviction, memory pressure and WebGPU support would make the publish button unreliable.
+If evaluated later, browser inference must be an optional capability with progress, cancellation,
+cache controls and an immediate server fallback. A server-side llama.cpp deployment is the simpler
+first experiment.
+
+Official Qwen3.5 post-trained weights exist at
+[0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B),
+[2B](https://huggingface.co/Qwen/Qwen3.5-2B) and
+[4B](https://huggingface.co/Qwen/Qwen3.5-4B). On 2026-08-12, the current SiliconFlow account exposed
+Qwen3.5 4B and 9B but not 0.8B, 2B or Gemma 4. Real listing-copy checks produced these results:
+
+| Model | Real listing-copy result |
+|---|---|
+| `Qwen/Qwen3.5-4B` | Failed twice with no complete response before the adapter read timeout, including a single-request run. It is not a usable cost route on the current provider. |
+| `Qwen/Qwen3.5-9B` | Passed one initial request in 13.74 s / 2857 tokens and an initial-plus-revision run in 33.41 s / 6091 tokens. The copy was repetitive and more generic than Qwen3.6, so it is not selected for users. |
+| `Qwen/Qwen3.6-35B-A3B` | Passed initial-plus-revision in 32.26 s / 6148 tokens and remained the stronger factual/editorial baseline, although a human should still shorten overly clinical descriptions. |
+
+The next cost experiment should run 0.8B, 2B, 4B and Gemma E2B on a separate server/CPU test target,
+not on a production Compute GPU. Use the same hidden set of real artworks and score: Chinese title,
+description and tags; revision-instruction compliance; invented visual/mathematical facts; schema
+pass rate; time to first token; complete latency; peak memory; and cost. The smallest model that
+meets the Qwen3.6 quality floor may handle listing copy, with automatic server-side Qwen3.6 fallback.
+Image analysis, Studio patch tools and low-confidence outputs stay on Qwen3.6. This is a future
+optimization and does not add runtime multi-model routing to the current release.
