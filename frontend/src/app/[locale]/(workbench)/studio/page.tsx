@@ -42,6 +42,7 @@ import {
   TRANSITION_METRICS,
   previewDimensions,
 } from "@/lib/studio-catalog";
+import { canRenderFractalLocally, renderFractalLocally } from "@/lib/fractal/local-renderer";
 
 type ImageMode = "map" | "julia" | "transitionPair" | "transitionMulti" | "formula" | "sequence";
 type SequenceOrbit = Extract<OrbitProgram, { type: "sequence" }>;
@@ -107,6 +108,25 @@ const minScale = 3 / 2 ** 41;
 const selectClass = "instrument-control h-9 w-full px-2 text-sm";
 const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const imageModes: readonly ImageMode[] = ["map", "julia", "transitionPair", "transitionMulti", "formula", "sequence"];
+
+async function previewWithLocalFallback(
+  spec: FractalSpec,
+  width: number,
+  height: number,
+  signal: AbortSignal,
+  channel: "main" | "julia_picker",
+  onStatus: (status: "queued" | "deferred" | "rendering" | "completed" | "stale") => void,
+): Promise<Blob> {
+  try {
+    const local = await renderFractalLocally(spec, width, height, signal);
+    if (local) return local;
+  } catch (reason) {
+    if (signal.aborted || reason instanceof DOMException && reason.name === "AbortError") throw reason;
+    // Device/worker failures are capability failures, not render failures. The
+    // native service remains the authoritative and universally supported path.
+  }
+  return platform.studio.preview(spec, width, height, signal, channel, onStatus);
+}
 
 function parseExplorationSession(raw: string | null): StudioExplorationSession | null {
   if (!raw) return null;
@@ -480,8 +500,11 @@ export default function StudioPage() {
     abortRef.current?.abort();
     const generation = ++previewGenerationRef.current;
     const controller = new AbortController();
-    const minimumInterval = mode === "julia" ? juliaPreviewMinIntervalMs : previewMinIntervalMs;
-    const wait = Math.max(previewDebounceMs, lastPreviewAtRef.current + minimumInterval - Date.now());
+    const localPreview = canRenderFractalLocally(canonical)
+      && (mode !== "julia" || canRenderFractalLocally(juliaPickerCanonical));
+    const minimumInterval = localPreview ? 150 : mode === "julia" ? juliaPreviewMinIntervalMs : previewMinIntervalMs;
+    const debounce = localPreview ? 120 : previewDebounceMs;
+    const wait = Math.max(debounce, lastPreviewAtRef.current + minimumInterval - Date.now());
     const timer = window.setTimeout(async () => {
       abortRef.current = controller;
       setPreviewing(true);
@@ -491,10 +514,10 @@ export default function StudioPage() {
       lastPreviewAtRef.current = Date.now();
       try {
         const [blob, pickerBlob] = await Promise.all([
-          platform.studio.preview(canonical, previewSize.width, previewSize.height, controller.signal, "main", (jobStatus) => {
+          previewWithLocalFallback(canonical, previewSize.width, previewSize.height, controller.signal, "main", (jobStatus) => {
             if (jobStatus === "queued" || jobStatus === "deferred") setPreviewQueued(true);
           }),
-          ...(mode === "julia" ? [platform.studio.preview(juliaPickerCanonical, previewSize.width, previewSize.height, controller.signal, "julia_picker", (jobStatus) => {
+          ...(mode === "julia" ? [previewWithLocalFallback(juliaPickerCanonical, previewSize.width, previewSize.height, controller.signal, "julia_picker", (jobStatus) => {
             if (jobStatus === "queued" || jobStatus === "deferred") setPreviewQueued(true);
           })] : []),
         ]);

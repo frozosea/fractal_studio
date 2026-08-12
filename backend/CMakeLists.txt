@@ -288,6 +288,10 @@ target_include_directories(color_program_smoke PRIVATE src src/include)
 target_compile_options(color_program_smoke PRIVATE -Wall -Wextra -Wno-unused-parameter -O3)
 add_test(NAME color_program_smoke COMMAND color_program_smoke)
 
+add_executable(browser_orbit_reference src/tests/browser_orbit_reference.cpp)
+target_include_directories(browser_orbit_reference PRIVATE src src/include)
+target_compile_options(browser_orbit_reference PRIVATE -Wall -Wextra -Wno-unused-parameter -O3)
+
 if(OpenMP_CXX_FOUND)
     target_link_libraries(compute_path_diff PRIVATE OpenMP::OpenMP_CXX)
 endif()
