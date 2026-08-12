@@ -67,6 +67,7 @@ EXPLORATION_REPORT.md
 *.pfx
 .DS_Store
 auth.json
+/ai.env
 frontend/test-results/
 frontend/playwright-report/
 frontend/.pnpm-store/

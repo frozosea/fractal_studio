@@ -8,7 +8,7 @@ services:
       POSTGRES_DB: fractal_platform
       POSTGRES_USER: fractal
       POSTGRES_PASSWORD: fractal_dev_password
-    ports: ["${POSTGRES_PORT:-15442}:5432"]
+    ports: ["127.0.0.1:${POSTGRES_PORT:-15442}:5432"]
     volumes: [platform-postgres:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fractal -d fractal_platform"]
@@ -19,7 +19,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports: ["${REDIS_PORT:-16389}:6379"]
+    ports: ["127.0.0.1:${REDIS_PORT:-16389}:6379"]
     volumes: [platform-redis:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -34,7 +34,7 @@ services:
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio_dev_password
-    ports: ["${MINIO_PORT:-19010}:9000", "${MINIO_CONSOLE_PORT:-19011}:9001"]
+    ports: ["127.0.0.1:${MINIO_PORT:-19010}:9000", "127.0.0.1:${MINIO_CONSOLE_PORT:-19011}:9001"]
     volumes: [platform-minio:/data]
 
   minio-init:
@@ -64,7 +64,7 @@ services:
       FSD_ENABLE_LEGACY_API: "0"
       FSD_ENABLE_LEGACY_FORMULA_COMPILER: "0"
       FSD_RENDER_THREADS: "2"
-    ports: ["${COMPUTE_PORT:-18101}:18080"]
+    ports: ["127.0.0.1:${COMPUTE_PORT:-18101}:18080"]
     volumes: [compute-a-runtime:/workspace/fractal_studio/runtime]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18080/compute/v1/health"]
@@ -84,7 +84,7 @@ services:
       FSD_ENABLE_LEGACY_API: "0"
       FSD_ENABLE_LEGACY_FORMULA_COMPILER: "0"
       FSD_RENDER_THREADS: "2"
-    ports: ["${COMPUTE_B_PORT:-18104}:18080"]
+    ports: ["127.0.0.1:${COMPUTE_B_PORT:-18104}:18080"]
     volumes: [compute-b-runtime:/workspace/fractal_studio/runtime]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18080/compute/v1/health"]
@@ -99,7 +99,7 @@ services:
       POSTGRES_DB: compute_gateway
       POSTGRES_USER: gateway
       POSTGRES_PASSWORD: ${COMPUTE_GATEWAY_DB_PASSWORD:-gateway_dev_password}
-    ports: ["${COMPUTE_GATEWAY_POSTGRES_PORT:-25443}:5432"]
+    ports: ["127.0.0.1:${COMPUTE_GATEWAY_POSTGRES_PORT:-25443}:5432"]
     volumes: [compute-gateway-postgres:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gateway -d compute_gateway"]
@@ -131,7 +131,7 @@ services:
     environment:
       <<: *gateway-env
       COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://compute:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://compute-b:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true}]'
-    ports: ["${COMPUTE_GATEWAY_PORT:-18103}:8080"]
+    ports: ["127.0.0.1:${COMPUTE_GATEWAY_PORT:-18103}:8080"]
     volumes:
       - ./compute-gateway:/app
     healthcheck:
@@ -152,7 +152,7 @@ services:
       context: ./platform-backend
     command: ["uv", "run", "--no-sync", "uvicorn", "tests.e2e.fixtures.alipay_stub:app", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
-    ports: ["${ALIPAY_STUB_PORT:-18102}:8000"]
+    ports: ["127.0.0.1:${ALIPAY_STUB_PORT:-18102}:8000"]
 
   migrate:
     build:
@@ -164,7 +164,7 @@ services:
       MIGRATION_DATABASE_URL: postgresql+psycopg://fractal:fractal_dev_password@postgres:5432/fractal_platform
       REDIS_URL: redis://redis:6379/0
       SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret-change-me-32-bytes-minimum}
-      SESSION_COOKIE_SECURE: "false"
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       API_ORIGIN: ${FSD_API_ORIGIN:-http://localhost:3010}
       CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3010},${FSD_API_ORIGIN:-http://localhost:3010}
       COMPUTE_BASE_URL: http://compute-gateway:8080
@@ -188,6 +188,16 @@ services:
       PAYMENT_RECONCILE_DELAY_SECONDS: "1"
       OUTBOX_POLL_INTERVAL_SECONDS: "0.5"
       OUTBOX_SCHEDULE_INTERVAL_SECONDS: "1"
+      AI_ENABLED: ${AI_ENABLED:-false}
+      SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
+      SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-Qwen/Qwen3.6-35B-A3B}
+      AI_FREE_LIFETIME_LIMIT: ${AI_FREE_LIFETIME_LIMIT:-10}
+      AI_HISTORY_TTL_DAYS: ${AI_HISTORY_TTL_DAYS:-90}
+      AI_MAX_USER_MESSAGE_CHARS: ${AI_MAX_USER_MESSAGE_CHARS:-4000}
+      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-1500}
+      AI_MAX_IMAGE_BYTES: ${AI_MAX_IMAGE_BYTES:-1048576}
+      AI_MAX_CONCURRENT_PER_USER: ${AI_MAX_CONCURRENT_PER_USER:-2}
+      AI_RUNTIME_ROLE: migrate
     volumes:
       - ./platform-backend:/app
     depends_on:
@@ -199,8 +209,11 @@ services:
       context: ./platform-backend
     command: ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
-    environment: *platform-env
-    ports: ["${PLATFORM_PORT:-18100}:8000"]
+    environment:
+      <<: *platform-env
+      AI_RUNTIME_ROLE: api
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+    ports: ["127.0.0.1:${PLATFORM_PORT:-18100}:8000"]
     volumes:
       - ./platform-backend:/app
       - ./alipay_app_private.pem:/run/secrets/alipay_app_private.pem:ro
@@ -220,7 +233,9 @@ services:
       context: ./platform-backend
     command: ["uv", "run", "--no-sync", "python", "-m", "app.outbox.worker"]
     restart: unless-stopped
-    environment: *platform-env
+    environment:
+      <<: *platform-env
+      AI_RUNTIME_ROLE: worker
     volumes:
       - ./platform-backend:/app
       - ./alipay_app_private.pem:/run/secrets/alipay_app_private.pem:ro
@@ -240,7 +255,9 @@ services:
     image: fractal-studio-dev-api
     command: ["uv", "run", "--no-sync", "python", "-m", "app.studio.preview_worker"]
     restart: unless-stopped
-    environment: *platform-env
+    environment:
+      <<: *platform-env
+      AI_RUNTIME_ROLE: worker
     volumes:
       - ./platform-backend:/app
       - ./alipay_app_private.pem:/run/secrets/alipay_app_private.pem:ro
@@ -262,7 +279,7 @@ services:
       PLATFORM_INTERNAL_URL: http://api:8000
     command: ["/bin/sh", "/app/scripts/dev-frontend.sh"]
     restart: unless-stopped
-    ports: ["${FRONTEND_PORT:-3010}:3000"]
+    ports: ["127.0.0.1:${FRONTEND_PORT:-3010}:3000"]
     volumes:
       - ./frontend:/app
       - frontend-node-modules:/app/node_modules

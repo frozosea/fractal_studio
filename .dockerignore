@@ -1,5 +1,9 @@
 .git
 .gitignore
+.env
+ai.env
+**/.env
+**/*.env
 .vscode
 .pytest_cache
 **/.pytest_cache

@@ -12,7 +12,15 @@ fractal.kevin0412.top {
 
 	# Platform publishes /v1/*; remove only the public /platform prefix.
 	handle_path /platform/* {
-		reverse_proxy 127.0.0.1:18110
+		reverse_proxy 127.0.0.1:18110 {
+			# Stream Studio AI SSE chunks immediately.
+			flush_interval -1
+		}
+	}
+
+	# Optional canonical asset prefix; strip /storage before MinIO.
+	handle_path /storage/* {
+		reverse_proxy 127.0.0.1:19020
 	}
 
 	# Preserve the bucket path and query string used by MinIO signatures.
