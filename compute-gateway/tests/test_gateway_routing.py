@@ -52,6 +52,8 @@ class FakeNodeClient:
             },
             "persistentKinds": ["map_image"],
             "previewKinds": ["map_image"],
+            "builtInVariants": ["mandelbrot", "tricorn"],
+            "axisTransitionVariants": ["mandelbrot"],
             "jobs": [{"kind": "map_image", "engines": ["openmp", "cuda"], "scalars": ["fp32", "fp64"]}],
             "coloring": {
                 "builtInColorMaps": ["classic_cos", "viridis", "spectral1530"],
@@ -212,6 +214,8 @@ async def test_sticky_routing_replay_manifest_and_artifact_stream(
     await _add_node(service, "node-b")
     capabilities = await service.capabilities()
     assert capabilities["gateway"] == {"healthyNodes": 2, "ready": True}
+    assert capabilities["builtInVariants"] == ["mandelbrot", "tricorn"]
+    assert capabilities["axisTransitionVariants"] == ["mandelbrot"]
     assert capabilities["coloring"] == {
         "builtInColorMaps": ["classic_cos", "viridis", "spectral1530"],
         "staticImageColorModes": ["direct", "eq_full", "eq_center"],

@@ -274,6 +274,13 @@ class GatewayService:
             blocks = [caps.get(key) for caps in values]
             if blocks and all(isinstance(block, dict) for block in blocks) and all(block == blocks[0] for block in blocks[1:]):
                 shared_metadata[key] = blocks[0]
+        for key in ("builtInVariants", "axisTransitionVariants"):
+            lists = [caps.get(key) for caps in values]
+            if lists and all(isinstance(items, list) for items in lists):
+                common = {item for item in lists[0] if isinstance(item, str)}
+                for items in lists[1:]:
+                    common &= {item for item in items if isinstance(item, str)}
+                shared_metadata[key] = sorted(common)
         async with self._sessions() as session:
             ready = False
             for node in nodes:
