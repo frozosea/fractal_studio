@@ -1,6 +1,6 @@
 # Studio AI model evaluation
 
-Evaluation date: 2026-08-09 to 2026-08-10. Provider: SiliconFlow China endpoint. The secret was read from the
+Evaluation date: 2026-08-09 to 2026-08-13. Provider: SiliconFlow China endpoint. The secret was read from the
 gitignored local `ai.env`; it was not printed, logged or persisted in a request fixture.
 
 All candidates received the same real 640×640 Studio preview (506 KiB), current `FractalSpec`,
@@ -81,10 +81,23 @@ Qwen3.5 4B and 9B but not 0.8B, 2B or Gemma 4. Real listing-copy checks produced
 | `Qwen/Qwen3.5-9B` | Passed one initial request in 13.74 s / 2857 tokens and an initial-plus-revision run in 33.41 s / 6091 tokens. The copy was repetitive and more generic than Qwen3.6, so it is not selected for users. |
 | `Qwen/Qwen3.6-35B-A3B` | Passed initial-plus-revision in 32.26 s / 6148 tokens and remained the stronger factual/editorial baseline, although a human should still shorten overly clinical descriptions. |
 
-The next cost experiment should run 0.8B, 2B, 4B and Gemma E2B on a separate server/CPU test target,
-not on a production Compute GPU. Use the same hidden set of real artworks and score: Chinese title,
-description and tags; revision-instruction compliance; invented visual/mathematical facts; schema
-pass rate; time to first token; complete latency; peak memory; and cost. The smallest model that
-meets the Qwen3.6 quality floor may handle listing copy, with automatic server-side Qwen3.6 fallback.
-Image analysis, Studio patch tools and low-confidence outputs stay on Qwen3.6. This is a future
-optimization and does not add runtime multi-model routing to the current release.
+On 2026-08-13, the official ModelScope BF16 weights for Qwen3.5 0.8B, 2B and 4B were also run locally
+on the Node 1 RTX 4090. The temporary runtime was isolated from both Compose projects, all weights
+were held in `/dev/shm`, and the production Compute container was neither stopped nor reconfigured.
+The same actual 640×640 artwork (498,704 bytes) and Chinese listing contract were used. Transformers
+5.15.0 ran each model with `enable_thinking=false`; three fixed seeds were checked per case.
+
+| Local model | Image-to-copy result | Trusted-observation text-only result |
+|---|---|---|
+| `Qwen/Qwen3.5-0.8B` | Peak 1.75 GiB. Only 1/3 outputs contained a complete three-candidate JSON object; the others truncated or repeated to the token limit. The valid output still used a prohibited snowflake metaphor and missed visible cyan/green structure. | 0/3 valid even when image interpretation was removed; every run repeated or truncated at 1000 tokens. Rejected. |
+| `Qwen/Qwen3.5-2B` | Peak 4.29 GiB and 8.37–9.14 s per copy. JSON passed 3/3, but the observation incorrectly described the asymmetric diagonal artwork as three vertically/horizontally symmetric structures, so the resulting copy was factually unsuitable. | Only 1/3 strict JSON outputs passed (4.14–4.53 s). Rejected. |
+| `Qwen/Qwen3.5-4B` | Peak 8.89 GiB and 7.72–11.88 s per copy. With thinking explicitly disabled, JSON passed 3/3 and visual grounding was better than 2B, but it still misplaced some large colour regions and produced more formulaic copy than Qwen3.6. Omitting the thinking flag caused all three runs to exhaust 1200 tokens before completing JSON. | Initial copy passed 3/3 in 3.90–4.33 s when supplied with a human-verified observation. A strict revision request passed only 1/3: one run reused an explicitly banned phrase and one returned malformed JSON. Not release-ready. |
+
+This shows that local inference is technically practical, but the useful boundary is not simply
+“copywriting is easy”. At 4B, separating trusted visual observation from text editing materially
+improves output, while 0.8B and 2B remain contract-unstable. JSON-schema constrained decoding and a
+bounded local retry could address syntax failures, but they cannot repair incorrect visual facts or
+ignored revision instructions. A future hidden experiment may therefore use 4B only after a trusted
+observation, with Qwen3.6 fallback and no user-visible model selector. Image analysis, Studio patch
+tools and low-confidence outputs stay on Qwen3.6. The current release deliberately adds no local
+runtime dependency or multi-model routing.
