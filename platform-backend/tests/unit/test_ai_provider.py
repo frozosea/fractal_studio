@@ -589,3 +589,21 @@ async def test_invalid_tool_call_index_is_sanitized(monkeypatch: pytest.MonkeyPa
                 text="hello", history=[], context={}, image=None, image_type=None
             )
         ]
+
+
+def test_output_budget_is_per_mode_and_capped() -> None:
+    settings = _settings()
+    assert settings.ai_max_output_tokens == 321
+    assert provider._output_budget(settings, "chat") == 321
+    assert provider._output_budget(settings, "location") == 321
+    assert provider._output_budget(settings, "color") == 321
+    assert provider._output_budget(settings, "composition") == 321
+
+
+def test_output_budget_exploration_capped_below_global_limit() -> None:
+    settings = _settings()
+    settings.ai_max_output_tokens = 1500
+    assert provider._output_budget(settings, "chat") == 1500
+    assert provider._output_budget(settings, "location") == 400
+    assert provider._output_budget(settings, "color") == 400
+    assert provider._output_budget(settings, "composition") == 400
