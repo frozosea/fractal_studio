@@ -7,6 +7,11 @@ import {
   type LocalRenderSpec,
 } from "@/lib/fractal/local-render-core";
 import {
+  isWasmEligible,
+  loadWasmFieldCore,
+  renderWasmRawField,
+} from "@/lib/fractal/wasm-field-core";
+import {
   createRawFieldCacheKey,
   RawFieldCache,
   type RawEscapeField,
@@ -66,6 +71,20 @@ function transitionSpec(spec: LocalRenderSpec): LocalTransitionRenderSpec {
   };
 }
 
+let wasmFieldCore: Awaited<ReturnType<typeof loadWasmFieldCore>> | null = null;
+
+async function computeRawAsync(spec: LocalRenderSpec, width: number, height: number): Promise<RawField> {
+  if (isWasmEligible(spec)) {
+    wasmFieldCore ??= await loadWasmFieldCore();
+    if (wasmFieldCore) {
+      try {
+        return renderWasmRawField(spec, width, height, wasmFieldCore);
+      } catch { /* fall through to the TypeScript core */ }
+    }
+  }
+  return computeRaw(spec, width, height);
+}
+
 function computeRaw(spec: LocalRenderSpec, width: number, height: number): RawField {
   if (spec.transition) {
     const raw = renderLocalTransitionRaw(transitionSpec(spec), width, height);
@@ -115,7 +134,7 @@ async function renderStage(
     let raw = fieldCache.get(cacheKey);
     cacheHit = raw !== undefined;
     if (!raw) {
-      raw = computeRaw(spec, width, height);
+      raw = await computeRawAsync(spec, width, height);
       fieldCache.set(cacheKey, raw);
     }
     rgba = colorizeLocalRawField(spec, raw);
