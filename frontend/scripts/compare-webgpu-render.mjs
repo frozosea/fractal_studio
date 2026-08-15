@@ -5,22 +5,26 @@
 // pixel. The CPU core is itself validated against the native backend by
 // compare-local-render.mjs, so this closes the loop on the shader path.
 //
-// WebGPU is not exposed to Playwright-launched Chrome in this environment, so
-// the harness launches Chrome itself with the SwiftShader flags that unlock
-// headless WebGPU, then attaches over CDP (connectOverCDP). Override the
-// binary with CHROME_BIN, e.g.:
+// Chrome is launched by the harness itself and attached over CDP
+// (connectOverCDP). Two environment quirks are handled here:
+//
+// - WebGPU is not exposed on opaque-origin pages, so the harness loads a
+//   file:// page (a secure context).
+// - Chrome's GPU process prefers its bundled Vulkan loader, which only knows
+//   SwiftShader and fails to enumerate adapters ("Failed to create WebGPU
+//   Context Provider"). Pointing LD_LIBRARY_PATH at the system loader makes
+//   Dawn use the system Vulkan ICDs (NVIDIA, lavapipe, ...), so a real or
+//   software adapter is found.
+//
+// Override the binary with CHROME_BIN, e.g.:
 //
 //   CHROME_BIN=/usr/bin/google-chrome npm run test:webgpu-parity
-//
-// The GPU adapter is software (SwiftShader): slow, but deterministic enough
-// for byte-level diffing with a small boundary allowance.
 
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import ts from "typescript";
-import { chromium } from "@playwright/test";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
@@ -116,11 +120,16 @@ var require = function (name) {
 <script>var webgpuExports = module.exports;</script>
 <script>
 window.__parity = (async () => {
+  // The GPU process may still be initializing its Vulkan device when the
+  // page starts; requestAdapter can transiently return null, so retry.
   let adapterAvailable = false;
-  try {
-    if (navigator.gpu) adapterAvailable = !!(await navigator.gpu.requestAdapter());
-  } catch (error) {
-    adapterAvailable = false;
+  for (let attempt = 0; attempt < 60 && !adapterAvailable; attempt += 1) {
+    try {
+      adapterAvailable = !!(navigator.gpu && await navigator.gpu.requestAdapter());
+    } catch (error) {
+      adapterAvailable = false;
+    }
+    if (!adapterAvailable) await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
   }
   const cases = ${JSON.stringify(CASES)};
   const results = [];
@@ -159,7 +168,10 @@ window.__parity = (async () => {
 </script></body></html>`;
 
 // ---------------------------------------------------------------------------
-// 3. Launch Chrome with headless WebGPU (SwiftShader) and attach over CDP.
+// 3. Launch Chrome with headless WebGPU and drive it over raw CDP.
+//    Playwright's CDP attach hides the adapter in some environments (the
+//    adapter only shows up on a plain /json/new target), so the harness
+//    speaks the CDP protocol directly over WebSocket.
 // ---------------------------------------------------------------------------
 
 const port = 9300 + Math.floor(Math.random() * 500);
@@ -172,12 +184,20 @@ const chrome = spawn(chromeBin, [
   "--headless=new",
   "--no-sandbox",
   "--disable-dev-shm-usage",
-  "--enable-unsafe-swiftshader",
-  "--use-webgpu-adapter=swiftshader",
+  "--use-vulkan=native",
+  "--enable-features=Vulkan",
   `--remote-debugging-port=${port}`,
   `--user-data-dir=${profile}`,
   "about:blank",
-], { stdio: "ignore" });
+], {
+  stdio: "ignore",
+  env: {
+    ...process.env,
+    // Make Chrome's Dawn use the system Vulkan loader/ICDs instead of the
+    // bundled SwiftShader-only loader (see header comment).
+    LD_LIBRARY_PATH: process.env.SYSTEM_LIB_PATH ?? "/usr/lib/x86_64-linux-gnu",
+  },
+});
 
 async function waitForEndpoint(url, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
@@ -191,20 +211,75 @@ async function waitForEndpoint(url, timeoutMs = 20000) {
   throw new Error(`Chrome DevTools endpoint ${url} did not come up`);
 }
 
-let browser;
+function cdpClient(ws) {
+  let nextId = 0;
+  const pending = new Map();
+  ws.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.id && pending.has(message.id)) {
+      const { resolve, reject } = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) reject(new Error(message.error.message));
+      else resolve(message.result);
+    }
+  });
+  return {
+    send(method, params = {}) {
+      const id = ++nextId;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        ws.send(JSON.stringify({ id, method, params }));
+      });
+    },
+  };
+}
+
+const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+
+let ws;
 try {
   await waitForEndpoint(`http://127.0.0.1:${port}/json/version`);
-  browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-  const page = await browser.newPage();
-  await page.goto(`file://${htmlPath}`);
-  const result = await page.evaluate(() => window.__parity, { timeout: 240000 });
-  await browser.close();
-  browser = undefined;
-  chrome.kill();
+  // Give the GPU process time to finish Vulkan device initialization before
+  // any page asks for an adapter; an early requestAdapter can permanently
+  // disable WebGPU for the browser session.
+  await delay(3000);
+  const target = await (await fetch(`http://127.0.0.1:${port}/json/new?file://${htmlPath}`, { method: "PUT" })).json();
+  ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolveOpen, rejectOpen) => {
+    ws.addEventListener("open", resolveOpen, { once: true });
+    ws.addEventListener("error", () => rejectOpen(new Error("websocket connect failed")), { once: true });
+  });
+  const cdp = cdpClient(ws);
+  await cdp.send("Runtime.enable");
+
+  // Wait for the inline harness scripts to define the __parity promise.
+  let ready = false;
+  for (let attempt = 0; attempt < 120 && !ready; attempt += 1) {
+    const probe = await cdp.send("Runtime.evaluate", {
+      expression: "typeof window.__parity === 'object' && window.__parity !== null",
+      returnByValue: true,
+    });
+    ready = probe?.result?.value === true;
+    if (!ready) await delay(500);
+  }
+  if (!ready) throw new Error("harness did not start in time");
+
+  const evaluated = await cdp.send("Runtime.evaluate", {
+    expression: "window.__parity",
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  if (evaluated.exceptionDetails) {
+    const description = evaluated.exceptionDetails.exception?.description
+      ?? evaluated.exceptionDetails.text ?? "unknown harness exception";
+    throw new Error(`harness threw: ${description.split("\n")[0]}`);
+  }
+  const result = evaluated?.result?.value;
+  ws.close();
 
   if (!result || !Array.isArray(result.results)) throw new Error("harness returned no results");
   if (!result.webgpu) throw new Error("WebGPU unavailable in the launched browser (navigator.gpu missing)");
-  if (!result.adapterAvailable) throw new Error("WebGPU adapter unavailable (requestAdapter returned null); SwiftShader WebGPU did not initialize in this Chrome/environment");
+  if (!result.adapterAvailable) throw new Error("WebGPU adapter unavailable (requestAdapter returned null)");
 
   let failed = 0;
   for (const entry of result.results) {
@@ -229,8 +304,9 @@ try {
   }
   console.log(`webgpu/native parity: ${result.results.length} cases passed (fp32 shader vs fp64 core)`);
 } finally {
-  if (browser) await browser.close().catch(() => {});
+  if (ws) ws.close();
   chrome.kill();
+  await delay(500);
   rmSync(profile, { recursive: true, force: true });
   rmSync(htmlPath, { force: true });
 }

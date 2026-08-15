@@ -191,17 +191,33 @@ Studio 的本地预览渲染（worker CPU 核心 + WebGPU 着色器）不依赖�
 cd frontend
 # CPU TypeScript 核心 vs C++ 后端（orbit/transition/program/agreement/color）
 npm run test:local-render-parity
-# WebGPU fp32 着色器 vs C++ 已验证的 CPU fp64 核心（需要可用的 WebGPU 适配器）
+# WebGPU fp32 着色器 vs C++ fp32 参考 + CPU fp64 核心
+npm run test:webgpu-wgpu-parity   # 需要 wgpu python 包（见下）
+# WebGPU fp32 着色器 vs CPU fp64 核心（Chrome 驱动，需要可用的 WebGPU 适配器）
 CHROME_BIN=/usr/bin/google-chrome npm run test:webgpu-parity
 ```
 
 - `test:local-render-parity` 会构建并调用 `backend/build/browser_orbit_reference`，
   对 16 个 variant、orbit program、pair/cardinal/multi transition、
   mandel_ship_agree 和 ColorProgram 做点级与整帧对比，完全在 Node 内运行。
-- `test:webgpu-parity` 自行启动带 SwiftShader 的 headless Chrome 并通过 CDP 附加，
-  将 WGSL 着色器的输出与 CPU fp64 核心逐像素对比。headless SwiftShader WebGPU
-  在部分环境下无法初始化适配器（`requestAdapter` 返回 null），此时脚本以明确
-  错误退出；需要真 GPU 或可用的软件适配器环境才能运行。
+- `test:webgpu-wgpu-parity` 是本机（有 Vulkan 驱动时）最可靠的 WebGPU 对拍：
+  `scripts/compare-webgpu-wgpu.py` 用 Python `wgpu`（wgpu-native + Vulkan，可走
+  NVIDIA 独显或 lavapipe）原样运行 `webgpu-renderer.ts` 里的 WGSL shader，
+  `scripts/compare-webgpu-wgpu.mjs` 再与 C++ `--frame-fp32` 参考（镜像 shader 的
+  float 运算顺序）逐字节对比，另输出与 CPU fp64 核心的边界噪声诊断。
+  安装运行环境：
+  ```bash
+  uv venv /tmp/wgpu-venv --python /usr/bin/python3
+  UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple \
+    uv pip install --python /tmp/wgpu-venv/bin/python wgpu
+  /tmp/wgpu-venv/bin/python scripts/compare-webgpu-wgpu.py
+  node scripts/compare-webgpu-wgpu.mjs
+  ```
+- `test:webgpu-parity` 自行启动 headless Chrome 并通过 CDP 附加，把 WGSL 着色器
+  输出与 CPU fp64 核心逐像素对比。注意两点：Chrome GPU 进程默认用自带的
+  SwiftShader-only Vulkan loader，需要 `LD_LIBRARY_PATH` 指向系统 loader
+  （脚本已处理）；headless SwiftShader WebGPU 在部分环境无法初始化适配器，
+  此时脚本以明确错误退出，需要真 GPU 或可用的软件适配器环境。
 
 ## Dev Server Smoke / 本地联调冒烟
 

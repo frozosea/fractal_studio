@@ -15,6 +15,8 @@
 using fsd::compute::Cx;
 using fsd::compute::Variant;
 
+constexpr double kPi = 3.14159265358979323846264338327950288;
+
 Cx<double> step_runtime(Variant variant, Cx<double> z, const Cx<double>& c) {
     switch (variant) {
         case Variant::Mandelbrot: return fsd::compute::variant_step<Variant::Mandelbrot, double>(z, c);
@@ -246,6 +248,50 @@ void emit_frame(bool julia, fsd::compute::Colormap palette, bool smooth) {
     std::cout.write(reinterpret_cast<const char*>(rgba.data()), static_cast<std::streamsize>(rgba.size()));
 }
 
+// fp32 frame reference for WebGPU parity: mirrors the WGSL shader's float
+// operation order exactly (pixel coordinates, rotation, orbit, bailout) so a
+// byte-level comparison against the shader is meaningful.
+template <Variant V>
+void emit_frame_fp32(bool julia, fsd::compute::Colormap palette, bool smooth,
+                     double center_re, double center_im, double scale,
+                     double rotation_deg, int max_iter) {
+    constexpr int width = 128, height = 96;
+    const float fcenter_re = static_cast<float>(center_re);
+    const float fcenter_im = static_cast<float>(center_im);
+    const float fscale = static_cast<float>(scale);
+    const float faspect = static_cast<float>(width) / static_cast<float>(height);
+    const float fwidth = static_cast<float>(width);
+    const float fheight = static_cast<float>(height);
+    const float fcos = static_cast<float>(std::cos(rotation_deg * kPi / 180.0));
+    const float fsin = static_cast<float>(std::sin(rotation_deg * kPi / 180.0));
+    const float bailout = static_cast<float>(fsd::compute::variant_default_bailout(V));
+    const float bailout_sq = bailout * bailout;
+    constexpr float julia_re = -0.8f, julia_im = 0.156f;
+    std::vector<unsigned char> rgba(static_cast<size_t>(width * height * 4), 255);
+    for (int py = 0; py < height; ++py) for (int px = 0; px < width; ++px) {
+        const float local_re = (((static_cast<float>(px) + 0.5f) / fwidth - 0.5f) * fscale) * faspect;
+        const float local_im = (0.5f - (static_cast<float>(py) + 0.5f) / fheight) * fscale;
+        const float re = fcenter_re + local_re * fcos - local_im * fsin;
+        const float im = fcenter_im + local_re * fsin + local_im * fcos;
+        Cx<float> z{julia ? re : 0.0f, julia ? im : 0.0f};
+        const Cx<float> c{julia ? julia_re : re, julia ? julia_im : im};
+        int iteration = max_iter; float norm = 0.0f;
+        for (int i = 0; i < max_iter; ++i) {
+            z = fsd::compute::variant_step<V, float>(z, c);
+            norm = z.re * z.re + z.im * z.im;
+            const bool escaped = !std::isfinite(norm) || (fsd::compute::variant_is_transcendental(V)
+                ? std::max(std::abs(z.re), std::abs(z.im)) >= bailout : norm > bailout_sq);
+            if (escaped) { iteration = i; break; }
+        }
+        unsigned char b=0,g=0,r=0;
+        fsd::compute::colorize_escape_bgr(iteration, max_iter, palette,
+            iteration < max_iter ? static_cast<double>(norm) : 0.0, smooth, b, g, r);
+        const size_t offset = static_cast<size_t>((py * width + px) * 4);
+        rgba[offset]=r; rgba[offset+1]=g; rgba[offset+2]=b;
+    }
+    std::cout.write(reinterpret_cast<const char*>(rgba.data()), static_cast<std::streamsize>(rgba.size()));
+}
+
 template <Variant V>
 void emit_agreement_frame() {
     constexpr int width=32,height=24,max_iter=120;
@@ -411,6 +457,13 @@ int main(int argc, char** argv) {
         if (std::string(argv[2]) == "mandelbrot") emit_frame<Variant::Mandelbrot>(false, fsd::compute::Colormap::ClassicCos, false);
         else if (std::string(argv[2]) == "burning_ship_julia") emit_frame<Variant::Boat>(true, fsd::compute::Colormap::Viridis, true);
         else if (std::string(argv[2]) == "burning_ship_agree") emit_agreement_frame<Variant::Boat>();
+        else return 2;
+        return 0;
+    }
+    if (argc == 3 && std::string(argv[1]) == "--frame-fp32") {
+        if (std::string(argv[2]) == "mandelbrot") emit_frame_fp32<Variant::Mandelbrot>(false, fsd::compute::Colormap::ClassicCos, false, -0.75, 0.0, 3.0, 0.0, 180);
+        else if (std::string(argv[2]) == "burning_ship_julia") emit_frame_fp32<Variant::Boat>(true, fsd::compute::Colormap::Viridis, true, -0.64, 0.03, 2.4, 19.0, 180);
+        else if (std::string(argv[2]) == "deep_zoom") emit_frame_fp32<Variant::Mandelbrot>(false, fsd::compute::Colormap::ClassicCos, false, -0.7435, 0.1314, 0.0002, 0.0, 600);
         else return 2;
         return 0;
     }
