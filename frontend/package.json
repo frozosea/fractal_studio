@@ -12,7 +12,8 @@
     "test:e2e": "playwright test",
     "test:local-render-parity": "node scripts/compare-local-render.mjs",
     "test:webgpu-parity": "node scripts/compare-webgpu-render.mjs",
-    "test:webgpu-wgpu-parity": "python3 scripts/compare-webgpu-wgpu.py && node scripts/compare-webgpu-wgpu.mjs"
+    "test:webgpu-wgpu-parity": "python3 scripts/compare-webgpu-wgpu.py && node scripts/compare-webgpu-wgpu.mjs",
+    "bench:local-render": "node scripts/bench-local-render.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
