@@ -267,17 +267,39 @@ export default function AdminPage() {
           <div className="grid gap-4 xl:grid-cols-2">
             {computeNodes.map((node) => {
               const bytesToGiB = (value?: number | null) => value == null ? t("compute.unknown") : `${(value / 1024 ** 3).toFixed(1)} GiB`;
+              const cpuFeatures = [
+                node.cpu?.openmp?.runtime && "OpenMP",
+                node.cpu?.avx2?.runtime && "AVX2",
+                node.cpu?.avx512?.runtime && "AVX-512",
+              ].filter(Boolean).join(" · ");
               return <article key={node.nodeKey} className="rounded-xl border border-hairline/10 bg-wash/[0.02] p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div><h2 className="font-medium text-ink/90">{node.nodeKey}</h2><p className="mt-1 text-xs text-muted-foreground">{node.gpu?.name ?? t("compute.unknownGpu")}</p></div>
                   <div className="flex gap-2"><Badge variant={node.healthy ? "success" : "error"}>{t(node.healthy ? "compute.healthy" : "compute.unhealthy")}</Badge><Badge variant="outline">{t(`compute.state.${node.state}`)}</Badge></div>
                 </div>
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <section className="rounded-lg border border-hairline/10 p-3">
+                    <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("compute.cpuAllocation")}</h3>
+                    <dl className="mt-3 space-y-3 text-sm">
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">{t("compute.taskSlots")}</dt><dd className="text-right text-ink/85">{node.cpuAllocation ? `${node.cpuAllocation.usedSlots} / ${node.cpuAllocation.maxSlots}` : t("compute.unknown")}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">{t("compute.previewSlots")}</dt><dd className="text-right text-ink/85">{node.cpuAllocation ? `${node.cpuAllocation.usedPreviewSlots} / ${node.cpuAllocation.maxPreviewSlots}` : t("compute.unknown")}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">{t("compute.cpuCores")}</dt><dd className="text-right text-ink/85">{node.cpu ? `${node.cpu.physicalCores ?? "?"} / ${node.cpu.logicalCores ?? "?"}` : t("compute.unknownCpu")}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">{t("compute.cpuAcceleration")}</dt><dd className="text-right text-ink/85">{cpuFeatures || t("compute.unavailable")}</dd></div>
+                    </dl>
+                  </section>
+                  <section className="rounded-lg border border-hairline/10 p-3">
+                    <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("compute.gpuAllocation")}</h3>
+                    <dl className="mt-3 space-y-3 text-sm">
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">{t("compute.taskSlots")}</dt><dd className="text-right text-ink/85">{node.gpuAllocation ? `${node.gpuAllocation.usedSlots} / ${node.gpuAllocation.maxSlots}` : t("compute.unknown")}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">{t("compute.previewSlots")}</dt><dd className="text-right text-ink/85">{node.gpuAllocation ? `${node.gpuAllocation.usedPreviewSlots} / ${node.gpuAllocation.maxPreviewSlots}` : t("compute.unknown")}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">GPU</dt><dd className="text-right text-ink/85">{node.gpu?.name ?? t("compute.unknownGpu")}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">{t("compute.vram")}</dt><dd className="text-right text-ink/85">{`${bytesToGiB(node.gpu?.freeVramBytes)} / ${bytesToGiB(node.gpu?.totalVramBytes)}`}</dd></div>
+                      <div className="flex justify-between gap-4"><dt className="text-muted-foreground">{t("compute.cuda")}</dt><dd className="text-right text-ink/85">{node.gpu?.runtime ? node.gpu.computeCapability ? `sm_${node.gpu.computeCapability.major}${node.gpu.computeCapability.minor}` : t("compute.available") : t("compute.unavailable")}</dd></div>
+                    </dl>
+                  </section>
+                </div>
                 <dl className="mt-5 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                   {[
-                    [t("compute.durableSlots"), `${node.usedDurableSlots} / ${node.maxDurableSlots}`],
-                    [t("compute.previewSlots"), `${node.usedPreviewSlots} / ${node.maxPreviewSlots}`],
-                    [t("compute.vram"), `${bytesToGiB(node.gpu?.freeVramBytes)} / ${bytesToGiB(node.gpu?.totalVramBytes)}`],
-                    [t("compute.cuda"), node.gpu?.runtime ? node.gpu.computeCapability ? `sm_${node.gpu.computeCapability.major}${node.gpu.computeCapability.minor}` : t("compute.available") : t("compute.unavailable")],
                     [t("compute.renderer"), node.rendererVersion ?? t("compute.unknown")],
                     [t("compute.lastHealthy"), node.lastHealthyAt ? formatDate(node.lastHealthyAt) : t("compute.never")],
                     [t("compute.lastAssigned"), node.lastAssignedAt ? formatDate(node.lastAssignedAt) : t("compute.never")],

@@ -143,6 +143,30 @@ class AdminComputeGpuView(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class AdminComputeFeatureView(BaseModel):
+    compiled: bool = False
+    runtime: bool = False
+
+
+class AdminComputeCpuView(BaseModel):
+    logical_cores: int | None = Field(default=None, alias="logicalCores")
+    physical_cores: int | None = Field(default=None, alias="physicalCores")
+    openmp: AdminComputeFeatureView | None = None
+    avx2: AdminComputeFeatureView | None = None
+    avx512: AdminComputeFeatureView | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AdminComputeAllocationView(BaseModel):
+    used_slots: int = Field(alias="usedSlots")
+    max_slots: int = Field(alias="maxSlots")
+    used_preview_slots: int = Field(alias="usedPreviewSlots")
+    max_preview_slots: int = Field(alias="maxPreviewSlots")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class AdminComputeNodeView(BaseModel):
     node_key: str = Field(alias="nodeKey")
     state: Literal["active", "draining", "offline", "disabled"]
@@ -152,6 +176,9 @@ class AdminComputeNodeView(BaseModel):
     max_preview_slots: int = Field(alias="maxPreviewSlots")
     used_preview_slots: int = Field(alias="usedPreviewSlots")
     renderer_version: str | None = Field(default=None, alias="rendererVersion")
+    cpu_allocation: AdminComputeAllocationView | None = Field(default=None, alias="cpuAllocation")
+    gpu_allocation: AdminComputeAllocationView | None = Field(default=None, alias="gpuAllocation")
+    cpu: AdminComputeCpuView | None = None
     gpu: AdminComputeGpuView | None = None
     last_healthy_at: datetime | None = Field(default=None, alias="lastHealthyAt")
     last_assigned_at: datetime | None = Field(default=None, alias="lastAssignedAt")

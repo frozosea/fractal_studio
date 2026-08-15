@@ -130,7 +130,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *gateway-env
-      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://compute:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://compute-b:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true}]'
+      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://compute:18080","maxDurableSlots":1,"maxPreviewSlots":2,"maxCpuSlots":2,"maxGpuSlots":1,"maxCpuPreviewSlots":4,"maxGpuPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://compute-b:18080","maxDurableSlots":1,"maxPreviewSlots":2,"maxCpuSlots":1,"maxGpuSlots":1,"maxCpuPreviewSlots":2,"maxGpuPreviewSlots":1,"enabled":true}]'
     ports: ["127.0.0.1:${COMPUTE_GATEWAY_PORT:-18103}:8080"]
     volumes:
       - ./compute-gateway:/app

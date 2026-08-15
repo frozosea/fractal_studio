@@ -5,13 +5,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
 class NodeUpsertInput(BaseModel):
     base_url: HttpUrl = Field(alias="baseUrl")
     max_durable_slots: int = Field(alias="maxDurableSlots", ge=1, le=64)
     max_preview_slots: int = Field(alias="maxPreviewSlots", ge=1, le=64)
+    max_cpu_slots: int | None = Field(default=None, alias="maxCpuSlots", ge=1, le=64)
+    max_gpu_slots: int | None = Field(default=None, alias="maxGpuSlots", ge=1, le=64)
+    max_cpu_preview_slots: int | None = Field(default=None, alias="maxCpuPreviewSlots", ge=1, le=64)
+    max_gpu_preview_slots: int | None = Field(default=None, alias="maxGpuPreviewSlots", ge=1, le=64)
     enabled: bool
 
     @field_validator("base_url")
@@ -23,6 +27,14 @@ class NodeUpsertInput(BaseModel):
             raise ValueError("baseUrl must not contain a path")
         return value
 
+    @model_validator(mode="after")
+    def fill_resource_defaults(self) -> NodeUpsertInput:
+        self.max_cpu_slots = self.max_cpu_slots or self.max_durable_slots
+        self.max_gpu_slots = self.max_gpu_slots or self.max_durable_slots
+        self.max_cpu_preview_slots = self.max_cpu_preview_slots or self.max_preview_slots
+        self.max_gpu_preview_slots = self.max_gpu_preview_slots or self.max_preview_slots
+        return self
+
 
 class NodeView(BaseModel):
     node_key: str = Field(alias="nodeKey")
@@ -32,6 +44,13 @@ class NodeView(BaseModel):
     max_preview_slots: int = Field(alias="maxPreviewSlots")
     healthy: bool
     last_healthy_at: datetime | None = Field(alias="lastHealthyAt")
+
+
+class ResourceAllocationView(BaseModel):
+    used_slots: int = Field(alias="usedSlots")
+    max_slots: int = Field(alias="maxSlots")
+    used_preview_slots: int = Field(alias="usedPreviewSlots")
+    max_preview_slots: int = Field(alias="maxPreviewSlots")
 
 
 class ErrorBody(BaseModel):

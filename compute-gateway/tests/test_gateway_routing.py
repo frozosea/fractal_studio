@@ -42,6 +42,13 @@ class FakeNodeClient:
             "schemaVersion": 1,
             "rendererVersion": "test-renderer-sm61",
             "hardware": {
+                "cpu": {
+                    "logicalCores": 8,
+                    "physicalCores": 4,
+                    "openmp": {"compiled": True, "runtime": True},
+                    "avx2": {"compiled": True, "runtime": True},
+                    "avx512": {"compiled": False, "runtime": False},
+                },
                 "cuda": {
                     "name": "Test GPU",
                     "runtime": True,
@@ -183,7 +190,17 @@ async def gateway() -> AsyncIterator[tuple[GatewayService, FakeNodeClient]]:
     await engine.dispose()
 
 
-async def _add_node(gateway: GatewayService, key: str, slots: int = 1, preview_slots: int = 2) -> None:
+async def _add_node(
+    gateway: GatewayService,
+    key: str,
+    slots: int = 1,
+    preview_slots: int = 2,
+    *,
+    cpu_slots: int | None = None,
+    gpu_slots: int | None = None,
+    cpu_preview_slots: int | None = None,
+    gpu_preview_slots: int | None = None,
+) -> None:
     await gateway.upsert_node(
         key,
         NodeUpsertInput.model_validate(
@@ -191,6 +208,10 @@ async def _add_node(gateway: GatewayService, key: str, slots: int = 1, preview_s
                 "baseUrl": f"http://{key}.internal:18080",
                 "maxDurableSlots": slots,
                 "maxPreviewSlots": preview_slots,
+                "maxCpuSlots": cpu_slots or slots,
+                "maxGpuSlots": gpu_slots or slots,
+                "maxCpuPreviewSlots": cpu_preview_slots or preview_slots,
+                "maxGpuPreviewSlots": gpu_preview_slots or preview_slots,
                 "enabled": True,
             }
         ),
@@ -244,6 +265,19 @@ async def test_sticky_routing_replay_manifest_and_artifact_stream(
     assert nodes["node-b"]["usedDurableSlots"] == 0
     assert nodes["node-a"]["usedPreviewSlots"] == 0
     assert nodes["node-a"]["rendererVersion"] == "test-renderer-sm61"
+    assert nodes["node-a"]["cpu"] == {
+        "logicalCores": 8,
+        "physicalCores": 4,
+        "openmp": {"compiled": True, "runtime": True},
+        "avx2": {"compiled": True, "runtime": True},
+        "avx512": {"compiled": False, "runtime": False},
+    }
+    assert nodes["node-a"]["cpuAllocation"] == {
+        "usedSlots": 0, "maxSlots": 1, "usedPreviewSlots": 0, "maxPreviewSlots": 2,
+    }
+    assert nodes["node-a"]["gpuAllocation"] == {
+        "usedSlots": 0, "maxSlots": 1, "usedPreviewSlots": 0, "maxPreviewSlots": 2,
+    }
     assert nodes["node-a"]["gpu"] == {
         "name": "Test GPU",
         "runtime": True,
@@ -320,6 +354,103 @@ async def test_rejected_run_releases_the_reserved_slot(gateway: tuple[GatewaySer
     assert (await service.list_nodes())[0]["usedDurableSlots"] == 0
 
 
+async def test_cpu_and_gpu_runs_use_independent_capacity_pools(
+    gateway: tuple[GatewayService, FakeNodeClient],
+) -> None:
+    service, fake = gateway
+    await _add_node(service, "node-a", cpu_slots=2, gpu_slots=1)
+    cpu_one = _request("platform-job:cpu-one")
+    cpu_one["payload"]["engine"] = "cpu"
+    cpu_two = _request("platform-job:cpu-two")
+    cpu_two["payload"]["engine"] = "cpu"
+    gpu = _request("platform-job:gpu")
+    gpu["payload"]["engine"] = "cuda"
+
+    await service.create_run(cpu_one)
+    await service.create_run(cpu_two)
+    await service.create_run(gpu)
+
+    assert fake.created == [
+        ("node-a", "platform-job:cpu-one"),
+        ("node-a", "platform-job:cpu-two"),
+        ("node-a", "platform-job:gpu"),
+    ]
+    view = (await service.list_nodes())[0]
+    assert view["cpuAllocation"]["usedSlots"] == 2
+    assert view["gpuAllocation"]["usedSlots"] == 1
+
+
+async def test_auto_request_reserves_both_resource_pools(
+    gateway: tuple[GatewayService, FakeNodeClient],
+) -> None:
+    service, fake = gateway
+    await _add_node(service, "node-a", cpu_slots=2, gpu_slots=1)
+
+    auto = _request("platform-job:auto")
+    auto["payload"]["engine"] = "auto"
+    await service.create_run(auto)
+
+    gpu = _request("platform-job:gpu-blocked")
+    gpu["payload"]["engine"] = "cuda"
+    with pytest.raises(GatewayError) as raised:
+        await service.create_run(gpu)
+    assert raised.value.status_code == 503
+    assert raised.value.code == "COMPUTE_CAPACITY_EXHAUSTED"
+
+    cpu = _request("platform-job:cpu-spare")
+    cpu["payload"]["engine"] = "cpu"
+    await service.create_run(cpu)
+
+    assert fake.created == [
+        ("node-a", "platform-job:auto"),
+        ("node-a", "platform-job:cpu-spare"),
+    ]
+    view = (await service.list_nodes())[0]
+    assert view["cpuAllocation"]["usedSlots"] == 2
+    assert view["gpuAllocation"]["usedSlots"] == 1
+
+
+async def test_preview_pools_are_independent_by_resource(
+    gateway: tuple[GatewayService, FakeNodeClient],
+) -> None:
+    service, fake = gateway
+    await _add_node(service, "node-a", cpu_preview_slots=1, gpu_preview_slots=2)
+    fake.block_previews = True
+
+    cpu_first = _request("preview-cpu-first")
+    cpu_first["payload"]["engine"] = "cpu"
+    first = asyncio.create_task(service.preview(cpu_first))
+    await fake.preview_started.wait()
+
+    cpu_second = _request("preview-cpu-second")
+    cpu_second["payload"]["engine"] = "cpu"
+    waiting = asyncio.create_task(service.preview(cpu_second))
+    await asyncio.sleep(0)
+    assert not waiting.done()
+
+    gpu_preview = _request("preview-gpu-free")
+    gpu_preview["payload"]["engine"] = "cuda"
+    gpu_task = asyncio.create_task(service.preview(gpu_preview))
+
+    from sqlalchemy import select as sa_select
+
+    deadline = asyncio.get_running_loop().time() + 5
+    while True:
+        async with service._sessions() as session:
+            node = (await session.execute(sa_select(ComputeNode).where(ComputeNode.node_key == "node-a"))).scalar_one()
+            in_flight = service._preview_in_flight
+            if in_flight[node.id, "cpu"] == 1 and in_flight[node.id, "gpu"] == 1:
+                break
+        if asyncio.get_running_loop().time() > deadline:
+            pytest.fail(f"preview slot never acquired; in_flight={dict(service._preview_in_flight)}")
+        await asyncio.sleep(0.01)
+
+    fake.release_previews.set()
+    assert (await first)[0] == b"preview"
+    assert (await waiting)[0] == b"preview"
+    assert (await gpu_task)[0] == b"preview"
+
+
 async def test_reconciliation_resubmits_an_allocating_run(
     gateway: tuple[GatewayService, FakeNodeClient],
 ) -> None:
@@ -363,7 +494,7 @@ async def test_zero_nodes_are_healthy_but_capacity_endpoints_fail_without_reserv
         assert raised.value.status_code == 503
         assert raised.value.code == "COMPUTE_CAPACITY_EXHAUSTED"
     async with service._sessions() as session:
-        assert await service._active_run_count(session, UUID(int=0)) == 0
+        assert await service._active_resource_counts(session, UUID(int=0)) == {"cpu": 0, "gpu": 0}
 
 
 async def test_bootstrap_updates_address_without_overwriting_operator_state(

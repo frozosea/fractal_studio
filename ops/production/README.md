@@ -21,6 +21,11 @@ files, WireGuard private keys, Alipay keys, Caddy configuration and data under
 - Additional nodes reuse the Compute-only template with explicit
   `COMPOSE_PROJECT_NAME`, `COMPUTE_BIND_IP` and `COMPUTE_RUNTIME_PATH` values.
   Never let two nodes share a project name, bind address, runtime or env file.
+- Node capacity is declarative: the Gateway bootstrap
+  (`COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON`) applies `max*Slots` values on every
+  restart, so keep that template as the authoritative capacity source per
+  hardware class (for example `maxCpuSlots`/`maxGpuSlots` for Node 1's RTX 4090
+  vs Node 2's GTX 1050) instead of tuning slots ad hoc through the admin API.
 
 ## Host preparation
 
