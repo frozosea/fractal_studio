@@ -58,7 +58,7 @@ services:
     runtime: nvidia
     gpus: all
     environment:
-      FSD_STARTUP_BENCHMARK: "off"
+      FSD_STARTUP_BENCHMARK: "quick"
       FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
       FSD_RENDERER_VERSION: compose-dev-a
       FSD_ENABLE_LEGACY_API: "0"
@@ -78,7 +78,7 @@ services:
     runtime: nvidia
     gpus: all
     environment:
-      FSD_STARTUP_BENCHMARK: "off"
+      FSD_STARTUP_BENCHMARK: "quick"
       FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
       FSD_RENDERER_VERSION: compose-dev-b
       FSD_ENABLE_LEGACY_API: "0"
