@@ -116,9 +116,10 @@ async function previewWithLocalFallback(
   signal: AbortSignal,
   channel: "main" | "julia_picker",
   onStatus: (status: "queued" | "deferred" | "rendering" | "completed" | "stale") => void,
+  onLocalPreview?: (blob: Blob) => void,
 ): Promise<Blob> {
   try {
-    const local = await renderFractalLocally(spec, width, height, signal);
+    const local = await renderFractalLocally(spec, width, height, signal, channel, onLocalPreview);
     if (local) return local;
   } catch (reason) {
     if (signal.aborted || reason instanceof DOMException && reason.name === "AbortError") throw reason;
@@ -513,13 +514,28 @@ export default function StudioPage() {
       setNotice(null);
       lastPreviewAtRef.current = Date.now();
       try {
+        const publishMainLocalPreview = (progressiveBlob: Blob) => {
+          if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+          const url = URL.createObjectURL(progressiveBlob);
+          if (previewRef.current) URL.revokeObjectURL(previewRef.current);
+          previewRef.current = url;
+          setPreview(url);
+          setPreviewContextKey(aiContextKey);
+        };
+        const publishPickerLocalPreview = (progressiveBlob: Blob) => {
+          if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+          const url = URL.createObjectURL(progressiveBlob);
+          if (juliaPickerPreviewRef.current) URL.revokeObjectURL(juliaPickerPreviewRef.current);
+          juliaPickerPreviewRef.current = url;
+          setJuliaPickerPreview(url);
+        };
         const [blob, pickerBlob] = await Promise.all([
           previewWithLocalFallback(canonical, previewSize.width, previewSize.height, controller.signal, "main", (jobStatus) => {
             if (jobStatus === "queued" || jobStatus === "deferred") setPreviewQueued(true);
-          }),
+          }, publishMainLocalPreview),
           ...(mode === "julia" ? [previewWithLocalFallback(juliaPickerCanonical, previewSize.width, previewSize.height, controller.signal, "julia_picker", (jobStatus) => {
             if (jobStatus === "queued" || jobStatus === "deferred") setPreviewQueued(true);
-          })] : []),
+          }, publishPickerLocalPreview)] : []),
         ]);
         if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
         const url = URL.createObjectURL(blob);

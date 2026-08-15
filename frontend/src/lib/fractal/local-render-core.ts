@@ -1,3 +1,12 @@
+import { stepLocalOrbitProgram, type CompiledLocalOrbitProgram } from "./local-orbit-program";
+import {
+  colorizeRawField,
+  type CompiledColorProgram,
+  type RawEscapeField,
+  type RawField,
+  type RawMetricField,
+} from "./local-field-cache";
+
 export const LOCAL_VARIANTS = [
   "mandelbrot", "tricorn", "burning_ship", "celtic", "heart", "buffalo",
   "perp_buffalo", "celtic_ship", "mandelceltic", "perp_ship", "sin_z",
@@ -5,7 +14,15 @@ export const LOCAL_VARIANTS = [
 ] as const;
 
 export type LocalVariant = (typeof LOCAL_VARIANTS)[number];
-export type LocalMetric = "escape" | "min_abs" | "max_abs" | "envelope";
+export type LocalMetric = "escape" | "min_abs" | "max_abs" | "envelope" | "min_pairwise_dist" | "mandel_ship_agree";
+
+export type LocalTransition = {
+  mode: "pair" | "multi";
+  thetaMilliDeg: number;
+  from: LocalVariant;
+  to: LocalVariant;
+  legs?: ReadonlyArray<{ variant: LocalVariant; weight: number }>;
+};
 
 export type LocalRenderSpec = {
   centerRe: number;
@@ -23,6 +40,10 @@ export type LocalRenderSpec = {
   juliaRe: number;
   juliaIm: number;
   bailout: number;
+  pairwiseCap?: number;
+  orbitProgram?: CompiledLocalOrbitProgram;
+  colorProgram?: CompiledColorProgram;
+  transition?: LocalTransition;
 };
 
 export type OrbitSample = { iter: number; norm: number; field: number };
@@ -36,7 +57,7 @@ function step(variant: LocalVariant, x: number, y: number, cx: number, cy: numbe
   switch (variant) {
     case "mandelbrot": return [x2 - y2 + cx, xy2 + cy];
     case "tricorn": return [x2 - y2 + cx, -xy2 + cy];
-    case "burning_ship": return [x2 - y2 + cx, 2 * Math.abs(x * y) + cy];
+    case "burning_ship": return [x2 - y2 + cx, 2 * Math.abs(x) * Math.abs(y) + cy];
     case "celtic": return [x2 - y2 + cx, 2 * x * Math.abs(y) + cy];
     case "heart": return [x2 - y2 + cx, -2 * Math.abs(x) * y + cy];
     case "buffalo": return [Math.abs(x2 - y2) + cx, xy2 + cy];
@@ -65,15 +86,46 @@ export function iterateOrbit(spec: LocalRenderSpec, re: number, im: number): Orb
   let maximum = 0;
   const componentEscape = TRANSCENDENTAL.has(spec.variant);
   const bailout2 = spec.bailout * spec.bailout;
+  const program = spec.orbitProgram;
+  const programRadius = program?.certifiedRadius == null ? null : spec.julia
+    ? Math.max(program.certifiedRadius, 0.5 * (1 + Math.sqrt(1 + 4 * Math.hypot(cx, cy))))
+    : program.certifiedRadius;
+  const advance = (iteration: number): [number, number] => program
+    ? [...stepLocalOrbitProgram(program, [x, y], [cx, cy], iteration)]
+    : step(spec.variant, x, y, cx, cy);
+  if (spec.metric === "min_pairwise_dist") {
+    const orbit: Array<readonly [number, number]> = [];
+    let minimumDistance2 = Number.POSITIVE_INFINITY;
+    const cap = Math.max(1, Math.min(spec.iterations, Math.round(spec.pairwiseCap ?? 64)));
+    for (let iter = 0; iter < cap; iter += 1) {
+      [x, y] = advance(iter);
+      for (const [previousX, previousY] of orbit) {
+        const deltaX = x - previousX; const deltaY = y - previousY;
+        const distance2 = deltaX * deltaX + deltaY * deltaY;
+        if (distance2 < minimumDistance2) minimumDistance2 = distance2;
+      }
+      orbit.push([x, y]);
+      const norm = x * x + y * y;
+      if (!Number.isFinite(norm) || (componentEscape
+        ? Math.max(Math.abs(x), Math.abs(y)) >= spec.bailout
+        : norm > bailout2)) break;
+    }
+    return { iter: spec.iterations, norm: 0, field: Number.isFinite(minimumDistance2) ? Math.sqrt(minimumDistance2) : 0 };
+  }
   for (let iter = 0; iter < spec.iterations; iter += 1) {
-    [x, y] = step(spec.variant, x, y, cx, cy);
+    [x, y] = advance(iter);
     const norm = x * x + y * y;
     if (norm < minimum) minimum = norm;
     if (norm > maximum) maximum = norm;
-    const escaped = !Number.isFinite(norm) || (componentEscape
-      ? Math.max(Math.abs(x), Math.abs(y)) > spec.bailout
-      : norm > bailout2);
-    if (escaped) return { iter, norm, field: fieldValue(spec.metric, minimum, maximum) };
+    const numericalDivergence = !Number.isFinite(norm);
+    const escaped = program ? programRadius !== null && norm > programRadius * programRadius : componentEscape
+      ? Math.max(Math.abs(x), Math.abs(y)) >= spec.bailout
+      : norm > bailout2;
+    if (numericalDivergence || escaped) return {
+      iter,
+      norm: numericalDivergence && program ? 0 : norm,
+      field: fieldValue(spec.metric, minimum, maximum),
+    };
   }
   return { iter: spec.iterations, norm: 0, field: fieldValue(spec.metric, minimum, maximum) };
 }
@@ -182,21 +234,59 @@ function metricColor(sample: OrbitSample, spec: LocalRenderSpec): RGB {
   return fieldColor(raw / spec.bailout, spec.colorMap);
 }
 
-export function renderLocalRgba(spec: LocalRenderSpec, width: number, height: number): Uint8ClampedArray {
-  const count = width * height; const iterations = new Uint32Array(count); const norms = new Float64Array(count);
-  const fields = spec.metric === "escape" ? null : new Float64Array(count); const histogram = new Float64Array(spec.iterations);
+export function computeLocalRawField(spec: LocalRenderSpec, width: number, height: number): RawField {
+  if (spec.transition || spec.metric === "mandel_ship_agree") {
+    throw new TypeError("special local render requires its dedicated orbit kernel");
+  }
+  if (!Number.isSafeInteger(width) || width < 1 || !Number.isSafeInteger(height) || height < 1) {
+    throw new RangeError("local render dimensions must be positive integers");
+  }
+  const count = width * height; const iterations = new Uint32Array(count); const norms = new Float32Array(count);
+  const fields = spec.metric === "escape" ? null : new Float64Array(count);
   const aspect = width / height; const angle = spec.rotationDeg * Math.PI / 180; const cosine = Math.cos(angle); const sine = Math.sin(angle);
-  let total = 0;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
     const localRe = ((x + 0.5) / width - 0.5) * spec.scale * aspect;
     const localIm = (0.5 - (y + 0.5) / height) * spec.scale;
     const re = spec.centerRe + localRe * cosine - localIm * sine; const im = spec.centerIm + localRe * sine + localIm * cosine;
     const sample = iterateOrbit(spec, re, im); const sampleIndex = y * width + x;
     iterations[sampleIndex] = sample.iter; norms[sampleIndex] = sample.norm; if (fields) fields[sampleIndex] = sample.field;
-    if (spec.metric === "escape" && sample.iter < spec.iterations && spec.colorMode !== "direct") {
+  }
+  if (fields) return {
+    kind: "metric", metric: spec.metric, width, height, bailout: spec.bailout, values: fields,
+  } satisfies RawMetricField;
+  return {
+    kind: "escape", metric: "escape", width, height, bailout: spec.bailout,
+    iterationLimit: spec.iterations, iterations, norms,
+  } satisfies RawEscapeField;
+}
+
+export function colorizeLocalRawField(spec: LocalRenderSpec, field: RawField): Uint8ClampedArray {
+  if (field.metric !== spec.metric || field.width < 1 || field.height < 1) {
+    throw new TypeError("raw field does not match local render specification");
+  }
+  if (spec.colorProgram) return colorizeRawField(field, spec.colorProgram, { smooth: spec.smooth });
+
+  const { width, height } = field;
+  const count = width * height;
+  const iterations = field.kind === "escape" ? field.iterations : null;
+  const norms = field.kind === "escape" ? field.norms : null;
+  const fields = field.kind === "metric" ? field.values : null;
+  const histogram = new Float64Array(spec.iterations);
+  let total = 0;
+  if (iterations && spec.colorMode !== "direct") {
+    const aspect = width / height; const angle = spec.rotationDeg * Math.PI / 180;
+    const cosine = Math.cos(angle); const sine = Math.sin(angle);
+    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+      const index = y * width + x; const iteration = iterations[index] ?? spec.iterations;
+      if (iteration >= spec.iterations) continue;
+      const localRe = ((x + 0.5) / width - 0.5) * spec.scale * aspect;
+      const localIm = (0.5 - (y + 0.5) / height) * spec.scale;
+      const re = spec.centerRe + localRe * cosine - localIm * sine;
+      const im = spec.centerIm + localRe * sine + localIm * cosine;
       if (spec.colorMode === "eq_center" && re * re + im * im > 4) continue;
-      const weight = spec.colorMode === "eq_center" ? 1 / Math.max((re-spec.centerRe) ** 2 + (im-spec.centerIm) ** 2, (spec.scale / height) ** 2) : 1;
-      histogram[sample.iter] = (histogram[sample.iter] ?? 0) + weight; total += weight;
+      const weight = spec.colorMode === "eq_center"
+        ? 1 / Math.max((re-spec.centerRe) ** 2 + (im-spec.centerIm) ** 2, (spec.scale / height) ** 2) : 1;
+      histogram[iteration] = (histogram[iteration] ?? 0) + weight; total += weight;
     }
   }
   let countMin = 0; while (countMin < histogram.length && !histogram[countMin]) countMin += 1;
@@ -214,10 +304,38 @@ export function renderLocalRgba(spec: LocalRenderSpec, width: number, height: nu
   };
   const rgba = new Uint8ClampedArray(count * 4);
   for (let index = 0; index < count; index += 1) {
-    const sample = { iter: iterations[index] ?? spec.iterations, norm: norms[index] ?? 0, field: fields?.[index] ?? 0 };
+    const sample = { iter: iterations?.[index] ?? spec.iterations, norm: norms?.[index] ?? 0, field: fields?.[index] ?? 0 };
     const rgb = spec.metric !== "escape" ? metricColor(sample, spec)
       : spec.colorMode !== "direct" && sample.iter < spec.iterations && total > 0 ? equalizedColor(sample.iter) : escapeColor(sample, spec);
     const offset = index * 4; rgba[offset] = rgb[0]; rgba[offset+1] = rgb[1]; rgba[offset+2] = rgb[2]; rgba[offset+3] = 255;
   }
   return rgba;
+}
+
+export function colorizeLocalAgreement(
+  spec: LocalRenderSpec,
+  iterations: Uint32Array,
+  agreements: Float64Array,
+  width: number,
+  height: number,
+): Uint8ClampedArray {
+  if (iterations.length !== width * height || agreements.length !== width * height) {
+    throw new RangeError("agreement field dimensions do not match");
+  }
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  const paletteSpec = { ...spec, smooth: false };
+  for (let index = 0; index < iterations.length; index += 1) {
+    const rgb = escapeColor({ iter: iterations[index] ?? spec.iterations, norm: 0, field: 0 }, paletteSpec);
+    const agrees = agreements[index] === 1;
+    const offset = index * 4;
+    rgba[offset] = agrees ? rgb[0] : 255 - rgb[0];
+    rgba[offset + 1] = agrees ? rgb[1] : 255 - rgb[1];
+    rgba[offset + 2] = agrees ? rgb[2] : 255 - rgb[2];
+    rgba[offset + 3] = 255;
+  }
+  return rgba;
+}
+
+export function renderLocalRgba(spec: LocalRenderSpec, width: number, height: number): Uint8ClampedArray {
+  return colorizeLocalRawField(spec, computeLocalRawField(spec, width, height));
 }

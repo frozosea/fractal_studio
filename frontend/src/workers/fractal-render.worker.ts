@@ -1,19 +1,136 @@
 /// <reference lib="webworker" />
 
-import { renderLocalRgba, type LocalRenderSpec } from "@/lib/fractal/local-render-core";
+import {
+  colorizeLocalAgreement,
+  colorizeLocalRawField,
+  computeLocalRawField,
+  type LocalRenderSpec,
+} from "@/lib/fractal/local-render-core";
+import {
+  createRawFieldCacheKey,
+  RawFieldCache,
+  type RawEscapeField,
+  type RawField,
+  type RawMetricField,
+} from "@/lib/fractal/local-field-cache";
+import {
+  renderLocalMandelShipAgreementRaw,
+  renderLocalTransitionRaw,
+  type LocalAxisTransitionVariant,
+  type LocalTransitionMetric,
+  type LocalTransitionRenderSpec,
+} from "@/lib/fractal/local-transition-core";
 
-type RenderMessage = { id: number; spec: LocalRenderSpec; width: number; height: number };
+type RenderMessage = {
+  id: number;
+  spec: LocalRenderSpec;
+  width: number;
+  height: number;
+  previewWidth?: number;
+  previewHeight?: number;
+};
+
+type RenderStage = "preview" | "final";
+const fieldCache = new RawFieldCache(64 * 1024 * 1024);
+
+async function rgbaBlob(rgba: Uint8ClampedArray, width: number, height: number): Promise<Blob> {
+  const canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("2d_context_unavailable");
+  context.putImageData(new ImageData(rgba, width, height), 0, 0);
+  return canvas.convertToBlob({ type: "image/png" });
+}
+
+function transitionSpec(spec: LocalRenderSpec): LocalTransitionRenderSpec {
+  const transition = spec.transition;
+  if (!transition) throw new Error("missing_transition_spec");
+  return {
+    centerRe: spec.centerRe,
+    centerIm: spec.centerIm,
+    scale: spec.scale,
+    iterations: spec.iterations,
+    metric: spec.metric as LocalTransitionMetric,
+    bailout: spec.bailout,
+    rotationDeg: spec.rotationDeg,
+    julia: spec.julia,
+    juliaRe: spec.juliaRe,
+    juliaIm: spec.juliaIm,
+    transitionThetaMilliDeg: transition.thetaMilliDeg,
+    transitionFrom: transition.from as LocalAxisTransitionVariant,
+    transitionTo: transition.to as LocalAxisTransitionVariant,
+    transitionLegs: transition.mode === "multi" ? transition.legs?.map((leg) => ({
+      variant: leg.variant as LocalAxisTransitionVariant,
+      weight: leg.weight,
+    })) : undefined,
+    pairwiseCap: spec.pairwiseCap,
+  };
+}
+
+function computeRaw(spec: LocalRenderSpec, width: number, height: number): RawField {
+  if (spec.transition) {
+    const raw = renderLocalTransitionRaw(transitionSpec(spec), width, height);
+    if (raw.iterU32 && raw.normF32) return {
+      kind: "escape", metric: "escape", width, height, bailout: spec.bailout,
+      iterationLimit: spec.iterations, iterations: raw.iterU32, norms: raw.normF32,
+    } satisfies RawEscapeField;
+    if (!raw.fieldF64) throw new Error("transition_field_missing");
+    return {
+      kind: "metric", metric: spec.metric, width, height, bailout: spec.bailout,
+      values: raw.fieldF64,
+    } satisfies RawMetricField;
+  }
+  return computeLocalRawField(spec, width, height);
+}
+
+function renderAgreement(spec: LocalRenderSpec, width: number, height: number): Uint8ClampedArray {
+  const raw = renderLocalMandelShipAgreementRaw({
+    centerRe: spec.centerRe,
+    centerIm: spec.centerIm,
+    scale: spec.scale,
+    iterations: spec.iterations,
+    variant: spec.variant,
+    bailout: spec.bailout,
+    julia: spec.julia,
+    juliaRe: spec.juliaRe,
+    juliaIm: spec.juliaIm,
+    rotationDeg: spec.rotationDeg,
+  }, width, height);
+  if (!raw.agreementIterU32 || !raw.fieldF64) throw new Error("agreement_field_missing");
+  return colorizeLocalAgreement(spec, raw.agreementIterU32, raw.fieldF64, width, height);
+}
+
+async function renderStage(
+  id: number,
+  stage: RenderStage,
+  spec: LocalRenderSpec,
+  width: number,
+  height: number,
+): Promise<void> {
+  let rgba: Uint8ClampedArray;
+  let cacheHit = false;
+  if (spec.metric === "mandel_ship_agree") {
+    rgba = renderAgreement(spec, width, height);
+  } else {
+    const cacheKey = createRawFieldCacheKey(spec as unknown as Record<string, unknown>, width, height);
+    let raw = fieldCache.get(cacheKey);
+    cacheHit = raw !== undefined;
+    if (!raw) {
+      raw = computeRaw(spec, width, height);
+      fieldCache.set(cacheKey, raw);
+    }
+    rgba = colorizeLocalRawField(spec, raw);
+  }
+  const blob = await rgbaBlob(rgba, width, height);
+  self.postMessage({ id, stage, blob, width, height, cacheHit });
+}
 
 self.onmessage = async (event: MessageEvent<RenderMessage>) => {
-  const { id, spec, width, height } = event.data;
+  const { id, spec, width, height, previewWidth, previewHeight } = event.data;
   try {
-    const rgba = renderLocalRgba(spec, width, height);
-    const canvas = new OffscreenCanvas(width, height);
-    const context = canvas.getContext("2d", { alpha: false });
-    if (!context) throw new Error("2d_context_unavailable");
-    context.putImageData(new ImageData(rgba, width, height), 0, 0);
-    const blob = await canvas.convertToBlob({ type: "image/png" });
-    self.postMessage({ id, blob });
+    if (previewWidth && previewHeight && (previewWidth !== width || previewHeight !== height)) {
+      await renderStage(id, "preview", spec, previewWidth, previewHeight);
+    }
+    await renderStage(id, "final", spec, width, height);
   } catch (reason) {
     self.postMessage({ id, error: reason instanceof Error ? reason.message : "local_render_failed" });
   }

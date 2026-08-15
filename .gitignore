@@ -30,6 +30,9 @@
 
 # Frontend deps/build
 /frontend/node_modules/
+# This worktree links node_modules to the fractal_studio worktree; git treats
+# the symlink as a file, so also ignore the bare path.
+/frontend/node_modules
 /frontend/dist/
 /frontend/*.tsbuildinfo
 # frontend/.gitignore already covers /frontend/.next; this catches a stray
