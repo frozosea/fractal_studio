@@ -182,6 +182,27 @@ server/client 边界问题。两者都不等于视觉回归测试。
 
 改动 `messages/*.json` 之后，确认两个语言的键集合完全一致——缺键在运行时才会炸。
 
+## Browser Local Render Parity / 浏览器本地渲染对拍
+
+Studio 的本地预览渲染（worker CPU 核心 + WebGPU 着色器）不依赖后端即可出图，
+因此需要与 C++ 后端数值对拍，防止浏览器侧实现漂移：
+
+```bash
+cd frontend
+# CPU TypeScript 核心 vs C++ 后端（orbit/transition/program/agreement/color）
+npm run test:local-render-parity
+# WebGPU fp32 着色器 vs C++ 已验证的 CPU fp64 核心（需要可用的 WebGPU 适配器）
+CHROME_BIN=/usr/bin/google-chrome npm run test:webgpu-parity
+```
+
+- `test:local-render-parity` 会构建并调用 `backend/build/browser_orbit_reference`，
+  对 16 个 variant、orbit program、pair/cardinal/multi transition、
+  mandel_ship_agree 和 ColorProgram 做点级与整帧对比，完全在 Node 内运行。
+- `test:webgpu-parity` 自行启动带 SwiftShader 的 headless Chrome 并通过 CDP 附加，
+  将 WGSL 着色器的输出与 CPU fp64 核心逐像素对比。headless SwiftShader WebGPU
+  在部分环境下无法初始化适配器（`requestAdapter` 返回 null），此时脚本以明确
+  错误退出；需要真 GPU 或可用的软件适配器环境才能运行。
+
 ## Dev Server Smoke / 本地联调冒烟
 
 ```bash

@@ -10,7 +10,8 @@
     "lint": "next lint",
     "type-check": "tsc --noEmit",
     "test:e2e": "playwright test",
-    "test:local-render-parity": "node scripts/compare-local-render.mjs"
+    "test:local-render-parity": "node scripts/compare-local-render.mjs",
+    "test:webgpu-parity": "node scripts/compare-webgpu-render.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
