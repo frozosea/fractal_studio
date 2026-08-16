@@ -340,6 +340,35 @@ function renderTiledInWorkers(
   });
 }
 
+let wasmProbe: Promise<boolean> | null = null;
+
+async function detectWasm(): Promise<boolean> {
+  wasmProbe ??= (async () => {
+    try {
+      const url = new URL("../../scripts/wasm-core/field_core.wasm", import.meta.url);
+      const bytes = await (await fetch(url)).arrayBuffer();
+      await WebAssembly.instantiate(bytes, {});
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  return wasmProbe;
+}
+
+// Device-tier routing: weak devices (few cores and no wasm SIMD core) hand
+// heavy renders to the compute nodes instead of stalling the browser with a
+// single-threaded JS render. Strong devices keep everything local.
+async function heavyRenderOffloaded(local: LocalRenderSpec, width: number, height: number): Promise<boolean> {
+  if (typeof navigator === "undefined") return false;
+  const cores = navigator.hardwareConcurrency ?? 1;
+  if (cores >= 4) return false;
+  const heavy = width * height > 1_000_000 || local.iterations > 2000;
+  if (!heavy) return false;
+  const hasWasm = await detectWasm();
+  return !hasWasm;
+}
+
 export async function renderFractalLocally(
   spec: FractalSpec,
   width: number,
@@ -352,6 +381,7 @@ export async function renderFractalLocally(
   if (!local || typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined") return null;
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1
     || width > 4096 || height > 4096 || width * height > 4_194_304) return null;
+  if (await heavyRenderOffloaded(local, width, height)) return null;
   const dimensions = dimensionsForRender(local, width, height);
   const requestedScalar = spec.scalarType ?? "auto";
   const allowWebGpu = requestedScalar === "auto" || requestedScalar === "fp32" || requestedScalar === "float";
