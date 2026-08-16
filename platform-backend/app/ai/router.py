@@ -255,7 +255,7 @@ async def _read_image(upload: UploadFile | None) -> tuple[bytes | None, str | No
         with Image.open(BytesIO(data)) as image:
             if max(image.size) > 640:
                 raise HTTPException(status_code=422, detail="ai_image_dimensions_invalid")
-    except (UnidentifiedImageError, OSError) as error:
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
         raise HTTPException(status_code=422, detail="ai_image_invalid") from error
     try:
         return prepare_ai_image(data, upload.content_type)

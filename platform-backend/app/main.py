@@ -26,8 +26,17 @@ from app.core.request_context import idempotency_key_var, request_id_var, user_i
 from app.studio.router import router as studio_router
 
 
-app = FastAPI(title="Fractal Platform API", version="0.1.0")
-configure_logging(json_output=get_settings().log_json or get_settings().app_env == "production")
+_settings = get_settings()
+# Keep interactive docs and the OpenAPI schema off the production surface so
+# the full route surface is not publicly discoverable at /platform/docs.
+app = FastAPI(
+    title="Fractal Platform API",
+    version="0.1.0",
+    docs_url=None if _settings.app_env == "production" else "/docs",
+    redoc_url=None if _settings.app_env == "production" else "/redoc",
+    openapi_url=None if _settings.app_env == "production" else "/openapi.json",
+)
+configure_logging(json_output=_settings.log_json or _settings.app_env == "production")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(get_settings().trusted_origins),

@@ -43,7 +43,8 @@ def prepare_ai_image(data: bytes, content_type: str) -> tuple[bytes, str]:
             output = BytesIO()
             opened.convert("RGB").save(output, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
             return output.getvalue(), "image/jpeg"
-    except (UnidentifiedImageError, OSError, ValueError) as error:
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as error:
         # The upload was verified before this point; treat a re-encode failure
-        # as an invalid image rather than forwarding raw bytes.
+        # (including a decompression bomb whose header lies about its size) as
+        # an invalid image rather than forwarding raw bytes.
         raise ValueError("AI image could not be re-encoded") from error
