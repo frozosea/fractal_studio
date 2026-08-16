@@ -205,9 +205,19 @@ const mime = {
 };
 const server = createServer((req, res) => {
   const path = req.url === "/" ? "/index.html" : req.url;
+  if (path.startsWith("/wasm/")) {
+    const file = join(WASM_DIR, path.slice("/wasm/".length));
+    if (!existsSync(file)) {
+      console.error("404:", req.url);
+      res.writeHead(404).end("not found");
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/wasm" });
+    res.end(readFileSync(file));
+    return;
+  }
   let file = join(OUT, path);
-  if (path.startsWith("/wasm/")) file = join(WASM_DIR, path.slice("/wasm/".length));
-  else if (!existsSync(file)) file = join(distDir, path);
+  if (!existsSync(file)) file = join(distDir, path);
   if (!file.startsWith(OUT) || !existsSync(file)) {
     console.error("404:", req.url);
     res.writeHead(404).end("not found");
