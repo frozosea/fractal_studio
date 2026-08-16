@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from uuid import UUID
 
@@ -9,11 +10,22 @@ from uuid import UUID
 COMPUTE_SCHEMA_VERSION = 1
 PREVIEW_MAPPING_VERSION = "compute-v1-preview-v3"
 RENDER_MAPPING_VERSION = "compute-v1-render-v1"
-# Preview is interactive work, not an export. 768² pixels × thousands of
-# iterations can occupy every Compute slot for minutes (especially exp/sin
-# maps), preventing any newer viewport from being shown.
-PREVIEW_MAX_ITERATIONS = 512
+# Preview is interactive work, not an export. High iteration counts can
+# occupy a Compute slot for a while (especially exp/sin maps at deep zoom),
+# so the cap is a safety ceiling rather than a detail target: viewport
+# iterations up to this value render at their true count, larger requests
+# are clamped here and the escape-gradient correction keeps colour bands
+# aligned with the durable render.
+PREVIEW_MAX_ITERATIONS = 65536
 PREVIEW_MAX_PAIRWISE_CAP = 128
+# Durable renders are billed exports, but the shared node capacity still needs
+# a hard ceiling: these mirror the Studio UI bounds and the frontend AI-patch
+# clamps. Out-of-range values are rejected, never silently resized.
+RENDER_MAX_ITERATIONS = 1_000_000
+RENDER_MIN_SCALE = 3 / 2**41
+RENDER_MAX_SCALE = 1e9
+RENDER_MAX_BAILOUT = 1e9
+RENDER_MAX_PAIRWISE_CAP = 1_000_000
 COMPUTE_RUNS_ROUTE = "/compute/v1/runs"
 COMPUTE_PREVIEWS_ROUTE = "/compute/v1/previews"
 # Mapper failures safe to echo back to the caller as a 422 detail.
@@ -125,6 +137,53 @@ def _envelope(*, kind: str, payload: dict[str, object], idempotency_key: str | N
     return request
 
 
+def _bounded_int(value: object, *, name: str, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid_{name}") from error
+    if number < minimum or number > maximum:
+        raise ValueError(f"invalid_{name}")
+    return number
+
+
+def _bounded_float(value: object, *, name: str, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid_{name}") from error
+    if not math.isfinite(number) or number < minimum or number > maximum:
+        raise ValueError(f"invalid_{name}")
+    return number
+
+
+def bound_durable_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Reject out-of-range work before a durable request is persisted/sent.
+
+    The canonical recipe comes from the user's own edits, but may also have
+    been produced from AI suggestions, so it is not trusted input. Enforcing
+    the bounds here keeps a single account from occupying shared CPU/GPU pool
+    slots with arbitrarily expensive render jobs.
+    """
+    bounded = deepcopy(payload)
+    bounded["iterations"] = _bounded_int(
+        bounded.get("iterations", 512), name="iterations", minimum=1, maximum=RENDER_MAX_ITERATIONS
+    )
+    if "scale" in bounded:
+        bounded["scale"] = _bounded_float(
+            bounded.get("scale", 3), name="scale", minimum=RENDER_MIN_SCALE, maximum=RENDER_MAX_SCALE
+        )
+    if "bailout" in bounded:
+        bounded["bailout"] = _bounded_float(
+            bounded.get("bailout", 2), name="bailout", minimum=1e-6, maximum=RENDER_MAX_BAILOUT
+        )
+    if "pairwiseCap" in bounded:
+        bounded["pairwiseCap"] = _bounded_int(
+            bounded.get("pairwiseCap", 0), name="pairwiseCap", minimum=0, maximum=RENDER_MAX_PAIRWISE_CAP
+        )
+    return bounded
+
+
 def bound_preview_payload(payload: dict[str, object]) -> dict[str, object]:
     """Copy and bound preview work while preserving escape-gradient colour bands."""
     bounded = deepcopy(payload)
@@ -135,6 +194,13 @@ def bound_preview_payload(payload: dict[str, object]) -> dict[str, object]:
         int(bounded.get("pairwiseCap", PREVIEW_MAX_PAIRWISE_CAP)),
         PREVIEW_MAX_PAIRWISE_CAP,
     )
+    if "scale" in bounded:
+        try:
+            bounded["scale"] = min(
+                max(float(bounded["scale"]), RENDER_MIN_SCALE), RENDER_MAX_SCALE
+            )
+        except (TypeError, ValueError):
+            bounded["scale"] = 3
     program = bounded.get("colorProgram")
     if (
         preview_iterations < original_iterations
@@ -222,6 +288,7 @@ def map_durable_v1(
         }
     else:
         raise ValueError("unsupported_output_kind")
+    payload = bound_durable_payload(payload)
     return (
         COMPUTE_RUNS_ROUTE,
         _envelope(

@@ -124,7 +124,7 @@ def test_preview_mapper_bounds_export_sized_compute_work() -> None:
 
     request = map_preview_v1(canonical.spec, width=64, height=64, request_id=UUID(int=1))
 
-    assert request["payload"]["iterations"] == 512
+    assert request["payload"]["iterations"] == 65536
     assert request["payload"]["pairwiseCap"] == 128
     assert canonical.spec["iterations"] == 1_000_000
     assert canonical.spec["pairwiseCap"] == 1_000_000
@@ -146,8 +146,8 @@ def test_preview_mapper_preserves_escape_gradient_band_without_mutating_recipe()
 
     request = map_preview_v1(canonical.spec, width=64, height=64, request_id=UUID(int=1))
 
-    assert request["payload"]["iterations"] == 512
-    assert request["payload"]["colorProgram"]["cycles"] == pytest.approx(60 * 514 / 60_002)
+    assert request["payload"]["iterations"] == 60_000
+    assert request["payload"]["colorProgram"]["cycles"] == pytest.approx(60)
     assert canonical.spec["iterations"] == 60_000
     assert canonical.spec["colorProgram"]["cycles"] == 60
 

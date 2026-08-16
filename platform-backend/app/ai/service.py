@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import hashlib
 import json
 from collections.abc import AsyncIterator
@@ -17,6 +18,7 @@ from app.ai.models import validate_studio_suggestion
 from app.ai.provider import AssistantMode, ProviderUnavailable, stream_completion
 from app.core.config import get_settings
 from app.core.db import get_engine
+from app.core.logging import log_event
 
 
 _ACTIVE_STATUSES = "'reserved','streaming','retrying'"
@@ -604,6 +606,17 @@ async def stream_message(*, owner_id: UUID, conversation_id: UUID, idempotency_k
                 pass
         if disconnected or not isinstance(error, Exception):
             raise
+        # Diagnostic breadcrumb only: error kind and attempt round, never the
+        # provider body, prompt, image or any credential.
+        if isinstance(error, ProviderUnavailable):
+            log_event(
+                logging.WARNING,
+                "AI provider attempt failed",
+                provider_error=str(error),
+                retryable=error.retryable,
+                attempt=attempt,
+                terminal_status=terminal_status,
+            )
         error_payload: dict[str, object] = {"code": "AI_PROVIDER_UNAVAILABLE"}
         if message_id and terminal_status in {"partial", "completed"}:
             error_payload["messageId"] = str(message_id)
