@@ -3,3 +3,4 @@ node_modules/
 out/
 .env.local
 .env*.local
+frontend/scripts/e2e-entry.ts
