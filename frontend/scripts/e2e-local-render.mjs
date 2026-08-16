@@ -190,13 +190,8 @@ if (workerUrlMatch) {
 writeFileSync(entryPath, entryJs);
 console.log("bundle:", ["entry.js", "worker.js"].join(", "));
 
-// esbuild leaves new URL(wasm) references untouched; copy the wasm cores to
-// the paths the bundles request.
-for (const name of ["field_core.wasm", "colorize.wasm"]) {
-  const target = join(OUT, "dist/scripts/wasm-core", name);
-  ensureDir(dirname(target), { recursive: true });
-  copyFileSync(resolve(ROOT, "scripts/wasm-core", name), target);
-}
+// The renderer fetches wasm from /wasm/* (public/wasm); serve it.
+const WASM_DIR = resolve(ROOT, "public/wasm");
 
 // Serve the bundle + wasm assets.
 const distDir = join(OUT, "dist");
@@ -211,7 +206,8 @@ const mime = {
 const server = createServer((req, res) => {
   const path = req.url === "/" ? "/index.html" : req.url;
   let file = join(OUT, path);
-  if (!existsSync(file)) file = join(distDir, path);
+  if (path.startsWith("/wasm/")) file = join(WASM_DIR, path.slice("/wasm/".length));
+  else if (!existsSync(file)) file = join(distDir, path);
   if (!file.startsWith(OUT) || !existsSync(file)) {
     console.error("404:", req.url);
     res.writeHead(404).end("not found");

@@ -348,7 +348,7 @@ let wasmProbe: Promise<boolean> | null = null;
 async function detectWasm(): Promise<boolean> {
   wasmProbe ??= (async () => {
     try {
-      const url = new URL("../../scripts/wasm-core/field_core.wasm", import.meta.url);
+      const url = "/wasm/field_core.wasm";
       const bytes = await (await fetch(url)).arrayBuffer();
       await WebAssembly.instantiate(bytes, {});
       return true;

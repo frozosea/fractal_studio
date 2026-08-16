@@ -50,7 +50,7 @@ let wasmPromise: Promise<WasmExports | null> | null = null;
 
 async function loadWasm(): Promise<WasmExports | null> {
   try {
-    const url = new URL("../../../scripts/wasm-core/field_core.wasm", import.meta.url);
+    const url = "/wasm/field_core.wasm";
     const bytes = await (await fetch(url)).arrayBuffer();
     const { instance } = await WebAssembly.instantiate(bytes, {});
     return instance.exports as unknown as WasmExports;
@@ -130,7 +130,7 @@ let colorizePromise: Promise<ColorizeExports | null> | null = null;
 
 async function loadWasmColorize(): Promise<ColorizeExports | null> {
   try {
-    const url = new URL("../../../scripts/wasm-core/colorize.wasm", import.meta.url);
+    const url = "/wasm/colorize.wasm";
     const bytes = await (await fetch(url)).arrayBuffer();
     const { instance } = await WebAssembly.instantiate(bytes, {});
     return instance.exports as unknown as ColorizeExports;
