@@ -50,7 +50,7 @@ async function rgbaBlob(rgba: Uint8ClampedArray, width: number, height: number):
   const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext("2d", { alpha: false });
   if (!context) throw new Error("2d_context_unavailable");
-  context.putImageData(new ImageData(rgba, width, height), 0, 0);
+  context.putImageData(new ImageData(rgba as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
   return canvas.convertToBlob({ type: "image/png" });
 }
 
@@ -179,10 +179,18 @@ async function renderTileStage(
   y0: number,
   frameHeight: number,
 ): Promise<void> {
-  const raw = await computeRawAsync(spec, width, frameHeight, y0, tileHeight);
+  const cacheKey = `${createRawFieldCacheKey(spec as unknown as Record<string, unknown>, width, tileHeight)}:y${y0}`;
+  let raw = fieldCache.get(cacheKey);
+  if (!raw) {
+    raw = await computeRawAsync(spec, width, frameHeight, y0, tileHeight);
+    fieldCache.set(cacheKey, raw);
+  }
   const rgba = await colorizeRawAsync(spec, raw);
-  // Transfer the tile RGBA to the main thread for compositing.
-  self.postMessage({ id, y0, rgba, width, height: tileHeight }, { transfer: [rgba.buffer] });
+  // Transfer the tile RGBA to the main thread for compositing. Copy first:
+  // wasm-backed views share the WebAssembly.Memory buffer, which cannot be
+  // detached.
+  const transferable = new Uint8ClampedArray(rgba);
+  self.postMessage({ id, y0, rgba: transferable, width, height: tileHeight }, { transfer: [transferable.buffer] });
 }
 
 self.onmessage = async (event: MessageEvent<RenderMessage>) => {

@@ -219,7 +219,7 @@ async function rgbaToBlob(rgba: Uint8ClampedArray, width: number, height: number
   const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext("2d", { alpha: false });
   if (!context) throw new Error("2d_context_unavailable");
-  context.putImageData(new ImageData(rgba, width, height), 0, 0);
+  context.putImageData(new ImageData(rgba as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
   return canvas.convertToBlob({ type: "image/png" });
 }
 
@@ -292,6 +292,9 @@ function renderTiledInWorkers(
     let rejected = false;
     const compose = () => {
       if (rejected || completed < workers) return;
+      // All tiles are in: release the pool slots so the next render can
+      // reuse the workers instead of discarding them.
+      for (const slot of used) clearPending(slot);
       try {
         const frame = new Uint8ClampedArray(width * height * 4);
         for (const tile of tiles) {
@@ -403,11 +406,18 @@ export async function renderFractalLocally(
         const abort = () => { if (slot.pending?.id === previewId) discardSlot(slot, abortError()); };
         slot.pending = {
           id: previewId,
-          resolve: () => resolvePreview(),
+          resolve: () => {},
           reject: rejectPreview,
           signal,
           abort,
-          onPreview,
+          // The worker's preview reply only publishes the blob, so the
+          // completion hook rides on the preview callback: clear the slot so
+          // the tiled final pass can reuse this worker.
+          onPreview: (blob, blobDimensions) => {
+            clearPending(slot);
+            onPreview?.(blob, blobDimensions);
+            resolvePreview();
+          },
         };
         signal?.addEventListener("abort", abort, { once: true });
         slot.worker.postMessage({
