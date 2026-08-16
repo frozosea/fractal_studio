@@ -8,7 +8,9 @@ import {
 } from "@/lib/fractal/local-render-core";
 import {
   isWasmEligible,
+  loadWasmColorizeCore,
   loadWasmFieldCore,
+  renderWasmColorize,
   renderWasmRawField,
 } from "@/lib/fractal/wasm-field-core";
 import {
@@ -78,6 +80,19 @@ function transitionSpec(spec: LocalRenderSpec): LocalTransitionRenderSpec {
 }
 
 let wasmFieldCore: Awaited<ReturnType<typeof loadWasmFieldCore>> | null = null;
+let wasmColorizeCore: Awaited<ReturnType<typeof loadWasmColorizeCore>> | null = null;
+
+async function colorizeRawAsync(spec: LocalRenderSpec, raw: RawField): Promise<Uint8ClampedArray> {
+  if (isWasmEligible(spec) && spec.colorMode === "direct") {
+    wasmColorizeCore ??= await loadWasmColorizeCore();
+    if (wasmColorizeCore) {
+      try {
+        return renderWasmColorize(raw, spec, wasmColorizeCore);
+      } catch { /* fall through to the TypeScript colorizer */ }
+    }
+  }
+  return colorizeLocalRawField(spec, raw);
+}
 
 async function computeRawAsync(
   spec: LocalRenderSpec,
@@ -150,7 +165,7 @@ async function renderStage(
       raw = await computeRawAsync(spec, width, height);
       fieldCache.set(cacheKey, raw);
     }
-    rgba = colorizeLocalRawField(spec, raw);
+    rgba = await colorizeRawAsync(spec, raw);
   }
   const blob = await rgbaBlob(rgba, width, height);
   self.postMessage({ id, stage, blob, width, height, cacheHit });
@@ -165,7 +180,7 @@ async function renderTileStage(
   frameHeight: number,
 ): Promise<void> {
   const raw = await computeRawAsync(spec, width, frameHeight, y0, tileHeight);
-  const rgba = colorizeLocalRawField(spec, raw);
+  const rgba = await colorizeRawAsync(spec, raw);
   // Transfer the tile RGBA to the main thread for compositing.
   self.postMessage({ id, y0, rgba, width, height: tileHeight }, { transfer: [rgba.buffer] });
 }

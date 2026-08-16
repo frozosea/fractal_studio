@@ -105,3 +105,82 @@ export function renderWasmRawField(
 export function loadWasmFieldCore(): Promise<WasmExports | null> {
   return ensureWasm();
 }
+
+// ---------------------------------------------------------------------------
+// wasm colorize core (scripts/wasm-core/colorize.cpp): ports the TypeScript
+// direct-mode coloring (escapeColor/metricColor/fieldColor) for all 11
+// palettes x smooth x escape/metric. Parity-tested by
+// scripts/parity-colorize.mjs (88 cases, maxDelta=1).
+// ---------------------------------------------------------------------------
+
+const PALETTES = ["classic_cos", "mod17", "hsv_wheel", "tri765", "grayscale",
+  "hs_rainbow", "inferno", "viridis", "twilight", "ember_blue", "spectral1530"];
+
+type ColorizeExports = {
+  memory: WebAssembly.Memory;
+  field_core_colorize: (
+    iters: number, norms: number, fields: number,
+    log2log2: number, log2field: number, count: number,
+    iterations: number, metric: number, smooth: number,
+    colorMap: number, bailout: number, outRgba: number,
+  ) => void;
+};
+
+let colorizePromise: Promise<ColorizeExports | null> | null = null;
+
+async function loadWasmColorize(): Promise<ColorizeExports | null> {
+  try {
+    const url = new URL("../../../scripts/wasm-core/colorize.wasm", import.meta.url);
+    const bytes = await (await fetch(url)).arrayBuffer();
+    const { instance } = await WebAssembly.instantiate(bytes, {});
+    return instance.exports as unknown as ColorizeExports;
+  } catch {
+    return null;
+  }
+}
+
+export function loadWasmColorizeCore(): Promise<ColorizeExports | null> {
+  colorizePromise ??= loadWasmColorize();
+  return colorizePromise;
+}
+
+export function renderWasmColorize(
+  raw: RawEscapeField | RawMetricField,
+  spec: LocalRenderSpec,
+  exports: ColorizeExports,
+): Uint8ClampedArray {
+  const count = raw.width * raw.height;
+  const memory = exports.memory;
+  // Scratch area sits above the wasm data segment (gradient tables live at
+  // the start of memory).
+  const base = 1024 * 1024;
+  const log2log2Ptr = base;
+  const log2fieldPtr = base + count * 8;
+  const rgbaPtr = log2fieldPtr + count * 8;
+  const itersPtr = rgbaPtr + count * 4;
+  const normsPtr = itersPtr + count * 4;
+  const fieldsPtr = normsPtr + count * 4;
+  const log2log2 = new Float64Array(memory.buffer, log2log2Ptr, count);
+  const log2field = new Float64Array(memory.buffer, log2fieldPtr, count);
+  for (let i = 0; i < count; i += 1) {
+    const norm = raw.kind === "escape" ? (raw.norms[i] ?? 0) : 0;
+    const field = raw.kind === "metric" ? (raw.values[i] ?? 0) : 0;
+    log2log2[i] = norm > 1 ? Math.log2(Math.log2(norm)) : 0;
+    log2field[i] = field > 0 ? Math.log2(field) : 0;
+  }
+  if (raw.kind === "escape") {
+    new Uint32Array(memory.buffer, itersPtr, count).set(raw.iterations);
+    new Float32Array(memory.buffer, normsPtr, count).set(raw.norms);
+    new Float64Array(memory.buffer, fieldsPtr, count).fill(0);
+  } else {
+    new Uint32Array(memory.buffer, itersPtr, count).fill(spec.iterations);
+    new Float32Array(memory.buffer, normsPtr, count).fill(0);
+    new Float64Array(memory.buffer, fieldsPtr, count).set(raw.values);
+  }
+  exports.field_core_colorize(
+    itersPtr, normsPtr, fieldsPtr, log2log2Ptr, log2fieldPtr, count,
+    spec.iterations, spec.metric === "escape" ? 0 : 1, spec.smooth ? 1 : 0,
+    PALETTES.indexOf(spec.colorMap), spec.bailout, rgbaPtr,
+  );
+  return new Uint8ClampedArray(memory.buffer, rgbaPtr, count * 4);
+}
