@@ -186,6 +186,48 @@ function safeScale(value: number | undefined, fallback = 3): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.max(minScale, parsed) : fallback;
 }
 
+function clampNumber(value: number | undefined, min: number, max: number): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : undefined;
+}
+
+/** Bounds for AI-suggestion patches: LLM output is untrusted input. */
+const AI_PATCH_NUMERIC_BOUNDS: ReadonlyArray<readonly [keyof FractalSpec, number, number]> = [
+  ["iterations", 1, 1_000_000],
+  ["scale", minScale, 1e9],
+  ["bailout", 1e-6, 1e9],
+  ["pairwiseCap", 0, 1_000_000],
+  ["cyclesPerOctave", 1, 1024],
+  ["rotationDeg", -360_000, 360_000],
+  ["transitionThetaMilliDeg", 0, 1e9],
+  ["juliaRe", -1e6, 1e6],
+  ["juliaIm", -1e6, 1e6],
+  ["centerRe", -1e12, 1e12],
+  ["centerIm", -1e12, 1e12],
+];
+
+function boundedAIPatch(patch: Partial<FractalSpec>): Partial<FractalSpec> {
+  const bounded: Partial<FractalSpec> = { ...patch };
+  for (const [key, min, max] of AI_PATCH_NUMERIC_BOUNDS) {
+    const value = bounded[key];
+    if (typeof value !== "number") continue;
+    const clamped = clampNumber(value, min, max);
+    if (clamped === undefined) throw new Error("AI suggestion carried a non-finite numeric value");
+    (bounded as Record<string, unknown>)[key] = clamped;
+  }
+  if (bounded.colorProgram?.stops) {
+    bounded.colorProgram = {
+      ...bounded.colorProgram,
+      stops: bounded.colorProgram.stops.map((stop) => ({
+        ...stop,
+        at: Math.min(1, Math.max(0, Number(stop.at) || 0)),
+      })),
+    };
+  }
+  return bounded;
+}
+
 function hasInvalidScale(value: number | undefined): boolean {
   const parsed = Number(value);
   return !Number.isFinite(parsed) || parsed <= 0;
@@ -671,15 +713,19 @@ export default function StudioPage() {
     if (patch.engine !== undefined && !targetCapabilities.engines.includes(patch.engine)) throw new Error(t("errors.capabilities"));
     if (patch.scalarType !== undefined && !targetCapabilities.scalars.includes(patch.scalarType)) throw new Error(t("errors.capabilities"));
 
+    // AI output is untrusted: clamp numeric fields to the same bounds the
+    // interactive UI enforces so one prompt-injected patch cannot enqueue
+    // unbounded compute work on the shared nodes.
+    const boundedPatch = boundedAIPatch(patch);
     const appliedPatch: Partial<FractalSpec> = {
-      ...patch,
+      ...boundedPatch,
       // A location candidate may carry both a numeric compatibility value and
       // an exact decimal coordinate. Never replace the exact string with the
       // rounded JavaScript number.
-      ...(patch.centerRe === undefined || patch.centerReStr !== undefined
-        ? {} : { centerReStr: String(patch.centerRe) }),
-      ...(patch.centerIm === undefined || patch.centerImStr !== undefined
-        ? {} : { centerImStr: String(patch.centerIm) }),
+      ...(boundedPatch.centerRe === undefined || boundedPatch.centerReStr !== undefined
+        ? {} : { centerReStr: String(boundedPatch.centerRe) }),
+      ...(boundedPatch.centerIm === undefined || boundedPatch.centerImStr !== undefined
+        ? {} : { centerImStr: String(boundedPatch.centerIm) }),
     };
     aiUndoRef.current.clear();
     aiUndoRef.current.set(details.messageId, { patch: appliedPatch });
@@ -688,7 +734,6 @@ export default function StudioPage() {
       ([key, value]) => JSON.stringify(currentValues[key]) !== JSON.stringify(value),
     );
     if (!changesCurrentSpec) return;
-    aiMainPreviewGateRef.current = { captureNextInputs: true, inputKey: null };
     abortRef.current?.abort();
     abortRef.current = null;
     previewGenerationRef.current += 1;
@@ -717,7 +762,6 @@ export default function StudioPage() {
       aiUndoRef.current.delete(details.messageId);
       return;
     }
-    aiMainPreviewGateRef.current = { captureNextInputs: true, inputKey: null };
     abortRef.current?.abort();
     abortRef.current = null;
     previewGenerationRef.current += 1;
@@ -741,7 +785,7 @@ export default function StudioPage() {
   };
   const zoom = (factor: number) => updateViewport({
     scale: Math.min(1e9, Math.max(minScale, Number(spec.scale ?? 3) * factor)),
-    iterations: Math.min(20_000, Math.ceil(Number(spec.iterations ?? 512) * (factor < 1 ? 1.12 : 1))),
+    iterations: Math.min(65_536, Math.ceil(Number(spec.iterations ?? 512) * (factor < 1 ? 1.12 : 1))),
   });
   const zoomJuliaPicker = (factor: number) => updateJuliaPickerViewport({
     scale: Math.min(1e9, Math.max(minScale, Number(juliaPickerSpec.scale ?? 3) * factor)),
@@ -1224,7 +1268,7 @@ export default function StudioPage() {
               onNavigationStart={() => undefined}
               onReset={reset}
               onZoom={zoom}
-              preview={previewContextKey === aiContextKey ? preview : null}
+              preview={preview}
               previewing={previewing}
               spec={canonical}
               width={previewSize.width}
