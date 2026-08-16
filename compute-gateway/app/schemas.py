@@ -2,10 +2,28 @@
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+
+
+def blocked_literal_host(host: str) -> bool:
+    """True when a literal address may never be used as a compute node target.
+
+    Nodes live on the WireGuard mesh (10.66.0.0/24) or Docker networks, so
+    loopback, link-local (incl. 169.254.169.254 metadata), multicast,
+    unspecified, reserved and public literal addresses are never legitimate
+    targets. Hostnames (Docker/WireGuard DNS) remain allowed.
+    """
+    try:
+        addr = ipaddress.ip_address(host.lstrip("[").rstrip("]"))
+    except ValueError:
+        return False
+    if addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified:
+        return True
+    return not addr.is_private
 
 
 class NodeUpsertInput(BaseModel):
@@ -25,6 +43,11 @@ class NodeUpsertInput(BaseModel):
             raise ValueError("baseUrl must not contain credentials, query, or fragment")
         if value.path not in {"", "/"}:
             raise ValueError("baseUrl must not contain a path")
+        if blocked_literal_host(value.host):
+            raise ValueError(
+                "baseUrl host must be a private-network address or hostname; "
+                "loopback, link-local, metadata, public and multicast addresses are blocked"
+            )
         return value
 
     @model_validator(mode="after")

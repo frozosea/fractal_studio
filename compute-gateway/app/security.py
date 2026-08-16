@@ -13,7 +13,10 @@ settings = get_settings()
 
 
 def _require(authorization: str | None, expected: str) -> None:
-    if not authorization or not secrets.compare_digest(authorization, f"Bearer {expected}"):
+    # compare_digest on str rejects non-ASCII input with TypeError; encode to
+    # bytes so an attacker-supplied header can only ever yield 401, never 500.
+    supplied = (authorization or "").encode("latin-1")
+    if not supplied or not secrets.compare_digest(supplied, f"Bearer {expected}".encode("latin-1")):
         raise GatewayError(401, "COMPUTE_UNAUTHORIZED", "valid Compute service credential required")
 
 
