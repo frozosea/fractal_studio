@@ -207,6 +207,7 @@ async def run() -> None:
         except NotImplementedError:
             pass
     from app.studio.quota_expiry_scheduler import RenderQuotaExpiryScheduler
+    from app.ai.cleanup import AiHistoryExpiryScheduler
     from app.core.idempotency_cleanup import IdempotencyExpiryScheduler
     from app.assets.cleanup_service import AssetCleanupScheduler
     from app.commerce.service import CommerceService
@@ -224,6 +225,7 @@ async def run() -> None:
         handlers=handlers,
         due_work_readers=(
             RenderQuotaExpiryScheduler(),
+            AiHistoryExpiryScheduler(),
             AssetCleanupScheduler(),
             IdempotencyExpiryScheduler(),
             commerce,

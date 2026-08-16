@@ -70,6 +70,29 @@ class ObjectStorage:
             str(destination),
         )
 
+    async def download_bytes(self, *, object_key: str, max_bytes: int) -> bytes:
+        """Read a bounded private object in memory without exposing its key or a local file."""
+
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
+        client = self._client()
+
+        def read() -> bytes:
+            response = client.get_object(Bucket=self._settings.s3_bucket, Key=object_key)
+            body = response["Body"]
+            try:
+                content_length = response.get("ContentLength")
+                if isinstance(content_length, int) and content_length > max_bytes:
+                    raise ValueError("object_too_large")
+                data = body.read(max_bytes + 1)
+            finally:
+                body.close()
+            if len(data) > max_bytes:
+                raise ValueError("object_too_large")
+            return data
+
+        return await asyncio.to_thread(read)
+
     async def create_signed_get_url(self, *, object_key: str, expires_seconds: int) -> str:
         client = self._public_client()
         return await asyncio.to_thread(

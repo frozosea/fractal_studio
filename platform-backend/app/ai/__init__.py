@@ -1,0 +1,1 @@
+"""Studio AI assistant module."""

@@ -72,6 +72,12 @@ uint64_t estimateLnMapBytes(int s, int t) {
     return static_cast<uint64_t>(s) * static_cast<uint64_t>(t) * 3u;
 }
 
+// Hard ceiling for the strip allocation. The validated parameter ranges alone
+// admit multi-TB cv::Mat strips (s up to 65536, depthOctaves up to 1024), and
+// the largest legitimate video strips (e.g. 8K width, 32 depth octaves) stay
+// far below this.
+constexpr uint64_t LN_MAP_MAX_PEAK_BYTES = 4ULL * 1024ULL * 1024ULL * 1024ULL;
+
 compute::Variant requireBuiltinLnMapVariant(const std::string& variant) {
     compute::Variant resolved;
     if (compute::variant_from_name(variant.c_str(), resolved)) return resolved;
@@ -182,6 +188,13 @@ std::string lnMapRenderRoute(const std::filesystem::path& repoRoot, JobRunner& r
     const double t_exact = (extraOctaves + depthOctaves) * LN_TWO / TAU * static_cast<double>(s);
     const int t = static_cast<int>(std::ceil(t_exact));
     const uint64_t estimatedPeakMemory = estimateLnMapBytes(s, t);
+    // Enforce the resource budget before allocating: the accepted parameter
+    // ranges alone admit multi-TB cv::Mat strips, which would OOM-kill the
+    // node. The largest legitimate video strips (e.g. 8K, 32 depth octaves)
+    // stay far below this ceiling.
+    if (estimatedPeakMemory > LN_MAP_MAX_PEAK_BYTES) {
+        throw std::runtime_error("requested ln-map exceeds the 4 GiB memory budget");
+    }
 
     const compute::Variant v = requireBuiltinLnMapVariant(variantStr);
     double bailout = j.contains("bailout") && !j["bailout"].is_null()

@@ -448,6 +448,19 @@ Json normalizedRunResponse(const std::string& kind, const Json& legacy) {
 
 Json hardwareCapabilitiesJson() {
     const auto caps = compute::runtime_capabilities();
+    Json benchmark = Json::array();
+    for (const auto& entry : compute::benchmark_cache_snapshot()) {
+        benchmark.push_back(Json{
+            {"family", entry.family},
+            {"workload", entry.workload},
+            {"engine", entry.engine},
+            {"scalar", entry.scalar},
+            {"mpixPerSec", entry.mpix_per_sec},
+            {"elapsedMs", entry.elapsed_ms},
+            {"sampleCount", entry.sample_count},
+            {"available", entry.available},
+        });
+    }
     return {
         {"cpu", {
             {"logicalCores", caps.logical_cores},
@@ -465,6 +478,10 @@ Json hardwareCapabilitiesJson() {
             {"totalVramBytes", caps.cuda_total_vram},
             {"freeVramBytes", caps.cuda_free_vram},
         }},
+        // Populated by the startup calibration (FSD_STARTUP_BENCHMARK) that
+        // runs before HTTP listen on every node, so registration can publish
+        // measured engine/scalar throughput instead of only static hardware.
+        {"benchmark", std::move(benchmark)},
     };
 }
 

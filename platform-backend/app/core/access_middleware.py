@@ -82,9 +82,9 @@ def csrf_token(raw_session_token: str) -> str:
 
 
 def enforce_same_origin_or_no_origin(request: Request) -> None:
-    """Login/register are not approved cross-site flows."""
+    """Allow login/register only from explicitly configured first-party origins."""
     origin = request.headers.get("origin")
-    if origin and origin != get_settings().api_origin:
+    if origin and origin not in get_settings().trusted_origins:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="untrusted_origin")
 
 

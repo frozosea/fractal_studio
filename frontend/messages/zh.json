@@ -794,11 +794,34 @@
       "subtitle": "检查从素材库创建的草稿，然后发布到作品市场。",
       "empty": "还没有上架项，请从素材库中选择一个已就绪素材创建。",
       "editTitle": "编辑上架信息",
-      "editHint": "标题、简介和价格都会立刻应用到已发布的作品。",
+      "editHint": "修改标题、简介、标签和价格；保存后才会更新上架信息。",
       "descriptionPlaceholder": "作品简介（会显示在市场卡片上，也参与搜索）",
+      "tagsPlaceholder": "标签（用逗号分隔）",
       "previewPreparing": "正在生成预览",
       "noDescription": "暂无说明",
-      "publicPreviewPreparing": "公开预览仍在生成中。"
+      "publicPreviewPreparing": "公开预览仍在生成中。",
+      "aiCopy": {
+        "title": "AI 生成文案",
+        "hint": "AI 会根据这件作品生成 3 套标题、简介和标签。选择后只会回填表单，不会自动保存或发布。",
+        "generate": "AI 生成文案",
+        "generateAgain": "重新生成",
+        "retry": "重试上次请求",
+        "stop": "停止生成",
+        "choicesLabel": "AI 文案方案",
+        "notSatisfied": "以上都不满意，输入修改意见",
+        "instructionPlaceholder": "例如：标题更克制，突出深海与珊瑚的感觉；简介不要使用夸张形容词。",
+        "rewrite": "让 AI 改",
+        "applyHint": "已选择的方案会回填上方字段。请检查内容并点击“保存”；AI 不会替你保存或发布。",
+        "allowanceMember": "会员不限次数",
+        "allowanceRemaining": "AI 剩余 {count} 次",
+        "errors": {
+          "exhausted": "免费 AI 次数已用完，升级会员后可继续使用。",
+          "disabled": "AI 文案功能暂未开放；你仍可手动编辑并发布。",
+          "interrupted": "生成已中断。可使用同一请求安全重试，不会重复扣次。",
+          "unavailable": "AI 服务暂时不可用，请稍后再试。",
+          "failed": "文案生成失败，请稍后重试。"
+        }
+      }
     },
     "purchases": {
       "untitled": "未命名作品",
@@ -947,8 +970,12 @@
       "compute": {
         "healthy": "健康",
         "unhealthy": "不可用",
-        "durableSlots": "渲染槽位",
         "previewSlots": "预览槽位",
+        "cpuAllocation": "CPU 计算能力",
+        "gpuAllocation": "GPU 计算能力",
+        "cpuCores": "核心（物理 / 逻辑）",
+        "cpuAcceleration": "CPU 加速",
+        "taskSlots": "任务槽位",
         "vram": "显存（可用 / 总量）",
         "cuda": "CUDA",
         "renderer": "渲染器版本",
@@ -958,6 +985,7 @@
         "unavailable": "不可用",
         "unknown": "未知",
         "unknownGpu": "未报告 GPU",
+        "unknownCpu": "未报告 CPU",
         "never": "从未",
         "empty": "尚未注册计算节点。",
         "state": { "active": "已启用", "draining": "正在排空", "offline": "离线", "disabled": "已禁用" }
@@ -1009,6 +1037,116 @@
     "logout": "退出登录",
     "adminArchitecture": "管理员 → 管理接口 → 平台数据",
     "architecture": "浏览器 → 平台服务 → 私有计算服务"
+  },
+  "aiAssistant": {
+    "title": "Studio AI 助手",
+    "close": "关闭 AI 助手",
+    "conversation": "选择对话",
+    "newConversation": "新对话",
+    "rename": "重命名对话",
+    "renameSave": "保存名称",
+    "renameCancel": "取消重命名",
+    "delete": "删除对话",
+    "deleteConfirm": "删除这个对话及其全部消息？此操作无法撤销。",
+    "deleteAll": "删除全部 AI 对话",
+    "deleteAllConfirm": "删除你的全部 AI 对话及消息？此操作无法撤销，但已使用的免费次数不会恢复。",
+    "loading": "正在载入对话…",
+    "thinking": "正在思考…",
+    "placeholder": "询问配色、参数或分形知识…",
+    "send": "发送",
+    "stop": "停止生成",
+    "retry": "重试",
+    "dismissError": "关闭错误提示",
+    "unavailable": "AI 助手当前未启用",
+    "trialExhausted": "免费 AI 体验次数已用完",
+    "disclaimer": "AI 建议可能有误；候选预览和参数应用都由你确认，不会创建正式渲染、素材或导出。",
+    "allowance": {
+      "member": "会员不限次数",
+      "remaining": "剩余 {count} 次",
+      "loading": "正在查询可用次数",
+      "unavailable": "AI 当前未启用"
+    },
+    "empty": {
+      "title": "从当前作品继续探索",
+      "description": "从位置、调色或构图开始比较真实候选，也可以直接询问参数和分形知识。"
+    },
+    "quick": {
+      "location": {
+        "label": "探索位置",
+        "prompt": "请结合当前预览和精确参数，给出 3 个真正值得继续探索的位置候选。保留分形类型和画面模式，每个候选都要有清楚的视觉目的。"
+      },
+      "color": {
+        "label": "比较调色",
+        "prompt": "请结合当前预览，给出 4 套有明显区别且适合当前结构的调色候选。说明每套如何改善层次、焦点或氛围。"
+      },
+      "composition": {
+        "label": "优化构图",
+        "prompt": "请结合当前预览，给出 3 套构图候选。重点比较主体位置、留白、旋转与视野尺度，不要改变作品的核心分形类型。"
+      },
+      "parameters": {
+        "label": "解释参数",
+        "prompt": "请用容易理解的方式解释当前 Studio 参数如何影响画面，重点说明最关键的三项。"
+      },
+      "knowledge": {
+        "label": "分形知识",
+        "prompt": "结合当前作品，讲解一个相关的分形数学概念，保持简洁但准确。"
+      },
+      "analyse": {
+        "label": "分析作品",
+        "prompt": "只根据这张当前预览分析构图、层次和配色，再提出一组可选的 Studio 参数改进建议。"
+      }
+    },
+    "feedback": {
+      "good": "有帮助",
+      "bad": "没有帮助",
+      "consent": "如果我主动提交反馈，同意将本对话用于改进助手；未提交反馈时不会作为优化样本。"
+    },
+    "suggestion": {
+      "title": "参数建议",
+      "apply": "应用建议",
+      "undo": "恢复应用前状态",
+      "stale": "生成建议后，Studio 参数、画面模式或输出尺寸已经改变。请基于当前作品重新生成建议后再应用。"
+    },
+    "candidates": {
+      "hint": "先检查参数差异，再生成真实 Compute 预览进行比较。预览不会进入素材库。",
+      "location": { "title": "位置候选" },
+      "color": { "title": "调色候选" },
+      "composition": { "title": "构图候选" },
+      "stale": "当前 Studio 参数、画面模式或输出尺寸已不同于生成候选时的基准。为避免把旧建议应用到新作品，请重新生成候选。",
+      "baseline": "当前基准预览",
+      "baselineAlt": "生成候选时的当前作品预览",
+      "previewing": "正在生成真实候选预览…",
+      "previewAlt": "候选“{label}”的真实预览",
+      "previewFailed": "这个候选预览失败，可重新生成整组预览。",
+      "verification": "校验：",
+      "verificationPending": "等待真实预览",
+      "verificationReady": "真实 Compute 预览成功",
+      "verificationFailed": "真实 Compute 预览失败",
+      "previewNotice": "将按顺序生成约 256px 的临时候选预览；图片不会进入素材库或长期存储，Platform 的短期预览缓存会自动过期。",
+      "aspectUnsupported": "当前自定义画幅过宽或过高，无法生成比例准确的 256px 候选预览。请先选择较温和的画幅比例再比较构图。",
+      "generatePreviews": "生成真实候选预览",
+      "apply": "确认并应用"
+    },
+    "errors": {
+      "load": "无法载入 AI 对话，请稍后重试。",
+      "create": "无法新建对话。",
+      "rename": "无法重命名对话。",
+      "delete": "无法删除对话。",
+      "send": "AI 暂时无法回复，请稍后重试。",
+      "feedback": "无法保存反馈。",
+      "consent": "无法更新优化授权。",
+      "apply": "无法应用这项建议。",
+      "undo": "无法恢复应用前状态。",
+      "undoChanged": "应用建议后参数又被修改了，为避免覆盖你的新调整，不能直接撤销这条建议。",
+      "trial": "免费 AI 体验次数已用完。",
+      "disabled": "AI 助手当前未启用。",
+      "provider": "AI 服务暂时不可用，请稍后重试。",
+      "stopped": "已停止生成。可以使用同一次请求重试，不会重复扣费。",
+      "incomplete": "回复流意外中断；已保留这次请求，可重试继续。",
+      "candidatePreview": "部分候选预览生成失败，请稍后重试。",
+      "concurrency": "同时进行的 AI 请求过多，请等待当前请求结束。",
+      "compute": "当前没有可用的计算能力，暂时无法生成参数建议；知识问答仍可继续。"
+    }
   },
   "common": {
     "theme": {

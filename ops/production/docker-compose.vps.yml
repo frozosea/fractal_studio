@@ -14,9 +14,15 @@ x-platform-env: &platform-env
   CORS_ORIGINS: https://fractalstudio.cn
   COMPUTE_BASE_URL: http://compute-gateway:8080
   COMPUTE_SERVICE_KEY: ${COMPUTE_GATEWAY_SERVICE_KEY:?set in /etc/fractal-prod/vps.env}
-  COMPUTE_GATEWAY_ADMIN_KEY: ${COMPUTE_GATEWAY_ADMIN_KEY:?set in /etc/fractal-prod/vps.env}
+  # Never hand the gateway ADMIN key to Platform services: env_file above would
+  # otherwise inject it into every service, collapsing service/admin separation
+  # (a compromised API/worker could then register malicious compute nodes).
+  COMPUTE_GATEWAY_ADMIN_KEY: ""
   S3_ENDPOINT_URL: http://minio:9000
-  S3_PUBLIC_ENDPOINT_URL: https://fractalstudio.cn/storage
+  # No path prefix on purpose: presigned SigV4 URLs sign the full request path,
+  # so a "/storage" prefix that Caddy strips would make every download fail
+  # signature validation. Caddy preserves the /fractal-platform/* prefix.
+  S3_PUBLIC_ENDPOINT_URL: https://fractalstudio.cn
   S3_BUCKET: fractal-platform
   S3_REGION: us-east-1
   S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in /etc/fractal-prod/vps.env}
@@ -30,6 +36,19 @@ x-platform-env: &platform-env
   ALIPAY_RETURN_URL: https://fractalstudio.cn/payment-result
   ALIPAY_PRIVATE_KEY_PATH: /run/secrets/alipay_app_private.pem
   ALIPAY_PUBLIC_KEY_PATH: /run/secrets/alipay_public.pem
+  AI_ENABLED: ${AI_ENABLED:-false}
+  AI_RUNTIME_ROLE: migrate
+  # Override the common env_file so the provider secret is absent everywhere
+  # except the API service below.
+  SILICONFLOW_API_KEY: ""
+  SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
+  SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-Qwen/Qwen3.6-35B-A3B}
+  AI_FREE_LIFETIME_LIMIT: ${AI_FREE_LIFETIME_LIMIT:-10}
+  AI_HISTORY_TTL_DAYS: ${AI_HISTORY_TTL_DAYS:-90}
+  AI_MAX_USER_MESSAGE_CHARS: ${AI_MAX_USER_MESSAGE_CHARS:-4000}
+  AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-1500}
+  AI_MAX_IMAGE_BYTES: ${AI_MAX_IMAGE_BYTES:-1048576}
+  AI_MAX_CONCURRENT_PER_USER: ${AI_MAX_CONCURRENT_PER_USER:-2}
 x-platform-service: &platform-service
   image: ${PLATFORM_IMAGE:?immutable Git-SHA image required}
   restart: unless-stopped
@@ -46,7 +65,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     env_file: /etc/fractal-prod/vps.env
-    environment: {POSTGRES_DB: fractal_platform, POSTGRES_USER: fractal, POSTGRES_PASSWORD: "${PLATFORM_DB_PASSWORD}"}
+    environment: {POSTGRES_DB: fractal_platform, POSTGRES_USER: fractal, POSTGRES_PASSWORD: "${PLATFORM_DB_PASSWORD}", SILICONFLOW_API_KEY: ""}
     volumes: [/srv/fractal-prod/postgres:/var/lib/postgresql/data]
     healthcheck: {test: [CMD-SHELL, "pg_isready -U fractal -d fractal_platform"], interval: 5s, timeout: 3s, retries: 30}
     logging: *logging
@@ -55,7 +74,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     env_file: /etc/fractal-prod/vps.env
-    environment: {POSTGRES_DB: compute_gateway, POSTGRES_USER: gateway, POSTGRES_PASSWORD: "${GATEWAY_DB_PASSWORD}"}
+    environment: {POSTGRES_DB: compute_gateway, POSTGRES_USER: gateway, POSTGRES_PASSWORD: "${GATEWAY_DB_PASSWORD}", SILICONFLOW_API_KEY: ""}
     volumes: [/srv/fractal-prod/gateway-postgres:/var/lib/postgresql/data]
     healthcheck: {test: [CMD-SHELL, "pg_isready -U gateway -d compute_gateway"], interval: 5s, timeout: 3s, retries: 30}
     logging: *logging
@@ -75,6 +94,7 @@ services:
     env_file: /etc/fractal-prod/vps.env
     environment:
       MINIO_KMS_SECRET_KEY: ${MINIO_KMS_SECRET_KEY:?set fractal-prod:<base64-32-byte-key> in /etc/fractal-prod/vps.env}
+      SILICONFLOW_API_KEY: ""
     ports: ["127.0.0.1:29010:9000"]
     volumes: [/srv/fractal-prod/minio:/data]
     logging: *logging
@@ -82,6 +102,7 @@ services:
   minio-init:
     image: minio/mc:RELEASE.2025-04-16T18-13-26Z
     env_file: /etc/fractal-prod/vps.env
+    environment: {SILICONFLOW_API_KEY: ""}
     entrypoint: /bin/sh -ec 'until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done; mc mb --ignore-existing local/fractal-platform'
     depends_on: [minio]
   gateway-migrate:
@@ -89,11 +110,13 @@ services:
     command: [uv, run, --no-sync, alembic, -c, alembic.ini, upgrade, head]
     env_file: /etc/fractal-prod/vps.env
     environment: &gateway-env
+      APP_ENV: production
       DATABASE_URL: postgresql+asyncpg://gateway:${GATEWAY_DB_PASSWORD}@gateway-db:5432/compute_gateway
       COMPUTE_GATEWAY_SERVICE_KEY: ${COMPUTE_GATEWAY_SERVICE_KEY}
       COMPUTE_GATEWAY_ADMIN_KEY: ${COMPUTE_GATEWAY_ADMIN_KEY}
       COMPUTE_UPSTREAM_SERVICE_KEY: ${COMPUTE_UPSTREAM_SERVICE_KEY}
-      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://10.66.0.2:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://10.66.0.3:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true}]'
+      SILICONFLOW_API_KEY: ""
+      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://10.66.0.2:18080","maxDurableSlots":1,"maxPreviewSlots":2,"maxCpuSlots":2,"maxGpuSlots":1,"maxCpuPreviewSlots":4,"maxGpuPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://10.66.0.3:18080","maxDurableSlots":1,"maxPreviewSlots":2,"maxCpuSlots":1,"maxGpuSlots":1,"maxCpuPreviewSlots":2,"maxGpuPreviewSlots":1,"enabled":true}]'
     depends_on: {gateway-db: {condition: service_healthy}}
   compute-gateway:
     image: ${GATEWAY_IMAGE:?immutable Git-SHA image required}
@@ -111,7 +134,11 @@ services:
     depends_on: {postgres: {condition: service_healthy}}
   api:
     <<: *platform-service
-    command: [uv, run, --no-sync, uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000"]
+    command: [uv, run, --no-sync, uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000", --proxy-headers, --forwarded-allow-ips, "127.0.0.1"]
+    environment:
+      <<: *platform-env
+      AI_RUNTIME_ROLE: api
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
     ports: ["127.0.0.1:28100:8000"]
     depends_on:
       migrate: {condition: service_completed_successfully}
@@ -120,10 +147,16 @@ services:
   worker:
     <<: *platform-service
     command: [uv, run, --no-sync, python, -m, app.outbox.worker]
+    environment:
+      <<: *platform-env
+      AI_RUNTIME_ROLE: worker
     depends_on: {migrate: {condition: service_completed_successfully}, redis: {condition: service_healthy}}
   preview-worker:
     <<: *platform-service
     command: [uv, run, --no-sync, python, -m, app.studio.preview_worker]
+    environment:
+      <<: *platform-env
+      AI_RUNTIME_ROLE: worker
     depends_on: {migrate: {condition: service_completed_successfully}, redis: {condition: service_healthy}}
   frontend:
     image: ${FRONTEND_IMAGE:?immutable Git-SHA image required}

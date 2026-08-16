@@ -59,11 +59,23 @@ else
   exit 1
 fi
 
-printf 'DEV_USER_EMAIL=%q\nDEV_USER_PASSWORD=%q\nAPI_URL=%q\n' \
-  "$EMAIL" "$PASSWORD" "$API_URL" > "$CREDENTIALS_FILE"
+SESSION_TOKEN="$(python3 - "$response_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    token = json.load(source).get("data", {}).get("sessionToken", "")
+if not isinstance(token, str) or not token:
+    raise SystemExit("authentication response did not contain a session token")
+print(token)
+PY
+)"
+
+printf 'DEV_USER_EMAIL=%q\nDEV_USER_PASSWORD=%q\nDEV_USER_SESSION_TOKEN=%q\nAPI_URL=%q\n' \
+  "$EMAIL" "$PASSWORD" "$SESSION_TOKEN" "$API_URL" > "$CREDENTIALS_FILE"
 
 printf 'Dev user %s: %s\n' "$action" "$EMAIL"
 printf 'Credentials: %s\nCookie jar: %s\n' "$CREDENTIALS_FILE" "$COOKIE_FILE"
 printf 'Authenticated check:\n'
-curl --noproxy '*' -fsS -b "$COOKIE_FILE" "$API_URL/v1/me"
+curl --noproxy '*' -fsS -H "Authorization: Bearer $SESSION_TOKEN" "$API_URL/v1/me"
 printf '\n'

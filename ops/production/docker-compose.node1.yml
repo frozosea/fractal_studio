@@ -6,7 +6,7 @@ services:
     runtime: nvidia
     gpus: all
     environment:
-      FSD_STARTUP_BENCHMARK: "off"
+      FSD_STARTUP_BENCHMARK: "quick"
       FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:?set in /etc/fractal-node1-prod/compute.env}
       FSD_RENDERER_VERSION: ${FSD_RENDERER_VERSION:?set in /etc/fractal-node1-prod/compute.env}
       FSD_RENDER_THREADS: ${FSD_RENDER_THREADS:-2}

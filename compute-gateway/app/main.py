@@ -54,7 +54,16 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await task
 
 
-app = FastAPI(title="Fractal Studio Compute Gateway", version="0.1.0", lifespan=lifespan)
+# Keep the interactive docs and OpenAPI schema off the production surface so
+# the internal admin API is not publicly discoverable.
+app = FastAPI(
+    title="Fractal Studio Compute Gateway",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url=None if settings.app_env == "production" else "/docs",
+    redoc_url=None if settings.app_env == "production" else "/redoc",
+    openapi_url=None if settings.app_env == "production" else "/openapi.json",
+)
 install_error_handler(app)
 
 

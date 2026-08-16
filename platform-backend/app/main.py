@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.admin.router import router as admin_router
+from app.ai.listing_router import router as ai_listing_router
+from app.ai.router import router as ai_router
 from app.auth.router import router as auth_router
 from app.assets.router import router as assets_router
 from app.commerce.router import router as commerce_router
@@ -24,8 +26,17 @@ from app.core.request_context import idempotency_key_var, request_id_var, user_i
 from app.studio.router import router as studio_router
 
 
-app = FastAPI(title="Fractal Platform API", version="0.1.0")
-configure_logging(json_output=get_settings().log_json or get_settings().app_env == "production")
+_settings = get_settings()
+# Keep interactive docs and the OpenAPI schema off the production surface so
+# the full route surface is not publicly discoverable at /platform/docs.
+app = FastAPI(
+    title="Fractal Platform API",
+    version="0.1.0",
+    docs_url=None if _settings.app_env == "production" else "/docs",
+    redoc_url=None if _settings.app_env == "production" else "/redoc",
+    openapi_url=None if _settings.app_env == "production" else "/openapi.json",
+)
+configure_logging(json_output=_settings.log_json or _settings.app_env == "production")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(get_settings().trusted_origins),
@@ -41,6 +52,8 @@ app.add_middleware(
     expose_headers=["X-Session-Token"],
 )
 app.include_router(auth_router)
+app.include_router(ai_router)
+app.include_router(ai_listing_router)
 app.include_router(studio_router)
 app.include_router(assets_router)
 app.include_router(marketplace_router)
@@ -128,6 +141,16 @@ _DEFAULT_ERROR_CODE = {
 }
 
 _PUBLIC_DETAIL_CODES = {
+    "AI_DISABLED",
+    "AI_PROVIDER_UNAVAILABLE",
+    "AI_TRIAL_EXHAUSTED",
+    "ai_concurrency_exhausted",
+    "ai_conversation_not_found",
+    "ai_image_dimensions_invalid",
+    "ai_image_invalid",
+    "ai_message_not_found",
+    "ai_message_not_complete",
+    "ai_request_in_progress",
     "COMPUTE_CAPACITY_EXHAUSTED",
     "email_already_registered",
     "export_quota_exhausted",

@@ -124,6 +124,115 @@ export interface ExportAllowance {
   remaining: number | null;
 }
 
+export interface AIConversation {
+  id: string;
+  title: string;
+  optimizationConsent: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AIStudioMode = "map" | "julia" | "transitionPair" | "transitionMulti" | "formula" | "sequence";
+
+export interface AIStudioSuggestionBaseline {
+  /** Optional only for safe handling of suggestions saved before the baseline protocol existed. */
+  baseSpec?: FractalSpec;
+  baseMode?: AIStudioMode;
+  baseOutput?: { width: number; height: number };
+}
+
+export interface AIStudioPatchSuggestion extends AIStudioSuggestionBaseline {
+  patch: Partial<FractalSpec>;
+  reason: string;
+}
+
+export type AIAssistantMode = "chat" | "location" | "color" | "composition";
+
+export interface AIStudioCandidate {
+  id: string;
+  label: string;
+  patch: Partial<FractalSpec>;
+  reason: string;
+  verification?: unknown;
+}
+
+export interface AIStudioCandidateSet extends AIStudioSuggestionBaseline {
+  kind: "candidate_set";
+  mode: Exclude<AIAssistantMode, "chat">;
+  baseSpecHash: string;
+  candidates: AIStudioCandidate[];
+}
+
+export type AIStudioSuggestion = AIStudioPatchSuggestion | AIStudioCandidateSet;
+
+export interface AIMessageFeedback {
+  rating: -1 | 1;
+  consent: boolean;
+}
+
+export interface AIMessage {
+  id: string;
+  conversationId?: string;
+  role: "user" | "assistant";
+  content: string;
+  suggestion: AIStudioSuggestion | null;
+  feedback?: AIMessageFeedback | -1 | 1 | null;
+  status?: "completed" | "partial" | "retrying" | null;
+  createdAt: string;
+}
+
+/** Free AI replies left. `limit`/`remaining` are null for members: unmetered. */
+export interface AIAllowance {
+  member: boolean;
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  enabled?: boolean;
+}
+
+export interface AIUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
+export interface AIListingCopyCandidate {
+  title: string;
+  description: string;
+  tags: string[];
+}
+
+export interface AIListingCopyResponse {
+  requestId: string;
+  candidates: AIListingCopyCandidate[];
+  allowance: AIAllowance;
+}
+
+export type AIStreamEvent =
+  | { type: "message"; messageId: string; message?: AIMessage }
+  | { type: "delta"; content: string }
+  | { type: "suggestion"; suggestion: AIStudioSuggestion }
+  | { type: "usage"; usage: AIUsage }
+  | { type: "done"; messageId: string; message?: AIMessage; allowance?: AIAllowance; partial?: boolean; replayed?: boolean }
+  | { type: "error"; code: string; message: string };
+
+export interface AIMessageInput {
+  text: string;
+  context: {
+    spec: FractalSpec;
+    mode: string;
+    output: { width: number; height: number; preset?: string };
+    capabilities: StudioCapabilities;
+  };
+  /** Force the provider's sole Studio-patch tool for an explicit suggestion action. */
+  requestPatch?: boolean;
+  assistantMode?: AIAssistantMode;
+  image?: Blob | null;
+  signal?: AbortSignal;
+  /** Reuse this key when retrying a request whose outcome is unknown. */
+  idempotencyKey?: string;
+}
+
 export interface RenderJob {
   id: string;
   recipeId: string;
@@ -290,6 +399,15 @@ export interface AdminComputeNode {
   maxPreviewSlots: number;
   usedPreviewSlots: number;
   rendererVersion?: string | null;
+  cpuAllocation?: { usedSlots: number; maxSlots: number; usedPreviewSlots: number; maxPreviewSlots: number } | null;
+  gpuAllocation?: { usedSlots: number; maxSlots: number; usedPreviewSlots: number; maxPreviewSlots: number } | null;
+  cpu?: {
+    logicalCores?: number | null;
+    physicalCores?: number | null;
+    openmp?: { compiled: boolean; runtime: boolean } | null;
+    avx2?: { compiled: boolean; runtime: boolean } | null;
+    avx512?: { compiled: boolean; runtime: boolean } | null;
+  } | null;
   gpu?: {
     name?: string | null;
     runtime: boolean;
@@ -597,7 +715,13 @@ async function asError(response: Response): Promise<PlatformApiError> {
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  options: { csrf?: boolean; idempotency?: boolean; raw?: boolean; cookie?: boolean } = {},
+  options: {
+    csrf?: boolean;
+    idempotency?: boolean;
+    idempotencyKey?: string;
+    raw?: boolean;
+    cookie?: boolean;
+  } = {},
 ): Promise<T> {
   reportRequestActivity(1);
   try {
@@ -606,7 +730,8 @@ async function request<T>(
     headers.set("Accept", "application/json");
     const method = (init.method ?? "GET").toUpperCase();
     if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
-    if (options.idempotency) headers.set("Idempotency-Key", idempotencyKey());
+    if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
+    else if (options.idempotency) headers.set("Idempotency-Key", idempotencyKey());
     if (options.csrf) headers.set("X-CSRF-Token", await csrfToken());
     const response = await fetch(`${baseUrl}${path}`, {
       // Only sign-in and sign-out touch the shared cookie, so that reopening
@@ -624,6 +749,240 @@ async function request<T>(
     if (response.status === 204) return undefined as T;
     const body = (await response.json()) as { data: T };
     return body.data;
+  } finally {
+    reportRequestActivity(-1);
+  }
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function normalizeStudioBaseline(value: Record<string, unknown>): AIStudioSuggestionBaseline {
+  const baseSpec = objectValue(value.baseSpec ?? value.base_spec);
+  const baseMode = value.baseMode ?? value.base_mode;
+  const rawOutput = objectValue(value.baseOutput ?? value.base_output);
+  const width = rawOutput?.width;
+  const height = rawOutput?.height;
+  const validMode = ["map", "julia", "transitionPair", "transitionMulti", "formula", "sequence"]
+    .includes(String(baseMode));
+  const validOutput = typeof width === "number" && Number.isInteger(width) && width >= 64 && width <= 4096
+    && typeof height === "number" && Number.isInteger(height) && height >= 64 && height <= 4096;
+  if (!baseSpec || !validMode || !validOutput) return {};
+  return {
+    baseSpec: baseSpec as unknown as FractalSpec,
+    baseMode: baseMode as AIStudioMode,
+    baseOutput: { width, height },
+  };
+}
+
+function normalizeStudioSuggestion(value: unknown): AIStudioSuggestion | null {
+  const outer = objectValue(value);
+  if (!outer) return null;
+  const candidate = objectValue(outer.candidateSet ?? outer.candidate_set) ?? outer;
+  const patch = objectValue(candidate.patch);
+  if (patch) {
+    return {
+      patch: patch as Partial<FractalSpec>,
+      reason: typeof candidate.reason === "string" ? candidate.reason : "",
+      ...normalizeStudioBaseline(candidate),
+    };
+  }
+  const mode = candidate.mode;
+  const baseSpecHash = candidate.baseSpecHash ?? candidate.base_spec_hash;
+  const baseSpec = objectValue(candidate.baseSpec ?? candidate.base_spec);
+  if (
+    candidate.kind !== "candidate_set"
+    || !["location", "color", "composition"].includes(String(mode))
+    || typeof baseSpecHash !== "string"
+    || !baseSpec
+    || !Array.isArray(candidate.candidates)
+  ) return null;
+  const candidates = candidate.candidates.flatMap((raw, index) => {
+    const item = objectValue(raw);
+    const itemPatch = objectValue(item?.patch);
+    if (!item || !itemPatch) return [];
+    return [{
+      id: typeof item.id === "string" ? item.id : `candidate-${index + 1}`,
+      label: typeof item.label === "string" ? item.label : `Candidate ${index + 1}`,
+      patch: itemPatch as Partial<FractalSpec>,
+      reason: typeof item.reason === "string" ? item.reason : "",
+      ...(item.verification === undefined ? {} : { verification: item.verification }),
+    } satisfies AIStudioCandidate];
+  });
+  if (candidates.length === 0) return null;
+  return {
+    kind: "candidate_set",
+    mode: mode as AIStudioCandidateSet["mode"],
+    baseSpecHash,
+    ...normalizeStudioBaseline(candidate),
+    candidates,
+  };
+}
+
+function normalizeAIMessage(message: AIMessage): AIMessage {
+  return {
+    ...message,
+    suggestion: message.suggestion ? normalizeStudioSuggestion(message.suggestion) : null,
+  };
+}
+
+function normalizeAIStreamEvent(eventName: string, rawData: string): AIStreamEvent | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawData);
+  } catch {
+    parsed = rawData;
+  }
+
+  const outer = objectValue(parsed);
+  const type = eventName === "message" && typeof outer?.type === "string"
+    ? outer.type
+    : eventName;
+  const wrapped = outer && "data" in outer ? outer.data : parsed;
+  const payload = objectValue(wrapped);
+
+  if (type === "delta") {
+    const content = typeof wrapped === "string"
+      ? wrapped
+      : typeof payload?.content === "string"
+        ? payload.content
+        : typeof payload?.delta === "string" ? payload.delta : "";
+    return content ? { type, content } : null;
+  }
+  if (type === "suggestion") {
+    const candidate = objectValue(payload?.suggestion) ?? payload;
+    const suggestion = normalizeStudioSuggestion(candidate);
+    return suggestion ? { type, suggestion } : null;
+  }
+  if (type === "usage") {
+    const candidate = objectValue(payload?.usage) ?? payload;
+    if (!candidate) return null;
+    const number = (camel: string, snake: string): number | undefined => {
+      const value = candidate[camel] ?? candidate[snake];
+      return typeof value === "number" ? value : undefined;
+    };
+    return {
+      type,
+      usage: {
+        promptTokens: number("promptTokens", "prompt_tokens"),
+        completionTokens: number("completionTokens", "completion_tokens"),
+        totalTokens: number("totalTokens", "total_tokens"),
+      },
+    };
+  }
+  if (type === "error") {
+    return {
+      type,
+      code: typeof payload?.code === "string" ? payload.code : "AI_STREAM_FAILED",
+      message: typeof payload?.message === "string" ? payload.message : "AI response failed",
+    };
+  }
+  if (type === "message" || type === "done") {
+    const rawMessage = objectValue(payload?.message) as unknown as AIMessage | null;
+    const message = rawMessage ? normalizeAIMessage(rawMessage) : null;
+    const messageId = typeof wrapped === "string"
+      ? wrapped
+      : typeof payload?.messageId === "string"
+        ? payload.messageId
+        : typeof payload?.id === "string" ? payload.id : message?.id ?? "";
+    if (!messageId) return null;
+    if (type === "message") return { type, messageId, ...(message ? { message } : {}) };
+    const allowance = objectValue(payload?.allowance) as unknown as AIAllowance | null;
+    return {
+      type,
+      messageId,
+      ...(message ? { message } : {}),
+      ...(allowance ? { allowance } : {}),
+      ...(payload?.partial === true ? { partial: true } : {}),
+      ...(payload?.replayed === true ? { replayed: true } : {}),
+    };
+  }
+  return null;
+}
+
+async function streamAIMessage(
+  conversationId: string,
+  input: AIMessageInput,
+  onEvent: (event: AIStreamEvent) => void | Promise<void>,
+): Promise<void> {
+  reportRequestActivity(1);
+  try {
+    await ensureTabSession();
+    const body = new FormData();
+    body.set("text", input.text);
+    body.set("context", JSON.stringify(input.context));
+    body.set("requestPatch", String(input.requestPatch ?? false));
+    body.set("assistantMode", input.assistantMode ?? "chat");
+    if (input.image) {
+      const extension = input.image.type === "image/png" ? "png" : "jpg";
+      body.set("image", input.image, `studio-preview.${extension}`);
+    }
+
+    const headers = authHeaders({ Accept: "text/event-stream" });
+    headers.set("X-CSRF-Token", await csrfToken());
+    headers.set("Idempotency-Key", input.idempotencyKey ?? idempotencyKey());
+    const response = await fetch(
+      `${baseUrl}/v1/ai/conversations/${encodeURIComponent(conversationId)}/messages`,
+      {
+        method: "POST",
+        headers,
+        body,
+        signal: input.signal,
+        credentials: "omit",
+        cache: "no-store",
+      },
+    );
+    if (!response.ok) throw await asError(response);
+    const rotated = response.headers.get("X-Session-Token");
+    if (rotated) storeSessionToken(rotated);
+    collectionCache.clear();
+    if (!response.body) throw new PlatformApiError(502, "AI_STREAM_FAILED", "AI response stream is empty");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let eventName = "message";
+    let dataLines: string[] = [];
+    const dispatch = async () => {
+      if (dataLines.length === 0) {
+        eventName = "message";
+        return;
+      }
+      const event = normalizeAIStreamEvent(eventName, dataLines.join("\n"));
+      eventName = "message";
+      dataLines = [];
+      if (event) await onEvent(event);
+    };
+    const consumeLines = async (flush: boolean) => {
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) break;
+        const line = buffer.slice(0, newline).replace(/\r$/, "");
+        buffer = buffer.slice(newline + 1);
+        if (!line) await dispatch();
+        else if (line.startsWith("event:")) eventName = line.slice(6).trim() || "message";
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+      }
+      if (flush) {
+        const line = buffer.replace(/\r$/, "");
+        buffer = "";
+        if (line.startsWith("event:")) eventName = line.slice(6).trim() || "message";
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+        await dispatch();
+      }
+    };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      await consumeLines(false);
+    }
+    buffer += decoder.decode();
+    await consumeLines(true);
   } finally {
     reportRequestActivity(-1);
   }
@@ -690,13 +1049,65 @@ export const platform = {
     },
     creatorProfile: (handle: string, displayName: string) => request<PlatformUser>("/v1/me/creator-profile", { method: "PATCH", body: json({ handle, displayName }) }, { csrf: true, idempotency: true }),
   },
+  ai: {
+    conversations: () => request<AIConversation[]>("/v1/ai/conversations"),
+    createConversation: (title = "新对话") => request<AIConversation>(
+      "/v1/ai/conversations",
+      { method: "POST", body: json({ title }) },
+      { csrf: true, idempotency: true },
+    ),
+    updateConversation: (
+      conversationId: string,
+      body: Partial<Pick<AIConversation, "title" | "optimizationConsent">>,
+    ) => request<AIConversation>(
+      `/v1/ai/conversations/${encodeURIComponent(conversationId)}`,
+      { method: "PATCH", body: json(body) },
+      { csrf: true, idempotency: true },
+    ),
+    deleteConversation: (conversationId: string) => request<void>(
+      `/v1/ai/conversations/${encodeURIComponent(conversationId)}`,
+      { method: "DELETE" },
+      { csrf: true, idempotency: true },
+    ),
+    deleteAllConversations: () => request<void>(
+      "/v1/me/ai-conversations",
+      { method: "DELETE" },
+      { csrf: true, idempotency: true },
+    ),
+    messages: async (conversationId: string) => (
+      await request<AIMessage[]>(
+        `/v1/ai/conversations/${encodeURIComponent(conversationId)}/messages`,
+      )
+    ).map(normalizeAIMessage),
+    allowance: () => request<AIAllowance>("/v1/me/ai-allowance"),
+    listingCopy: (
+      body: {
+        listingId: string;
+        locale: string;
+        sourceRequestId?: string;
+        instruction?: string;
+      },
+      requestKey: string,
+      signal?: AbortSignal,
+    ) => request<AIListingCopyResponse>(
+      "/v1/ai/listing-copy",
+      { method: "POST", body: json(body), signal },
+      { csrf: true, idempotencyKey: requestKey },
+    ),
+    feedback: (messageId: string, rating: -1 | 1, consent: boolean) => request<AIMessageFeedback>(
+      `/v1/ai/messages/${encodeURIComponent(messageId)}/feedback`,
+      { method: "POST", body: json({ rating, consent }) },
+      { csrf: true, idempotency: true },
+    ),
+    streamMessage: streamAIMessage,
+  },
   studio: {
     preview: async (
       canonicalSpec: FractalSpec,
       width = 512,
       height = 512,
       signal?: AbortSignal,
-      channel: "main" | "julia_picker" = "main",
+      channel: "main" | "julia_picker" | "ai_candidate" = "main",
       onStatus?: (status: PreviewJob["status"]) => void,
     ): Promise<Blob> => {
       const job = await request<PreviewJob>("/v1/studio/preview-jobs", { method: "POST", body: json({ canonicalSpec, width, height, channel }), signal }, { csrf: true });

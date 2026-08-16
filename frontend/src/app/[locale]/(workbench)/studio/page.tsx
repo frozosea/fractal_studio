@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
+  Bot,
   Braces,
   CheckCircle2,
   Download,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { InteractiveFractalCanvas } from "@/components/studio/interactive-fractal-canvas";
+import { StudioAIAssistant } from "@/components/studio/ai-assistant";
 import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -184,6 +186,48 @@ function safeScale(value: number | undefined, fallback = 3): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.max(minScale, parsed) : fallback;
 }
 
+function clampNumber(value: number | undefined, min: number, max: number): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : undefined;
+}
+
+/** Bounds for AI-suggestion patches: LLM output is untrusted input. */
+const AI_PATCH_NUMERIC_BOUNDS: ReadonlyArray<readonly [keyof FractalSpec, number, number]> = [
+  ["iterations", 1, 1_000_000],
+  ["scale", minScale, 1e9],
+  ["bailout", 1e-6, 1e9],
+  ["pairwiseCap", 0, 1_000_000],
+  ["cyclesPerOctave", 1, 1024],
+  ["rotationDeg", -360_000, 360_000],
+  ["transitionThetaMilliDeg", 0, 1e9],
+  ["juliaRe", -1e6, 1e6],
+  ["juliaIm", -1e6, 1e6],
+  ["centerRe", -1e12, 1e12],
+  ["centerIm", -1e12, 1e12],
+];
+
+function boundedAIPatch(patch: Partial<FractalSpec>): Partial<FractalSpec> {
+  const bounded: Partial<FractalSpec> = { ...patch };
+  for (const [key, min, max] of AI_PATCH_NUMERIC_BOUNDS) {
+    const value = bounded[key];
+    if (typeof value !== "number") continue;
+    const clamped = clampNumber(value, min, max);
+    if (clamped === undefined) throw new Error("AI suggestion carried a non-finite numeric value");
+    (bounded as Record<string, unknown>)[key] = clamped;
+  }
+  if (bounded.colorProgram?.stops) {
+    bounded.colorProgram = {
+      ...bounded.colorProgram,
+      stops: bounded.colorProgram.stops.map((stop) => ({
+        ...stop,
+        at: Math.min(1, Math.max(0, Number(stop.at) || 0)),
+      })),
+    };
+  }
+  return bounded;
+}
+
 function hasInvalidScale(value: number | undefined): boolean {
   const parsed = Number(value);
   return !Number.isFinite(parsed) || parsed <= 0;
@@ -194,12 +238,14 @@ const MEMBER_ONLY_MODES: ReadonlySet<ImageMode> = new Set(["transitionMulti", "f
 
 export default function StudioPage() {
   const t = useTranslations("studio");
+  const tAI = useTranslations("aiAssistant");
   const { user } = useAuth();
   const isMember = !!user?.member;
   const [spec, setSpec] = useState<FractalSpec>(defaults);
   const [juliaPickerSpec, setJuliaPickerSpec] = useState<FractalSpec>(defaults);
   const [mode, setMode] = useState<ImageMode>("map");
   const [preview, setPreview] = useState<string | null>(null);
+  const [previewContextKey, setPreviewContextKey] = useState<string | null>(null);
   const [juliaPickerPreview, setJuliaPickerPreview] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [previewQueued, setPreviewQueued] = useState(false);
@@ -213,13 +259,80 @@ export default function StudioPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [aiOpen, setAIOpen] = useState(false);
+  const [aiWideLayout, setAIWideLayout] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const previewRef = useRef<string | null>(null);
   const juliaPickerPreviewRef = useRef<string | null>(null);
   const lastPreviewAtRef = useRef(0);
   const previewGenerationRef = useRef(0);
   const explorationRef = useRef<StudioExplorationSession | null>(null);
+  const aiUndoRef = useRef(new Map<string, { patch: Partial<FractalSpec> }>());
+  const aiMainPreviewGateRef = useRef<{
+    captureNextInputs: boolean;
+    inputKey: string | null;
+  } | null>(null);
+  const aiDialogRef = useRef<HTMLElement | null>(null);
+  const aiOpenButtonRef = useRef<HTMLButtonElement | null>(null);
   const explorationStorageKey = user?.id ? `fractal-studio:exploration:v1:${user.id}` : null;
+
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1280px)");
+    const sync = () => {
+      setAIWideLayout(query.matches);
+      if (query.matches) setAIOpen(false);
+    };
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!aiOpen || aiWideLayout) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const dialog = aiDialogRef.current;
+    const focusableSelector = [
+      "button:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "input:not([disabled])",
+      "[href]",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setAIOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
+        .filter((element) => element.getClientRects().length > 0);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+      if (activeIndex < 0 || (!event.shiftKey && activeIndex === focusable.length - 1)) {
+        event.preventDefault();
+        (event.shiftKey ? focusable.at(-1) : focusable[0])?.focus();
+      } else if (event.shiftKey && activeIndex === 0) {
+        event.preventDefault();
+        focusable.at(-1)?.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    const focusFrame = window.requestAnimationFrame(() => dialog?.focus());
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previous;
+      const opener = aiOpenButtonRef.current;
+      if (opener?.isConnected && opener.getClientRects().length > 0) opener.focus();
+    };
+  }, [aiOpen, aiWideLayout]);
 
   useEffect(() => {
     if (!explorationStorageKey) return;
@@ -282,6 +395,10 @@ export default function StudioPage() {
       transitionThetaMilliDeg: Math.round(Number(spec.transitionThetaMilliDeg ?? 0)),
     };
   }, [spec]);
+  const aiContextKey = useMemo(
+    () => JSON.stringify({ spec: canonical, mode, output }),
+    [canonical, mode, output],
+  );
   const juliaPickerCanonical = useMemo<FractalSpec>(() => {
     const { juliaRe: _juliaRe, juliaIm: _juliaIm, ...shared } = canonical;
     const centerRe = Number(juliaPickerSpec.centerReStr ?? juliaPickerSpec.centerRe ?? 0);
@@ -322,6 +439,15 @@ export default function StudioPage() {
   }, [explorationReady, juliaPickerSpec.scale]);
   const specKey = JSON.stringify(canonical);
   const juliaPickerSpecKey = JSON.stringify(juliaPickerCanonical);
+  const mainPreviewInputsKey = useMemo(
+    () => JSON.stringify({
+      spec: canonical,
+      juliaPickerSpec: mode === "julia" ? juliaPickerCanonical : null,
+      mode,
+      previewSize,
+    }),
+    [canonical, juliaPickerCanonical, mode, previewSize],
+  );
   const zoomLevel = Math.max(0, Math.log2(3 / Number(canonical.scale ?? 3)));
   const availableVariants = capabilities.variants.length ? capabilities.variants : [...BUILTIN_VARIANTS];
   const axisVariants = capabilities.axisTransitionVariants.length ? capabilities.axisTransitionVariants : [...AXIS_TRANSITION_VARIANTS];
@@ -374,6 +500,23 @@ export default function StudioPage() {
 
   useEffect(() => {
     if (!explorationReady) return;
+    const aiGate = aiMainPreviewGateRef.current;
+    if (aiGate?.captureNextInputs) {
+      aiGate.captureNextInputs = false;
+      aiGate.inputKey = mainPreviewInputsKey;
+    }
+    if (aiGate?.inputKey === mainPreviewInputsKey) {
+      // Applying or undoing an AI suggestion only changes parameters. Keep this
+      // exact input snapshot gated across retries/effect replays; the next real
+      // manual input change gets a different key and resumes normal auto-preview.
+      abortRef.current?.abort();
+      abortRef.current = null;
+      previewGenerationRef.current += 1;
+      setPreviewing(false);
+      setPreviewQueued(false);
+      return;
+    }
+    aiMainPreviewGateRef.current = null;
     // Stop polling previous request immediately. Its Redis job is superseded by
     // the one below, so workers discard it before publishing a stale frame.
     abortRef.current?.abort();
@@ -402,6 +545,7 @@ export default function StudioPage() {
         if (previewRef.current) URL.revokeObjectURL(previewRef.current);
         previewRef.current = url;
         setPreview(url);
+        setPreviewContextKey(aiContextKey);
         if (pickerBlob) {
           const pickerUrl = URL.createObjectURL(pickerBlob);
           if (juliaPickerPreviewRef.current) URL.revokeObjectURL(juliaPickerPreviewRef.current);
@@ -435,7 +579,7 @@ export default function StudioPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [canonical, explorationReady, juliaPickerCanonical, juliaPickerSpecKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
+  }, [aiContextKey, canonical, explorationReady, juliaPickerCanonical, juliaPickerSpecKey, mainPreviewInputsKey, mode, previewSize.height, previewSize.width, retryTick, specKey, t]);
 
   const update = (patch: Partial<FractalSpec>) => setSpec((current) => ({ ...current, ...patch }));
   const updateViewport = (patch: Partial<FractalSpec>) => {
@@ -537,6 +681,103 @@ export default function StudioPage() {
     if (next === "sequence") update({ julia: false, transitionMode: "off", orbitProgram: sequenceProgram(), metric: "escape" });
   };
 
+  const applyAIStudioPatch = (
+    patch: Partial<FractalSpec>,
+    details: { messageId: string; reason: string; previousSpec: FractalSpec },
+  ) => {
+    if (patch.variant !== undefined && !capabilities.variants.includes(patch.variant)) throw new Error(t("errors.capabilities"));
+    if (patch.colorMap !== undefined && patch.colorMap !== null && !capabilities.colorMaps.includes(patch.colorMap)) throw new Error(t("errors.capabilities"));
+    if (patch.colorMode !== undefined && !capabilities.colorModes.includes(patch.colorMode)) throw new Error(t("errors.capabilities"));
+    if (patch.metric !== undefined && !capabilities.metrics.includes(patch.metric)) throw new Error(t("errors.capabilities"));
+    if (patch.engine !== undefined && !capabilities.engines.includes(patch.engine)) throw new Error(t("errors.capabilities"));
+    if (patch.scalarType !== undefined && !capabilities.scalars.includes(patch.scalarType)) throw new Error(t("errors.capabilities"));
+    if (patch.julia === true && patch.transitionMode && patch.transitionMode !== "off") throw new Error(t("errors.capabilities"));
+
+    let targetMode = mode;
+    if (patch.julia === true) targetMode = "julia";
+    else if (patch.transitionMode === "pair") targetMode = "transitionPair";
+    else if (patch.transitionMode === "multi") targetMode = "transitionMulti";
+    else if ((patch.julia === false && mode === "julia")
+      || (patch.transitionMode === "off" && isTransitionMode(mode))) targetMode = "map";
+
+    // The first assistant refines the current image mode. Switching formula
+    // families or map kinds belongs in an explicit, separately previewed flow.
+    if (targetMode !== mode) throw new Error(t("errors.capabilities"));
+
+    if (isTransitionMode(targetMode) && !capabilities.imageKinds.transition.enabled) throw new Error(t("errors.capabilities"));
+    if (targetMode === "transitionMulti" && !isMember) throw new Error(t("memberLocked"));
+    const targetCapabilities = isTransitionMode(targetMode)
+      ? capabilities.imageKinds.transition
+      : capabilities.imageKinds.map;
+    if (patch.metric !== undefined && !targetCapabilities.metrics.includes(patch.metric)) throw new Error(t("errors.capabilities"));
+    if (patch.engine !== undefined && !targetCapabilities.engines.includes(patch.engine)) throw new Error(t("errors.capabilities"));
+    if (patch.scalarType !== undefined && !targetCapabilities.scalars.includes(patch.scalarType)) throw new Error(t("errors.capabilities"));
+
+    // AI output is untrusted: clamp numeric fields to the same bounds the
+    // interactive UI enforces so one prompt-injected patch cannot enqueue
+    // unbounded compute work on the shared nodes.
+    const boundedPatch = boundedAIPatch(patch);
+    const appliedPatch: Partial<FractalSpec> = {
+      ...boundedPatch,
+      // A location candidate may carry both a numeric compatibility value and
+      // an exact decimal coordinate. Never replace the exact string with the
+      // rounded JavaScript number.
+      ...(boundedPatch.centerRe === undefined || boundedPatch.centerReStr !== undefined
+        ? {} : { centerReStr: String(boundedPatch.centerRe) }),
+      ...(boundedPatch.centerIm === undefined || boundedPatch.centerImStr !== undefined
+        ? {} : { centerImStr: String(boundedPatch.centerIm) }),
+    };
+    aiUndoRef.current.clear();
+    aiUndoRef.current.set(details.messageId, { patch: appliedPatch });
+    const currentValues = spec as unknown as Record<string, unknown>;
+    const changesCurrentSpec = Object.entries(appliedPatch).some(
+      ([key, value]) => JSON.stringify(currentValues[key]) !== JSON.stringify(value),
+    );
+    if (!changesCurrentSpec) return;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    previewGenerationRef.current += 1;
+    setPreviewing(false);
+    setPreviewQueued(false);
+    setSpec((current) => ({
+      ...current,
+      ...appliedPatch,
+    }));
+  };
+
+  const undoAIStudioPatch = (previousSpec: FractalSpec, details: { messageId: string }) => {
+    const snapshot = aiUndoRef.current.get(details.messageId);
+    if (!snapshot) throw new Error(tAI("errors.undo"));
+    const currentValues = spec as unknown as Record<string, unknown>;
+    const previousValues = previousSpec as unknown as Record<string, unknown>;
+    const patchValues = snapshot.patch as unknown as Record<string, unknown>;
+    const unchangedSinceApply = Object.entries(patchValues).every(
+      ([key, value]) => JSON.stringify(currentValues[key]) === JSON.stringify(value),
+    );
+    if (!unchangedSinceApply) throw new Error(tAI("errors.undoChanged"));
+    const changesCurrentSpec = Object.keys(patchValues).some(
+      (key) => JSON.stringify(currentValues[key]) !== JSON.stringify(previousValues[key]),
+    );
+    if (!changesCurrentSpec) {
+      aiUndoRef.current.delete(details.messageId);
+      return;
+    }
+    abortRef.current?.abort();
+    abortRef.current = null;
+    previewGenerationRef.current += 1;
+    setPreviewing(false);
+    setPreviewQueued(false);
+    setSpec((current) => {
+      const restored = { ...current } as unknown as Record<string, unknown>;
+      for (const key of Object.keys(patchValues)) {
+        if (previousValues[key] === undefined) delete restored[key];
+        else restored[key] = previousValues[key];
+      }
+      return restored as unknown as FractalSpec;
+    });
+    aiUndoRef.current.delete(details.messageId);
+  };
+
   const reset = () => {
     setMode("map");
     setSpec(defaults);
@@ -544,7 +785,7 @@ export default function StudioPage() {
   };
   const zoom = (factor: number) => updateViewport({
     scale: Math.min(1e9, Math.max(minScale, Number(spec.scale ?? 3) * factor)),
-    iterations: Math.min(20_000, Math.ceil(Number(spec.iterations ?? 512) * (factor < 1 ? 1.12 : 1))),
+    iterations: Math.min(65_536, Math.ceil(Number(spec.iterations ?? 512) * (factor < 1 ? 1.12 : 1))),
   });
   const zoomJuliaPicker = (factor: number) => updateJuliaPickerViewport({
     scale: Math.min(1e9, Math.max(minScale, Number(juliaPickerSpec.scale ?? 3) * factor)),
@@ -697,13 +938,18 @@ export default function StudioPage() {
           <h1 className="mt-1 text-2xl font-medium tracking-tight text-ink">{t("title")}</h1>
           <p className="mt-1 max-w-3xl text-sm text-ink/50">{t("subtitle")}</p>
         </div>
-        <div className="flex items-center gap-2 font-mono text-[11px] text-ink/45">
-          <span className="h-1.5 w-1.5 bg-emerald-400" />
-          {t("renderer")}: {capabilities.rendererVersion ?? t("loadingCapabilities")}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button ref={aiOpenButtonRef} className="xl:hidden" size="sm" variant="fractal" onClick={() => setAIOpen(true)}>
+            <Bot className="h-3.5 w-3.5" />{tAI("title")}
+          </Button>
+          <div className="flex items-center gap-2 font-mono text-[11px] text-ink/45">
+            <span className="h-1.5 w-1.5 bg-emerald-400" />
+            {t("renderer")}: {capabilities.rendererVersion ?? t("loadingCapabilities")}
+          </div>
         </div>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[21rem_minmax(0,1fr)] xl:grid-cols-[23rem_minmax(0,1fr)]">
+      <div className="grid gap-4 lg:grid-cols-[21rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_20rem] 2xl:grid-cols-[23rem_minmax(0,1fr)_22rem]">
         <aside className="space-y-3 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto lg:pr-1">
           <Panel index="01" title={t("sections.imageMode")}>
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
@@ -1084,6 +1330,41 @@ export default function StudioPage() {
             )}
           </section>
         </main>
+
+        <aside
+          ref={aiDialogRef}
+          aria-label={aiWideLayout ? undefined : tAI("title")}
+          aria-modal={aiWideLayout ? undefined : true}
+          role={aiWideLayout ? undefined : "dialog"}
+          tabIndex={aiWideLayout ? undefined : -1}
+          className={aiWideLayout
+          ? "sticky top-4 h-[calc(100dvh-7rem)] min-h-[32rem]"
+          : aiOpen ? "fixed inset-0 z-[70] flex justify-end" : "hidden"
+          }
+        >
+            {!aiWideLayout && (
+              <div
+                className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+                aria-hidden="true"
+                onClick={() => setAIOpen(false)}
+              />
+            )}
+            <StudioAIAssistant
+              capabilities={capabilities}
+              className={aiWideLayout
+                ? "h-full w-full"
+                : "relative h-dvh w-full border-y-0 border-r-0 shadow-2xl sm:max-w-[28rem]"
+              }
+              disabled={!user}
+              mode={mode}
+              onApplySuggestion={applyAIStudioPatch}
+              onClose={aiWideLayout ? undefined : () => setAIOpen(false)}
+              onUndoSuggestion={undoAIStudioPatch}
+              output={output}
+              preview={previewContextKey === aiContextKey ? preview : null}
+              spec={canonical}
+            />
+        </aside>
       </div>
     </div>
   );

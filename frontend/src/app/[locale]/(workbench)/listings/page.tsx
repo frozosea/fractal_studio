@@ -1,19 +1,30 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AIListingCopy } from "@/components/listings/ai-listing-copy";
 import { ListingCard } from "@/components/shared/listing-card";
 import { RenderMeta } from "@/components/shared/render-meta";
 import { CARD_GRID_STYLE } from "@/lib/utils/layout";
-import { platform, PlatformApiError, type Listing } from "@/lib/api/platform";
+import { platform, PlatformApiError, type AIListingCopyCandidate, type Listing } from "@/lib/api/platform";
 import { Link } from "@/i18n/navigation";
 
-type Draft = { title: string; description: string; price: string };
+type Draft = { title: string; description: string; tags: string; price: string };
+
+function parseTags(value: string): string[] {
+  return Array.from(new Set(
+    value
+      .split(/[,，\n]/)
+      .map((tag) => tag.trim())
+      .filter(Boolean),
+  ));
+}
 
 export default function ListingsPage() {
+  const locale = useLocale();
   const t = useTranslations("commerce");
   const tNav = useTranslations("workbench");
   const tCommon = useTranslations("common");
@@ -23,8 +34,9 @@ export default function ListingsPage() {
   // just has not applied for a creator profile yet.
   const [needsCreatorProfile, setNeedsCreatorProfile] = useState(false);
   const [editing, setEditing] = useState<Listing | null>(null);
-  const [draft, setDraft] = useState<Draft>({ title: "", description: "", price: "" });
+  const [draft, setDraft] = useState<Draft>({ title: "", description: "", tags: "", price: "" });
   const [saving, setSaving] = useState(false);
+  const [aiGenerating, setAiGenerating] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
   // Only the listing GET reads 403 this way: it carries no CSRF token, so the
@@ -53,7 +65,13 @@ export default function ListingsPage() {
       .catch(() => setError(t("errors.requestFailed")));
 
   const openEdit = (listing: Listing) => {
-    setDraft({ title: listing.title, description: listing.description, price: listing.price });
+    setDraft({
+      title: listing.title,
+      description: listing.description,
+      tags: listing.tags.join(", "),
+      price: listing.price,
+    });
+    setAiGenerating(false);
     setEditError(null);
     setEditing(listing);
   };
@@ -65,9 +83,11 @@ export default function ListingsPage() {
     try {
       // Send only what actually changed, so an untouched field never overwrites
       // a value edited elsewhere.
-      const patch: Partial<Draft> = {};
+      const patch: Partial<{ title: string; description: string; tags: string[]; price: string }> = {};
       if (draft.title.trim() !== editing.title) patch.title = draft.title.trim();
       if (draft.description !== editing.description) patch.description = draft.description;
+      const tags = parseTags(draft.tags);
+      if (JSON.stringify(tags) !== JSON.stringify(editing.tags)) patch.tags = tags;
       if (draft.price !== editing.price) patch.price = draft.price;
       if (Object.keys(patch).length > 0) await platform.marketplace.update(editing.id, patch);
       setEditing(null);
@@ -77,6 +97,15 @@ export default function ListingsPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const applyAICopy = (candidate: AIListingCopyCandidate) => {
+    setDraft((current) => ({
+      ...current,
+      title: candidate.title,
+      description: candidate.description,
+      tags: candidate.tags.join(", "),
+    }));
   };
 
   return (
@@ -139,10 +168,18 @@ export default function ListingsPage() {
       <Dialog
         open={Boolean(editing)}
         onOpenChange={(open) => {
-          if (!open && !saving) setEditing(null);
+          if (!open && !saving && !aiGenerating) setEditing(null);
         }}
       >
-        <DialogContent>
+        <DialogContent
+          className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+          onEscapeKeyDown={(event) => {
+            if (saving || aiGenerating) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (saving || aiGenerating) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>{t("listings.editTitle")}</DialogTitle>
             <DialogDescription>{t("listings.editHint")}</DialogDescription>
@@ -163,6 +200,12 @@ export default function ListingsPage() {
               onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
             />
             <Input
+              placeholder={t("listings.tagsPlaceholder")}
+              value={draft.tags}
+              maxLength={1000}
+              onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))}
+            />
+            <Input
               placeholder={t("assets.priceCny")}
               type="number"
               min="0.01"
@@ -170,13 +213,26 @@ export default function ListingsPage() {
               value={draft.price}
               onChange={(event) => setDraft((current) => ({ ...current, price: event.target.value }))}
             />
+            {editing && editing.status !== "published" && (
+              <AIListingCopy
+                key={editing.id}
+                listingId={editing.id}
+                locale={locale}
+                onApply={applyAICopy}
+                onBusyChange={setAiGenerating}
+              />
+            )}
             {editError && <p className="text-sm text-red-400">{editError}</p>}
           </div>
           <DialogFooter>
-            <Button variant="outline" disabled={saving} onClick={() => setEditing(null)}>
+            <Button variant="outline" disabled={saving || aiGenerating} onClick={() => setEditing(null)}>
               {t("actions.cancel")}
             </Button>
-            <Button loading={saving} disabled={!draft.title.trim() || !draft.price} onClick={() => void saveEdit()}>
+            <Button
+              loading={saving}
+              disabled={aiGenerating || !draft.title.trim() || !draft.price}
+              onClick={() => void saveEdit()}
+            >
               {tCommon("save")}
             </Button>
           </DialogFooter>

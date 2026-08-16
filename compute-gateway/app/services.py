@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings, get_settings
@@ -24,6 +24,30 @@ ACTIVE_RUN_STATES = frozenset({"allocating", "queued", "running"})
 TERMINAL_RUN_STATES = frozenset({"completed", "failed", "cancelled", "node_lost"})
 SAFE_ARTIFACT_FILE = re.compile(r"^[^/\\:.][^/\\]*$")
 NODE_KEY = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
+
+
+def _requested_resources(payload: dict[str, object]) -> frozenset[str]:
+    engine = str(payload.get("engine", "auto"))
+    if engine in {"cpu", "openmp", "avx2", "avx512"}:
+        return frozenset({"cpu"})
+    if engine == "cuda":
+        return frozenset({"gpu"})
+    # auto and hybrid may use/fall back across both processors. Reserving both
+    # prevents either pool from being oversubscribed before actual execution is known.
+    return frozenset({"cpu", "gpu"})
+
+
+def _accumulate_resource_counts(counts: dict[str, int], envelope: object) -> None:
+    """Add the resource-pool footprint of one stored run envelope to ``counts``."""
+    if not isinstance(envelope, dict):
+        return
+    payload = envelope.get("payload", {})
+    if not isinstance(payload, dict):
+        return
+    for resource in _requested_resources(payload):
+        counts[resource] += 1
+
+
 # Compute emits manifest sidecars (progress, parameters, diagnostics) alongside
 # user-facing binaries. Keep an explicit allow-list: the Gateway must not turn an
 # arbitrary upstream content type into a downloadable public artifact.
@@ -98,7 +122,7 @@ class GatewayService:
         self._sessions = session_factory
         self._settings = settings or get_settings()
         self._upstream = upstream or ComputeNodeClient(self._settings)
-        self._preview_in_flight: dict[UUID, int] = defaultdict(int)
+        self._preview_in_flight: dict[tuple[UUID, str], int] = defaultdict(int)
         self._preview_slots = asyncio.Condition()
 
     async def upsert_node(self, node_key: str, payload: NodeUpsertInput) -> dict[str, object]:
@@ -117,6 +141,10 @@ class GatewayService:
             node.base_url = base_url
             node.max_durable_slots = payload.max_durable_slots
             node.max_preview_slots = payload.max_preview_slots
+            node.max_cpu_slots = payload.max_cpu_slots
+            node.max_gpu_slots = payload.max_gpu_slots
+            node.max_cpu_preview_slots = payload.max_cpu_preview_slots
+            node.max_gpu_preview_slots = payload.max_gpu_preview_slots
             node.state = "offline" if payload.enabled else "disabled"
         if payload.enabled:
             await self.probe_node(node_key, activate_on_success=True)
@@ -128,6 +156,13 @@ class GatewayService:
         Bootstrap runs after every Gateway restart.  It may move an endpoint (for
         example from a Docker DNS name to WireGuard), but must not undo an
         operator's draining/disabled decision or turn a healthy node offline.
+
+        Capacity fields (``max_durable_slots``, ``max_preview_slots`` and the
+        CPU/GPU split derived from them) are declarative: every bootstrap applies
+        the template values, so an operator tuning capacity through the admin API
+        must re-apply it via ``upsert_node`` after a restart, or update the
+        bootstrap template itself.  ``state`` is runtime state and is preserved
+        for existing nodes.
         """
         if not NODE_KEY.fullmatch(node_key):
             raise GatewayError(422, "COMPUTE_VALIDATION_ERROR", "invalid node key")
@@ -144,6 +179,10 @@ class GatewayService:
             node.base_url = base_url
             node.max_durable_slots = payload.max_durable_slots
             node.max_preview_slots = payload.max_preview_slots
+            node.max_cpu_slots = payload.max_cpu_slots
+            node.max_gpu_slots = payload.max_gpu_slots
+            node.max_cpu_preview_slots = payload.max_cpu_preview_slots
+            node.max_gpu_preview_slots = payload.max_gpu_preview_slots
             if created:
                 node.state = "offline" if payload.enabled else "disabled"
             elif not payload.enabled:
@@ -174,13 +213,14 @@ class GatewayService:
             ).scalar_one_or_none()
             if node is None:
                 raise GatewayError(404, "COMPUTE_NODE_NOT_FOUND", "Compute node not found")
-            used = await self._active_run_count(session, node.id)
+            used = await self._active_resource_counts(session, node.id)
             return self._node_view(node, used)
 
     async def list_nodes(self) -> list[dict[str, object]]:
         async with self._sessions() as session:
             nodes = (await session.execute(select(ComputeNode).order_by(ComputeNode.node_key))).scalars().all()
-            return [self._node_view(node, await self._active_run_count(session, node.id)) for node in nodes]
+            counts = await self._active_resource_counts_by_node(session)
+            return [self._node_view(node, counts.get(node.id, {"cpu": 0, "gpu": 0})) for node in nodes]
 
     async def probe_node(self, node_key: str, *, activate_on_success: bool = False) -> None:
         async with self._sessions() as session:
@@ -274,12 +314,22 @@ class GatewayService:
             blocks = [caps.get(key) for caps in values]
             if blocks and all(isinstance(block, dict) for block in blocks) and all(block == blocks[0] for block in blocks[1:]):
                 shared_metadata[key] = blocks[0]
+        for key in ("builtInVariants", "axisTransitionVariants"):
+            lists = [caps.get(key) for caps in values]
+            if lists and all(isinstance(items, list) for items in lists):
+                common = {item for item in lists[0] if isinstance(item, str)}
+                for items in lists[1:]:
+                    common &= {item for item in items if isinstance(item, str)}
+                shared_metadata[key] = sorted(common)
         async with self._sessions() as session:
             ready = False
+            counts = await self._active_resource_counts_by_node(session)
             for node in nodes:
+                used = counts.get(node.id, {"cpu": 0, "gpu": 0})
                 if (
-                    await self._active_run_count(session, node.id) < node.max_durable_slots
-                    or self._preview_in_flight[node.id] < node.max_preview_slots
+                    used["cpu"] < node.max_cpu_slots
+                    or used["gpu"] < node.max_gpu_slots
+                    or any(self._preview_in_flight[node.id, resource] < self._preview_limit(node, resource) for resource in ("cpu", "gpu"))
                 ):
                     ready = True
                     break
@@ -297,17 +347,19 @@ class GatewayService:
         kind, _ = _require_envelope(envelope, durable=False)
         payload = envelope["payload"]
         assert isinstance(payload, dict)
+        resources = _requested_resources(payload)
         nodes = await self._eligible_nodes(kind=kind, payload=payload, persistent=False)
         deadline = asyncio.get_running_loop().time() + self._settings.preview_queue_timeout_seconds
         async with self._preview_slots:
             while True:
-                available = [node for node in nodes if self._preview_in_flight[node.id] < node.max_preview_slots]
+                available = [node for node in nodes if all(self._preview_in_flight[node.id, resource] < self._preview_limit(node, resource) for resource in resources)]
                 if available:
                     node = min(
                         available,
-                        key=lambda item: (self._preview_in_flight[item.id] / item.max_preview_slots, item.node_key),
+                        key=lambda item: (max(self._preview_in_flight[item.id, resource] / self._preview_limit(item, resource) for resource in resources), item.node_key),
                     )
-                    self._preview_in_flight[node.id] += 1
+                    for resource in resources:
+                        self._preview_in_flight[node.id, resource] += 1
                     break
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
@@ -322,7 +374,8 @@ class GatewayService:
             raise self._unavailable_error(error) from error
         finally:
             async with self._preview_slots:
-                self._preview_in_flight[node.id] = max(0, self._preview_in_flight[node.id] - 1)
+                for resource in resources:
+                    self._preview_in_flight[node.id, resource] = max(0, self._preview_in_flight[node.id, resource] - 1)
                 self._preview_slots.notify(1)
 
     async def create_run(self, envelope: dict[str, object]) -> dict[str, object]:
@@ -410,6 +463,7 @@ class GatewayService:
     ) -> ComputeRun:
         payload = envelope["payload"]
         assert isinstance(payload, dict)
+        resources = _requested_resources(payload)
         async with self._sessions() as session, session.begin():
             existing = (
                 await session.execute(
@@ -426,12 +480,14 @@ class GatewayService:
             # before reserving a slot on it.
             nodes = (await session.execute(select(ComputeNode).where(ComputeNode.state == "active"))).scalars().all()
             candidates: list[tuple[float, ComputeNode]] = []
+            counts = await self._active_resource_counts_by_node(session)
             for node in nodes:
                 if not self._healthy(node) or not _node_supports(node, kind=kind, payload=payload, persistent=True):
                     continue
-                used = await self._active_run_count(session, node.id)
-                if used < node.max_durable_slots:
-                    candidates.append((used / node.max_durable_slots, node))
+                used = counts.get(node.id, {"cpu": 0, "gpu": 0})
+                limits = {"cpu": node.max_cpu_slots, "gpu": node.max_gpu_slots}
+                if all(used[resource] < limits[resource] for resource in resources):
+                    candidates.append((max(used[resource] / limits[resource] for resource in resources), node))
             if not candidates:
                 raise GatewayError(503, "COMPUTE_CAPACITY_EXHAUSTED", "no healthy compatible Compute node has capacity")
             for _, candidate in sorted(
@@ -449,7 +505,9 @@ class GatewayService:
                     continue
                 if not self._healthy(node) or not _node_supports(node, kind=kind, payload=payload, persistent=True):
                     continue
-                if await self._active_run_count(session, node.id) >= node.max_durable_slots:
+                used = await self._active_resource_counts(session, node.id)
+                limits = {"cpu": node.max_cpu_slots, "gpu": node.max_gpu_slots}
+                if any(used[resource] >= limits[resource] for resource in resources):
                     continue
                 node.last_assigned_at = _now()
                 run = ComputeRun(
@@ -584,14 +642,29 @@ class GatewayService:
             return [node for node in nodes if self._healthy(node)]
         return [node for node in nodes if self._healthy(node) and _node_supports(node, kind=kind, payload=payload, persistent=persistent)]
 
-    async def _active_run_count(self, session: AsyncSession, node_id: UUID) -> int:
-        return int(
-            (await session.execute(
-                select(func.count(ComputeRun.gateway_run_id)).where(
-                    ComputeRun.node_id == node_id, ComputeRun.state.in_(ACTIVE_RUN_STATES)
-                )
-            )).scalar_one()
-        )
+    async def _active_resource_counts(self, session: AsyncSession, node_id: UUID) -> dict[str, int]:
+        requests = (await session.execute(
+            select(ComputeRun.request_json).where(
+                ComputeRun.node_id == node_id, ComputeRun.state.in_(ACTIVE_RUN_STATES)
+            )
+        )).scalars().all()
+        counts = {"cpu": 0, "gpu": 0}
+        for envelope in requests:
+            _accumulate_resource_counts(counts, envelope)
+        return counts
+
+    async def _active_resource_counts_by_node(self, session: AsyncSession) -> dict[UUID, dict[str, int]]:
+        rows = (await session.execute(
+            select(ComputeRun.node_id, ComputeRun.request_json).where(ComputeRun.state.in_(ACTIVE_RUN_STATES))
+        )).all()
+        counts: dict[UUID, dict[str, int]] = defaultdict(lambda: {"cpu": 0, "gpu": 0})
+        for node_id, envelope in rows:
+            _accumulate_resource_counts(counts[node_id], envelope)
+        return dict(counts)
+
+    @staticmethod
+    def _preview_limit(node: ComputeNode, resource: str) -> int:
+        return node.max_cpu_preview_slots if resource == "cpu" else node.max_gpu_preview_slots
 
     async def _locked_node(self, session: AsyncSession, node_key: str) -> ComputeNode:
         node = (
@@ -607,22 +680,42 @@ class GatewayService:
         async with self._sessions() as session, session.begin():
             session.add(NodeProbe(node_id=node_id, healthy=healthy, latency_ms=latency_ms, error_code=error_code))
 
-    def _node_view(self, node: ComputeNode, used_durable_slots: int) -> dict[str, object]:
+    def _node_view(self, node: ComputeNode, used_resources: dict[str, int]) -> dict[str, object]:
         capabilities = node.capabilities_json or {}
         hardware = capabilities.get("hardware") if isinstance(capabilities, dict) else None
+        cpu = hardware.get("cpu") if isinstance(hardware, dict) else None
         cuda = hardware.get("cuda") if isinstance(hardware, dict) else None
         return {
             "nodeKey": node.node_key,
             "state": node.state,
             "maxDurableSlots": node.max_durable_slots,
-            "usedDurableSlots": used_durable_slots,
+            "usedDurableSlots": max(used_resources.values()),
             "maxPreviewSlots": node.max_preview_slots,
-            "usedPreviewSlots": self._preview_in_flight[node.id],
+            "usedPreviewSlots": max(self._preview_in_flight[node.id, "cpu"], self._preview_in_flight[node.id, "gpu"]),
+            "cpuAllocation": {
+                "usedSlots": used_resources["cpu"],
+                "maxSlots": node.max_cpu_slots,
+                "usedPreviewSlots": self._preview_in_flight[node.id, "cpu"],
+                "maxPreviewSlots": node.max_cpu_preview_slots,
+            },
+            "gpuAllocation": {
+                "usedSlots": used_resources["gpu"],
+                "maxSlots": node.max_gpu_slots,
+                "usedPreviewSlots": self._preview_in_flight[node.id, "gpu"],
+                "maxPreviewSlots": node.max_gpu_preview_slots,
+            },
             "healthy": self._healthy(node),
             "lastHealthyAt": node.last_healthy_at,
             "lastAssignedAt": node.last_assigned_at,
             "capabilitiesAt": node.capabilities_at,
             "rendererVersion": capabilities.get("rendererVersion") if isinstance(capabilities, dict) else None,
+            "cpu": {
+                "logicalCores": cpu.get("logicalCores"),
+                "physicalCores": cpu.get("physicalCores"),
+                "openmp": cpu.get("openmp"),
+                "avx2": cpu.get("avx2"),
+                "avx512": cpu.get("avx512"),
+            } if isinstance(cpu, dict) else None,
             "gpu": {
                 "name": cuda.get("name"),
                 "runtime": bool(cuda.get("runtime")),

@@ -82,6 +82,15 @@ class PreviewJobService:
         self, *, owner_id: UUID, session_id: UUID, channel: str, canonical: CanonicalRecipe, width: int, height: int
     ) -> tuple[str, str]:
         PreviewService()._validate_dimensions(width, height)
+        # Same fail-closed per-user throttle as the synchronous preview path:
+        # without it, rotating sessions/accounts can saturate the shared
+        # interactive preview capacity of the compute nodes.
+        try:
+            allowed = await PreviewRateLimiter().allow(owner_id)
+        except PreviewQuotaUnavailable as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="preview_rate_limit_unavailable") from error
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="preview_rate_limited")
         try:
             await self._compute_client.capabilities()
         except ComputeClientError as error:
