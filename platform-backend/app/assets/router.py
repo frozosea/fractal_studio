@@ -131,7 +131,13 @@ async def delete_my_asset(
 
 @router.post("/assets/{asset_id}/download-url")
 async def create_download_url(
-    asset_id: UUID, principal: AccessPrincipal = Depends(require_principal)
+    asset_id: UUID,
+    request: Request,
+    principal: AccessPrincipal = Depends(require_principal),
 ) -> dict[str, object]:
+    # Signed-download boundary: reject cross-site requests (untrusted Origin or
+    # missing CSRF proof) before a signed master-object URL is produced, exactly
+    # like every other state-affecting authenticated mutation.
+    enforce_origin_and_csrf(request, principal)
     view = await AssetLibraryService().create_download_url(principal=principal, asset_id=asset_id)
     return {"data": view.model_dump(mode="json", by_alias=True)}

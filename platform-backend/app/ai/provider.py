@@ -344,6 +344,18 @@ def _decode_tool_arguments(arguments: str) -> object:
         ) from None
 
 
+# Exploration candidates are short structured tool calls (measured 200-350
+# completion tokens).  A large unified budget invites trailing filler and, on
+# reasoning-heavy providers, lets hidden thought tokens exhaust the request.
+_EXPLORATION_OUTPUT_BUDGET = 400
+
+
+def _output_budget(settings: object, assistant_mode: AssistantMode) -> int:
+    if assistant_mode in {"location", "color", "composition"}:
+        return min(settings.ai_max_output_tokens, _EXPLORATION_OUTPUT_BUDGET)
+    return settings.ai_max_output_tokens
+
+
 async def stream_completion(*, text: str, history: list[dict], context: dict, image: bytes | None,
                             image_type: str | None, force_patch: bool = False,
                             disable_tools: bool = False,
@@ -370,7 +382,7 @@ async def stream_completion(*, text: str, history: list[dict], context: dict, im
         if force_patch and "-VL-" not in settings.siliconflow_model else "auto"
     )
     payload = {"model": settings.siliconflow_model, "messages": messages, "stream": True,
-               "max_tokens": settings.ai_max_output_tokens,
+               "max_tokens": _output_budget(settings, assistant_mode),
                "stream_options": {"include_usage": True},
                # Structured exploration must be reproducible: even a small
                # sampling temperature occasionally makes Qwen emit malformed

@@ -58,7 +58,7 @@ services:
     runtime: nvidia
     gpus: all
     environment:
-      FSD_STARTUP_BENCHMARK: "off"
+      FSD_STARTUP_BENCHMARK: "quick"
       FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
       FSD_RENDERER_VERSION: compose-dev-a
       FSD_ENABLE_LEGACY_API: "0"
@@ -78,7 +78,7 @@ services:
     runtime: nvidia
     gpus: all
     environment:
-      FSD_STARTUP_BENCHMARK: "off"
+      FSD_STARTUP_BENCHMARK: "quick"
       FSD_COMPUTE_SERVICE_KEY: ${FSD_COMPUTE_SERVICE_KEY:-dev-compute-key-change-me}
       FSD_RENDERER_VERSION: compose-dev-b
       FSD_ENABLE_LEGACY_API: "0"
@@ -130,7 +130,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *gateway-env
-      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://compute:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://compute-b:18080","maxDurableSlots":1,"maxPreviewSlots":2,"enabled":true}]'
+      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://compute:18080","maxDurableSlots":1,"maxPreviewSlots":2,"maxCpuSlots":2,"maxGpuSlots":1,"maxCpuPreviewSlots":4,"maxGpuPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://compute-b:18080","maxDurableSlots":1,"maxPreviewSlots":2,"maxCpuSlots":1,"maxGpuSlots":1,"maxCpuPreviewSlots":2,"maxGpuPreviewSlots":1,"enabled":true}]'
     ports: ["127.0.0.1:${COMPUTE_GATEWAY_PORT:-18103}:8080"]
     volumes:
       - ./compute-gateway:/app
@@ -177,8 +177,10 @@ services:
       S3_ACCESS_KEY_ID: minio
       S3_SECRET_ACCESS_KEY: minio_dev_password
       ALIPAY_STUB_MODE: "false"
-      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-9021000166609768}
-      ALIPAY_SELLER_ID: ${ALIPAY_SELLER_ID:-2088721106011274}
+      # Fail closed instead of silently wiring the payment edge to
+      # real-looking identifiers: real values must come from the env file.
+      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-dev-stub}
+      ALIPAY_SELLER_ID: ${ALIPAY_SELLER_ID:-dev-stub}
       ALIPAY_STUB_PUBLIC_KEY_URL: ""
       ALIPAY_GATEWAY_URL: ${ALIPAY_GATEWAY_URL:-https://openapi-sandbox.dl.alipaydev.com/gateway.do}
       ALIPAY_NOTIFY_URL: ${ALIPAY_NOTIFY_URL:-https://fractal.kevin0412.top/platform/v1/webhooks/alipay}

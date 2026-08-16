@@ -168,7 +168,7 @@ class MediaWorker:
                 with Image.open(master_path) as image:
                     image.load()
                     base = image.convert("RGBA")
-        except (OSError, UnidentifiedImageError) as error:
+        except (OSError, UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
             raise MediaProcessingError("invalid_image_master") from error
 
         thumbnail = base.copy()

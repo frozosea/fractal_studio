@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from time import monotonic
@@ -11,6 +12,12 @@ import httpx
 
 from app.config import Settings, get_settings
 from app.models import ComputeNode
+
+# A misbehaving or compromised node must not be able to OOM the gateway by
+# streaming an unbounded body (production mem_limit is 384m). JSON and preview
+# responses are buffered, so they get hard byte budgets; artifacts stream.
+MAX_JSON_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_PREVIEW_RESPONSE_BYTES = 64 * 1024 * 1024
 
 
 class UpstreamError(RuntimeError):
@@ -60,21 +67,24 @@ class ComputeNodeClient:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(self._settings.preview_timeout_seconds), trust_env=False
             ) as client:
-                response = await client.post(
-                    self._url(node, "/compute/v1/previews"), headers=self._headers(), json=envelope
-                )
+                async with client.stream(
+                    "POST", self._url(node, "/compute/v1/previews"), headers=self._headers(), json=envelope
+                ) as response:
+                    if response.status_code != 200:
+                        self._raise_response(response)
+                    body = await self._read_bounded(response, MAX_PREVIEW_RESPONSE_BYTES)
         except httpx.TimeoutException as error:
             raise UpstreamError("COMPUTE_TIMEOUT") from error
+        except UpstreamError:
+            raise
         except httpx.HTTPError as error:
             raise UpstreamError("COMPUTE_NODE_UNAVAILABLE") from error
-        if response.status_code != 200:
-            self._raise_response(response)
         forwarded = {
             key: value
             for key, value in response.headers.items()
             if key.lower() in {"x-fsd-width", "x-fsd-height", "x-fsd-pixel-format"}
         }
-        return response.content, response.headers.get("content-type", "application/octet-stream"), forwarded
+        return body, response.headers.get("content-type", "application/octet-stream"), forwarded
 
     async def create_run(self, node: ComputeNode, envelope: dict[str, object]) -> UpstreamReply:
         return await self._json(node, "POST", "/compute/v1/runs", json=envelope, expected={202})
@@ -156,20 +166,39 @@ class ComputeNodeClient:
         )
         try:
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-                response = await client.request(method, self._url(node, route), headers=self._headers(), json=json)
+                async with client.stream(
+                    method, self._url(node, route), headers=self._headers(), json=json
+                ) as response:
+                    if response.status_code not in expected:
+                        self._raise_response(response)
+                    body_bytes = await self._read_bounded(response, MAX_JSON_RESPONSE_BYTES)
         except httpx.TimeoutException as error:
             raise UpstreamError("COMPUTE_TIMEOUT") from error
+        except UpstreamError:
+            raise
         except httpx.HTTPError as error:
             raise UpstreamError("COMPUTE_NODE_UNAVAILABLE") from error
-        if response.status_code not in expected:
-            self._raise_response(response)
         try:
-            body = response.json()
+            body = json.loads(body_bytes)
         except ValueError as error:
             raise UpstreamError("COMPUTE_INVALID_RESPONSE", status_code=response.status_code) from error
         if not isinstance(body, dict):
             raise UpstreamError("COMPUTE_INVALID_RESPONSE", status_code=response.status_code)
         return UpstreamReply(response.status_code, body, dict(response.headers))
+
+    @staticmethod
+    async def _read_bounded(response: httpx.Response, cap: int) -> bytes:
+        """Read the streamed body, aborting once it exceeds `cap` bytes."""
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > cap:
+                raise UpstreamError("COMPUTE_INVALID_RESPONSE", status_code=response.status_code)
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     @staticmethod
     def _raise_response(response: httpx.Response) -> None:

@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    app_env: str = "development"
     database_url: str
     compute_gateway_service_key: str = Field(min_length=16)
     compute_gateway_admin_key: str = Field(min_length=16)

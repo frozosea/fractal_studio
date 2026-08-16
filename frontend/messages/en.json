@@ -970,8 +970,12 @@
       "compute": {
         "healthy": "Healthy",
         "unhealthy": "Unavailable",
-        "durableSlots": "Render slots",
         "previewSlots": "Preview slots",
+        "cpuAllocation": "CPU compute",
+        "gpuAllocation": "GPU compute",
+        "cpuCores": "Cores (physical / logical)",
+        "cpuAcceleration": "CPU acceleration",
+        "taskSlots": "Task slots",
         "vram": "VRAM (free / total)",
         "cuda": "CUDA",
         "renderer": "Renderer version",
@@ -981,6 +985,7 @@
         "unavailable": "Unavailable",
         "unknown": "Unknown",
         "unknownGpu": "GPU not reported",
+        "unknownCpu": "CPU not reported",
         "never": "Never",
         "empty": "No compute nodes are registered.",
         "state": { "active": "Active", "draining": "Draining", "offline": "Offline", "disabled": "Disabled" }

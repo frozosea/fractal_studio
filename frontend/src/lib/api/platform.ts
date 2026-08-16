@@ -399,6 +399,15 @@ export interface AdminComputeNode {
   maxPreviewSlots: number;
   usedPreviewSlots: number;
   rendererVersion?: string | null;
+  cpuAllocation?: { usedSlots: number; maxSlots: number; usedPreviewSlots: number; maxPreviewSlots: number } | null;
+  gpuAllocation?: { usedSlots: number; maxSlots: number; usedPreviewSlots: number; maxPreviewSlots: number } | null;
+  cpu?: {
+    logicalCores?: number | null;
+    physicalCores?: number | null;
+    openmp?: { compiled: boolean; runtime: boolean } | null;
+    avx2?: { compiled: boolean; runtime: boolean } | null;
+    avx512?: { compiled: boolean; runtime: boolean } | null;
+  } | null;
   gpu?: {
     name?: string | null;
     runtime: boolean;

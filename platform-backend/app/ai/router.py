@@ -12,6 +12,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
 from sqlalchemy import text as sql
 
+from app.ai.images import prepare_ai_image
 from app.ai.models import (
     ConversationCreate,
     ConversationUpdate,
@@ -254,9 +255,12 @@ async def _read_image(upload: UploadFile | None) -> tuple[bytes | None, str | No
         with Image.open(BytesIO(data)) as image:
             if max(image.size) > 640:
                 raise HTTPException(status_code=422, detail="ai_image_dimensions_invalid")
-    except (UnidentifiedImageError, OSError) as error:
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
         raise HTTPException(status_code=422, detail="ai_image_invalid") from error
-    return data, upload.content_type
+    try:
+        return prepare_ai_image(data, upload.content_type)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="ai_image_invalid") from error
 
 
 @router.post("/ai/conversations/{conversation_id}/messages")

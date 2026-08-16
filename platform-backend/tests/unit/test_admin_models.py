@@ -94,6 +94,15 @@ def test_compute_node_view_exposes_safe_operational_fields_only() -> None:
             "maxPreviewSlots": 2,
             "usedPreviewSlots": 1,
             "rendererVersion": "renderer-sm61",
+            "cpuAllocation": {"usedSlots": 1, "maxSlots": 2, "usedPreviewSlots": 0, "maxPreviewSlots": 4},
+            "gpuAllocation": {"usedSlots": 0, "maxSlots": 1, "usedPreviewSlots": 1, "maxPreviewSlots": 2},
+            "cpu": {
+                "logicalCores": 8,
+                "physicalCores": 4,
+                "openmp": {"compiled": True, "runtime": True},
+                "avx2": {"compiled": True, "runtime": True},
+                "avx512": {"compiled": False, "runtime": False},
+            },
             "gpu": {
                 "name": "GTX 1050",
                 "runtime": True,
@@ -106,5 +115,9 @@ def test_compute_node_view_exposes_safe_operational_fields_only() -> None:
     payload = view.model_dump(mode="json", by_alias=True)
     assert payload["nodeKey"] == "compute-b"
     assert payload["usedPreviewSlots"] == 1
+    assert payload["cpu"]["logicalCores"] == 8
+    assert payload["cpu"]["avx2"]["runtime"] is True
+    assert payload["cpuAllocation"]["maxSlots"] == 2
+    assert payload["gpuAllocation"]["usedPreviewSlots"] == 1
     assert payload["gpu"]["computeCapability"] == {"major": 6, "minor": 1}
     assert "baseUrl" not in payload

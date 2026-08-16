@@ -845,7 +845,12 @@ std::string specialPointsAutoRoute(const std::filesystem::path& repoRoot, const 
 
     if (pointType == "misiurewicz" && k <= 0) throw std::runtime_error("misiurewicz requires k > 0");
     if (pointType == "hyperbolic"  && k != 0) throw std::runtime_error("hyperbolic requires k = 0");
-    if (p < 1)                                 throw std::runtime_error("period p must be >= 1");
+    if (k < 0 || k > 32) throw std::runtime_error("preperiod k must be in 0..32");
+    // The solver builds a periodicity polynomial of degree 2^p with schoolbook
+    // multiplication and runs synchronously in the request thread; p=13 would
+    // already burn seconds of CPU per request. Bound it so one request cannot
+    // pin a worker thread or exhaust node memory.
+    if (p < 1 || p > 12) throw std::runtime_error("period p must be in 1..12");
 
     const auto pts = compute::newton_sp::auto_solve(k, p);
 
@@ -869,7 +874,8 @@ std::string specialPointsSeedRoute(const std::filesystem::path& repoRoot, const 
     const double sr = j.value("re", 0.0);
     const double si = j.value("im", 0.0);
 
-    if (p < 1) throw std::runtime_error("period p must be >= 1");
+    if (k < 0 || k > 32) throw std::runtime_error("preperiod k must be in 0..32");
+    if (p < 1 || p > 12) throw std::runtime_error("period p must be in 1..12");
 
     const auto pts = compute::newton_sp::seed_solve(k, p, std::complex<double>(sr, si));
 

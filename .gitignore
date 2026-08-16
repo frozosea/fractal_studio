@@ -68,6 +68,11 @@ EXPLORATION_REPORT.md
 *.key
 *.p12
 *.pfx
+*.p8
+*.jks
+*.keystore
+*.dump
+*.tar.gz
 .DS_Store
 auth.json
 /ai.env

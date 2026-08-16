@@ -395,6 +395,10 @@ components:
         baseUrl: { type: string, format: uri }
         maxDurableSlots: { type: integer, minimum: 1, maximum: 64 }
         maxPreviewSlots: { type: integer, minimum: 1, maximum: 64 }
+        maxCpuSlots: { type: integer, minimum: 1, maximum: 64 }
+        maxGpuSlots: { type: integer, minimum: 1, maximum: 64 }
+        maxCpuPreviewSlots: { type: integer, minimum: 1, maximum: 64 }
+        maxGpuPreviewSlots: { type: integer, minimum: 1, maximum: 64 }
         enabled: { type: boolean }
     NodeView:
       type: object
@@ -405,8 +409,46 @@ components:
         maxDurableSlots: { type: integer }
         usedDurableSlots: { type: integer }
         maxPreviewSlots: { type: integer }
+        usedPreviewSlots: { type: integer }
+        cpuAllocation: { $ref: '#/components/schemas/ResourceAllocation' }
+        gpuAllocation: { $ref: '#/components/schemas/ResourceAllocation' }
+        cpu: { $ref: '#/components/schemas/CpuView' }
+        gpu: { $ref: '#/components/schemas/GpuView' }
+        rendererVersion: { type: [string, 'null'] }
         healthy: { type: boolean }
         lastHealthyAt: { type: [string, 'null'], format: date-time }
+        lastAssignedAt: { type: [string, 'null'], format: date-time }
+        capabilitiesAt: { type: [string, 'null'], format: date-time }
+    ResourceAllocation:
+      type: object
+      required: [usedSlots, maxSlots, usedPreviewSlots, maxPreviewSlots]
+      properties:
+        usedSlots: { type: integer }
+        maxSlots: { type: integer }
+        usedPreviewSlots: { type: integer }
+        maxPreviewSlots: { type: integer }
+    CpuFeatureView:
+      type: object
+      required: [compiled, runtime]
+      properties:
+        compiled: { type: boolean }
+        runtime: { type: boolean }
+    CpuView:
+      type: object
+      properties:
+        logicalCores: { type: [integer, 'null'] }
+        physicalCores: { type: [integer, 'null'] }
+        openmp: { $ref: '#/components/schemas/CpuFeatureView' }
+        avx2: { $ref: '#/components/schemas/CpuFeatureView' }
+        avx512: { $ref: '#/components/schemas/CpuFeatureView' }
+    GpuView:
+      type: object
+      properties:
+        name: { type: [string, 'null'] }
+        runtime: { type: boolean }
+        computeCapability: { type: [object, 'null'] }
+        totalVramBytes: { type: [integer, 'null'] }
+        freeVramBytes: { type: [integer, 'null'] }
     ErrorEnvelope:
       type: object
       required: [error]

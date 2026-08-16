@@ -970,8 +970,12 @@
       "compute": {
         "healthy": "健康",
         "unhealthy": "不可用",
-        "durableSlots": "渲染槽位",
         "previewSlots": "预览槽位",
+        "cpuAllocation": "CPU 计算能力",
+        "gpuAllocation": "GPU 计算能力",
+        "cpuCores": "核心（物理 / 逻辑）",
+        "cpuAcceleration": "CPU 加速",
+        "taskSlots": "任务槽位",
         "vram": "显存（可用 / 总量）",
         "cuda": "CUDA",
         "renderer": "渲染器版本",
@@ -981,6 +985,7 @@
         "unavailable": "不可用",
         "unknown": "未知",
         "unknownGpu": "未报告 GPU",
+        "unknownCpu": "未报告 CPU",
         "never": "从未",
         "empty": "尚未注册计算节点。",
         "state": { "active": "已启用", "draining": "正在排空", "offline": "离线", "disabled": "已禁用" }

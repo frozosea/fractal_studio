@@ -123,7 +123,7 @@ def prepare_listing_preview(
                 raise ListingPreviewUnavailable("asset preview dimensions are too large")
             opened.load()
             image = ImageOps.exif_transpose(opened).convert("RGB")
-    except (UnidentifiedImageError, OSError, ValueError) as error:
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as error:
         raise ListingPreviewUnavailable("asset preview is not a valid image") from error
     if image.width < 1 or image.height < 1:
         raise ListingPreviewUnavailable("asset preview has invalid dimensions")

@@ -253,6 +253,8 @@ erDiagram
 | `state` | enum | `active`, `draining`, `offline`, `disabled` |
 | `max_durable_slots` | int | `1..64`; default `1` for a GPU node |
 | `max_preview_slots` | int | `1..64`; default `2` |
+| `max_cpu_slots`, `max_gpu_slots` | int | independent durable CPU/GPU capacity; `1..64` |
+| `max_cpu_preview_slots`, `max_gpu_preview_slots` | int | independent preview CPU/GPU capacity; `1..64` |
 | `capabilities_json` | jsonb | latest validated `/capabilities` response |
 | `capabilities_at`, `last_healthy_at` | timestamptz | nullable before first successful probe |
 
@@ -287,17 +289,51 @@ Append-only operational history. Retain 7 days in MVP with a daily cleanup job.
 ### 5.3 Capacity query
 
 The scheduler locks candidate `compute_nodes` rows in one database transaction.
-For each active node it counts `compute_runs` in `allocating`, `queued`, or
-`running`; this is its reserved durable capacity. Select the lowest score:
+For each active node it counts active `compute_runs` (in `allocating`, `queued`,
+or `running`) **per resource pool**; this is its reserved durable capacity.
+Select the lowest score:
 
 ```text
-score = active_durable_runs / max_durable_slots
+requested pools = engine cpu|openmp|avx2|avx512  -> {cpu}
+                  engine cuda                    -> {gpu}
+                  engine auto|hybrid             -> {cpu, gpu}
+
+score = max(used[resource] / limit[resource] for resource in requested pools)
+limit = max_cpu_slots for "cpu", max_gpu_slots for "gpu"
 ```
 
 Tie-break by the oldest `last_assigned_at` (add this nullable timestamp to
 `compute_nodes`) then `node_key`. A selected row gets a new `allocating` run
 within that same transaction. This prevents two Gateway replicas overbooking a
-single node.
+single node. After locking a candidate the scheduler re-reads its fresh
+per-resource counts, so concurrent reservations cannot oversubscribe one pool.
+
+Notes on the pool semantics:
+
+- An `auto`/`hybrid` request reserves **both** pools because actual execution
+  may use or fall back across either processor; reserving both prevents either
+  pool from being oversubscribed before execution is known. On a node with
+  `max_cpu_slots=2, max_gpu_slots=1`, one `auto` run leaves one CPU slot free but
+  no GPU slot, so a second `auto` run is rejected while an explicit `cpu` run can
+  still be scheduled.
+- Preview capacity works the same way with `max_cpu_preview_slots` /
+  `max_gpu_preview_slots`; a preview reserves its requested pools in memory
+  (`_preview_in_flight`) until the upstream call finishes.
+- Legacy fields remain available: `usedDurableSlots`/`usedPreviewSlots` report
+  the busiest pool (`max` of cpu/gpu) for backward compatibility, and
+  `max_durable_slots`/`max_preview_slots` are the pre-split totals that the
+  per-pool limits default to on upsert and migration.
+
+### 5.4 Node configuration semantics
+
+Capacity fields (`max_durable_slots`, `max_preview_slots`, and the CPU/GPU split)
+are **declarative**: both `upsert_node` (operator admin API) and `bootstrap_node`
+(runs after every Gateway restart) apply the template values verbatim. The
+bootstrap template therefore wins over any ad-hoc operator tuning after a
+restart — to change capacity durably, update the bootstrap template (the
+`COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON` environment variable) or re-apply
+`upsert_node` after each restart. `state` is runtime state and is **preserved**
+across bootstrap for existing nodes.
 
 ## 6. Class diagram
 

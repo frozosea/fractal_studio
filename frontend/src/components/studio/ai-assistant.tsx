@@ -26,6 +26,7 @@ import {
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MarkdownMessage } from "@/components/studio/markdown-message";
 import {
   platform,
   PlatformApiError,
@@ -533,6 +534,13 @@ export function StudioAIAssistant({
       setLastRequest(request);
       setDraft("");
       await runRequest(request, false, controller);
+      // 自动命名:第一条消息成功后,把默认标题换成消息摘要,便于会话列表区分。
+      if (conversation.title === t("newConversation")) {
+        const title = normalized.length > 20 ? `${normalized.slice(0, 20)}…` : normalized;
+        void platform.ai.updateConversation(conversation.id, { title })
+          .then(() => refreshConversations())
+          .catch(() => {});
+      }
     } catch (reason) {
       if (reason instanceof Error && reason.name === "AbortError") setError(t("errors.stopped"));
       else if (reason instanceof PlatformApiError && reason.code === "AI_TRIAL_EXHAUSTED") setError(t("errors.trial"));
@@ -544,7 +552,7 @@ export function StudioAIAssistant({
       // runRequest owns normal completion; this covers conversation/image preparation failures.
       finishRequest(controller);
     }
-  }, [beginRequest, blocked, context, createConversation, exhausted, finishRequest, preview, runRequest, selected, t]);
+  }, [beginRequest, blocked, context, createConversation, exhausted, finishRequest, preview, refreshConversations, runRequest, selected, t]);
 
   const retry = () => {
     if (!lastRequest || inFlightRef.current) return;
@@ -794,7 +802,11 @@ export function StudioAIAssistant({
                 ? "border-brand/25 bg-brand/[0.07] text-ink/80"
                 : "border-instrument-rule bg-instrument-raised text-ink/75",
             )}>
-              <p className="whitespace-pre-wrap break-words">{message.content}</p>
+              {message.role === "assistant" ? (
+                <MarkdownMessage content={message.content} />
+              ) : (
+                <p className="whitespace-pre-wrap break-words">{message.content}</p>
+              )}
               {message.role === "assistant" && message.suggestion && (
                 isCandidateSet(message.suggestion) ? (
                   <CandidateSetCard

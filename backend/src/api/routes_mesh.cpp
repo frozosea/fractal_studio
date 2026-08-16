@@ -112,6 +112,12 @@ void validateTransitionResolution(const Json& j, int resolution, bool voxelPrevi
     }
     if (resolution >= 256) {
         const uint64_t estimate = estimateTransitionBytes(resolution, voxelPreview);
+        // allowLargeVolume lifts the default 2 GiB guard but never this
+        // absolute host-memory ceiling: a single request must not be able to
+        // OOM-kill the node. 1024^3 durable work sits exactly at the cap.
+        if (estimate > 8ULL * 1024ULL * 1024ULL * 1024ULL) {
+            throw std::runtime_error("transition volume estimate exceeds the absolute 8 GiB budget");
+        }
         const auto caps = compute::runtime_capabilities();
         if (caps.cuda_runtime && caps.cuda_free_vram > 0 && estimate > caps.cuda_free_vram * 7ULL / 10ULL) {
             throw std::runtime_error("transition volume estimate exceeds safe CUDA VRAM budget");
