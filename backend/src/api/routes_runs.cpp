@@ -16,6 +16,10 @@ std::string runsListRoute(const std::filesystem::path& repoRoot, JobRunner& runn
     if (!limRaw.empty()) { try { limit = std::stoi(limRaw); } catch (...) {} }
     const std::string offRaw = getQueryParam(query, "offset");
     if (!offRaw.empty()) { try { offset = std::stoi(offRaw); } catch (...) {} }
+    // Clamp regardless of sign/value so one request cannot dump the whole
+    // runs table (or a negative offset) into a single response.
+    if (limit < 1 || limit > 200) limit = 200;
+    if (offset < 0) offset = 0;
     // urlDecode: the module filter may be a comma-separated category list; URLSearchParams
     // percent-encodes the commas (%2C), so decode before the comma-split in Db::listRuns.
     const std::string moduleFilter = urlDecode(getQueryParam(query, "module"));

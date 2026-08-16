@@ -69,6 +69,22 @@ inline void validateRunIdForPath(const std::string& runId) {
     }
 }
 
+// Whether a directory directly contains regular files: a run directory does,
+// while a category container (runs/<category>/) only holds run directories.
+// Used to stop a runId like "videos" or "." from resolving to a container and
+// then serving any file below it via a slash-relative artifact path.
+inline bool directlyContainsFiles(const std::filesystem::path& dir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; it != end; it.increment(ec)) {
+        if (ec) break;
+        std::error_code sec;
+        if (it->is_symlink(sec) || sec) continue;
+        if (it->is_regular_file(sec) && !sec) return true;
+    }
+    return false;
+}
+
 // Resolve an existing run without following category/run directory symlinks.
 // The returned canonical directory is guaranteed to remain beneath the
 // canonical runtime/runs root at resolution time.
@@ -103,6 +119,13 @@ inline std::filesystem::path resolveRunDirSecure(
     };
 
     if (const fs::path flat = resolveCandidate(runsRoot / runId); !flat.empty()) {
+        // A runId must name a run directory, never the runs root or a category
+        // container: "." or "videos" must not resolve, or a slash-relative
+        // artifact path could read other runs' files below the container.
+        // Flat-layout run directories directly contain their artifact files.
+        if (flat == runsRoot || !directlyContainsFiles(flat)) {
+            throw std::runtime_error("invalid run directory path");
+        }
         return flat;
     }
 
@@ -110,7 +133,11 @@ inline std::filesystem::path resolveRunDirSecure(
         if (ec) break;
         std::error_code dec;
         if (it->is_symlink(dec) || dec || !it->is_directory(dec)) continue;
-        if (const fs::path nested = resolveCandidate(it->path() / runId); !nested.empty()) {
+        const fs::path top = it->path();
+        // Only category containers (no loose files) are scanned for nested
+        // run directories; flat run dirs are handled by the direct lookup.
+        if (directlyContainsFiles(top)) continue;
+        if (const fs::path nested = resolveCandidate(top / runId); !nested.empty()) {
             return nested;
         }
     }

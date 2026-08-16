@@ -197,7 +197,9 @@ std::string HttpServer::handleRequest(const std::string& request) const {
     // migration, a valid service key plus the production DTO shape selects
     // this adapter; authenticated legacy-shaped requests continue below. In a
     // hosted build (legacy disabled), these paths always select this contract.
-    const bool legacyApiEnabled = envEnabled("FSD_ENABLE_LEGACY_API", true);
+    // Fail closed: the legacy surface is unauthenticated, so any binary run
+    // without an explicit FSD_ENABLE_LEGACY_API=1 must not expose it.
+    const bool legacyApiEnabled = envEnabled("FSD_ENABLE_LEGACY_API", false);
     if (isPlatformComputeApiPath(path)) {
         const std::string authorization = requestHeaderValue(request, "Authorization");
         const bool hasAuthorization = !authorization.empty();
@@ -483,7 +485,7 @@ bool HttpServer::streamArtifactResponse(int clientFd, const std::string& request
                 "{\"error\":{\"code\":\"COMPUTE_UNAUTHORIZED\",\"message\":\"valid Compute service credential required\",\"details\":{}}}"));
         return true;
     }
-    if (!isComputeContent && !envEnabled("FSD_ENABLE_LEGACY_API", true)) {
+    if (!isComputeContent && !envEnabled("FSD_ENABLE_LEGACY_API", false)) {
         sendAll(clientFd, makeHttpResponse(404, "{\"error\":\"legacy API disabled\"}"));
         return true;
     }

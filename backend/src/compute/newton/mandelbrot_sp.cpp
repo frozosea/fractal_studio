@@ -240,7 +240,9 @@ Poly poly_deflate_linear(const Poly& p, Z root) {
 } // namespace
 
 std::vector<SolvedPoint> auto_solve(int k, int p) {
-    if (k < 0 || p < 1) throw std::runtime_error("auto_solve: invalid (k,p)");
+    if (k < 0 || k > 32 || p < 1 || p > 12) {
+        throw std::runtime_error("auto_solve: invalid (k,p), k in 0..32, p in 1..12");
+    }
 
     Poly fx = g_poly(k, p);
     if (fx.degree() <= 0) return {};
@@ -290,7 +292,9 @@ std::vector<SolvedPoint> auto_solve(int k, int p) {
 }
 
 std::vector<SolvedPoint> seed_solve(int k, int p, std::complex<double> seed) {
-    if (k < 0 || p < 1) throw std::runtime_error("seed_solve: invalid (k,p)");
+    if (k < 0 || k > 32 || p < 1 || p > 12) {
+        throw std::runtime_error("seed_solve: invalid (k,p), k in 0..32, p in 1..12");
+    }
     const Poly fx = g_poly(k, p);
     if (fx.degree() < 1) return {};
     const NewtonResult nr = newton_iterate(fx, seed);

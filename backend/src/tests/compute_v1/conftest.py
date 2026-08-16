@@ -36,6 +36,12 @@ def backend(pytestconfig: pytest.Config) -> ComputeClient:
         "FSD_STARTUP_BENCHMARK": "off",
         "FSD_COMPUTE_SERVICE_KEY": SERVICE_KEY,
         "FSD_RENDERER_VERSION": "contract-pytest",
+        # The legacy /api/* surface is deliberately covered by these tests,
+        # but it is FAIL-CLOSED by default: production compose and the Docker
+        # image set both flags to 0 explicitly. Keeping them on here mirrors
+        # that explicit opt-in rather than relying on a permissive default.
+        "FSD_ENABLE_LEGACY_API": "1",
+        "FSD_ENABLE_LEGACY_FORMULA_COMPILER": "1",
     })
     process = subprocess.Popen(
         [str(binary), str(port)], cwd=studio_root, env=env,
