@@ -33,6 +33,12 @@ type RenderMessage = {
   height: number;
   previewWidth?: number;
   previewHeight?: number;
+  // Tiled final render: render tileHeight rows starting at global row y0 and
+  // post back the raw RGBA (transferable) instead of a PNG blob.
+  y0?: number;
+  tileHeight?: number;
+  frameHeight?: number;
+  previewOnly?: boolean;
 };
 
 type RenderStage = "preview" | "final";
@@ -73,15 +79,22 @@ function transitionSpec(spec: LocalRenderSpec): LocalTransitionRenderSpec {
 
 let wasmFieldCore: Awaited<ReturnType<typeof loadWasmFieldCore>> | null = null;
 
-async function computeRawAsync(spec: LocalRenderSpec, width: number, height: number): Promise<RawField> {
+async function computeRawAsync(
+  spec: LocalRenderSpec,
+  width: number,
+  height: number,
+  y0 = 0,
+  tileHeight = height,
+): Promise<RawField> {
   if (isWasmEligible(spec)) {
     wasmFieldCore ??= await loadWasmFieldCore();
     if (wasmFieldCore) {
       try {
-        return renderWasmRawField(spec, width, height, wasmFieldCore);
+        return renderWasmRawField(spec, width, height, wasmFieldCore, y0, tileHeight);
       } catch { /* fall through to the TypeScript core */ }
     }
   }
+  if (y0 !== 0 || tileHeight !== height) throw new Error("tiled_render_requires_wasm");
   return computeRaw(spec, width, height);
 }
 
@@ -143,9 +156,31 @@ async function renderStage(
   self.postMessage({ id, stage, blob, width, height, cacheHit });
 }
 
+async function renderTileStage(
+  id: number,
+  spec: LocalRenderSpec,
+  width: number,
+  tileHeight: number,
+  y0: number,
+  frameHeight: number,
+): Promise<void> {
+  const raw = await computeRawAsync(spec, width, frameHeight, y0, tileHeight);
+  const rgba = colorizeLocalRawField(spec, raw);
+  // Transfer the tile RGBA to the main thread for compositing.
+  self.postMessage({ id, y0, rgba, width, height: tileHeight }, { transfer: [rgba.buffer] });
+}
+
 self.onmessage = async (event: MessageEvent<RenderMessage>) => {
-  const { id, spec, width, height, previewWidth, previewHeight } = event.data;
+  const { id, spec, width, height, previewWidth, previewHeight, y0, tileHeight, frameHeight, previewOnly } = event.data;
   try {
+    if (y0 !== undefined && tileHeight !== undefined && frameHeight !== undefined) {
+      await renderTileStage(id, spec, width, tileHeight, y0, frameHeight);
+      return;
+    }
+    if (previewOnly) {
+      await renderStage(id, "preview", spec, width, height);
+      return;
+    }
     if (previewWidth && previewHeight && (previewWidth !== width || previewHeight !== height)) {
       await renderStage(id, "preview", spec, previewWidth, previewHeight);
     }

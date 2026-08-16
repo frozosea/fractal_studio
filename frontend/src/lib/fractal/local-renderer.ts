@@ -122,6 +122,8 @@ type WorkerResponse = {
   blob?: Blob;
   width?: number;
   height?: number;
+  y0?: number;
+  rgba?: Uint8ClampedArray;
   error?: string;
 };
 
@@ -132,6 +134,7 @@ type PendingRender = {
   signal?: AbortSignal;
   abort: () => void;
   onPreview?: LocalPreviewCallback;
+  onTile?: (y0: number, rgba: Uint8ClampedArray) => void;
 };
 
 type WorkerSlot = {
@@ -140,7 +143,7 @@ type WorkerSlot = {
   pending: PendingRender | null;
 };
 
-const workerSlots = new Map<LocalRenderChannel, WorkerSlot>();
+const workerSlots = new Map<LocalRenderChannel, WorkerSlot[]>();
 
 function abortError(): DOMException { return new DOMException("Render aborted", "AbortError"); }
 
@@ -154,7 +157,12 @@ function clearPending(slot: WorkerSlot): PendingRender | null {
 
 function discardSlot(slot: WorkerSlot, reason?: unknown): void {
   slot.worker.terminate();
-  if (workerSlots.get(slot.channel) === slot) workerSlots.delete(slot.channel);
+  const pool = workerSlots.get(slot.channel);
+  if (pool) {
+    const index = pool.indexOf(slot);
+    if (index >= 0) pool.splice(index, 1);
+    if (pool.length === 0) workerSlots.delete(slot.channel);
+  }
   const pending = clearPending(slot);
   if (pending && reason) pending.reject(reason);
 }
@@ -167,6 +175,12 @@ function createWorkerSlot(channel: LocalRenderChannel): WorkerSlot {
     if (!pending || event.data.id !== pending.id) return;
     if (event.data.error) {
       clearPending(slot)?.reject(new Error(event.data.error));
+      return;
+    }
+    if (event.data.y0 !== undefined && event.data.rgba) {
+      try {
+        pending.onTile?.(event.data.y0, event.data.rgba);
+      } catch { /* Tile publishing failure invalidates the final render. */ }
       return;
     }
     if (!event.data.blob) return;
@@ -182,7 +196,6 @@ function createWorkerSlot(channel: LocalRenderChannel): WorkerSlot {
     clearPending(slot)?.resolve(event.data.blob);
   };
   worker.onerror = (event) => discardSlot(slot, new Error(event.message || "local_render_worker_failed"));
-  workerSlots.set(channel, slot);
   return slot;
 }
 
@@ -210,6 +223,34 @@ async function rgbaToBlob(rgba: Uint8ClampedArray, width: number, height: number
   return canvas.convertToBlob({ type: "image/png" });
 }
 
+function tiledEligible(local: LocalRenderSpec): boolean {
+  return local.colorMode === "direct"
+    && local.metric !== "mandel_ship_agree"
+    && local.metric !== "min_pairwise_dist"
+    && !local.transition
+    && !local.orbitProgram
+    && !local.colorProgram
+    && LOCAL_VARIANTS.indexOf(local.variant) < 10;
+}
+
+function workerCount(): number {
+  if (typeof navigator === "undefined") return 4;
+  const cores = navigator.hardwareConcurrency ?? 4;
+  // Reserve one core for the main thread; cap the pool at 8 workers.
+  return Math.max(1, Math.min(cores - 1, 8));
+}
+
+function ensurePool(channel: LocalRenderChannel): WorkerSlot[] {
+  const existing = workerSlots.get(channel);
+  if (existing) return existing;
+  const pool: WorkerSlot[] = [];
+  for (let index = 0; index < workerCount(); index += 1) {
+    pool.push(createWorkerSlot(channel));
+  }
+  workerSlots.set(channel, pool);
+  return pool;
+}
+
 function renderInWorker(
   local: LocalRenderSpec,
   dimensions: ReturnType<typeof dimensionsForRender>,
@@ -217,18 +258,85 @@ function renderInWorker(
   channel: LocalRenderChannel,
   onPreview: LocalPreviewCallback | undefined,
 ): Promise<Blob | null> {
-  let slot = workerSlots.get(channel);
-  if (slot?.pending) discardSlot(slot, abortError());
-  slot = workerSlots.get(channel) ?? createWorkerSlot(channel);
+  const pool = ensurePool(channel);
+  const slot = pool[0] ?? createWorkerSlot(channel);
+  if (slot.pending) discardSlot(slot, abortError());
   const id = ++sequence;
   return new Promise((resolve, reject) => {
     const abort = () => {
-      if (slot?.pending?.id === id) discardSlot(slot, abortError());
+      if (slot.pending?.id === id) discardSlot(slot, abortError());
     };
     if (signal?.aborted) { reject(abortError()); return; }
     slot.pending = { id, resolve, reject, signal, abort, onPreview };
     signal?.addEventListener("abort", abort, { once: true });
     slot.worker.postMessage({ id, spec: local, ...dimensions });
+  });
+}
+
+function renderTiledInWorkers(
+  local: LocalRenderSpec,
+  dimensions: ReturnType<typeof dimensionsForRender>,
+  signal: AbortSignal | undefined,
+  channel: LocalRenderChannel,
+  onPreview: LocalPreviewCallback | undefined,
+): Promise<Blob | null> {
+  const pool = ensurePool(channel);
+  const { width, height } = dimensions;
+  const workers = Math.max(1, Math.min(pool.length, height));
+  const tileHeight = Math.ceil(height / workers);
+  const id = ++sequence;
+  const used = pool.slice(0, workers);
+  return new Promise((resolve, reject) => {
+    const tiles: Array<{ y0: number; rgba: Uint8ClampedArray }> = [];
+    let completed = 0;
+    let rejected = false;
+    const compose = () => {
+      if (rejected || completed < workers) return;
+      try {
+        const frame = new Uint8ClampedArray(width * height * 4);
+        for (const tile of tiles) {
+          frame.set(tile.rgba, tile.y0 * width * 4);
+        }
+        resolve(rgbaToBlob(frame, width, height));
+      } catch (reason) {
+        reject(reason);
+      }
+    };
+    const abort = () => {
+      for (const slot of used) {
+        if (slot.pending?.id === id) discardSlot(slot, abortError());
+      }
+    };
+    if (signal?.aborted) { reject(abortError()); return; }
+    signal?.addEventListener("abort", abort, { once: true });
+    for (let w = 0; w < workers; w += 1) {
+      const slot = used[w] ?? createWorkerSlot(channel);
+      if (slot.pending) discardSlot(slot, abortError());
+      const y0 = w * tileHeight;
+      const tileH = Math.min(tileHeight, height - y0);
+      slot.pending = {
+        id,
+        resolve: () => { /* tiles are assembled through onTile */ },
+        reject: (reason) => { rejected = true; reject(reason); },
+        signal,
+        abort,
+        onPreview,
+        onTile: (tileY0, rgba) => {
+          tiles.push({ y0: tileY0, rgba });
+          completed += 1;
+          compose();
+        },
+      };
+      slot.worker.postMessage({
+        id,
+        spec: local,
+        width,
+        height: tileH,
+        y0,
+        tileHeight: tileH,
+        frameHeight: height,
+      });
+    }
   });
 }
 
@@ -252,5 +360,36 @@ export async function renderFractalLocally(
     if (gpuRgba) return rgbaToBlob(gpuRgba, dimensions.width, dimensions.height);
   }
   if (requestedScalar === "fp32" || requestedScalar === "float") return null;
+  if (tiledEligible(local) && dimensions.height >= 4) {
+    const previewOnly = dimensions.previewWidth && dimensions.previewHeight
+      && (dimensions.previewWidth !== dimensions.width || dimensions.previewHeight !== dimensions.height);
+    if (previewOnly) {
+      // Progressive preview on the first pool worker, then tiled final.
+      const pool = ensurePool(channel);
+      const slot = pool[0] ?? createWorkerSlot(channel);
+      const previewId = ++sequence;
+      await new Promise<void>((resolvePreview, rejectPreview) => {
+        if (signal?.aborted) { rejectPreview(abortError()); return; }
+        const abort = () => { if (slot.pending?.id === previewId) discardSlot(slot, abortError()); };
+        slot.pending = {
+          id: previewId,
+          resolve: () => resolvePreview(),
+          reject: rejectPreview,
+          signal,
+          abort,
+          onPreview,
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        slot.worker.postMessage({
+          id: previewId,
+          spec: local,
+          width: dimensions.previewWidth,
+          height: dimensions.previewHeight,
+          previewOnly: true,
+        });
+      });
+    }
+    return renderTiledInWorkers(local, dimensions, signal, channel, onPreview);
+  }
   return renderInWorker(local, dimensions, signal, channel, onPreview);
 }

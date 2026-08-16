@@ -69,8 +69,10 @@ export function renderWasmRawField(
   width: number,
   height: number,
   exports: WasmExports,
+  y0 = 0,
+  tileHeight = height,
 ): RawEscapeField | RawMetricField {
-  const count = width * height;
+  const count = width * tileHeight;
   if (count > MAX_PIXELS) throw new Error("wasm_field_too_large");
   const memory = exports.memory;
   const itersPtr = 0;
@@ -83,19 +85,19 @@ export function renderWasmRawField(
     spec.iterations, spec.bailout,
     VARIANT_INDEX.get(spec.variant) ?? 0, METRIC_INDEX[spec.metric] ?? 0,
     spec.julia ? 1 : 0, spec.juliaRe, spec.juliaIm,
-    width, height, 0, height,
+    width, height, y0, tileHeight,
     itersPtr, normsPtr, fieldsPtr,
   );
   if (spec.metric === "escape") {
     return {
-      kind: "escape", metric: "escape", width, height, bailout: spec.bailout,
+      kind: "escape", metric: "escape", width, height: tileHeight, bailout: spec.bailout,
       iterationLimit: spec.iterations,
       iterations: new Uint32Array(memory.buffer, itersPtr, count),
       norms: new Float32Array(memory.buffer, normsPtr, count),
     } satisfies RawEscapeField;
   }
   return {
-    kind: "metric", metric: spec.metric, width, height, bailout: spec.bailout,
+    kind: "metric", metric: spec.metric, width, height: tileHeight, bailout: spec.bailout,
     values: new Float64Array(memory.buffer, fieldsPtr, count),
   } satisfies RawMetricField;
 }

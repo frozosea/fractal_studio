@@ -130,7 +130,7 @@ for (const entry of CASES) {
 // 多 worker 分块（scalar wasm，模拟多核）
 const hc = 8;
 console.log(`\nmulti-worker tiled (${hc} threads, wasm SIMD, one tile each):`);
-for (const entry of CASES.slice(0, 2)) {
+for (const entry of CASES) {
   const r = await multiWorker(hc, entry.width, entry.height, entry.iterations);
   const mpix = entry.width * entry.height / r.wall / 1000;
   console.log(`${entry.name.padEnd(22)}${r.wall.toFixed(1).padStart(8)} ms  (${mpix.toFixed(2)} Mpix/s wall)`);
