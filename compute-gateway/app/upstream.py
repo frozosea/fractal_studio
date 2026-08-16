@@ -64,15 +64,17 @@ class ComputeNodeClient:
 
     async def preview(self, node: ComputeNode, envelope: dict[str, object]) -> tuple[bytes, str, dict[str, str]]:
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(self._settings.preview_timeout_seconds), trust_env=False
-            ) as client:
-                async with client.stream(
+            async with (
+                httpx.AsyncClient(
+                    timeout=httpx.Timeout(self._settings.preview_timeout_seconds), trust_env=False
+                ) as client,
+                client.stream(
                     "POST", self._url(node, "/compute/v1/previews"), headers=self._headers(), json=envelope
-                ) as response:
-                    if response.status_code != 200:
-                        self._raise_response(response)
-                    body = await self._read_bounded(response, MAX_PREVIEW_RESPONSE_BYTES)
+                ) as response,
+            ):
+                if response.status_code != 200:
+                    self._raise_response(response)
+                body = await self._read_bounded(response, MAX_PREVIEW_RESPONSE_BYTES)
         except httpx.TimeoutException as error:
             raise UpstreamError("COMPUTE_TIMEOUT") from error
         except UpstreamError:
@@ -87,7 +89,7 @@ class ComputeNodeClient:
         return body, response.headers.get("content-type", "application/octet-stream"), forwarded
 
     async def create_run(self, node: ComputeNode, envelope: dict[str, object]) -> UpstreamReply:
-        return await self._json(node, "POST", "/compute/v1/runs", json=envelope, expected={202})
+        return await self._json(node, "POST", "/compute/v1/runs", payload=envelope, expected={202})
 
     async def run_status(self, node: ComputeNode, node_run_id: str) -> UpstreamReply:
         return await self._json(
@@ -99,7 +101,7 @@ class ComputeNodeClient:
             node,
             "POST",
             f"/compute/v1/runs/{quote(node_run_id, safe='')}/cancel",
-            json={},
+            payload={},
             expected={202},
         )
 
@@ -157,7 +159,7 @@ class ComputeNodeClient:
         method: str,
         route: str,
         *,
-        json: dict[str, object] | None = None,
+        payload: dict[str, object] | None = None,
         expected: set[int],
     ) -> UpstreamReply:
         timeout = httpx.Timeout(
@@ -165,13 +167,15 @@ class ComputeNodeClient:
             connect=self._settings.create_connect_timeout_seconds,
         )
         try:
-            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-                async with client.stream(
-                    method, self._url(node, route), headers=self._headers(), json=json
-                ) as response:
-                    if response.status_code not in expected:
-                        self._raise_response(response)
-                    body_bytes = await self._read_bounded(response, MAX_JSON_RESPONSE_BYTES)
+            async with (
+                httpx.AsyncClient(timeout=timeout, trust_env=False) as client,
+                client.stream(
+                    method, self._url(node, route), headers=self._headers(), json=payload
+                ) as response,
+            ):
+                if response.status_code not in expected:
+                    self._raise_response(response)
+                body_bytes = await self._read_bounded(response, MAX_JSON_RESPONSE_BYTES)
         except httpx.TimeoutException as error:
             raise UpstreamError("COMPUTE_TIMEOUT") from error
         except UpstreamError:
