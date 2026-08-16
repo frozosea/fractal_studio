@@ -51,7 +51,7 @@ export function LoginForm() {
           <div><p className="text-sm text-ink/80">{t("accountAccess")}</p><p className="mt-0.5 font-mono text-[10px] uppercase tracking-wider text-ink/30">{t("secureSession")}</p></div>
         </div>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form method="post" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <AuthField error={errors.email?.message} icon={<Mail className="h-3.5 w-3.5" />} label={t("emailLabel")}>
             <Input {...register("email")} type="email" placeholder={t("emailPlaceholder")} className="auth-control h-10 rounded-none pl-10 font-mono text-sm" autoComplete="email" />
           </AuthField>
