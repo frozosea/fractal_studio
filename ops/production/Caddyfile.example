@@ -5,6 +5,12 @@
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# Validate in staging before rollout: Next.js 14 App Router needs inline
+		# bootstrap scripts/styles, so script-src/style-src keep 'unsafe-inline'.
+		# The CSP still blocks external script/style injection and arbitrary
+		# connect/img origins, containing a same-origin XSS behind the bearer
+		# token in sessionStorage. Upgrade to nonces when Next.js allows it.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' https://*.alipay.com https://*.alipaydev.com"
 		-Server
 	}
 }
@@ -18,10 +24,10 @@ fractalstudio.cn {
 			flush_interval -1
 		}
 	}
-	handle_path /storage/* {
-		reverse_proxy 127.0.0.1:29010
-	}
-	# Preserve download URLs issued before the migration.
+	# Presigned download URLs. The path prefix must be PRESERVED (handle, not
+	# handle_path): SigV4 signs the full request path, so stripping /storage
+	# would break signature validation at MinIO. S3_PUBLIC_ENDPOINT_URL is set
+	# to https://fractalstudio.cn, so URLs arrive as /fractal-platform/<key>.
 	handle /fractal-platform/* {
 		reverse_proxy 127.0.0.1:29010
 	}

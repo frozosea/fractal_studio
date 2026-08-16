@@ -177,8 +177,10 @@ services:
       S3_ACCESS_KEY_ID: minio
       S3_SECRET_ACCESS_KEY: minio_dev_password
       ALIPAY_STUB_MODE: "false"
-      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-9021000166609768}
-      ALIPAY_SELLER_ID: ${ALIPAY_SELLER_ID:-2088721106011274}
+      # Fail closed instead of silently wiring the payment edge to
+      # real-looking identifiers: real values must come from the env file.
+      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-dev-stub}
+      ALIPAY_SELLER_ID: ${ALIPAY_SELLER_ID:-dev-stub}
       ALIPAY_STUB_PUBLIC_KEY_URL: ""
       ALIPAY_GATEWAY_URL: ${ALIPAY_GATEWAY_URL:-https://openapi-sandbox.dl.alipaydev.com/gateway.do}
       ALIPAY_NOTIFY_URL: ${ALIPAY_NOTIFY_URL:-https://fractal.kevin0412.top/platform/v1/webhooks/alipay}
