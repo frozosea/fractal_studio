@@ -127,8 +127,11 @@ class Settings(BaseSettings):
             raise ValueError("SESSION_COOKIE_SECURE must be true in production")
         if len(self.session_secret) < 32 or self.session_secret.startswith("dev-"):
             raise ValueError("SESSION_SECRET must be a non-development secret in production")
-        if len(self.compute_gateway_admin_key) < 32:
-            raise ValueError("COMPUTE_GATEWAY_ADMIN_KEY must be configured in production")
+        # The admin compute monitoring is optional and degrades to 503 when the
+        # key is absent (the API intentionally does not hold the Gateway ADMIN
+        # key). Only enforce strength when a key is actually configured.
+        if self.compute_gateway_admin_key and len(self.compute_gateway_admin_key) < 32:
+            raise ValueError("COMPUTE_GATEWAY_ADMIN_KEY must be at least 32 characters in production")
         if not self.api_origin.startswith("https://"):
             raise ValueError("API_ORIGIN must use HTTPS in production")
         if any(origin.startswith("http://localhost") for origin in self.trusted_origins):
