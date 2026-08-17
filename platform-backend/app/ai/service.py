@@ -512,13 +512,6 @@ async def stream_message(*, owner_id: UUID, conversation_id: UUID, idempotency_k
                     history=phase_history, context=context, image=phase_image,
                     image_type=phase_image_type, force_patch=requires_suggestion,
                     assistant_mode=assistant_mode,
-                    # Plain chat is a conversation: the model must not reach for
-                    # the patch tool, whose schema has no formula field. A tool
-                    # call with an unsupported field fails validation and turns
-                    # any formula-related first message into
-                    # AI_PROVIDER_UNAVAILABLE. Formula guidance is returned as
-                    # text; candidates still use the tool.
-                    disable_tools=not requires_suggestion,
                 ):
                     if event == "delta" and payload:
                         if defer_until_suggestion and not started:

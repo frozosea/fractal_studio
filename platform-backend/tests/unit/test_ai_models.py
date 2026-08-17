@@ -310,3 +310,36 @@ def test_siliconflow_key_is_redacted_from_settings_and_validation_errors() -> No
         Settings(**base, app_env="production", session_cookie_secure=False)
     assert sentinel not in str(raised.value)
     assert sentinel not in repr(raised.value)
+
+
+def test_suggestion_accepts_orbit_program_formula_patch() -> None:
+    """A custom formula (orbitProgram formula/dsl) patch is accepted and returned."""
+    from app.ai.models import validate_studio_suggestion
+
+    result = validate_studio_suggestion({
+        "patch": {
+            "orbitProgram": {
+                "type": "formula",
+                "formula": {"type": "dsl", "source": "z*z*z+c"},
+            },
+        },
+        "reason": "改用三次方公式增强结构",
+    }, _context(member=True), )
+    assert result is not None
+    assert result["patch"]["orbitProgram"]["formula"]["source"] == "z*z*z+c"
+    assert result["patch"]["orbitProgram"]["type"] == "formula"
+
+
+def test_suggestion_rejects_invalid_orbit_program() -> None:
+    from app.ai.models import validate_studio_suggestion
+
+    # unknown program type -> rejected
+    assert validate_studio_suggestion({
+        "patch": {"orbitProgram": {"type": "sequence", "steps": []}},
+        "reason": "非法轨道程序",
+    }, _context(member=True)) is None
+    # malformed dsl formula -> rejected
+    assert validate_studio_suggestion({
+        "patch": {"orbitProgram": {"type": "formula", "formula": {"type": "dsl"}}},
+        "reason": "缺 source",
+    }, _context(member=True)) is None

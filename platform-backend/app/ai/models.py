@@ -6,10 +6,12 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
-from app.studio.models import FractalSpec
+from app.studio.models import FractalSpec, OrbitProgram
 from app.studio.recipe_service import canonicalize_spec
+
+_orbit_program_adapter = TypeAdapter(OrbitProgram)
 
 
 StudioMode = Literal[
@@ -248,6 +250,13 @@ def validate_studio_suggestion(raw: object, context: dict[str, object]) -> dict[
                 patch[key] = value
         elif key in _ENUMS and value in _ENUMS[key]:
             patch[key] = value
+        elif key == "orbitProgram" and isinstance(value, dict):
+            try:
+                program = _orbit_program_adapter.validate_python(value)
+            except ValidationError:
+                pass
+            else:
+                patch[key] = program.model_dump(mode="json", by_alias=True)
     patch = {key: value for key, value in patch.items() if base_values.get(key) != value}
     if not patch:
         return None

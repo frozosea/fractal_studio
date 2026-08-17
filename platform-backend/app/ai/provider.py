@@ -63,7 +63,24 @@ TOOL = {
                         "bailout": {"type": "number", "exclusiveMinimum": 0},
                         "engine": {"type": "string"}, "scalarType": {"type": "string"},
                         "transitionMode": {"type": "string", "enum": ["off", "pair", "multi"]},
-                        "transitionThetaMilliDeg": {"type": "integer", "minimum": -180000, "maximum": 180000}
+                        "transitionThetaMilliDeg": {"type": "integer", "minimum": -180000, "maximum": 180000},
+                        "orbitProgram": {
+                            "type": "object",
+                            "description": "自定义公式/轨道程序修改。只允许 formula 类型，source 为分形 DSL 表达式。",
+                            "properties": {
+                                "type": {"const": "formula"},
+                                "formula": {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {"const": "dsl"},
+                                        "source": {"type": "string", "maxLength": 4096},
+                                        "parameters": {"type": "object"}
+                                    },
+                                    "required": ["type", "source"]
+                                }
+                            },
+                            "required": ["type", "formula"]
+                        }
                     },
                     "additionalProperties": False
                 },
