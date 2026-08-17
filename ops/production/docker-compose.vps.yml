@@ -139,6 +139,9 @@ services:
       <<: *platform-env
       AI_RUNTIME_ROLE: api
       SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      # Only the API calls the Gateway admin API (compute node monitoring);
+      # workers and migrations never receive this key.
+      COMPUTE_GATEWAY_ADMIN_KEY: ${COMPUTE_GATEWAY_ADMIN_KEY:?set in /etc/fractal-prod/vps.env}
     ports: ["127.0.0.1:28100:8000"]
     depends_on:
       migrate: {condition: service_completed_successfully}
