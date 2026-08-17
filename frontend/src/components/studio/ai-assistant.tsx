@@ -698,6 +698,7 @@ export function StudioAIAssistant({
               variant="ghost"
               disabled={sending}
               aria-label={t("newConversation")}
+              title={t("newConversation")}
               onClick={() => void createConversation().catch((reason: unknown) => setError(errorMessage(reason, t("errors.create"))))}
             >
               <MessageSquarePlus className="h-3.5 w-3.5" />
@@ -708,6 +709,7 @@ export function StudioAIAssistant({
               variant="ghost"
               disabled={sending || !selected}
               aria-label={t("rename")}
+              title={t("rename")}
               onClick={() => {
                 if (!selected) return;
                 setRenameTitle(selected.title);

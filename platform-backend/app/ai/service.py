@@ -606,16 +606,15 @@ async def stream_message(*, owner_id: UUID, conversation_id: UUID, idempotency_k
                 pass
         if disconnected or not isinstance(error, Exception):
             raise
-        # Diagnostic breadcrumb only: error kind and attempt round, never the
-        # provider body, prompt, image or any credential.
+        # Diagnostic breadcrumb only: sanitized error kind and attempt round,
+        # never the provider body, prompt, image or any credential. log_event
+        # drops arbitrary metadata by design, so the safe fields go in the
+        # message itself.
         if isinstance(error, ProviderUnavailable):
             log_event(
                 logging.WARNING,
-                "AI provider attempt failed",
-                provider_error=str(error),
-                retryable=error.retryable,
-                attempt=attempt,
-                terminal_status=terminal_status,
+                f"AI provider attempt failed: {str(error)} "
+                f"(retryable={error.retryable}, attempt={attempt}, terminal={terminal_status})",
             )
         error_payload: dict[str, object] = {"code": "AI_PROVIDER_UNAVAILABLE"}
         if message_id and terminal_status in {"partial", "completed"}:
