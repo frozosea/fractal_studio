@@ -759,6 +759,40 @@ def test_partial_retry_migration_extends_statuses_and_preserves_ledger_on_delete
 
 
 @pytest.mark.asyncio
+async def test_missing_tool_response_retries_once_before_failing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepSeek 'auto' tool choice can return text only; the first attempt must
+    retry because phase one regenerates a different observation."""
+
+    reservation = _reservation()
+    _install_reservation(monkeypatch, reservation)
+    calls: list[int] = []
+    settled: list[tuple[UUID, datetime]] = []
+
+    async def provider(**_kwargs) -> object:
+        calls.append(1)
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+    async def settle(
+        request_id: UUID, attempt_started_at: datetime
+    ) -> ai_service.SettledAttempt:
+        settled.append((request_id, attempt_started_at))
+        return ai_service.SettledAttempt("released", None)
+
+    monkeypatch.setattr(ai_service, "stream_completion", provider)
+    monkeypatch.setattr(ai_service, "_settle_attempt", settle)
+    arguments = _stream_arguments()
+    arguments["assistant_mode"] = "color"
+
+    events = _decoded_events(await _collect(**arguments))
+
+    assert len(calls) == 2
+    assert events[-1] == ("error", {"code": "AI_PROVIDER_UNAVAILABLE"})
+
+
+@pytest.mark.asyncio
 async def test_unexpected_runtime_error_before_output_releases_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

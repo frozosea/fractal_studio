@@ -131,8 +131,10 @@ One provider is active at a time. `AI_PROVIDER=siliconflow` (default) uses `SILI
 `AI_PROVIDER=deepseek` uses `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`/`DEEPSEEK_MODEL` and enables
 DeepSeek's multimodal streaming and listing copy. The API refuses to boot with `AI_ENABLED=true` and
 a missing key for the selected provider. DeepSeek models are reasoning models: hidden
-`reasoning_tokens` count inside `max_tokens`, so production keeps `AI_MAX_OUTPUT_TOKENS=1500` and the
-exploration path uses a dedicated higher budget.
+`reasoning_tokens` count inside `max_tokens`, so DeepSeek deployments should keep
+`AI_MAX_OUTPUT_TOKENS=2400` (the exploration path has its own higher budget). A DeepSeek model that
+answers in text instead of calling the exploration tool is retried once with a regenerated
+observation; an invalid tool result stays fail-closed.
 
 Before an approved release, confirm immutable image tags and validate the rendered Compose file:
 

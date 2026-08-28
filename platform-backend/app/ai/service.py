@@ -444,6 +444,7 @@ async def stream_message(*, owner_id: UUID, conversation_id: UUID, idempotency_k
     history = reservation.history
     output: list[str] = []
     suggestion: dict | None = None
+    suggestion_events = 0
     started = False
     completed = False
     usage: object | None = None
@@ -525,6 +526,7 @@ async def stream_message(*, owner_id: UUID, conversation_id: UUID, idempotency_k
                         output.append(str(payload))
                         yield sse("delta", {"content": str(payload)})
                     elif event == "suggestion":
+                        suggestion_events += 1
                         checked = (
                             validate_candidate_set(payload, context, assistant_mode)
                             if assistant_mode != "chat"
@@ -542,7 +544,16 @@ async def stream_message(*, owner_id: UUID, conversation_id: UUID, idempotency_k
                     elif event == "usage":
                         usage = payload
                 if requires_suggestion and suggestion is None:
-                    raise ProviderUnavailable("invalid provider tool response")
+                    # DeepSeek thinking models run with "auto" tool choice and
+                    # occasionally answer in text instead of calling the tool
+                    # (no suggestion event at all). The retry re-runs phase one
+                    # (temperature 0.2), so the regenerated observation changes
+                    # the tool-phase prompt and the model usually complies. A
+                    # tool call with invalid arguments stays fail-closed.
+                    raise ProviderUnavailable(
+                        "invalid provider tool response",
+                        retryable=(attempt == 0 and suggestion_events == 0),
+                    )
                 break
             except ProviderUnavailable as error:
                 if started or attempt == 1 or not error.retryable:

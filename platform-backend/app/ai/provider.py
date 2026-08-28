@@ -367,11 +367,12 @@ def _decode_tool_arguments(arguments: str) -> object:
 # reasoning-heavy providers, lets hidden thought tokens exhaust the request.
 _EXPLORATION_OUTPUT_BUDGET = 400
 # DeepSeek reasoning models count hidden reasoning tokens inside max_tokens and
-# need roughly 500 reasoning + 300 structured tool tokens before emitting a
-# four-candidate colour proposal; 800 was measured to cut the stream at the end
-# of reasoning with `finish_reason=length` and no tool call. The effective value
-# is still capped by ai_max_output_tokens (1500 in production).
-_DEEPSEEK_EXPLORATION_OUTPUT_BUDGET = 1600
+# need roughly 500-1400 reasoning tokens before emitting a four-candidate colour
+# proposal; 800 was measured to cut the stream at the end of reasoning with
+# `finish_reason=length` and no tool call, and a production observation once
+# consumed the full 1500-token cap. The effective value is still capped by
+# ai_max_output_tokens, so DeepSeek deployments should set that to 2400.
+_DEEPSEEK_EXPLORATION_OUTPUT_BUDGET = 2400
 
 
 def _output_budget(settings: object, assistant_mode: AssistantMode) -> int:
