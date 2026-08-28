@@ -662,10 +662,12 @@ async def test_deepseek_routes_endpoint_omits_thinking_and_extends_exploration_b
     payload = captured["payload"]
     assert payload["model"] == "deepseek-v4-flash-vision-exp"
     assert "enable_thinking" not in payload
+    # DeepSeek thinking models reject a forced tool_choice with HTTP 400.
+    assert payload["tool_choice"] == "auto"
     # Chat keeps the global budget; exploration gets the larger reasoning-aware
-    # budget instead of SiliconFlow's 400.
+    # budget instead of SiliconFlow's 400, still capped by ai_max_output_tokens.
     assert provider._output_budget(settings, "chat") == 1500
-    assert provider._output_budget(settings, "composition") == 800
-    assert payload["max_tokens"] == 800
+    assert provider._output_budget(settings, "composition") == 1500
+    assert payload["max_tokens"] == 1500
     assert payload["stream_options"] == {"include_usage": True}
     assert events == [("delta", "红色在上")]

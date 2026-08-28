@@ -366,10 +366,12 @@ def _decode_tool_arguments(arguments: str) -> object:
 # completion tokens).  A large unified budget invites trailing filler and, on
 # reasoning-heavy providers, lets hidden thought tokens exhaust the request.
 _EXPLORATION_OUTPUT_BUDGET = 400
-# DeepSeek reasoning models count hidden reasoning tokens inside max_tokens. A
-# slightly larger exploration budget keeps structured output from being cut
-# off while staying far below the chat budget.
-_DEEPSEEK_EXPLORATION_OUTPUT_BUDGET = 800
+# DeepSeek reasoning models count hidden reasoning tokens inside max_tokens and
+# need roughly 500 reasoning + 300 structured tool tokens before emitting a
+# four-candidate colour proposal; 800 was measured to cut the stream at the end
+# of reasoning with `finish_reason=length` and no tool call. The effective value
+# is still capped by ai_max_output_tokens (1500 in production).
+_DEEPSEEK_EXPLORATION_OUTPUT_BUDGET = 1600
 
 
 def _output_budget(settings: object, assistant_mode: AssistantMode) -> int:
@@ -405,9 +407,13 @@ async def stream_completion(*, text: str, history: list[dict], context: dict, im
     messages.extend(history[-20:])
     messages.append({"role": "user", "content": content})
     base_url, api_key, model = provider_endpoint(settings)
+    # SiliconFlow Qwen text models get a forced tool choice for reproducible
+    # structured exploration. DeepSeek's thinking models reject a forced
+    # `tool_choice` with HTTP 400, so they keep "auto" and the first tool call
+    # in the stream is used.
     tool_choice: object = (
         {"type": "function", "function": {"name": "propose_studio_patch"}}
-        if force_patch and "-VL-" not in model else "auto"
+        if force_patch and "-VL-" not in model and not uses_deepseek(settings) else "auto"
     )
     payload = {"model": model, "messages": messages, "stream": True,
                "max_tokens": _output_budget(settings, assistant_mode),

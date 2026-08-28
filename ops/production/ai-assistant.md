@@ -124,8 +124,15 @@ Do not use a project-less `compose down`, stop production Compute, or run a glob
 
 Production remains host-managed. Add the same AI variables to `/etc/fractal-prod/vps.env`, owned by
 the administrator and mode `0600`; never copy the populated file into the repository. The production
-Compose template masks the provider key in PostgreSQL, MinIO, Gateway, migration and workers, then
+Compose template masks the provider keys in PostgreSQL, MinIO, Gateway, migration and workers, then
 injects the real value only into the Platform API.
+
+One provider is active at a time. `AI_PROVIDER=siliconflow` (default) uses `SILICONFLOW_*`;
+`AI_PROVIDER=deepseek` uses `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`/`DEEPSEEK_MODEL` and enables
+DeepSeek's multimodal streaming and listing copy. The API refuses to boot with `AI_ENABLED=true` and
+a missing key for the selected provider. DeepSeek models are reasoning models: hidden
+`reasoning_tokens` count inside `max_tokens`, so production keeps `AI_MAX_OUTPUT_TOKENS=1500` and the
+exploration path uses a dedicated higher budget.
 
 Before an approved release, confirm immutable image tags and validate the rendered Compose file:
 
@@ -136,6 +143,10 @@ docker compose -p fractal-prod --env-file /etc/fractal-prod/vps.env \
 docker compose -p fractal-prod --env-file /etc/fractal-prod/vps.env \
   -f /opt/fractal-prod/docker-compose.vps.yml up -d --no-build
 ```
+
+Switching the provider is a Platform-API-only change (workers and migrations never hold a provider
+key): update `AI_PROVIDER` and the matching key in `vps.env`, then recreate only the API service with
+`docker compose ... up -d --no-build api`. The full release still recreates the whole control plane.
 
 Confirm migration completion, API health, unbuffered text/image streaming, suggestion apply/undo,
 history deletion and the free-account 10th/11th request boundary at `https://fractalstudio.cn`.
