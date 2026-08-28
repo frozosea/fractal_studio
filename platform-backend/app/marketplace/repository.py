@@ -442,11 +442,14 @@ async def search_published(
         predicates.append("EXISTS (SELECT 1 FROM listing_tags lt WHERE lt.listing_id = l.id AND lt.tag = :tag)")
         params["tag"] = tag
     if creator:
-        predicates.append("cp.handle ILIKE :creator")
-        params["creator"] = f"%{creator}%"
+        # Creator chips come from exact handle counts. Keep filtering exact as
+        # well, or selecting `bob` would also return `bobby` and contradict the
+        # count displayed by the facet.
+        predicates.append("cp.handle = :creator")
+        params["creator"] = creator
     if creator_exact:
-        # A profile page must show one creator's work, so it cannot use the
-        # substring match above: `creator=bob` would also list `bobby`.
+        # Profile routes keep a separate filter field because their cursor
+        # shape differs from the public catalogue's facet query.
         predicates.append("cp.handle = :creator_exact")
         params["creator_exact"] = creator_exact
     if media_type:
@@ -513,6 +516,11 @@ async def facet_counts(connection: AsyncConnection) -> list[dict[str, object]]:
     rows = await connection.execute(
         text(
             f"""
+            SELECT 'creator' AS facet, cp.handle AS value, COUNT(*) AS total
+            FROM listings l JOIN creator_profiles cp ON cp.user_id = l.creator_id
+            WHERE {_PUBLISHED}
+            GROUP BY cp.handle
+            UNION ALL
             SELECT 'variant' AS facet, l.variant AS value, COUNT(*) AS total
             FROM listings l WHERE {_PUBLISHED} AND l.variant IS NOT NULL
             GROUP BY l.variant

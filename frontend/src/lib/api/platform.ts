@@ -270,7 +270,7 @@ export interface RenderMeta {
 }
 
 /** Facet values present in the published catalogue, with listing counts. */
-export type FacetName = "variant" | "colorMap" | "depth" | "resolution";
+export type FacetName = "variant" | "colorMap" | "depth" | "resolution" | "creator";
 export interface FacetCount {
   facet: FacetName;
   value: string;

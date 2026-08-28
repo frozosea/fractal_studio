@@ -2,7 +2,8 @@
 
 本文记录已经确认的功能状态和暂缓决策，避免把已完成能力重复列为待办，也避免在语义与生命周期约定尚未确定时提前固化接口。
 
-决策日期：2026-07-17。
+最近核对：2026-08-29。生产镜像与节点的实际版本另见
+[ops/production/STATUS.md](../ops/production/STATUS.md)。
 
 ## Decision Summary / 决策摘要
 
@@ -17,6 +18,8 @@
 | Multi-variant transition video | Deferred / 暂缓 | multi-kernel `theta` 尚无明确语义；先定义权重与路径动画、schema 和 tests。 |
 | Segmented ln-map reuse | Deferred / 暂缓 | 临时段默认清理，且尚无持久 manifest、兼容性约定与保留策略；现有 preview stats reuse 继续。 |
 | Commercial 2D Studio | Implemented / 已实现 | `map_image` 与 `transition_image` 覆盖普通图谱、Julia、pair/multi transition、Formula/Sequence、动态均衡染色和 PNG 导出。 |
+| Studio AI assistant | Implemented / 已实现 | 会话式探索、可信预览上下文、受验证位置/调色/构图/Formula/Sequence patch、反馈、历史/额度和上架文案已实现；由 feature flag 控制。 |
+| Multi-node Compute routing | Implemented / 已实现 | Gateway 支持 0..N 节点、能力过滤、CPU/GPU 槽位、durable run 亲和和自动健康恢复；本地双节点只用于调度回归。 |
 | Ln-map static PNG in Studio | Deferred / 暂缓 | 当前页面只接最终二维图像；ln-map 等到视频产品阶段按复用关系一并设计。 |
 
 ## Commercial 2D Studio
@@ -30,6 +33,28 @@
 
 本阶段明确不把视频、raw field、特殊点和三维输出塞入该页面。`ln_map` 静态 PNG 也暂缓，待视频与
 可复用条带生命周期一起设计。
+
+## Studio AI Assistant
+
+状态：已实现，feature flag 控制。
+
+浏览器只访问 Platform，且不持有 provider key。AI 会话支持流式 Markdown 回复、自动命名、
+反馈与历史删除；探索建议必须基于可信 recipe/preview 上下文，并通过 schema、范围、资源预算和
+支持矩阵校验后才可应用。当前位置、调色、构图以及安全 Formula/Sequence patch 均保留 undo；
+普通聊天不会误触发 patch 工具。上架文案使用独立受限工作流。
+
+免费账户使用终身额度，provider 不可用或 `AI_ENABLED=false` 时只关闭 AI，不影响 Studio 渲染和
+其他控制面功能。自动化测试使用 mock，真实 provider 合同需按
+[ops/production/ai-assistant.md](../ops/production/ai-assistant.md) 显式付费执行。
+
+## Multi-node Compute Routing
+
+状态：已实现。
+
+节点数量来自声明式 JSON 清单，不固定为两台。Gateway 对任意 active 节点执行健康和 capabilities
+筛选，按 CPU/GPU durable/preview 槽位调度，并为 durable run 持久化原节点亲和。零节点时
+Gateway health 仍可用，容量接口明确返回 `503 COMPUTE_CAPACITY_EXHAUSTED`。安装、扩容和
+退役流程见 [ops/production/INSTALL.md](../ops/production/INSTALL.md)。
 
 ## AVX2 `fp32` Raw Field
 

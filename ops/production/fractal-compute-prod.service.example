@@ -1,0 +1,19 @@
+[Unit]
+Description=Fractal Studio production Compute node
+Requires=docker.service wg-quick@wg0.service
+After=network-online.target wg-quick@wg0.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/fractal-compute-prod
+EnvironmentFile=/etc/fractal-compute-prod/compute.env
+# docker-compose.node1.yml is a legacy filename; the template itself is generic
+# and takes project, bind address and runtime path from compute.env.
+ExecStart=/usr/bin/docker compose --env-file /etc/fractal-compute-prod/compute.env -f /opt/fractal-compute-prod/docker-compose.node1.yml up -d --no-build
+ExecStop=/usr/bin/docker compose --env-file /etc/fractal-compute-prod/compute.env -f /opt/fractal-compute-prod/docker-compose.node1.yml stop
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

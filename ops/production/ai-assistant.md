@@ -131,9 +131,9 @@ Before an approved release, confirm immutable image tags and validate the render
 
 ```bash
 test "$(stat -c %a /etc/fractal-prod/vps.env)" = 600
-docker compose --env-file /etc/fractal-prod/vps.env \
+docker compose -p fractal-prod --env-file /etc/fractal-prod/vps.env \
   -f /opt/fractal-prod/docker-compose.vps.yml config --quiet
-docker compose --env-file /etc/fractal-prod/vps.env \
+docker compose -p fractal-prod --env-file /etc/fractal-prod/vps.env \
   -f /opt/fractal-prod/docker-compose.vps.yml up -d --no-build
 ```
 

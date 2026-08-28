@@ -3,7 +3,9 @@ Address = 10.66.0.1/24
 ListenPort = 51820
 PrivateKey = REPLACE_VPS_PRIVATE_KEY
 
+# Repeat one [Peer] block for every Compute node. Each peer must have a unique
+# /32 address; never widen a peer's AllowedIPs to the whole 10.66.0.0/24.
 [Peer]
-PublicKey = REPLACE_NODE1_PUBLIC_KEY
-AllowedIPs = 10.66.0.2/32
+PublicKey = REPLACE_COMPUTE_PUBLIC_KEY
+AllowedIPs = REPLACE_COMPUTE_WG_IP/32
 PersistentKeepalive = 25

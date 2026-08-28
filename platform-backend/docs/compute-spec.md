@@ -10,13 +10,16 @@ orders, payment data or S3 object keys.
 flowchart LR
   B[Next browser] -->|/platform/v1| P[Platform API]
   P -->|outbox| W[Platform worker]
-  W -->|Bearer /compute/v1| C[C++ Compute]
-  C -->|manifest + private artifact bytes| W
+  W -->|Gateway service key /compute/v1| G[Compute Gateway]
+  G -->|upstream service key /compute/v1| C[0..N C++ Compute nodes]
+  C -->|sticky manifest + private artifact bytes| G
+  G --> W
   W -->|verified upload| S[(S3/MinIO)]
 ```
 
-- Browser never calls Compute and never receives `FSD_COMPUTE_SERVICE_KEY`.
-- Platform worker is the only Compute client.
+- Browser never calls Gateway/Compute and never receives a service key.
+- Platform calls one Gateway URL; Gateway alone owns node selection and receives
+  `FSD_COMPUTE_SERVICE_KEY` as its separate upstream key.
 - Worker accepts only artifacts in completed manifest, verifies SHA-256 and size
   while streaming, then uploads to object storage.
 - Compute local SQLite/runtime files are diagnostics and temporary output only.
@@ -27,8 +30,9 @@ flowchart LR
 - `GET /compute/v1/health` is unauthenticated private-network liveness.
 - Every other `/compute/v1/*` route requires
   `Authorization: Bearer <FSD_COMPUTE_SERVICE_KEY>`.
-- Compute must not be public ingress. Docker host port exists only for local
-  development and contract gates.
+- Gateway and Compute must not be public ingress. Production node ports are
+  reachable only from the VPS over WireGuard; Docker host ports exist locally
+  only for development and contract gates.
 - Legacy `/api/*` is migration-only, disabled with `FSD_ENABLE_LEGACY_API=0` in
   hosted/dev Platform stack. It is not a Platform or browser transport.
 

@@ -1,0 +1,9 @@
+[Interface]
+Address = REPLACE_COMPUTE_WG_IP/24
+PrivateKey = REPLACE_COMPUTE_PRIVATE_KEY
+
+[Peer]
+PublicKey = REPLACE_VPS_PUBLIC_KEY
+Endpoint = REPLACE_VPS_PUBLIC_IP:51820
+AllowedIPs = 10.66.0.1/32
+PersistentKeepalive = 25

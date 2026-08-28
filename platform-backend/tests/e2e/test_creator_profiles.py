@@ -38,8 +38,7 @@ async def test_profile_and_listings_are_readable_without_a_session(e2e_api_url: 
         assert listings.status_code == 200, listings.text
         items = listings.json()["data"]
         assert items, "a creator reported as published should have listings"
-        # Exact handle match, not the catalogue's substring `creator` filter:
-        # a profile page must never mix in a creator with a longer handle.
+        # A profile page must never mix in a creator with a longer handle.
         assert {item["creator"]["handle"] for item in items} == {handle}
         assert len(items) == min(data["publishedCount"], 48)
 

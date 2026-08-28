@@ -152,6 +152,8 @@ _PUBLIC_DETAIL_CODES = {
     "ai_message_not_complete",
     "ai_request_in_progress",
     "COMPUTE_CAPACITY_EXHAUSTED",
+    "account_disabled",
+    "creator_name_change_too_soon",
     "email_already_registered",
     "export_quota_exhausted",
     "handle_already_registered",

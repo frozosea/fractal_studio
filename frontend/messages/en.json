@@ -34,6 +34,7 @@
       "passwordLength": "Password must be at least 12 characters",
       "passwordMismatch": "Passwords do not match",
       "loginFailed": "Sign-in failed. Check your email and password.",
+      "accountDisabled": "Your account has been disabled. Please contact an administrator.",
       "emailExists": "This email already has an account. Sign in instead.",
       "registerFailed": "Registration failed. Please try again."
     }
@@ -748,6 +749,7 @@
     },
     "marketplace": {
       "facets": {
+              "creator": "Author",
               "variant": "Formula",
               "colorMap": "Colour",
               "depth": "Depth",
@@ -877,6 +879,10 @@
       "becomeCreator": "Become a creator",
       "handlePlaceholder": "handle (lowercase, e.g. fractal_artist)",
       "displayNamePlaceholder": "display name",
+      "creatorIdentity": "Creator ID and name",
+      "updateCreatorName": "Change creator name",
+      "creatorNameCooldown": "The creator name can be changed once every 30 days.",
+      "creatorNameChangeTooSoon": "The creator name can only be changed once every 30 days. Please try again later.",
       "saveProfile": "Save creator profile",
       "invalidHandle": "Handle must contain 3–32 lowercase letters, numbers or underscores.",
       "displayNameRequired": "Enter a display name.",
@@ -902,6 +908,7 @@
       "maximumCny": "Maximum CNY",
       "from": "From",
       "to": "To",
+      "dateFormat": "Year/Month/Day",
       "requestedAt": "Requested {date}",
       "paidAt": "Paid {date}",
       "reason": "Reason: {reason}",

@@ -9,7 +9,8 @@ from typing import Literal
 
 import httpx
 
-from app.core.config import get_settings, reveal_secret
+from app.ai.provider_config import provider_endpoint, uses_deepseek
+from app.core.config import get_settings
 from app.studio.compute_request_mapper import PREVIEW_MAX_ITERATIONS
 
 
@@ -365,11 +366,20 @@ def _decode_tool_arguments(arguments: str) -> object:
 # completion tokens).  A large unified budget invites trailing filler and, on
 # reasoning-heavy providers, lets hidden thought tokens exhaust the request.
 _EXPLORATION_OUTPUT_BUDGET = 400
+# DeepSeek reasoning models count hidden reasoning tokens inside max_tokens. A
+# slightly larger exploration budget keeps structured output from being cut
+# off while staying far below the chat budget.
+_DEEPSEEK_EXPLORATION_OUTPUT_BUDGET = 800
 
 
 def _output_budget(settings: object, assistant_mode: AssistantMode) -> int:
     if assistant_mode in {"location", "color", "composition"}:
-        return min(settings.ai_max_output_tokens, _EXPLORATION_OUTPUT_BUDGET)
+        budget = (
+            _DEEPSEEK_EXPLORATION_OUTPUT_BUDGET
+            if uses_deepseek(settings)
+            else _EXPLORATION_OUTPUT_BUDGET
+        )
+        return min(settings.ai_max_output_tokens, budget)
     return settings.ai_max_output_tokens
 
 
@@ -394,11 +404,12 @@ async def stream_completion(*, text: str, history: list[dict], context: dict, im
     messages = [{"role": "system", "content": SYSTEM_PROMPT + "\n当前上下文：" + json.dumps(context, ensure_ascii=False)}]
     messages.extend(history[-20:])
     messages.append({"role": "user", "content": content})
+    base_url, api_key, model = provider_endpoint(settings)
     tool_choice: object = (
         {"type": "function", "function": {"name": "propose_studio_patch"}}
-        if force_patch and "-VL-" not in settings.siliconflow_model else "auto"
+        if force_patch and "-VL-" not in model else "auto"
     )
-    payload = {"model": settings.siliconflow_model, "messages": messages, "stream": True,
+    payload = {"model": model, "messages": messages, "stream": True,
                "max_tokens": _output_budget(settings, assistant_mode),
                "stream_options": {"include_usage": True},
                # Structured exploration must be reproducible: even a small
@@ -408,15 +419,16 @@ async def stream_completion(*, text: str, history: list[dict], context: dict, im
     # SiliconFlow's Qwen3-VL Instruct endpoints reject the text-model-only
     # `enable_thinking` extension. The Instruct variants are already the
     # non-thinking models, so omit the unsupported field for those endpoints.
-    if "-VL-" not in settings.siliconflow_model:
+    # DeepSeek exposes its own reasoning stream and rejects unknown fields, so
+    # the extension belongs to SiliconFlow only.
+    if not uses_deepseek(settings) and "-VL-" not in model:
         payload["enable_thinking"] = False
     if not disable_tools:
         payload.update({"tools": [_tool_for_context(context, assistant_mode)], "tool_choice": tool_choice})
     tool_calls: dict[int, dict[str, str]] = {}
     timeout = httpx.Timeout(connect=10, read=90, write=20, pool=10)
-    api_key = reveal_secret(settings.siliconflow_api_key)
     try:
-        async with httpx.AsyncClient(base_url=settings.siliconflow_base_url, trust_env=False, timeout=timeout) as client:
+        async with httpx.AsyncClient(base_url=base_url, trust_env=False, timeout=timeout) as client:
             async with client.stream("POST", "/chat/completions", json=payload,
                                      headers={"Authorization": f"Bearer {api_key}"}) as response:
                 if response.status_code >= 400:

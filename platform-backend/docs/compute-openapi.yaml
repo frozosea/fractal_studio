@@ -3,8 +3,8 @@ info:
   title: Fractal Compute private v1 API
   version: 1.0.0
   description: |
-    Authoritative Platform Worker contract for the current C++ Compute v1 server.
-    Legacy /api/* routes are explicitly outside this contract.
+    Authoritative private contract exposed by Compute Gateway and implemented
+    by each C++ Compute v1 node. Legacy /api/* routes are outside this contract.
 servers:
   - url: http://compute.internal
 security:

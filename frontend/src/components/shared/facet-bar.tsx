@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils/cn";
 export type FacetSelection = Partial<Record<FacetName, string | null>>;
 
 /** Row order, and which axes exist at all. */
-const FACET_ORDER: readonly FacetName[] = ["variant", "colorMap", "depth", "resolution"] as const;
+const FACET_ORDER: readonly FacetName[] = ["creator", "variant", "colorMap", "depth", "resolution"] as const;
 
 const COLOR_MAP_PREVIEWS = new Map(COLOR_MAPS.map((entry) => [entry.id as string, entry.preview]));
 
@@ -44,6 +44,7 @@ export function FacetBar({ facets, selection, onChange, disabled }: FacetBarProp
   const active = FACET_ORDER.some((facet) => selection[facet]);
 
   const label = (facet: FacetName, value: string): string => {
+    if (facet === "creator") return value;
     if (facet === "variant") {
       if (value === "custom") return tCommerce("render.customFormula");
       return t.has(`variants.${value}.name`) ? t(`variants.${value}.name`) : value;

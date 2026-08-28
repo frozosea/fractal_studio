@@ -113,7 +113,7 @@ agent 开始搜索前，应将描述拆成两类：
 
 同一轮实测的两项配套事实：
 
-- 引擎实际走的是微扰路径。`GET /compute/v1/runs/{runId}` 返回的 `hardwareExecution.actualScalar` 是 `perturb-mpfr158-fp64`（158 位 MPFR 参考轨道 + fp64 逐像素偏移），CUDA 执行。它不会随深度逐渐劣化，要么正常要么位数耗尽。Platform 侧保存的 `compute_result_json` 只有 artifacts，取精度证据必须直接问 Compute。
+- 引擎实际走的是微扰路径。`GET /compute/v1/runs/{runId}` 返回的 `hardwareExecution.actualScalar` 是 `perturb-mpfr158-fp64`（158 位 MPFR 参考轨道 + fp64 逐像素偏移），CUDA 执行。它不会随深度逐渐劣化，要么正常要么位数耗尽。Platform 侧保存的 `compute_result_json` 只有 artifacts，取精度证据必须通过受信任的 Gateway/Compute 运维路径查询。
 - 迭代预算随深度独立增长，且是另一个会先撞上的上限。经验量级：1e-12 约 8k，1e-18 约 20k，1e-24 约 60k，1e-30 约 120k。预算不足的表现和精度耗尽**完全一样**（整片内部色），排查时要先加迭代再怀疑坐标。
 
 ### 4.4 位置助手的理想输出

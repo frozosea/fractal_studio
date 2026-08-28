@@ -1,3 +1,5 @@
+# Compatibility example for the currently deployed Node 1. New Compute hosts
+# should start from wg0.compute.example and choose a unique WireGuard address.
 [Interface]
 Address = 10.66.0.2/24
 PrivateKey = REPLACE_NODE1_PRIVATE_KEY

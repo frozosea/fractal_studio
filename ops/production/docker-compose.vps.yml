@@ -116,7 +116,10 @@ services:
       COMPUTE_GATEWAY_ADMIN_KEY: ${COMPUTE_GATEWAY_ADMIN_KEY}
       COMPUTE_UPSTREAM_SERVICE_KEY: ${COMPUTE_UPSTREAM_SERVICE_KEY}
       SILICONFLOW_API_KEY: ""
-      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: '[{"nodeKey":"compute-a","baseUrl":"http://10.66.0.2:18080","maxDurableSlots":1,"maxPreviewSlots":2,"maxCpuSlots":2,"maxGpuSlots":1,"maxCpuPreviewSlots":4,"maxGpuPreviewSlots":2,"enabled":true},{"nodeKey":"compute-b","baseUrl":"http://10.66.0.3:18080","maxDurableSlots":1,"maxPreviewSlots":2,"maxCpuSlots":1,"maxGpuSlots":1,"maxCpuPreviewSlots":2,"maxGpuPreviewSlots":1,"enabled":true}]'
+      # The Gateway supports an arbitrary number of Compute nodes. Keep the
+      # authoritative, single-line JSON array in the root-only VPS env file so
+      # adding or retiring a node does not require editing this Compose file.
+      COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON: "${COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON:?set the complete node array in /etc/fractal-prod/vps.env}"
     depends_on: {gateway-db: {condition: service_healthy}}
   compute-gateway:
     image: ${GATEWAY_IMAGE:?immutable Git-SHA image required}
@@ -138,7 +141,11 @@ services:
     environment:
       <<: *platform-env
       AI_RUNTIME_ROLE: api
+      AI_PROVIDER: ${AI_PROVIDER:-siliconflow}
       SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       # Only the API calls the Gateway admin API (compute node monitoring);
       # workers and migrations never receive this key.
       COMPUTE_GATEWAY_ADMIN_KEY: ${COMPUTE_GATEWAY_ADMIN_KEY:?set in /etc/fractal-prod/vps.env}

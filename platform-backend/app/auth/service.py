@@ -137,13 +137,16 @@ async def login(email: str, password: str, request: Request) -> tuple[UserView, 
     async with get_engine().begin() as connection:
         user = await user_repository.find_by_email(connection, email)
         encoded_password = str(user["password_hash"]) if user is not None else ""
-        if (
-            user is None
-            or user["status"] != "active"
-            or not _verify_password(password, encoded_password)
-        ):
+        if user is None or not _verify_password(password, encoded_password):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials"
+            )
+        # Only reveal the disabled state after the caller proves knowledge of
+        # the password. Otherwise any unauthenticated caller could enumerate
+        # disabled accounts by submitting an arbitrary password.
+        if user["status"] != "active":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="account_disabled"
             )
         user_id = user["id"]
         if _password_needs_rehash(encoded_password):
@@ -219,6 +222,26 @@ async def upsert_creator_profile(
             )
             if claim.is_replay:
                 return claim.replay_body or {}, None, True, claim.replay_headers or {}
+            current_profile = await connection.execute(
+                text(
+                    "SELECT display_name, display_name_changed_at "
+                    "FROM creator_profiles WHERE user_id = :user_id FOR UPDATE"
+                ),
+                {"user_id": principal.user_id},
+            )
+            current = current_profile.mappings().one_or_none()
+            if (
+                current
+                and current["display_name"] != payload.display_name
+                and current["display_name_changed_at"] is not None
+                and current["display_name_changed_at"] > await connection.scalar(
+                    text("SELECT CURRENT_TIMESTAMP - INTERVAL '30 days'")
+                )
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="creator_name_change_too_soon",
+                )
             await creator_profile_repository.upsert(
                 connection,
                 user_id=principal.user_id,

@@ -1,23 +1,32 @@
 # Compute v1 私有 HTTP 合同
 
-本文是 C++ `/compute/v1/*` 的版本化工具与扩展合同，覆盖完整 workload、Orbit/DSL、manifest 和 artifact 流。当前 `platform_backend@81bc3fc` 的 Worker **不调用本合同**，而是调用生产私有 `/api/*`；服务后端接入必须先读 [Platform–Compute 对接指南](platform_compute_integration.md) 和 [`compute-openapi.yaml`](../platform-backend/docs/compute-openapi.yaml)。手动使用 Compute v1 时再阅读 [从零调用手册](compute_v1_cookbook.md) 与 [compute_v1_jobs.md](compute_v1_jobs.md)。
+本文是 `/compute/v1/*` 的版本化私有合同，覆盖完整 workload、Orbit/DSL、manifest 和 artifact
+流。当前 Platform 通过 Compute Gateway 使用本合同，Gateway 再用同一 wire contract 调用
+具体 C++ 节点；服务端接入先读 [Platform–Gateway–Compute 对接指南](platform_compute_integration.md)
+和 [`compute-openapi.yaml`](../platform-backend/docs/compute-openapi.yaml)。手动直连单个 Compute
+时再阅读 [从零调用手册](compute_v1_cookbook.md) 与 [compute_v1_jobs.md](compute_v1_jobs.md)。
 
 合同版本为 `schemaVersion: 1`。除明确标为“仅供观测”的字段外，本文出现的字段均为 v1 合同的一部分。JSON 字段名区分大小写；未说明可为 `null` 的字段不得发送 `null`。
 
 ## 1. 边界与部署
 
-- Compute v1 是私网服务，只允许 Platform Worker/受信任运维客户端访问；浏览器不得持有服务密钥。
+- Compute v1 是私网服务。生产 Platform 只访问 Compute Gateway，Gateway 再访问节点；仅这些
+  服务和受信任运维客户端可持有各自边界的服务密钥，浏览器不得持有任何 Compute/Gateway key。
 - `GET /compute/v1/health` 是唯一无鉴权端点。
 - Compute 拥有分形数学、硬件执行和本地 run 生命周期。PostgreSQL 中的用户、配方、平台任务、商业 Asset、订单和账本均由 Platform 拥有。
 - Compute 的 SQLite 和 run 目录只用于节点本地运行状态，不是商业事实来源。
-- URL 由 Platform 配置，例如 `http://compute:8080`。v1 没有额外的 `/api` 前缀。
+- Platform URL 指向 Gateway（生产为 `http://compute-gateway:8080`）；Gateway 节点 URL 指向各
+  WireGuard 地址。v1 没有额外的 `/api` 前缀。
 - 请求和响应采用 UTF-8 JSON，二进制预览和 artifact 下载除外。
 
 建议连接参数：连接超时 2 秒，普通 JSON 请求总超时 15 秒，artifact 流式读取超时按文件大小单独配置。运行时长不受创建请求超时控制，必须依赖轮询。
 
 ## 2. 鉴权与通用头
 
-服务 Key 不是用户申请的 API Key，也没有申请端点。它由部署方生成，分别注入 Compute 的 `FSD_COMPUTE_SERVICE_KEY` 与 Platform API/Worker 的 `COMPUTE_SERVICE_KEY`。生成、Compose 配置和轮换方法见[调用手册第 1 节](compute_v1_cookbook.md#1-key-不是申请的)。
+服务 Key 不是用户申请的 API Key，也没有申请端点。生产有两个独立边界：Platform 的
+`COMPUTE_SERVICE_KEY` 与 Gateway 的 `COMPUTE_GATEWAY_SERVICE_KEY` 相同；Gateway 的
+`COMPUTE_UPSTREAM_SERVICE_KEY` 与每个节点的 `FSD_COMPUTE_SERVICE_KEY` 相同。两类 key 不得
+复用。手动直连单节点时只需要后一个边界。配置见[调用手册第 1 节](compute_v1_cookbook.md#1-key-不是申请的)。
 
 除 health 外必须发送：
 
@@ -35,7 +44,9 @@ Content-Type: application/json
 {"error":{"code":"COMPUTE_UNAUTHORIZED","message":"valid Compute service credential required","details":{}}}
 ```
 
-Compute v1 调用方应在自己的日志上下文中同时记录 request ID、调用方 job ID、compute node ID 和 `computeRunId`。Compute v1 当前不回显外部 request ID，因此不得依赖响应头做关联。
+Platform 应记录 request ID、Platform job ID 和不透明 Gateway `computeRunId`；Gateway 另行记录
+实际 node identity 和 node-local run。Compute v1 当前不回显外部 request ID，因此不得依赖
+响应头做关联，也不得把私有公式或完整 payload 写入普通日志。
 
 ## 3. 端点总表
 
@@ -56,6 +67,8 @@ Compute v1 调用方应在自己的日志上下文中同时记录 request ID、�
 
 ### 4.1 Health
 
+Compute 节点返回（Platform 不直接访问，仅 Gateway/运维可见）：
+
 ```json
 {
   "schemaVersion": 1,
@@ -64,6 +77,10 @@ Compute v1 调用方应在自己的日志上下文中同时记录 request ID、�
   "rendererVersion": "git-sha-or-image-version"
 }
 ```
+
+Gateway 暴露同一路径，但响应为
+`{"schemaVersion":1,"status":"ok","service":"compute-gateway"}`，不带 `rendererVersion`——节点版本
+必须从每台节点的 capabilities/调度视图读取。
 
 `status=ok` 只说明 HTTP 进程存活，不证明某个 CUDA/AVX kernel 可执行。调度必须同时读取 capabilities。
 
@@ -214,6 +231,8 @@ Platform 仍必须在自己的数据库中将 key 与不可变 recipe hash/kind 
 - `startedAt`/`finishedAt` 是 Unix epoch 毫秒；未完成时 `finishedAt=0`。
 - `progress` 是按 job 扩展的观测对象，字段会随 kind/stage 改变。`stage` 通常存在；`current/total/percent/estimatedRemainingMs/cancelable/kernelReported` 均应按 optional 建模，special-points 等阶段可能没有通用 percent。Platform 应保存原对象，并按 [调用手册的进度规则](compute_v1_cookbook.md#34-进度条怎样做)生成 UI 进度，不能要求每个 kind 都有相同字段。
 - `artifacts` 是当前已登记的摘要，任务运行中可以增长。只有 terminal manifest 才可作为接收清单。
+- 经 Gateway 消费时，`artifacts` 恒为空数组：节点本地 artifact ID 不允许离开 Gateway，Platform
+  只能通过 `/runs/{id}/manifest` 拿到真实清单。
 - HTTP `200` 不表示任务成功；必须检查 `data.status`。
 
 ### 6.3 取消

@@ -27,6 +27,24 @@ def _settings(
     )
 
 
+def _deepseek_settings(
+    *,
+    api_key: str = "ds-test-secret-never-log",
+    model: str = "deepseek-v4-flash-vision-exp",
+    max_tokens: int = 1500,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        ai_provider="deepseek",
+        siliconflow_api_key=SecretStr(""),
+        siliconflow_base_url="https://provider.invalid/v1",
+        siliconflow_model="test/model",
+        deepseek_api_key=SecretStr(api_key),
+        deepseek_base_url="https://deepseek.invalid/v1",
+        deepseek_model=model,
+        ai_max_output_tokens=max_tokens,
+    )
+
+
 def _api_key(settings: SimpleNamespace) -> str:
     return settings.siliconflow_api_key.get_secret_value()
 
@@ -607,3 +625,47 @@ def test_output_budget_exploration_capped_below_global_limit() -> None:
     assert provider._output_budget(settings, "location") == 400
     assert provider._output_budget(settings, "color") == 400
     assert provider._output_budget(settings, "composition") == 400
+
+
+@pytest.mark.asyncio
+async def test_deepseek_routes_endpoint_omits_thinking_and_extends_exploration_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _deepseek_settings()
+    captured: dict[str, Any] = {}
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse({"choices": [{"delta": {"content": "红色在上"}}]}),
+            request=request,
+        )
+
+    recorded = _install_transport(monkeypatch, httpx.MockTransport(handle))
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    events = [
+        event
+        async for event in provider.stream_completion(
+            text="分析当前作品",
+            history=[],
+            context={"mode": "explore"},
+            image=b"preview",
+            image_type="image/png",
+            assistant_mode="composition",
+        )
+    ]
+    assert recorded["client_kwargs"]["base_url"] == "https://deepseek.invalid/v1"
+    assert captured["request"].headers["authorization"] == "Bearer ds-test-secret-never-log"
+    payload = captured["payload"]
+    assert payload["model"] == "deepseek-v4-flash-vision-exp"
+    assert "enable_thinking" not in payload
+    # Chat keeps the global budget; exploration gets the larger reasoning-aware
+    # budget instead of SiliconFlow's 400.
+    assert provider._output_budget(settings, "chat") == 1500
+    assert provider._output_budget(settings, "composition") == 800
+    assert payload["max_tokens"] == 800
+    assert payload["stream_options"] == {"include_usage": True}
+    assert events == [("delta", "红色在上")]

@@ -1,4 +1,4 @@
-"""Real SiliconFlow adapter dedicated to publish-page listing copy."""
+"""Real provider adapter dedicated to publish-page listing copy."""
 
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ from app.ai.listing_models import (
     FocusedListingCopyToolResult,
     ListingCopyCandidate,
 )
-from app.core.config import Settings, get_settings, reveal_secret
+from app.ai.provider_config import provider_endpoint, uses_deepseek
+from app.core.config import Settings, get_settings
 
 
 class ListingProviderUnavailable(Exception):
@@ -290,7 +291,7 @@ async def generate_listing_copy(
     """Call the configured winning model; no mock/fallback output exists."""
 
     resolved = settings or get_settings()
-    api_key = reveal_secret(resolved.siliconflow_api_key)
+    base_url, api_key, model = provider_endpoint(resolved)
     image_url = f"data:{image_type};base64,{base64.b64encode(image).decode('ascii')}"
     image_content = {
         "type": "image_url",
@@ -307,16 +308,17 @@ async def generate_listing_copy(
         },
     ]
     observation_payload: dict[str, object] = {
-        "model": resolved.siliconflow_model,
+        "model": model,
         "messages": observation_messages,
         "stream": False,
         "max_tokens": min(500, resolved.ai_max_output_tokens),
-        "enable_thinking": False,
         "temperature": 0.1,
     }
+    if not uses_deepseek(resolved):
+        observation_payload["enable_thinking"] = False
     timeout = httpx.Timeout(connect=10, read=90, write=20, pool=10)
     async with httpx.AsyncClient(
-        base_url=resolved.siliconflow_base_url,
+        base_url=base_url,
         trust_env=False,
         timeout=timeout,
     ) as client:
@@ -347,11 +349,10 @@ async def generate_listing_copy(
             },
         ]
         request_payload: dict[str, object] = {
-            "model": resolved.siliconflow_model,
+            "model": model,
             "messages": messages,
             "stream": False,
             "max_tokens": resolved.ai_max_output_tokens,
-            "enable_thinking": False,
             "temperature": 0.55,
             "tools": [LISTING_COPY_TOOL],
             "tool_choice": {
@@ -359,6 +360,8 @@ async def generate_listing_copy(
                 "function": {"name": "propose_listing_copy"},
             },
         }
+        if not uses_deepseek(resolved):
+            request_payload["enable_thinking"] = False
         response_payload = await _post_completion(
             client,
             payload=request_payload,

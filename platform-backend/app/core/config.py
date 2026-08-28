@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -96,9 +97,15 @@ class Settings(BaseSettings):
     payout_qr_cleanup_retry_delay_seconds: int = Field(default=300, ge=30, le=86_400)
     ai_enabled: bool = False
     ai_runtime_role: str = "api"
+    # One active provider. SiliconFlow stays the default so existing deployments
+    # upgrade without env changes; DeepSeek is selected with AI_PROVIDER=deepseek.
+    ai_provider: Literal["siliconflow", "deepseek"] = "siliconflow"
     siliconflow_api_key: SecretStr = SecretStr("")
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
     siliconflow_model: str = "Qwen/Qwen3.6-35B-A3B"
+    deepseek_api_key: SecretStr = SecretStr("")
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
     ai_free_lifetime_limit: int = Field(default=10, ge=1, le=1000)
     ai_history_ttl_days: int = Field(default=90, ge=1, le=3650)
     ai_max_user_message_chars: int = Field(default=4000, ge=1, le=20000)
@@ -115,12 +122,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
-        if (
-            self.ai_enabled
-            and self.ai_runtime_role == "api"
-            and not reveal_secret(self.siliconflow_api_key)
-        ):
-            raise ValueError("SILICONFLOW_API_KEY is required when AI_ENABLED=true")
+        if self.ai_enabled and self.ai_runtime_role == "api":
+            required_key = (
+                self.deepseek_api_key if self.ai_provider == "deepseek" else self.siliconflow_api_key
+            )
+            required_env = (
+                "DEEPSEEK_API_KEY" if self.ai_provider == "deepseek" else "SILICONFLOW_API_KEY"
+            )
+            if not reveal_secret(required_key):
+                raise ValueError(f"{required_env} is required when AI_ENABLED=true")
         if self.app_env != "production":
             return self
         if not self.session_cookie_secure:

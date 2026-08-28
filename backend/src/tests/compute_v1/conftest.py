@@ -37,11 +37,13 @@ def backend(pytestconfig: pytest.Config) -> ComputeClient:
         "FSD_COMPUTE_SERVICE_KEY": SERVICE_KEY,
         "FSD_RENDERER_VERSION": "contract-pytest",
         # The legacy /api/* surface is deliberately covered by these tests,
-        # but it is FAIL-CLOSED by default: production compose and the Docker
-        # image set both flags to 0 explicitly. Keeping them on here mirrors
-        # that explicit opt-in rather than relying on a permissive default.
+        # so the legacy HTTP gate stays explicitly enabled. The native formula
+        # compiler, however, follows the shipped fail-closed default (the
+        # Docker image and production compose both set it to 0): compiling a
+        # custom variant is a legacy-only capability that the commercial
+        # contract refuses.
         "FSD_ENABLE_LEGACY_API": "1",
-        "FSD_ENABLE_LEGACY_FORMULA_COMPILER": "1",
+        "FSD_ENABLE_LEGACY_FORMULA_COMPILER": "0",
     })
     process = subprocess.Popen(
         [str(binary), str(port)], cwd=studio_root, env=env,

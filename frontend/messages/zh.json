@@ -34,6 +34,7 @@
       "passwordLength": "密码至少需要 12 个字符",
       "passwordMismatch": "两次输入的密码不一致",
       "loginFailed": "登录失败，请检查邮箱与密码。",
+      "accountDisabled": "您的账号已被停用，请联系管理员。",
       "emailExists": "该邮箱已注册，请直接登录。",
       "registerFailed": "注册失败，请稍后重试。"
     }
@@ -748,6 +749,7 @@
     },
     "marketplace": {
       "facets": {
+              "creator": "作者",
               "variant": "公式",
               "colorMap": "染色",
               "depth": "深度",
@@ -877,6 +879,10 @@
       "becomeCreator": "成为创作者",
       "handlePlaceholder": "创作者标识（小写，例如 fractal_artist）",
       "displayNamePlaceholder": "显示名称",
+      "creatorIdentity": "创作者标识与名称",
+      "updateCreatorName": "修改创作者名称",
+      "creatorNameCooldown": "创作者名称每 30 天只能修改一次。",
+      "creatorNameChangeTooSoon": "创作者名称每 30 天只能修改一次，请稍后再试。",
       "saveProfile": "保存创作者资料",
       "invalidHandle": "创作者标识需要 3–32 位，只能包含小写字母、数字或下划线。",
       "displayNameRequired": "请输入显示名称。",
@@ -902,6 +908,7 @@
       "maximumCny": "最高金额",
       "from": "开始日期",
       "to": "结束日期",
+      "dateFormat": "年/月/日",
       "requestedAt": "申请于 {date}",
       "paidAt": "打款于 {date}",
       "reason": "原因：{reason}",

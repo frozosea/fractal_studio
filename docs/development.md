@@ -17,8 +17,10 @@ cp .env.example .env   # optional: defaults work without this file
 | --- | --- | --- |
 | `frontend` | Next.js UI and `/platform/*` reverse proxy | http://localhost:3010 |
 | `api` | FastAPI Platform API | http://localhost:18100 |
-| `worker` | Platform outbox/render worker | internal only |
-| `compute` | private C++ Compute v1 | http://localhost:18101 |
+| `worker`, `preview-worker` | Platform outbox/render and bounded preview workers | internal only |
+| `compute-gateway` | private multi-node router | http://localhost:18103 |
+| `compute`, `compute-b` | two private C++ Compute fixtures | http://localhost:18101 / 18104 |
+| `compute-gateway-db` | Gateway node/run affinity state | localhost:25443 |
 | `postgres`, `redis`, `minio` | Platform state and artifacts | ports in `.env.example` |
 | `alipay-stub` | local payment callback stub | http://localhost:18102 |
 
@@ -29,8 +31,10 @@ The `migrate` one-shot service runs database migrations before `api` and
 ./dev.sh --down
 ```
 
-Use `docker compose -f docker-compose.dev.yml logs -f api worker frontend` for
-live logs. Do not run PostgreSQL, Redis, MinIO, or Compute as host processes.
+Use `docker compose -p fractal-studio-dev -f docker-compose.dev.yml logs -f api worker frontend`
+for live logs. Do not run PostgreSQL, Redis, MinIO, or Compute as host processes. The two local
+Compute services are a deterministic scheduler fixture; production accepts 0..N nodes from its
+host-managed inventory.
 
 ## Browser/API boundary
 
@@ -40,6 +44,11 @@ Browser requests use the same public origin:
 Browser -> http://localhost:3010/platform/v1/* -> Next reverse proxy -> Platform
 Platform worker -> http://compute-gateway:8080/compute/v1/* -> Compute Gateway -> Compute A / Compute B
 ```
+
+If `compute-gateway-migrate` reports password authentication failure while the database container is
+healthy, the persisted development volume was initialized with a different password. Inspect the
+explicit `fractal-studio-dev` project and repair that disposable development credential deliberately;
+never delete volumes globally, and never touch `fractal-node1-prod` as a workaround.
 
 Run full user E2E with two real CPU Compute nodes (payment edge uses local
 Alipay stub):

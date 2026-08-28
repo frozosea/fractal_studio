@@ -10,7 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 async def find(connection: AsyncConnection, user_id: UUID) -> dict[str, object] | None:
     result = await connection.execute(
-        text("SELECT handle, display_name FROM creator_profiles WHERE user_id = :user_id"),
+        text(
+            "SELECT handle, display_name, display_name_changed_at "
+            "FROM creator_profiles WHERE user_id = :user_id"
+        ),
         {"user_id": user_id},
     )
     return result.mappings().one_or_none()
@@ -45,10 +48,13 @@ async def upsert(
 ) -> None:
     await connection.execute(
         text(
-            "INSERT INTO creator_profiles (user_id, handle, display_name) "
-            "VALUES (:user_id, :handle, :display_name) "
+            "INSERT INTO creator_profiles (user_id, handle, display_name, display_name_changed_at) "
+            "VALUES (:user_id, :handle, :display_name, CURRENT_TIMESTAMP) "
             "ON CONFLICT (user_id) DO UPDATE "
-            "SET handle = EXCLUDED.handle, display_name = EXCLUDED.display_name"
+            "SET handle = EXCLUDED.handle, "
+            "display_name = EXCLUDED.display_name, "
+            "display_name_changed_at = CASE WHEN creator_profiles.display_name <> EXCLUDED.display_name "
+            "THEN CURRENT_TIMESTAMP ELSE creator_profiles.display_name_changed_at END"
         ),
         {"user_id": user_id, "handle": handle, "display_name": display_name},
     )

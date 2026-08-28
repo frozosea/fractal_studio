@@ -1,4 +1,10 @@
-# Commercialization Implementation / 商业化实施记录
+# Historical Commercialization Implementation / 历史商业化实施记录
+
+> **状态：2026-07 迁移过程快照。** 下方 milestone、Vue 前端、单节点和 `/api/*` 直连描述不再
+> 代表当前实现。当前架构见 [architecture.md](architecture.md)，产品状态见
+> [feature_status.md](feature_status.md)，Platform 现通过多节点 Gateway 使用 `/compute/v1/*`，
+> 见 [platform_compute_integration.md](platform_compute_integration.md)。保留本文仅用于追溯当时
+> 决策和提交，不应据此部署或新增功能。
 
 本文是 Fractal Studio 商业化重构的执行依据与进度事实来源。实施过程中每个功能只有在代码、自动测试和文档三者都完成后，才标记为 `completed`。
 

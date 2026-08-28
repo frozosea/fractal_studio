@@ -4,15 +4,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.auth.models import AccessPrincipal
-from app.commerce import repository as commerce_repo
-from app.commerce.models import AlipayFormView, OrderItemView, OrderView, PaymentAttemptView, PaymentStartView
+from app.commerce.models import AlipayFormView, OrderView, PaymentAttemptView, PaymentStartView
 from app.core import audit_writer, idempotency_service
 from app.core.access_middleware import enforce_origin_and_csrf, require_principal, require_role
 from app.core.config import get_settings

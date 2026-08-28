@@ -13,7 +13,7 @@ pytestmark = pytest.mark.skipif(
     reason="set E2E_API_URL to run live Compose E2E checks",
 )
 
-_FACETS = {"variant", "colorMap", "depth", "resolution"}
+_FACETS = {"creator", "variant", "colorMap", "depth", "resolution"}
 
 
 @pytest.mark.asyncio

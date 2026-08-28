@@ -1,4 +1,9 @@
-# C++ Compute `/api` 生产合同实施记录
+# Historical C++ Compute `/api` contract implementation / 历史实施记录
+
+> **状态：已归档的迁移分支记录。** 当前 Platform 不再使用下述 7 条 `/api/*` DTO，而是通过
+> Compute Gateway 调用统一 `/compute/v1/*`。当前合同、状态机和多节点亲和见
+> [platform_compute_integration.md](platform_compute_integration.md)。本文仅用于理解旧适配层，
+> 不可作为当前生产验收或开发依据。
 
 本文记录 `compute_api_contract` 分支对 Platform Backend 私有计算合同的实施状态。权威调用方是 `platform_backend@81bc3fc` 中的：
 

@@ -20,7 +20,7 @@ RUN printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire
 COPY pyproject.toml uv.lock ./
 # Lockfile came from a mirror that rejects some Docker Desktop traffic with 403.
 # Keep source lock untouched in git, rewrite only image-local artifact URLs.
-RUN sed -i 's#https://pypi.tuna.tsinghua.edu.cn#https://files.pythonhosted.org#g' uv.lock \
+RUN sed -i 's#https://pypi.tuna.tsinghua.edu.cn#https://pypi.org#g' uv.lock \
     && uv sync --locked --no-install-project
 
 COPY . ./

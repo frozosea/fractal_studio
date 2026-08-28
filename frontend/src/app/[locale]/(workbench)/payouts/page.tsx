@@ -39,7 +39,7 @@ export default function PayoutsPage() {
   const [dateTo, setDateTo] = useState("");
 
   const errorText = (reason: unknown) => reason instanceof PlatformApiError
-    ? t("errors.requestWithCode", { code: reason.code })
+    ? reason.code === "creator_name_change_too_soon" ? t("payouts.creatorNameChangeTooSoon") : t("errors.requestWithCode", { code: reason.code })
     : t("errors.requestFailed");
   const formatDate = (value: string) => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 
@@ -50,6 +50,11 @@ export default function PayoutsPage() {
 
   const isCreator = user?.roles.includes("creator") ?? false;
   useEffect(() => { if (isCreator) refresh(); }, [isCreator]);
+  useEffect(() => {
+    if (!isCreator || !user?.creatorProfile) return;
+    setHandle(user.creatorProfile.handle);
+    setDisplayName(user.creatorProfile.displayName);
+  }, [isCreator, user?.creatorProfile?.displayName, user?.creatorProfile?.handle]);
   const pendingRequest = rows.find((row) => row.status === "pending");
   const availableBalance = Number(balance?.availableAmount ?? 0);
   const requestedAmount = Number(amount);
@@ -142,6 +147,11 @@ export default function PayoutsPage() {
       </section>}
       {isCreator && <div className="grid items-start gap-5 xl:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1.2fr)]">
         <section className="space-y-3 rounded-xl border border-hairline/10 p-4">
+          <div className="rounded-lg border border-hairline/10 bg-wash/[0.03] p-3 text-sm"><span className="text-muted-foreground">{t("payouts.creatorIdentity")}</span><p className="mt-1 font-medium">@{user?.creatorProfile?.handle}</p><p className="text-muted-foreground">{user?.creatorProfile?.displayName}</p></div>
+          <h2 className="font-medium">{t("payouts.updateCreatorName")}</h2>
+          <Input value={displayName} placeholder={t("payouts.displayNamePlaceholder")} maxLength={120} onChange={(event) => setDisplayName(event.target.value)} />
+          <p className="text-xs text-muted-foreground">{t("payouts.creatorNameCooldown")}</p>
+          <Button variant="outline" loading={savingProfile} disabled={!displayName.trim() || displayName.trim() === user?.creatorProfile?.displayName} onClick={() => void saveCreatorProfile()}>{t("payouts.updateCreatorName")}</Button>
           <h2 className="font-medium">{t("payouts.requestTitle")}</h2>
           <div className="rounded-lg border border-hairline/10 bg-wash/[0.03] p-3 text-sm"><span className="text-muted-foreground">{t("payouts.available")}</span><p className="mt-1 text-lg font-medium">{balance ? `${balance.availableAmount} ${balance.currency}` : t("payouts.loadingBalance")}</p>{balance && availableBalance <= 0 && <p className="mt-1 text-xs text-muted-foreground">{t("payouts.balanceHint")}</p>}</div>
           <Input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("payouts.amountPlaceholder")} disabled={!balance || availableBalance <= 0} />
@@ -152,7 +162,7 @@ export default function PayoutsPage() {
         </section>
         <section className="rounded-xl border border-hairline/10 p-4">
           <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">{t("payouts.history")}</h2><p className="text-sm text-muted-foreground">{t("payouts.transactionCount", { shown: filteredRows.length, total: rows.length })}</p></div><Button size="sm" variant="outline" onClick={resetFilters}>{t("actions.clearFilters")}</Button></div>
-          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3"><label className="text-xs text-muted-foreground">{t("payouts.status")}<select className="mt-1 h-10 w-full rounded-lg border border-border bg-deep-slate/50 px-3 text-sm text-foreground" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}><option value="all">{t("payouts.allStatuses")}</option>{payoutStatuses.map((value) => <option key={value} value={value}>{t(`payoutStatus.${value}`)}</option>)}</select></label><label className="text-xs text-muted-foreground">{t("payouts.minimumCny")}<Input className="mt-1" type="number" min="0" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} /></label><label className="text-xs text-muted-foreground">{t("payouts.maximumCny")}<Input className="mt-1" type="number" min="0" value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} /></label><label className="text-xs text-muted-foreground">{t("payouts.from")}<Input className="mt-1" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label className="text-xs text-muted-foreground">{t("payouts.to")}<Input className="mt-1" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label></div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3"><label className="text-xs text-muted-foreground">{t("payouts.status")}<select className="mt-1 h-10 w-full rounded-lg border border-border bg-deep-slate/50 px-3 text-sm text-foreground" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}><option value="all">{t("payouts.allStatuses")}</option>{payoutStatuses.map((value) => <option key={value} value={value}>{t(`payoutStatus.${value}`)}</option>)}</select></label><label className="text-xs text-muted-foreground">{t("payouts.minimumCny")}<Input className="mt-1" type="number" min="0" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} /></label><label className="text-xs text-muted-foreground">{t("payouts.maximumCny")}<Input className="mt-1" type="number" min="0" value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} /></label><label className="text-xs text-muted-foreground">{t("payouts.from")}<span className="ml-1 text-[10px] opacity-70">({t("payouts.dateFormat")})</span><Input className="mt-1" lang={locale === "zh" ? "zh-CN" : "en-US"} type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label className="text-xs text-muted-foreground">{t("payouts.to")}<span className="ml-1 text-[10px] opacity-70">({t("payouts.dateFormat")})</span><Input className="mt-1" lang={locale === "zh" ? "zh-CN" : "en-US"} type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label></div>
           <div className="mt-4 space-y-2">{filteredRows.length ? filteredRows.map((row) => <article key={row.id} className="rounded-lg border border-hairline/10 bg-wash/[0.02] p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-medium">{row.amount} {row.currency}</p><p className="mt-1 text-xs text-muted-foreground">{t("payouts.requestedAt", { date: formatDate(row.createdAt) })}</p>{row.paidAt && <p className="mt-1 text-xs text-emerald-300">{t("payouts.paidAt", { date: formatDate(row.paidAt) })}</p>}{row.rejectionReason && <p className="mt-1 text-xs text-red-300">{t("payouts.reason", { reason: row.rejectionReason })}</p>}</div><div className="flex items-center gap-2"><span className={`rounded-full border px-2 py-1 text-xs ${statusClass[row.status]}`}>{t(`payoutStatus.${row.status}`)}</span>{row.status === "pending" && <Button size="sm" variant="outline" onClick={() => void platform.payouts.cancel(row.id).then(refresh).catch((reason: unknown) => setError(errorText(reason)))}>{t("actions.cancel")}</Button>}</div></div></article>) : <p className="rounded-lg border border-dashed border-hairline/10 p-6 text-center text-sm text-muted-foreground">{t("payouts.noMatches")}</p>}</div>
         </section>
       </div>}

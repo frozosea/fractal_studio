@@ -286,9 +286,26 @@ def test_enabled_api_requires_key_but_worker_does_not_receive_it() -> None:
     base = {"database_url": "postgresql+asyncpg://unused/unused", "session_secret": "dev-secret"}
     with pytest.raises(ValidationError, match="SILICONFLOW_API_KEY"):
         Settings(**base, ai_enabled=True, ai_runtime_role="api", siliconflow_api_key="")
+    with pytest.raises(ValidationError, match="DEEPSEEK_API_KEY"):
+        Settings(
+            **base,
+            ai_enabled=True,
+            ai_runtime_role="api",
+            ai_provider="deepseek",
+            deepseek_api_key="",
+        )
     worker = Settings(**base, ai_enabled=True, ai_runtime_role="worker", siliconflow_api_key="")
     assert worker.ai_enabled is True
     assert worker.siliconflow_api_key.get_secret_value() == ""
+    deepseek_worker = Settings(
+        **base,
+        ai_enabled=True,
+        ai_runtime_role="worker",
+        ai_provider="deepseek",
+        deepseek_api_key="",
+    )
+    assert deepseek_worker.ai_provider == "deepseek"
+    assert deepseek_worker.deepseek_api_key.get_secret_value() == ""
 
 
 def test_siliconflow_key_is_redacted_from_settings_and_validation_errors() -> None:

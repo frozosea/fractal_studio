@@ -1,114 +1,222 @@
 # Architecture / 架构
 
-这份文档说明 Fractal Studio 的代码如何分层、请求如何流动，以及新增功能时应该改哪些地方。README 只保留项目入口；具体计算链路拆到各 pipeline 文档。
+本文描述当前商业产品的代码分层、生产数据流和扩展边界。早期 Vue/Vite 直连 C++ 的原型已不
+再是浏览器依赖；当前浏览器只访问 Next.js 和 FastAPI Platform，所有 Compute 请求经有状态
+Gateway 路由到 0..N 个私有 C++ 节点。
 
-## Runtime Topology / 运行拓扑
+生产安装与运维见 [ops/production/INSTALL.md](../ops/production/INSTALL.md)，实际线上快照见
+[ops/production/STATUS.md](../ops/production/STATUS.md)。
 
-开发时通常由 `dev.sh` 同时拉起两个进程：
+## 1. Runtime topology / 运行拓扑
 
 ```text
 Browser
-  -> Vue 3 / Vite frontend (:5174 from dev.sh, :5173 from npm run dev)
-  -> frontend/src/api.ts
-  -> native C++ HTTP backend (:18080)
-  -> backend/src/api/routes_*.cpp
-  -> backend/src/compute/* and backend/src/core/*
-  -> runtime/runs/<category>/<runId>/ + runtime/db/fractal_studio.sqlite3
+  |
+  v
+Caddy (canonical HTTPS origin)
+  +-- / and localized pages ------> Next.js Frontend
+  +-- /platform/* ----------------> FastAPI Platform API
+  +-- /fractal-platform/* --------> MinIO signed object path
+
+Platform API / workers
+  +-- Platform PostgreSQL   users, sessions, recipes, jobs, commerce, assets
+  +-- Redis                 preview queue, cache and short-lived coordination
+  +-- MinIO                 authoritative commercial objects
+  +-- external providers    Alipay and optional Studio AI provider
+  |
+  v
+Compute Gateway + Gateway PostgreSQL
+  |
+  | health/capability filtering, CPU/GPU capacity, durable-run affinity
+  v
+0..N C++ Compute nodes over WireGuard
 ```
 
-后端是一个本地原生 C++ HTTP 服务，不依赖 Web 框架。`frontend/src/api.ts` 默认请求 `http://<current-host>:18080`；`dev.sh` 可用 `VITE_BACKEND_PORT` 替换端口，也可以用优先级更高的 `VITE_BACKEND_URL` 覆盖完整地址。
+Local Docker development keeps the same service boundaries but runs two local Compute containers to
+exercise distribution and affinity. The local two-node fixture is a test topology, not a production
+limit.
 
-## Backend Layers / 后端分层
+## 2. Service ownership
+
+| Service | Source | Owns | Must not own |
+|---|---|---|---|
+| Frontend | `frontend/` | Next.js routes, browser interaction, localized UI state | provider keys, direct Compute credentials |
+| Platform | `platform-backend/` | identity, CSRF, recipes, quota, jobs, assets, marketplace, orders, membership, payouts, AI audit/history | node scheduling, Compute runtime files |
+| Gateway | `compute-gateway/` | node registry, probes, capabilities, resource slots, run-to-node affinity, external artifact routing | users, money, quota, commercial objects |
+| Compute | `backend/` | validated fractal math, CPU/CUDA execution, local run lifecycle, manifest and temporary artifacts | accounts, orders, entitlements, authoritative assets |
+| Platform PostgreSQL | VPS | commercial state and transactional outbox | node-local execution state |
+| Gateway PostgreSQL | VPS | node state, probes and durable route identity | commercial state |
+| Redis | VPS | bounded queue/cache/coordination state | durable source of truth |
+| MinIO | VPS | encrypted commercial artifacts and previews | raw Compute scheduling state |
+
+This ownership split is also the failure boundary: zero healthy Compute nodes must not prevent the
+control plane from starting or serving identity, commerce, marketplace, assets and existing
+downloads.
+
+## 3. Main request flows
+
+### 3.1 Interactive Studio preview
+
+1. Browser validates and normalizes Studio state, then requests a Platform preview job.
+2. Platform authenticates the user, applies rate/resource limits and writes bounded queue state.
+3. Preview worker maps the canonical recipe to a Compute v1 envelope.
+4. Gateway filters all active healthy nodes by capabilities and requested CPU/GPU pools, reserves an
+   in-memory preview slot and forwards the request.
+5. Compute validates the envelope and returns preview bytes plus execution metadata.
+6. Platform verifies/encodes the response and returns it to the browser; superseded browser requests
+   cannot overwrite the latest view.
+
+Preview capacity exhaustion is explicit. Platform must not create durable jobs or consume export
+quota as a substitute for a failed preview.
+
+### 3.2 Durable render and artifact ingestion
+
+1. Browser creates or reuses an immutable recipe and submits a render request with idempotency.
+2. Platform atomically checks/reserves quota, persists a render job and schedules work through its
+   transactional outbox.
+3. Worker submits a Compute v1 durable run to Gateway.
+4. Gateway selects one compatible healthy node, records the node affinity with the idempotency hash,
+   then forwards creation. Replays return the same Gateway run.
+5. Poll, cancel, manifest and artifact requests always return to that original node.
+6. After completion, Platform verifies manifest, media limits, size and SHA-256, uploads the object to
+   encrypted VPS MinIO and records the commercial asset.
+7. Browser receives an authorized, short-lived signed download URL. Internal MinIO or Compute
+   addresses are never exposed.
+
+Compute runtime remains necessary while a run is being polled or ingested, but it is not the final
+asset store. A node cannot be deleted merely because the commercial object eventually lives in
+MinIO.
+
+### 3.3 Marketplace and commerce
+
+Marketplace reads published listings and public derivatives from Platform state. Checkout,
+entitlement and membership changes are transactional and idempotent. Alipay callbacks terminate at
+the canonical VPS origin, are verified server-side and schedule follow-up work through Platform;
+they never depend on a Compute node being online.
+
+Private master assets require an entitlement check before Platform issues a signed URL. Caddy
+preserves the S3-signed `/fractal-platform/*` path when proxying to MinIO.
+
+### 3.4 Studio AI
+
+Browser requests go to Platform and stream back over the `/platform` proxy. Only the Platform API
+process receives the provider key. Images remain bounded and in memory; prompts, private recipes and
+provider credentials are excluded from ordinary logs.
+
+Provider output is untrusted. Formula/sequence/location/color patches pass schema, range, resource
+budget and trusted-context validation before the UI may apply them; undo remains a client-side
+operation. Deterministic tests use mocks, while paid provider contracts are explicit manual checks.
+
+Disabling `AI_ENABLED` removes only AI functionality. Studio rendering and all non-AI control-plane
+features continue normally.
+
+## 4. Frontend layers
+
+The commercial browser application is Next.js 14, React 18 and `next-intl`:
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| Entry | `backend/src/main.cpp` | 定位项目根目录，创建 `runtime/`、SQLite DB、`JobRunner`，启动 HTTP server。 |
-| HTTP core | `backend/src/core/http_server.cpp` | 解析 HTTP 请求、CORS、路由分发、每连接一个 detached thread。 |
-| Runtime core | `backend/src/core/job_runner.cpp`, `db.cpp`, `resource_manager.cpp`, `path_guard.cpp`, `hardware_probe.cpp` | run 生命周期、进度、产物、持久化、路径安全、硬件探测。 |
-| API routes | `backend/src/api/routes_*.cpp` | JSON 参数解析、调用计算模块、写入 artifact、返回前端需要的响应结构。 |
-| Compute kernels | `backend/src/compute/*` | 分形渲染、ln-map、3D mesh、transition volume、special points、SIMD/CUDA/fixed-point 支持。 |
-| Hardware adapters | `backend/src/adapters/*` | CUDA/OpenMP 探测等平台能力适配。 |
+| Routes/layouts | `frontend/src/app/[locale]/` | public, auth and workbench route groups; localized layouts and errors |
+| Studio | `components/studio/`, `stores/studio-store.ts` | canvas interaction, canonical recipe edits, preview state and AI assistant |
+| Product UI | `components/layout/`, `components/listings/`, `components/shared/` | shell, marketplace cards, listing AI and reusable states |
+| API boundary | `lib/api/platform.ts`, `lib/api/errors.ts` | same-origin Platform requests, DTO conversion and stable errors |
+| Validation | `lib/validators/`, `lib/studio-catalog.ts` | browser-side schema/range checks and supported product catalog |
+| Providers/state | `providers/`, `stores/` | auth, React Query, theme and local UI state |
+| Localization | `src/i18n/`, `messages/*.json` | locale routing and user-facing copy |
 
-路由声明集中在 `backend/src/include/routes.hpp`。实际 URL 分发在 `backend/src/core/http_server.cpp`。
+Frontend code may improve responsiveness and reject invalid input early, but Platform remains the
+authorization and quota boundary. No `NEXT_PUBLIC_*` variable may contain a service or provider key.
 
-## Frontend Layers / 前端分层
+## 5. Platform layers
+
+`platform-backend/` is a FastAPI modular monolith. Each product module generally follows
+router -> service -> repository/port boundaries:
+
+- `auth/`: users, sessions, CSRF, creator profiles and RBAC;
+- `studio/`: recipes, preview queue, render jobs, quota and Compute mapping;
+- `ai/`: conversations, grounded exploration, listing copy, provider adapter and cleanup;
+- `assets/`: asset reads, derivatives, signed downloads and cleanup;
+- `marketplace/`: listings, facets, favorites and moderation-facing data;
+- `commerce/`, `membership/`, `finance/`: orders, entitlements, membership and payouts;
+- `admin/`: privileged account, marketplace, statistics and Compute monitoring views;
+- `outbox/`: at-least-once background dispatch and retries;
+- `infrastructure/`: Compute, Redis, storage and payment adapters;
+- `core/`: settings, database, idempotency, audit and request/logging boundaries.
+
+Schema migrations live in `platform-backend/migrations/`. API, worker and preview-worker are separate
+processes built from the same release image and must be updated together.
+
+## 6. Gateway scheduling and affinity
+
+Gateway accepts a declarative JSON array of any number of nodes. Each node has a stable `nodeKey`,
+private base URL, enabled intent and separate CPU/GPU durable/preview capacities.
+
+For a request, Gateway:
+
+1. loads all active nodes;
+2. removes stale/unhealthy and capability-incompatible nodes;
+3. determines required CPU/GPU resource pools (`auto`/`hybrid` reserve both);
+4. compares current reservations with per-pool limits;
+5. chooses the least-loaded candidate, breaking ties by oldest assignment and node key;
+6. locks only the selected database row and rechecks capacity before reserving;
+7. persists durable run affinity before forwarding upstream.
+
+Health probes automatically move offline nodes back into scheduling. Human draining/disabled state is
+preserved across bootstrap; declarative capacity is reapplied on every Gateway restart. Missing all
+eligible nodes produces `503 COMPUTE_CAPACITY_EXHAUSTED`, not an unbounded queue.
+
+Gateway implementation and schema details are in
+[compute-gateway-mvp/README.md](compute-gateway-mvp/README.md).
+
+## 7. Compute layers and runtime
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| App shell | `frontend/src/App.vue`, `components/NavRail.vue`, `components/StatusRail.vue` | 三栏桌面布局、移动端顶栏/底栏、全局状态展示。 |
-| Routing | `frontend/src/router.ts` | `map`, `points`, `3d`, `runs`, `system` 页面路由。 |
-| API client | `frontend/src/api.ts` | 后端请求封装、请求/响应类型、artifact URL 处理。 |
-| Views | `frontend/src/views/*.vue` | 页面级状态、表单、工作流。 |
-| Rendering components | `components/MapCanvas.vue`, `components/ThreeDViewer.vue`, `components/SpecialPointList.vue` | Canvas/Three.js/特殊点列表等重交互区域。 |
-| Shared UI/state | `frontend/src/i18n.ts`, `theme.ts`, `device.ts`, `types.ts`, `assets/*.css` | 语言、主题、设备模式、共享类型和设计 token。 |
+| Entry | `backend/src/main.cpp` | locate runtime, open SQLite, construct `JobRunner`, start HTTP service |
+| HTTP core | `backend/src/core/http_server.cpp` | private authentication, parsing, route dispatch and streaming |
+| Runtime core | `backend/src/core/` | run state, cancellation, path safety, resources and hardware evidence |
+| API routes | `backend/src/api/` | Compute v1 DTO validation, pipeline calls, manifests and artifacts |
+| Kernels | `backend/src/compute/` | 2D, transition, video, 3D, special points, scalar/SIMD/CUDA paths |
+| Hardware adapters | `backend/src/adapters/` | OpenMP/CUDA probing and execution capability evidence |
+| Contract tests | `backend/src/tests/compute_v1/` | real-process HTTP behavior, artifacts, validation and hardware contracts |
 
-## Data And Artifact Lifecycle / 数据与产物生命周期
+Compute stores node-local metadata in `runtime/db/` and run files in `runtime/runs/`. Artifact IDs are
+run-relative and canonical-containment checked; content streams support bounded range requests.
+Custom formulas use a typed parser and bounded bytecode, not arbitrary native compilation.
 
-1. 前端 view 组装 typed request，通过 `api.ts` 发给 `/api/*`。
-2. route 使用 `nlohmann::json` 解析参数，并选择对应 compute pipeline。
-3. 会产生产物的任务通过 `JobRunner::createRun()` 创建 `runtime/runs/<category>/<runId>/`；`category` 由 module 映射到 `maps`、`videos`、`ln-maps`、`meshes`、`points` 等产品分类。
-4. route 在计算过程中更新 `progress.json`，结束后调用 `addArtifact()` 写入 artifact 记录。
-5. run 元数据持久化到 `runtime/db/fractal_studio.sqlite3`。
-6. 前端通过 `/api/runs`, `/api/runs/status`, `/api/artifacts/*` 展示历史、进度和文件。
+The current product exposes 2D map, Julia, pair/multi transition, safe Formula/Sequence and PNG
+export. Compute also retains contracted video, 3D, field and special-point jobs for later product
+phases; capability advertisement, not a UI assumption, decides whether a node may receive a job.
 
-Artifact ID 使用 `runId:run-relative/path`，因此分段任务的嵌套文件也能唯一定位；
-解析时会做 canonical containment 检查，拒绝目录穿越和逃逸 symlink。`content`
-与 `download` 响应从磁盘分块发送并支持单个 HTTP byte Range，视频预览或数 GiB
-下载不会先把整个文件读入后端内存。
+## 8. Trust and failure boundaries
 
-高频交互接口并不总是写 artifact。例如 `/api/map/render-inline` 返回二进制图像帧，`/api/map/field` 返回原始场数据，适合实时预览。
+- Browser -> Platform: session/bearer auth, CSRF for cookie writes, CORS/canonical-origin checks.
+- Platform -> Gateway: service key; only the API process may receive the separate admin key for node
+  monitoring.
+- Gateway -> Compute: a private upstream service key over WireGuard.
+- Platform -> MinIO: internal credentials and mandatory server-side encryption.
+- Platform -> Alipay/AI: provider credentials exist only in server-side processes that need them.
+- Logs: whitelist operational fields; exclude passwords, keys, prompts, private formulas and images.
 
-当前写入统一使用分类布局。为兼容已有数据，run 和 artifact 查询仍可读取旧的扁平布局 `runtime/runs/<runId>/`；无需迁移历史目录，新任务也不会继续写入该布局。
+Long operations need stable idempotency, timeout, cancellation, bounded retry and observable terminal
+state. Platform quota is reserved only when work is accepted and follows explicit refund/release rules
+on failure or cancellation.
 
-## Pipeline Deep Dives / 计算链路文档
+## 9. Where to add a feature
 
-- [render_pipeline.md](render_pipeline.md): 2D map、Julia、transition slice、raw field、engine/scalar、自定义公式。
-- [coloring_contract.md](coloring_contract.md): 内置染色字段、安全自定义 gradient、能力矩阵和商业接入任务。
-- [special_points.md](special_points.md): center/Misiurewicz、Newton 求解、搜索、分类、持久化。
-- [recurrence_metric.md](recurrence_metric.md): `min_pairwise_dist` 的公式、复杂度、回退策略和 HS-Recurrence 用法。
-- [3d_pipeline.md](3d_pipeline.md): HS field/mesh、transition volume、marching cubes、voxel export。
-- [video_pipeline.md](video_pipeline.md): ln-map、preview、统一视频导出、warp/encode。
-- [platform_compute_integration.md](platform_compute_integration.md): 当前 Platform Worker 调用 C++ 私有 `/api/*` 的生产合同与状态机。
-- [hybrid_cloud_compute_deployment_plan.md](hybrid_cloud_compute_deployment_plan.md): VPS 业务控制面、OSS/CDN、4090/GTX 1050 双 Compute 节点和节点亲和调度的分阶段部署计划。
-- [compute_v1_contract.md](compute_v1_contract.md): C++ `/compute/v1/*` 工具/扩展合同；当前 Platform Worker 不使用。
-- [compute_v1_cookbook.md](compute_v1_cookbook.md): Key、workload、curl、DSL/sequence 与 transition 的上手手册。
-- [orbit_recipe_product_tasks.md](orbit_recipe_product_tasks.md): repeat block、公式编排、不可变配方/视角存档和服务后端/前端任务清单。
-- [compute_v1_jobs.md](compute_v1_jobs.md): 19 个 Compute kind 的 payload、限制、响应与产物合同。
-- [platform_compute_integration.md](platform_compute_integration.md): 实际 FastAPI ComputeClient、7 条 `/api` 路由、Outbox Worker 和已知缺口。
-- [testing.md](testing.md): 自动测试、构建检查、手动 QA 和提交前检查。
+1. Define the user and API contract, error semantics, quota behavior and compatibility first.
+2. Add Platform request/response models and service rules; keep authorization out of adapters.
+3. Extend Compute v1 only when new math or artifact work is required. Update capabilities and real
+   contract tests in the same change.
+4. Gateway changes are needed only for scheduling, transport or affinity semantics; never branch on a
+   fixed node count or hardware name.
+5. Add Frontend API DTOs/validation before page components; preserve localized and mobile behavior.
+6. Cover zero-node/provider-offline paths, idempotent replay, cancellation, private data and resource
+   limits.
+7. Update production templates/runbooks separately from product behavior and roll out behind a feature
+   flag where appropriate.
 
-## Concurrency And Cancellation / 并发与取消
-
-- HTTP server 对每个连接启动一个 detached thread，避免一个长请求阻塞所有请求。
-- `JobRunner` 用 mutex 管理内存中的 run、progress、cancel flags，并把完成/失败/取消状态写到 SQLite。
-- 部分长任务会调用 `setCancelable()` 并轮询 `isCancelRequested()`。
-- 前端的高频 map 请求使用 preempt/request id 模型，避免慢响应覆盖新视图。
-
-## Adding A Feature / 新增功能落点
-
-1. 后端新增 route：在 `backend/src/include/routes.hpp` 声明，在 `http_server.cpp` 分发，在合适的 `routes_*.cpp` 实现。
-2. 计算逻辑放进 `backend/src/compute/`，不要把重计算堆在 route 里。
-3. 如果会生成文件，使用 `JobRunner` 创建 run、写进 `runtime/runs/<category>/<runId>/`，并注册 artifacts。
-4. 前端先在 `frontend/src/api.ts` 增加类型和 client 函数，再接入对应 view/component。
-5. 如果新增页面，更新 `frontend/src/router.ts` 和 `components/NavRail.vue`。
-6. 新增移动端 UI 时同步检查 `frontend/src/device.ts`、`assets/base.css` 和目标 view 的 responsive block。
-
-## Existing Documentation / 现有文档
-
-- `README.md`: 项目简介、最短启动路径和文档索引。
-- [docs/feature_status.md](feature_status.md): 已实现能力与明确暂缓的功能决策。
-- `docs/development.md`: 本地开发、构建和排障。
-- `docs/frontend.md`: 前端结构、移动端/平板适配策略。
-- `docs/render_pipeline.md`: 二维渲染、引擎、变体和自定义公式。
-- `docs/special_points.md`: 特殊点 solver、搜索和分类。
-- `docs/recurrence_metric.md`: `min_pairwise_dist` / HS-Recurrence。
-- `docs/3d_pipeline.md`: HS、transition volume、mesh 和 voxel。
-- `docs/video_pipeline.md`: ln-map 和视频导出。
-- `docs/compute_v1_contract.md`: Compute v1 工具/扩展 transport、状态、manifest 与错误合同。
-- `docs/compute_v1_cookbook.md`: Compute v1 从零调用和玩法请求示例。
-- `docs/compute_v1_jobs.md`: Compute v1 逐 kind 参数和产物参考。
-- `docs/platform_compute_integration.md`: Platform 服务后端的 Compute 对接实现指南。
-- `docs/hybrid_cloud_compute_deployment_plan.md`: 云端 Platform 与双 Compute 节点部署、迁移、验收和工作量计划。
-- `docs/testing.md`: 测试和 QA。
-- `docs/lnmap_precision_experiments.md`: ln-map 精度实验记录。
-- `HS_legacy_guide_zh.md`: legacy HS 学习笔记，主要用于理解历史实现。
+Pipeline-specific references remain in `docs/render_pipeline.md`, `docs/coloring_contract.md`,
+`docs/special_points.md`, `docs/3d_pipeline.md`, `docs/video_pipeline.md`,
+`docs/compute_v1_contract.md`, `docs/compute_v1_jobs.md` and
+`docs/platform_compute_integration.md`.

@@ -35,6 +35,21 @@ def test_opaque_session_profile_idempotency_and_logout(e2e_api_url: str) -> None
         assert replay.json() == profile.json()
         assert replay.headers["cache-control"] == profile.headers["cache-control"] == "no-store"
 
+        unchanged = client.patch(
+            "/v1/me/creator-profile",
+            headers={"Idempotency-Key": "profile-unchanged-0001"},
+            json={"handle": handle, "displayName": "Creator"},
+        )
+        assert unchanged.status_code == 200
+
+        cooldown = client.patch(
+            "/v1/me/creator-profile",
+            headers={"Idempotency-Key": "profile-name-change-0001"},
+            json={"handle": handle, "displayName": "Changed too soon"},
+        )
+        assert cooldown.status_code == 409
+        assert cooldown.json()["error"]["code"] == "creator_name_change_too_soon"
+
         conflict = client.patch(
             "/v1/me/creator-profile",
             headers={"Idempotency-Key": "profile-0001"},

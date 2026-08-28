@@ -1,16 +1,19 @@
 # Compute v1 从零调用手册
 
-这份手册回答三个实际问题：服务密钥从哪里来、每种 workload 是做什么的、怎样用真实 HTTP 请求公式/组合/transition。它面向本地联调和 Platform 服务后端开发；浏览器不得直接调用 Compute。
+这份手册回答三个实际问题：服务密钥从哪里来、每种 workload 是做什么的、怎样用真实 HTTP
+请求公式/组合/transition。它面向本地单节点联调和受信任服务端开发；生产 Platform 应通过
+Gateway 调用，浏览器不得直接调用 Gateway 或 Compute。
 
 规范字段仍以 [HTTP 合同](compute_v1_contract.md) 和 [19 类任务参考](compute_v1_jobs.md) 为准。
 
 ## 1. Key 不是“申请”的
 
-Compute v1 没有注册、登录或申请 Key 的接口。它使用一个由部署方生成的服务间共享密钥：
+Compute v1 没有注册、登录或申请 Key 的接口。手动直连一个 C++ 节点时使用一把由部署方生成的
+服务间共享密钥：
 
 ```text
 C++ Compute 读取 FSD_COMPUTE_SERVICE_KEY
-FastAPI API/Worker 读取 COMPUTE_SERVICE_KEY
+受信任的手动客户端读取 COMPUTE_SERVICE_KEY
 两边的值必须完全相同
 ```
 
@@ -55,23 +58,27 @@ health 不需要 Key；capabilities 返回 401 说明两边密钥不一致或 Au
 
 ### 1.2 Docker Compose
 
-仓库的 `docker-compose.dev.yml` 使用固定的开发密钥，只适合本机开发。生产部署应把两个位置同时替换为 Secret Manager/Kubernetes Secret/容器平台注入的同一个随机值：
+仓库的 `docker-compose.dev.yml` 使用开发默认值，只适合本机开发。生产有两把独立 key：
 
 ```yaml
 compute:
   environment:
-    FSD_COMPUTE_SERVICE_KEY: ${COMPUTE_SERVICE_KEY}
+    FSD_COMPUTE_SERVICE_KEY: ${COMPUTE_UPSTREAM_SERVICE_KEY}
 
-api:
+compute-gateway:
   environment:
-    COMPUTE_SERVICE_KEY: ${COMPUTE_SERVICE_KEY}
+    COMPUTE_GATEWAY_SERVICE_KEY: ${COMPUTE_GATEWAY_SERVICE_KEY}
+    COMPUTE_UPSTREAM_SERVICE_KEY: ${COMPUTE_UPSTREAM_SERVICE_KEY}
 
-worker:
+api-or-worker:
   environment:
-    COMPUTE_SERVICE_KEY: ${COMPUTE_SERVICE_KEY}
+    COMPUTE_SERVICE_KEY: ${COMPUTE_GATEWAY_SERVICE_KEY}
 ```
 
-当前 v1 不支持同时接受新旧两把 Key。轮换时应协调更新 Compute 与 Worker 并滚动重启；不要设计成用户级 API Key，也不要保存到 PostgreSQL。
+`COMPUTE_GATEWAY_ADMIN_KEY` 还是第三个独立管理边界，只注入需要节点监控的 API/Gateway，不能
+代替 service key。当前每个边界都不同时接受新旧两把 key；轮换必须按
+[生产部署手册](../ops/production/INSTALL.md) 协调两侧并验证，不能设计成用户级 API Key，也不能
+保存到 PostgreSQL。
 
 ## 2. 先理解 workload
 
@@ -738,13 +745,16 @@ browser recipe request
 
 Platform 不应提供“任意 Compute JSON 代理”。至少要限制：允许的 kind、尺寸、迭代、视频时长、volume resolution、DSL 长度、Orbit 节点数、请求硬件 SKU 和产物类型。
 
-现有内部客户端位于 `platform-backend/app/infrastructure/compute/compute_client.py`。部署环境配置：
+现有内部客户端位于 `platform-backend/app/infrastructure/compute/compute_client.py`。它只调用
+Compute Gateway，不感知节点身份：
 
 ```bash
-export COMPUTE_BASE_URL='http://compute:18080'
-export COMPUTE_SERVICE_KEY='与Compute相同的服务密钥'
-export COMPUTE_NODE_ID='compose-compute-1'
+export COMPUTE_BASE_URL='http://compute-gateway:8080'
+export COMPUTE_SERVICE_KEY='与 Gateway 的 COMPUTE_GATEWAY_SERVICE_KEY 相同'
 ```
+
+节点编号、0..N 清单、CPU/GPU 槽位和 durable 亲和全部由 Gateway 持有，Platform 不配置
+`COMPUTE_NODE_ID` 之类的节点字段。
 
 完整 Worker 数据库和恢复流程见 [Platform 对接指南](platform_compute_integration.md)。
 

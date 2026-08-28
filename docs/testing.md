@@ -5,11 +5,15 @@
 ## Backend Build / 后端构建
 
 ```bash
-cmake -S backend -B runtime/build -DCMAKE_BUILD_TYPE=Release
-cmake --build runtime/build -j
+python3 -m venv runtime/compute-test-venv
+runtime/compute-test-venv/bin/pip install -r backend/requirements-test.txt
+cmake -S backend -B backend/build -DCMAKE_BUILD_TYPE=Release \
+  -DFSD_PYTEST_PYTHON="$PWD/runtime/compute-test-venv/bin/python"
+cmake --build backend/build -j2
 ```
 
-等价 Makefile target：
+只需要快速编译时，历史 Makefile target 使用独立的 `runtime/build` 目录；不要与上面的
+`backend/build` 测试目录混用：
 
 ```bash
 make backend-build
@@ -20,7 +24,7 @@ CUDA 是可选能力。CMake 找不到 CUDA 时会禁用 GPU kernels，CPU backe
 ## Backend Tests / 后端测试
 
 ```bash
-ctest --test-dir runtime/build --output-on-failure
+ctest --test-dir backend/build --output-on-failure
 ```
 
 当前 CMake 注册的测试：
@@ -66,8 +70,7 @@ ctest --test-dir runtime/build --output-on-failure
 Compute v1 HTTP 合同可以独立运行：
 
 ```bash
-python -m pip install -r backend/requirements-test.txt
-python -m pytest -q backend/src/tests/compute_v1 \
+runtime/compute-test-venv/bin/python -m pytest -q backend/src/tests/compute_v1 \
   --backend-binary=backend/build/fractal_studio_backend \
   --studio-root=.
 ```
@@ -133,13 +136,13 @@ Transition 对拍策略：
 直接运行：
 
 ```bash
-./runtime/build/compute_path_diff
+./backend/build/compute_path_diff
 ```
 
 通过 CTest 运行：
 
 ```bash
-ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
+ctest --test-dir backend/build -R compute_path_diff --output-on-failure
 ```
 
 测评机可以打开硬件覆盖要求。对应路径没有实际跑到时，测试会失败：
@@ -148,7 +151,7 @@ ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
 FSD_DIFF_EXPECT_AVX2=1 \
 FSD_DIFF_EXPECT_AVX512=1 \
 FSD_DIFF_EXPECT_CUDA=1 \
-ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
+ctest --test-dir backend/build -R compute_path_diff --output-on-failure
 ```
 
 Hybrid 需要足够大的 workload 才会进入真实 CPU+GPU tile scheduler，默认 quick 套件不跑。测评机可开启慢测：
@@ -156,7 +159,7 @@ Hybrid 需要足够大的 workload 才会进入真实 CPU+GPU tile scheduler，�
 ```bash
 FSD_DIFF_INCLUDE_SLOW=1 \
 FSD_DIFF_EXPECT_HYBRID=1 \
-ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
+ctest --test-dir backend/build -R compute_path_diff --output-on-failure
 ```
 
 输出字段：
@@ -167,6 +170,41 @@ ctest --test-dir runtime/build -R compute_path_diff --output-on-failure
 - `bad`: 超过阈值的像素比例。
 - `SKIP`: 请求路径不可用或回退。
 - `FAIL`: 差异超过阈值，或测评机要求的路径未覆盖。
+
+## Platform Tests / Platform 测试
+
+```bash
+cd platform-backend
+uv sync --all-groups
+uv run ruff check .
+uv run pytest -q
+```
+
+`tests/unit/` 使用 mock/内存边界验证领域规则，不调用付费 AI provider。完整 Docker 用户旅程
+在仓库根目录运行 `./scripts/e2e-dev-gateway.sh`；它要求显式的
+`fractal-studio-dev` 本地服务、真实 C++ Compute 和可丢弃测试数据。真实 AI provider 合同只按
+[生产 AI runbook](../ops/production/ai-assistant.md) 手工触发。
+
+## Compute Gateway Tests / Gateway 测试
+
+Gateway 路由测试需要独立、已迁移且名称明确为测试用途的 PostgreSQL 数据库；测试会拒绝其他
+数据库名。先按 [compute-gateway/README.md](../compute-gateway/README.md) 准备数据库，再运行：
+
+```bash
+cd compute-gateway
+uv sync --all-groups
+uv run ruff check .
+GATEWAY_TEST_DATABASE_URL=postgresql+asyncpg://gateway:gateway_dev_password@localhost:25443/compute_gateway_test \
+  DATABASE_URL=postgresql+asyncpg://gateway:gateway_dev_password@localhost:25443/compute_gateway_test \
+  COMPUTE_GATEWAY_SERVICE_KEY=test-gateway-key-1234 \
+  COMPUTE_GATEWAY_ADMIN_KEY=test-admin-key-123456 \
+  COMPUTE_UPSTREAM_SERVICE_KEY=test-upstream-key-123 \
+  uv run pytest -q
+```
+
+`test_gateway_routing.py` 覆盖任意节点集合所需的健康、能力、CPU/GPU 槽位、并发、幂等、亲和、
+drain/disable、零节点和恢复语义。`test_live_distribution.py` 使用两个真实本地节点，是分配回归
+fixture，不代表生产只能有两台。
 
 ## Frontend Build Check / 前端构建检查
 
@@ -186,60 +224,66 @@ server/client 边界问题。两者都不等于视觉回归测试。
 
 ```bash
 ./dev.sh
+docker compose -p fractal-studio-dev -f docker-compose.dev.yml ps -a
 ```
 
 默认地址：
 
 ```text
-Frontend:     http://localhost:3010
-Platform API: http://localhost:18100
-Compute:      http://localhost:18101
+Frontend:        http://localhost:3010
+Platform API:    http://localhost:18100
+Compute Gateway: http://localhost:18103
+Compute A/B:     http://localhost:18101 / http://localhost:18104
 ```
 
-Backend smoke URLs：
+当前服务 smoke：
 
-```text
-http://localhost:18080/api/system/check
-http://localhost:18080/api/system/hardware
-http://localhost:18080/api/system/capabilities
-http://localhost:18080/api/runs
+```bash
+curl --noproxy '*' -fsS http://localhost:18100/healthz
+curl --noproxy '*' -fsS http://localhost:18103/compute/v1/health
+curl --noproxy '*' -fsS http://localhost:18101/compute/v1/health
+curl --noproxy '*' -fsS http://localhost:18104/compute/v1/health
 ```
+
+`migrate`、`compute-gateway-migrate` 和 `minio-init` 应 `Exited (0)`；其余应用服务应 running。
+若迁移失败，不要只看 Compute health，也不要删除 volume 规避数据库凭据问题。
 
 ## Manual Feature Checks / 手动功能检查
 
-### 2D Render
+### Commercial Studio 2D
 
-- 打开 Map 页面。
-- 切换 variant、metric、colormap。
-- 拖拽/缩放，确认旧图不会覆盖新视图。
-- 试一次 still export，确认 `runtime/runs/maps/<runId>/map.png` 存在。
+- 注册/登录普通用户并进入本地化 `/studio`。
+- 分别检查 Mandelbrot-family、Julia、pair/multi transition、Formula 和 Sequence。
+- 切换 metric、color map、自定义 gradient、旋转和精度；拖拽/缩放时旧 preview 不得覆盖新视图。
+- 提交 PNG export，检查 render job 从 queued/running 到 completed，资产库出现新对象。
+- 下载必须经过 Platform 授权和签名 URL，浏览器不得看到 Compute/Gateway 内部地址。
 
-### Recurrence Metric
+### Capacity and idempotency
 
-- 在 Map 或 3D 中选择 `min_pairwise_dist`。
-- 观察响应中的 `engineUsed` 是否回退到 OpenMP。
-- 降低 resolution 后再提高 iterations 或 pairwise cap。
+- 同一个浏览器 idempotency key + 相同 body 返回同一结果；不同 body 返回冲突。
+- 无健康节点时 preview/new render 返回明确 503，且不产生 job 或额度扣减。
+- 节点恢复后无需重启 Gateway 即可重新 preview/render。
+- 多本地节点下运行 live distribution，检查 compatible node 分配与 durable affinity。
 
-### Special Points
+### Assets, marketplace and commerce
 
-- 在 Map 页面打开 special points panel。
-- 执行 viewport search。
-- 确认返回点有 `accepted=true`、`actual.period` 和 `compatibleVariants`。
-- Runs 页面应能看到 search artifact。
+- 检查私有资产读取、重命名/删除、缩略图和未授权下载拒绝。
+- 创建 creator/listing，发布后检查 explore/facets/creator page/favorite。
+- 使用本地 Alipay stub 完成 checkout、回调幂等、purchase/entitlement 和会员路径。
+- 检查 payout 申请、取消和 operator/admin 边界，普通用户不能访问 internal API。
 
-### 3D
+### Studio AI（仅显式启用时）
 
-- 生成 HS field，确认 viewer 有稳定尺寸且不空白。
-- 生成 HS mesh，确认 GLB/STL artifact 可下载。
-- 生成 transition voxels，确认 `faceCount > 0`。
-- 生成 transition mesh，确认 `vertexCount` 和 `triangleCount` 非零。
+- 普通聊天不会调用 patch 工具；探索请求以可信 preview/context 生成受验证建议。
+- 位置、调色、构图、Formula/Sequence patch 可 apply/undo，越界或不支持 patch 被拒绝。
+- 流式 Markdown、自动命名、反馈、历史删除和免费额度第 10/11 次边界符合合同。
+- provider key 只存在于 API；关闭 feature flag 后所有非 AI 功能继续工作。
 
-### Video
+### Compute-only deferred product capabilities
 
-- 先跑 `/api/video/preview` 对应的 UI 预览。
-- 再跑完整 export。
-- Runs 页面确认 `ln_map.png`、`final_frame.png`、`start_frame.png`、`end_frame.png`、`zoom.mp4`、`video_export.json` 都存在。
-- 查看 progress stage 是否从 `queued` 到 `completed`。
+三维、视频、raw field 和特殊点仍存在于 Compute v1 合同，但不是当前商业 Studio 页面。通过
+[Compute v1 Cookbook](compute_v1_cookbook.md)、真实 HTTP 合同和产物 manifest 验证，不要把早期
+Vue 页面步骤当作商业验收。
 
 ## Mobile And Tablet QA / 移动端和平板检查
 
@@ -273,8 +317,22 @@ pnpm test:e2e --project=mobile
 后端代码改动：
 
 ```bash
-make backend-build
-ctest --test-dir runtime/build --output-on-failure
+cmake -S backend -B backend/build -DCMAKE_BUILD_TYPE=Release \
+  -DFSD_PYTEST_PYTHON="$PWD/runtime/compute-test-venv/bin/python"
+cmake --build backend/build -j2
+ctest --test-dir backend/build --output-on-failure
+```
+
+Platform/Gateway 代码改动：
+
+```bash
+cd platform-backend
+uv run ruff check .
+uv run pytest -q
+
+cd ../compute-gateway
+uv run ruff check .
+# 使用本页前述独立 compute_gateway_test 数据库运行 pytest。
 ```
 
 前端代码改动：
@@ -290,6 +348,12 @@ pnpm test:e2e
 
 ```bash
 git diff --check
+docker compose --env-file ops/production/vps.env.example \
+  -f ops/production/docker-compose.vps.yml \
+  config --quiet --no-env-resolution --no-path-resolution
+docker compose --env-file ops/production/compute.env.example \
+  -f ops/production/docker-compose.node1.yml \
+  config --quiet --no-env-resolution --no-path-resolution
 ```
 
 ## 明暗主题测试 / Theme

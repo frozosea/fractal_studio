@@ -10,6 +10,7 @@ import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Link } from "@/i18n/navigation";
+import { PlatformApiError } from "@/lib/api/platform";
 
 type LoginFormData = { email: string; password: string };
 
@@ -29,8 +30,12 @@ export function LoginForm() {
     try {
       setServerError(null);
       await login(data);
-    } catch {
-      setServerError(t("errors.loginFailed"));
+    } catch (error) {
+      setServerError(
+        error instanceof PlatformApiError && error.code === "account_disabled"
+          ? t("errors.accountDisabled")
+          : t("errors.loginFailed"),
+      );
     }
   };
 

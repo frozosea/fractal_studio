@@ -23,7 +23,9 @@ export FSD_STARTUP_BENCHMARK=off
 backend/build/fractal_studio_backend 18080
 ```
 
-进程工作目录必须是仓库根目录，运行数据库和产物写入 `runtime/`。`GET /compute/v1/health` 不鉴权；其余 `/compute/v1/*` 以及 Platform 使用的生产 `/api/*` 合同必须携带 `Authorization: Bearer <service-key>`。
+进程工作目录必须是仓库根目录，运行数据库和产物写入 `runtime/`。`GET /compute/v1/health`
+不鉴权；其余 `/compute/v1/*` 必须携带 `Authorization: Bearer <service-key>`。生产 Platform
+经 Gateway 使用这套合同；历史 `/api/*` 不再是商业浏览器或 Platform 依赖。
 
 本地同时启动旧前端时直接运行仓库根目录 `./dev.sh`。脚本会为 C++ 与 Vite 生成并注入同一个临时密钥，不落盘、不打印。`VITE_COMPUTE_SERVICE_KEY` 只用于本地迁移，禁止进入商业前端构建。
 
@@ -39,7 +41,8 @@ backend/build/fractal_studio_backend 18080
 | `FSD_RENDER_THREADS` | deployment-specific | OpenMP 计算线程上限。 |
 | `FSD_THERMAL_FRIENDLY` | deployment-specific | 降低持续 CPU 压力的运行模式。 |
 
-生产环境还应满足：Compute 只监听私网/安全组，只有 Platform Worker 持有服务密钥，运行卷不与浏览器共享，API 与 Worker 使用不同凭据。
+生产环境还应满足：Compute 只监听 WireGuard 私网，只有 Compute Gateway 持有上游服务密钥，
+运行卷不与浏览器共享；Platform 使用独立的 Gateway service key，不能获得 Compute 上游密钥。
 
 ## Tests
 
