@@ -5,7 +5,7 @@
 Gateway 路由到 0..N 个私有 C++ 节点。
 
 生产安装与运维见 [ops/production/INSTALL.md](../ops/production/INSTALL.md)，实际线上快照见
-[ops/production/STATUS.md](../ops/production/STATUS.md)。
+部署机本地的部署状态快照（真实值不入库）。
 
 ## 1. Runtime topology / 运行拓扑
 

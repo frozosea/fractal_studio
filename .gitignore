@@ -77,3 +77,8 @@ frontend/test-results/
 frontend/playwright-report/
 frontend/.pnpm-store/
 .cuda-toolkit/
+
+# Production deployment status snapshot: contains real domains, private
+# network addresses and version pins of the actual deployment. It is a
+# deployment-local file and must never be committed.
+/ops/production/STATUS.md

@@ -2,7 +2,7 @@
 
 本文是从空白主机安装、扩容和发布 Fractal Studio 生产环境的权威操作手册。它描述的是
 **一台控制面 VPS + 0 到 N 台 Compute 节点**，不把节点数量固定为两台。当前线上实例的
-日期化快照见 [STATUS.md](STATUS.md)，历史方案论证见
+当前部署的日期化快照（含真实域名、私网地址与版本号）按惯例保存在部署机本地且不入库；历史方案论证见
 [hybrid_cloud_compute_deployment_plan.md](../../docs/hybrid_cloud_compute_deployment_plan.md)。
 
 文中的 `REPLACE_*`、主机别名和节点名都必须由管理员替换。真实地址、私钥、支付配置、
@@ -10,7 +10,7 @@
 
 ## 1. 安全边界和不可变条件
 
-- 生产 origin 与 `www` 子域由管理员提供（本模板以 `REPLACE_PRODUCTION_ORIGIN`/`REPLACE_WWW_ORIGIN` 表示）；`www` 只做保留 `{uri}` 的 308 重定向。本文所有 `REPLACE_*` 均由管理员替换为实际值；当前仓库线上实例的真实取值见 [STATUS.md](STATUS.md)。
+- 生产 origin 与 `www` 子域由管理员提供（本模板以 `REPLACE_PRODUCTION_ORIGIN`/`REPLACE_WWW_ORIGIN` 表示）；`www` 只做保留 `{uri}` 的 308 重定向。本文所有 `REPLACE_*` 均由管理员替换为实际值；真实取值只保留在部署机本地的部署状态快照中（不入库）。
 - VPS 项目固定为 `fractal-prod`，只承载 Caddy、Frontend、Platform、Gateway、两个
   PostgreSQL、Redis、MinIO 和持久数据；不运行 Compute 或支付 stub。
 - 每台 Compute 主机使用独立 Compose 项目、env、runtime、WireGuard 地址和镜像；节点数量
@@ -677,4 +677,4 @@ compiled/runtime 和 compute capability。不要用 CUDA 13 重试 Pascal offlin
 安装或扩容只有在以下条件全部满足时完成：模板和 runbook 与实际一致；敏感内容未入库；自动化
 测试通过；每个节点网络隔离通过；真实 CUDA preview 和 durable render 通过；artifact 已摄取
 到 VPS MinIO 并可授权下载；零节点行为、恢复和回滚已在获批窗口验证；备份可恢复；所有未测项
-在 [STATUS.md](STATUS.md) 或当次发布记录中明确列出。容器 running 或域名能打开不等于完成。
+在当次发布记录或部署机本地的部署状态快照中明确列出。容器 running 或域名能打开不等于完成。

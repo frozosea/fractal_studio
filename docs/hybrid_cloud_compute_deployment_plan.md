@@ -4,7 +4,7 @@
 > 双节点固定拓扑、容量不足排队语义、机器资源和工作量估算均保留当时背景，部分已经过时。
 > 当前实现是 VPS 控制面 + 0..N 私有 Compute 节点，容量不足 fail closed；请使用
 > [多节点生产安装与部署手册](../ops/production/INSTALL.md) 和
-> [实际部署状态](../ops/production/STATUS.md)。
+> 实际部署状态见部署机本地快照（真实值不入库）。
 
 本文规划把长期在线的业务控制面部署到 `admin@fractal.kevin0412.top` 所在 VPS，
 把 C/C++ Compute 保留在两台用户侧机器：

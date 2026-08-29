@@ -7,7 +7,8 @@ Start here:
 
 - [INSTALL.md](INSTALL.md) — authoritative installation, N-node expansion, release, acceptance and
   rollback procedure;
-- [STATUS.md](STATUS.md) — dated read-only snapshot of the actual deployment and known drift;
+- Deployment status snapshot — a dated, deployment-local file (real domain/IP/version values, kept
+  out of git) describing the actual deployment and known drift;
 - [ai-assistant.md](ai-assistant.md) — Studio AI development and production feature rollout;
 - [Caddyfile.example](Caddyfile.example) — canonical production and isolated-development routes;
 - [docker-compose.vps.yml](docker-compose.vps.yml) — VPS control plane only;
@@ -30,7 +31,7 @@ REPLACE_PRODUCTION_ORIGIN -> VPS: Caddy + Next.js + Platform + Gateway + persist
 ```
 
 The current deployment's actual origin, WireGuard subnet and node inventory are the dated snapshot's
-job ([STATUS.md](STATUS.md)); every runbook here uses `REPLACE_*` placeholders instead of those
+job (the deployment-local status snapshot); every runbook here uses `REPLACE_*` placeholders instead of those
 values. See [INSTALL.md](INSTALL.md) for the fill-in process.
 
 The dated status snapshot currently records two active nodes, but neither the Gateway database nor
