@@ -345,7 +345,7 @@ Gateway 时也应先完成真实 CUDA preview/durable render。
 | MinIO root password | 独立高熵值 |
 | MinIO KMS master key | 恰好 32 个随机字节的 base64，永久加密备份 |
 | Alipay PEM | 官方生产应用私钥/公钥，不能使用 stub 或开发密钥 |
-| AI provider key（按 `AI_PROVIDER` 只需一个） | 仅 `AI_ENABLED=true` 时需要，且只校验活跃 provider：`AI_PROVIDER=siliconflow` → `SILICONFLOW_API_KEY`；`AI_PROVIDER=deepseek` → `DEEPSEEK_API_KEY`（另设 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`，建议 `AI_MAX_OUTPUT_TOKENS=2400`）。另一个 provider 的 key 留空即可，切换时再补；key 只注入 API 服务 |
+| AI provider 凭据（至少一个多模态模型） | 仅 `AI_ENABLED=true` 时需要。Studio AI 探索与上架文案都以图像为输入，因此活跃的 `AI_PROVIDER` 所用模型必须支持图像（如 `deepseek-v4-flash-vision-exp`、`Qwen3-VL-*-Instruct`），纯文本模型会直接失败；`siliconflow` 配 `SILICONFLOW_API_KEY`+`SILICONFLOW_MODEL`，`deepseek` 配 `DEEPSEEK_API_KEY`+`DEEPSEEK_BASE_URL`+`DEEPSEEK_MODEL`（建议 `AI_MAX_OUTPUT_TOKENS=2400`）。另一个 provider 可留空；key 只注入 API 服务 |
 
 可在管理员的本地安全终端按需生成 32-byte hex/base64 值；每次输出只填一个对应字段，不在
 shell history 中拼接完整 env：

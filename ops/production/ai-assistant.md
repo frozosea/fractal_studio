@@ -134,14 +134,16 @@ the administrator and mode `0600`; never copy the populated file into the reposi
 Compose template masks the provider keys in PostgreSQL, MinIO, Gateway, migration and workers, then
 injects the real value only into the Platform API.
 
-One provider is active at a time. `AI_PROVIDER=siliconflow` (default) uses `SILICONFLOW_*`;
+One provider is active at a time, and only one multimodal model needs to be configured.
+`AI_PROVIDER=siliconflow` (default) uses `SILICONFLOW_API_KEY`/`SILICONFLOW_MODEL`;
 `AI_PROVIDER=deepseek` uses `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`/`DEEPSEEK_MODEL` and enables
-DeepSeek's multimodal streaming and listing copy. The API refuses to boot with `AI_ENABLED=true` and
-a missing key for the selected provider. DeepSeek models are reasoning models: hidden
-`reasoning_tokens` count inside `max_tokens`, so DeepSeek deployments should keep
-`AI_MAX_OUTPUT_TOKENS=2400` (the exploration path has its own higher budget). A DeepSeek model that
-answers in text instead of calling the exploration tool is retried once with a regenerated
-observation; an invalid tool result stays fail-closed.
+DeepSeek's multimodal streaming and listing copy. The active model must accept images (exploration
+and listing copy are image-driven; a text-only model fails at the provider). The API refuses to boot
+with `AI_ENABLED=true` and a missing key for the selected provider, while the inactive provider's key
+may stay empty. DeepSeek models are reasoning models: hidden `reasoning_tokens` count inside
+`max_tokens`, so DeepSeek deployments should keep `AI_MAX_OUTPUT_TOKENS=2400` (the exploration path
+has its own higher budget). A DeepSeek model that answers in text instead of calling the exploration
+tool is retried once with a regenerated observation; an invalid tool result stays fail-closed.
 
 Before an approved release, confirm immutable image tags and validate the rendered Compose file:
 
