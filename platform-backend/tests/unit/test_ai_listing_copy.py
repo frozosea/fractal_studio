@@ -121,6 +121,44 @@ async def test_listing_provider_reveals_secret_only_at_each_outbound_call(
     assert sentinel not in repr(settings)
 
 
+@pytest.mark.asyncio
+async def test_deepseek_listing_uses_auto_tool_choice_and_retries_missing_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads: list[dict[str, object]] = []
+
+    async def post_completion(_client, *, payload, api_key):
+        assert api_key == "ds-listing-secret-never-log"
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return {"choices": [{"message": {"content": "可信的纯视觉观察"}}]}
+        return {"choices": [{"message": {"content": "没有调用工具"}}]}
+
+    monkeypatch.setattr(listing_provider, "_post_completion", post_completion)
+    settings = SimpleNamespace(
+        ai_provider="deepseek",
+        deepseek_api_key=SecretStr("ds-listing-secret-never-log"),
+        deepseek_base_url="https://deepseek.invalid/v1",
+        deepseek_model="deepseek-v4-flash-vision-exp",
+        ai_max_output_tokens=2400,
+    )
+
+    with pytest.raises(ListingProviderUnavailable) as raised:
+        await listing_provider.generate_listing_copy(
+            locale="zh",
+            listing_context={},
+            image=b"preview",
+            image_type="image/png",
+            settings=settings,  # type: ignore[arg-type]
+        )
+
+    assert raised.value.retryable is True
+    assert payloads[0]["max_tokens"] == 2400
+    assert payloads[1]["tool_choice"] == "auto"
+    assert "enable_thinking" not in payloads[0]
+    assert "enable_thinking" not in payloads[1]
+
+
 def test_preview_is_resized_and_kept_below_hard_in_memory_limit() -> None:
     image = Image.effect_noise((1600, 900), 80).convert("RGB")
     source = io.BytesIO()

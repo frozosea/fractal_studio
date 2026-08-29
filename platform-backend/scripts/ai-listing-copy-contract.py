@@ -15,35 +15,14 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.ai.listing_provider import ListingProviderUnavailable, generate_listing_copy
 from app.ai.listing_service import prepare_listing_preview
-
-
-@dataclass(frozen=True)
-class ContractSettings:
-    siliconflow_api_key: str
-    siliconflow_base_url: str
-    siliconflow_model: str
-    ai_max_output_tokens: int
-
-
-def _settings() -> ContractSettings:
-    key = os.getenv("SILICONFLOW_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("SILICONFLOW_API_KEY is required")
-    base_url = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").rstrip("/")
-    if not base_url.startswith("https://"):
-        raise RuntimeError("SILICONFLOW_BASE_URL must use HTTPS")
-    model = os.getenv("SILICONFLOW_MODEL", "Qwen/Qwen3.6-35B-A3B").strip()
-    max_tokens = int(os.getenv("AI_MAX_OUTPUT_TOKENS", "1500"))
-    if not 256 <= max_tokens <= 8192:
-        raise RuntimeError("AI_MAX_OUTPUT_TOKENS must be between 256 and 8192")
-    return ContractSettings(key, base_url, model, max_tokens)
+from app.ai.provider_config import uses_deepseek
+from app.core.config import get_settings
 
 
 def _context(path: Path | None) -> dict[str, object]:
@@ -73,7 +52,9 @@ async def _generate_with_release_policy(**kwargs):
 
 
 async def _run(args: argparse.Namespace) -> None:
-    configured = _settings()
+    configured = get_settings()
+    provider_name = "deepseek" if uses_deepseek(configured) else "siliconflow"
+    model = configured.deepseek_model if uses_deepseek(configured) else configured.siliconflow_model
     image_path = Path(args.image or os.getenv("AI_LISTING_CONTRACT_IMAGE", ""))
     if not image_path.is_file():
         raise RuntimeError("--image must point to an actual rendered artwork image")
@@ -119,7 +100,7 @@ async def _run(args: argparse.Namespace) -> None:
             )
         )
     print(
-        f"PASS listing-copy {configured.siliconflow_model}: 3 strict candidates, "
+        f"PASS listing-copy {provider_name}/{model}: 3 strict candidates, "
         f"{len(completions)} request(s), {total_tokens} tokens, {elapsed:.2f}s, "
         f"image={len(image)} bytes"
     )

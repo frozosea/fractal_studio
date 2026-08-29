@@ -164,7 +164,11 @@ def _request_text(
     )
 
 
-def _parse_completion(payload: object) -> ListingCompletion:
+def _parse_completion(
+    payload: object,
+    *,
+    missing_tool_retryable: bool = False,
+) -> ListingCompletion:
     if not isinstance(payload, dict):
         raise ListingProviderUnavailable("provider response was not an object")
     choices = payload.get("choices")
@@ -175,7 +179,10 @@ def _parse_completion(payload: object) -> ListingCompletion:
         raise ListingProviderUnavailable("provider response contained no message")
     tool_calls = message.get("tool_calls")
     if not isinstance(tool_calls, list) or len(tool_calls) != 1:
-        raise ListingProviderUnavailable("provider did not return one listing tool call")
+        raise ListingProviderUnavailable(
+            "provider did not return one listing tool call",
+            retryable=missing_tool_retryable,
+        )
     call = tool_calls[0]
     function = call.get("function") if isinstance(call, dict) else None
     if not isinstance(function, dict) or function.get("name") != "propose_listing_copy":
@@ -311,7 +318,13 @@ async def generate_listing_copy(
         "model": model,
         "messages": observation_messages,
         "stream": False,
-        "max_tokens": min(500, resolved.ai_max_output_tokens),
+        # DeepSeek counts hidden reasoning inside max_tokens. A 500-token cap
+        # can therefore end before any visible observation is emitted.
+        "max_tokens": (
+            resolved.ai_max_output_tokens
+            if uses_deepseek(resolved)
+            else min(500, resolved.ai_max_output_tokens)
+        ),
         "temperature": 0.1,
     }
     if not uses_deepseek(resolved):
@@ -355,10 +368,17 @@ async def generate_listing_copy(
             "max_tokens": resolved.ai_max_output_tokens,
             "temperature": 0.55,
             "tools": [LISTING_COPY_TOOL],
-            "tool_choice": {
-                "type": "function",
-                "function": {"name": "propose_listing_copy"},
-            },
+            # DeepSeek reasoning models reject a forced function choice. The
+            # caller already owns a bounded retry policy, so make a missing
+            # auto-selected call retryable below instead of weakening parsing.
+            "tool_choice": (
+                "auto"
+                if uses_deepseek(resolved)
+                else {
+                    "type": "function",
+                    "function": {"name": "propose_listing_copy"},
+                }
+            ),
         }
         if not uses_deepseek(resolved):
             request_payload["enable_thinking"] = False
@@ -367,7 +387,10 @@ async def generate_listing_copy(
             payload=request_payload,
             api_key=api_key,
         )
-    completion = _parse_completion(response_payload)
+    completion = _parse_completion(
+        response_payload,
+        missing_tool_retryable=uses_deepseek(resolved),
+    )
     return ListingCompletion(
         candidates=_without_unverified_identities(completion.candidates),
         usage=_combined_usage(observation_response, response_payload),

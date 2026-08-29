@@ -1,9 +1,9 @@
 # Studio AI assistant runbook
 
 The browser never receives a provider key. Studio sends AI requests to the Platform API, and only
-that API contacts SiliconFlow over HTTPS. Migration and worker containers receive the non-secret
-feature, quota and retention settings; the API is the only service that receives
-`SILICONFLOW_API_KEY`.
+that API contacts the selected provider over HTTPS. Migration and worker containers receive the
+non-secret feature, quota and retention settings; the API is the only service that receives
+`SILICONFLOW_API_KEY` or `DEEPSEEK_API_KEY`.
 
 ## Node 1 development
 
@@ -33,6 +33,10 @@ AI_MAX_IMAGE_BYTES=1048576
 AI_MAX_CONCURRENT_PER_USER=2
 ```
 
+For DeepSeek, set `AI_PROVIDER=deepseek` and fill `DEEPSEEK_API_KEY`,
+`DEEPSEEK_BASE_URL` and `DEEPSEEK_MODEL` instead. Keep inactive provider keys empty unless they are
+temporarily needed for an explicit comparison.
+
 The same ignored file may also hold the optional MiMo evaluation credentials requested for manual
 comparison:
 
@@ -45,11 +49,14 @@ MIMO_MODEL=mimo-v2.5
 The application and Compose files do not read or inject these `MIMO_*` values. MiMo was retained as
 an evaluation option but was not selected for runtime; production still enables exactly one model.
 
-Check that the file exists, is private and has a non-empty key without printing it:
+Check that the file exists, is private and that the selected provider key is non-empty without
+printing it:
 
 ```bash
 test "$(stat -c %a ai.env)" = 600
-awk -F= 'BEGIN{ok=0} /^SILICONFLOW_API_KEY=/{ok=length($2)>0} END{exit ok ? 0 : 1}' ai.env
+provider="$(awk -F= '/^AI_PROVIDER=/{print $2}' ai.env)"
+key_name="$([ "$provider" = deepseek ] && printf DEEPSEEK_API_KEY || printf SILICONFLOW_API_KEY)"
+awk -F= -v key="$key_name" 'BEGIN{ok=0} $1==key{ok=length($2)>0} END{exit ok ? 0 : 1}' ai.env
 ```
 
 Always target the isolated development project explicitly:

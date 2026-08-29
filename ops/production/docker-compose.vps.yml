@@ -41,6 +41,7 @@ x-platform-env: &platform-env
   # Override the common env_file so the provider secret is absent everywhere
   # except the API service below.
   SILICONFLOW_API_KEY: ""
+  DEEPSEEK_API_KEY: ""
   SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
   SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-Qwen/Qwen3.6-35B-A3B}
   AI_FREE_LIFETIME_LIMIT: ${AI_FREE_LIFETIME_LIMIT:-10}
@@ -65,7 +66,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     env_file: /etc/fractal-prod/vps.env
-    environment: {POSTGRES_DB: fractal_platform, POSTGRES_USER: fractal, POSTGRES_PASSWORD: "${PLATFORM_DB_PASSWORD}", SILICONFLOW_API_KEY: ""}
+    environment: {POSTGRES_DB: fractal_platform, POSTGRES_USER: fractal, POSTGRES_PASSWORD: "${PLATFORM_DB_PASSWORD}", SILICONFLOW_API_KEY: "", DEEPSEEK_API_KEY: ""}
     volumes: [/srv/fractal-prod/postgres:/var/lib/postgresql/data]
     healthcheck: {test: [CMD-SHELL, "pg_isready -U fractal -d fractal_platform"], interval: 5s, timeout: 3s, retries: 30}
     logging: *logging
@@ -74,7 +75,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     env_file: /etc/fractal-prod/vps.env
-    environment: {POSTGRES_DB: compute_gateway, POSTGRES_USER: gateway, POSTGRES_PASSWORD: "${GATEWAY_DB_PASSWORD}", SILICONFLOW_API_KEY: ""}
+    environment: {POSTGRES_DB: compute_gateway, POSTGRES_USER: gateway, POSTGRES_PASSWORD: "${GATEWAY_DB_PASSWORD}", SILICONFLOW_API_KEY: "", DEEPSEEK_API_KEY: ""}
     volumes: [/srv/fractal-prod/gateway-postgres:/var/lib/postgresql/data]
     healthcheck: {test: [CMD-SHELL, "pg_isready -U gateway -d compute_gateway"], interval: 5s, timeout: 3s, retries: 30}
     logging: *logging
@@ -95,6 +96,7 @@ services:
     environment:
       MINIO_KMS_SECRET_KEY: ${MINIO_KMS_SECRET_KEY:?set fractal-prod:<base64-32-byte-key> in /etc/fractal-prod/vps.env}
       SILICONFLOW_API_KEY: ""
+      DEEPSEEK_API_KEY: ""
     ports: ["127.0.0.1:29010:9000"]
     volumes: [/srv/fractal-prod/minio:/data]
     logging: *logging
@@ -102,7 +104,7 @@ services:
   minio-init:
     image: minio/mc:RELEASE.2025-04-16T18-13-26Z
     env_file: /etc/fractal-prod/vps.env
-    environment: {SILICONFLOW_API_KEY: ""}
+    environment: {SILICONFLOW_API_KEY: "", DEEPSEEK_API_KEY: ""}
     entrypoint: /bin/sh -ec 'until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done; mc mb --ignore-existing local/fractal-platform'
     depends_on: [minio]
   gateway-migrate:
@@ -116,6 +118,7 @@ services:
       COMPUTE_GATEWAY_ADMIN_KEY: ${COMPUTE_GATEWAY_ADMIN_KEY}
       COMPUTE_UPSTREAM_SERVICE_KEY: ${COMPUTE_UPSTREAM_SERVICE_KEY}
       SILICONFLOW_API_KEY: ""
+      DEEPSEEK_API_KEY: ""
       # The Gateway supports an arbitrary number of Compute nodes. Keep the
       # authoritative, single-line JSON array in the root-only VPS env file so
       # adding or retiring a node does not require editing this Compose file.

@@ -4,7 +4,30 @@ set -euo pipefail
 # Full user journey against this repository's running dev topology:
 # Platform -> Gateway -> two real C++ Compute nodes. Payment edge uses Alipay stub.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE=(docker compose -f "$ROOT_DIR/docker-compose.dev.yml" -f "$ROOT_DIR/docker-compose.e2e.yml")
+COMPOSE=(
+  docker compose
+  --project-name fractal-studio-dev
+)
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  COMPOSE+=(--env-file "$ROOT_DIR/.env")
+fi
+COMPOSE+=(
+  -f "$ROOT_DIR/docker-compose.dev.yml"
+  -f "$ROOT_DIR/docker-compose.e2e.yml"
+)
+
+container_env() {
+  local service="$1"
+  local variable="$2"
+  local container
+  container="$("${COMPOSE[@]}" ps -q "$service")"
+  if [[ -z "$container" ]]; then
+    printf 'service %s is not running\n' "$service" >&2
+    return 1
+  fi
+  docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" |
+    awk -F= -v key="$variable" '$1 == key {print substr($0, length(key) + 2); exit}'
+}
 
 if [[ "${E2E_BUILD:-0}" == "1" ]]; then
   "${COMPOSE[@]}" up --build --detach
@@ -25,8 +48,19 @@ export E2E_DISABLED_EMAIL="${E2E_DISABLED_EMAIL:-disabled-user@e2e.invalid}"
 export E2E_DISABLED_PASSWORD="${E2E_DISABLED_PASSWORD:-e2e-disabled-password-01}"
 
 export GATEWAY_LIVE_URL="${GATEWAY_LIVE_URL:-http://127.0.0.1:18103}"
-export GATEWAY_LIVE_SERVICE_KEY="${GATEWAY_LIVE_SERVICE_KEY:-dev-gateway-key-change-me}"
-export GATEWAY_LIVE_DATABASE_URL="${GATEWAY_LIVE_DATABASE_URL:-postgresql://gateway:gateway_dev_password@127.0.0.1:25443/compute_gateway}"
+if [[ -z "${GATEWAY_LIVE_SERVICE_KEY:-}" ]]; then
+  GATEWAY_LIVE_SERVICE_KEY="$(container_env compute-gateway COMPUTE_GATEWAY_SERVICE_KEY)"
+fi
+if [[ -z "${GATEWAY_LIVE_DATABASE_URL:-}" ]]; then
+  GATEWAY_LIVE_DATABASE_URL="$(container_env compute-gateway DATABASE_URL)"
+  GATEWAY_LIVE_DATABASE_URL="${GATEWAY_LIVE_DATABASE_URL/postgresql+asyncpg:/postgresql:}"
+  GATEWAY_LIVE_DATABASE_URL="${GATEWAY_LIVE_DATABASE_URL/@compute-gateway-db:5432/@127.0.0.1:25443}"
+fi
+if [[ -z "$GATEWAY_LIVE_SERVICE_KEY" || -z "$GATEWAY_LIVE_DATABASE_URL" ]]; then
+  printf 'running Gateway configuration is incomplete\n' >&2
+  exit 1
+fi
+export GATEWAY_LIVE_SERVICE_KEY GATEWAY_LIVE_DATABASE_URL
 
 cd "$ROOT_DIR/platform-backend"
 # These two tests intentionally require the old programmable Compute stub to

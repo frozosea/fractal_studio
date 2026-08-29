@@ -277,7 +277,10 @@ export default function StudioPage() {
   const explorationStorageKey = user?.id ? `fractal-studio:exploration:v1:${user.id}` : null;
 
   useEffect(() => {
-    const query = window.matchMedia("(min-width: 1280px)");
+    // The workbench already has a 240px application rail. Keep the AI panel
+    // in a drawer until 2xl so the preview and coordinate controls do not get
+    // squeezed into a third 320px column at common 1280px desktop widths.
+    const query = window.matchMedia("(min-width: 1536px)");
     const sync = () => {
       setAIWideLayout(query.matches);
       if (query.matches) setAIOpen(false);
@@ -939,7 +942,7 @@ export default function StudioPage() {
           <p className="mt-1 max-w-3xl text-sm text-ink/50">{t("subtitle")}</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button ref={aiOpenButtonRef} className="xl:hidden" size="sm" variant="fractal" onClick={() => setAIOpen(true)}>
+          <Button ref={aiOpenButtonRef} className="2xl:hidden" size="sm" variant="fractal" onClick={() => setAIOpen(true)}>
             <Bot className="h-3.5 w-3.5" />{tAI("title")}
           </Button>
           <div className="flex items-center gap-2 font-mono text-[11px] text-ink/45">
@@ -949,7 +952,7 @@ export default function StudioPage() {
         </div>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[21rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_20rem] 2xl:grid-cols-[23rem_minmax(0,1fr)_22rem]">
+      <div className="grid gap-4 lg:grid-cols-[21rem_minmax(0,1fr)] 2xl:grid-cols-[23rem_minmax(0,1fr)_22rem]">
         <aside className="space-y-3 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto lg:pr-1">
           <Panel index="01" title={t("sections.imageMode")}>
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
