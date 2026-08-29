@@ -174,15 +174,21 @@ docker build \
 请求参数中的 `engine=cuda` 不是执行证据；必须检查结果或 manifest 的 `actualEngine=cuda`、
 `hardwareClass=gpu` 且没有 fallback。
 
-通过 SSH 或 WireGuard 加密传输镜像。可使用 `docker save` 配合压缩流；不要使用公网裸 HTTP：
+通过 SSH 或 WireGuard 加密传输镜像。可使用 `docker save` 配合压缩流；不要使用公网裸 HTTP。
+`gzip` 与 `gzip -d` 在目标主机上总是可用；只有当传输两端都确认安装了 `zstd` 时才改用 zstd
+（当前 VPS 并未安装，直接用 zstd 会报 `zstd: 未找到命令`）：
 
 ```bash
 docker save fractal-platform:RELEASE_SHA \
   fractal-compute-gateway:RELEASE_SHA \
   fractal-frontend:RELEASE_SHA \
-  | zstd -T0 \
-  | ssh VPS_SSH_ALIAS 'zstd -d | docker load'
+  | gzip -1 \
+  | ssh VPS_SSH_ALIAS 'gzip -d | docker load'
 ```
+
+大文件建议先本地 `docker save | gzip` 成单个 tar.gz，`split -b 200M -d` 分片后用
+`xargs -P4 scp` 并行传输，再在目标主机 `cat` 合并解压；每次传输后对比本机与目标机的
+`sha256sum` 再加载。
 
 每台 Compute 节点只需加载适合自身架构的镜像。传输后分别运行 `docker image inspect`，确认
 tag 和 image ID 存在，再继续安装。
@@ -339,7 +345,7 @@ Gateway 时也应先完成真实 CUDA preview/durable render。
 | MinIO root password | 独立高熵值 |
 | MinIO KMS master key | 恰好 32 个随机字节的 base64，永久加密备份 |
 | Alipay PEM | 官方生产应用私钥/公钥，不能使用 stub 或开发密钥 |
-| AI provider key | 仅在 `AI_ENABLED=true` 时提供，只注入 API |
+| AI provider key | 仅在 `AI_ENABLED=true` 时提供，只注入 API；`AI_PROVIDER=siliconflow` 用 `SILICONFLOW_API_KEY`，`AI_PROVIDER=deepseek` 用 `DEEPSEEK_API_KEY`（同时设置 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`，DeepSeek 建议 `AI_MAX_OUTPUT_TOKENS=2400`） |
 
 可在管理员的本地安全终端按需生成 32-byte hex/base64 值；每次输出只填一个对应字段，不在
 shell history 中拼接完整 env：
@@ -397,8 +403,19 @@ if awk -F= '!/^[[:space:]]*#/ && /=/ {v=tolower(substr($0,index($0,"=")+1)); if 
   echo 'vps.env still contains placeholder values' >&2
   exit 1
 fi
-awk -F= '$1=="COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON" {print substr($0,index($0,"=")+1)}' \
-  /etc/fractal-prod/vps.env | jq -e 'type == "array"' >/dev/null
+# The VPS does not install jq; validate the JSON array with Python instead.
+python3 - <<'PY'
+import json
+for raw in open('/etc/fractal-prod/vps.env'):
+    if raw.startswith('COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON='):
+        value = raw.split('=', 1)[1].strip()
+        array = json.loads(value)
+        assert isinstance(array, list) and array, 'bootstrap node array must be a non-empty JSON array'
+        print('bootstrap nodes:', [n['nodeKey'] for n in array])
+        break
+else:
+    raise SystemExit('COMPUTE_GATEWAY_BOOTSTRAP_NODES_JSON is missing')
+PY
 docker image inspect \
   fractal-platform:REPLACE_SHA \
   fractal-compute-gateway:REPLACE_SHA \
