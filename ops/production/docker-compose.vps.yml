@@ -10,8 +10,8 @@ x-platform-env: &platform-env
   REDIS_URL: redis://redis:6379/0
   SESSION_SECRET: ${SESSION_SECRET:?set in /etc/fractal-prod/vps.env}
   SESSION_COOKIE_SECURE: "true"
-  API_ORIGIN: https://fractalstudio.cn
-  CORS_ORIGINS: https://fractalstudio.cn
+  API_ORIGIN: ${API_ORIGIN:?set in /etc/fractal-prod/vps.env}
+  CORS_ORIGINS: ${CORS_ORIGINS:?set in /etc/fractal-prod/vps.env}
   COMPUTE_BASE_URL: http://compute-gateway:8080
   COMPUTE_SERVICE_KEY: ${COMPUTE_GATEWAY_SERVICE_KEY:?set in /etc/fractal-prod/vps.env}
   # Never hand the gateway ADMIN key to Platform services: env_file above would
@@ -22,7 +22,7 @@ x-platform-env: &platform-env
   # No path prefix on purpose: presigned SigV4 URLs sign the full request path,
   # so a "/storage" prefix that Caddy strips would make every download fail
   # signature validation. Caddy preserves the /fractal-platform/* prefix.
-  S3_PUBLIC_ENDPOINT_URL: https://fractalstudio.cn
+  S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:?set in /etc/fractal-prod/vps.env}
   S3_BUCKET: fractal-platform
   S3_REGION: us-east-1
   S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set in /etc/fractal-prod/vps.env}
@@ -32,8 +32,8 @@ x-platform-env: &platform-env
   ALIPAY_APP_ID: ${ALIPAY_APP_ID:?set in /etc/fractal-prod/vps.env}
   ALIPAY_SELLER_ID: ${ALIPAY_SELLER_ID:?set in /etc/fractal-prod/vps.env}
   ALIPAY_GATEWAY_URL: ${ALIPAY_GATEWAY_URL:-https://openapi.alipay.com/gateway.do}
-  ALIPAY_NOTIFY_URL: https://fractalstudio.cn/platform/v1/webhooks/alipay
-  ALIPAY_RETURN_URL: https://fractalstudio.cn/payment-result
+  ALIPAY_NOTIFY_URL: ${ALIPAY_NOTIFY_URL:?set in /etc/fractal-prod/vps.env}
+  ALIPAY_RETURN_URL: ${ALIPAY_RETURN_URL:?set in /etc/fractal-prod/vps.env}
   ALIPAY_PRIVATE_KEY_PATH: /run/secrets/alipay_app_private.pem
   ALIPAY_PUBLIC_KEY_PATH: /run/secrets/alipay_public.pem
   AI_ENABLED: ${AI_ENABLED:-false}

@@ -1,3 +1,13 @@
+# Caddyfile template for the production VPS. Replace every REPLACE_* value
+# before validating, then merge into the host's existing /etc/caddy/Caddyfile
+# (the host may serve other sites) and `caddy validate` before reloading.
+#
+# Production origin routes (replace ALL of the REPLACE_* hostnames):
+#   REPLACE_PRODUCTION_ORIGIN -> Caddy -> production services (loopback ports)
+#   REPLACE_WWW_ORIGIN        -> 308 to the canonical origin, URI preserved
+# Optional isolated-development hostname (FRP):
+#   REPLACE_DEV_ORIGIN        -> FRP VPS-loopback ports to a dev stack
+
 (security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000"
@@ -15,49 +25,50 @@
 	}
 }
 
-fractalstudio.cn {
+REPLACE_PRODUCTION_ORIGIN {
 	encode zstd gzip
 	import security_headers
 	handle_path /platform/* {
-		reverse_proxy 127.0.0.1:28100 {
+		reverse_proxy 127.0.0.1:REPLACE_API_LOOPBACK_PORT {
 			# Stream Studio AI SSE chunks immediately.
 			flush_interval -1
 		}
 	}
 	# Presigned download URLs. The path prefix must be PRESERVED (handle, not
 	# handle_path): SigV4 signs the full request path, so stripping /storage
-	# would break signature validation at MinIO. S3_PUBLIC_ENDPOINT_URL is set
-	# to https://fractalstudio.cn, so URLs arrive as /fractal-platform/<key>.
+	# would break signature validation at MinIO. S3_PUBLIC_ENDPOINT_URL points
+	# at this origin, so URLs arrive as /fractal-platform/<key>.
 	handle /fractal-platform/* {
-		reverse_proxy 127.0.0.1:29010
+		reverse_proxy 127.0.0.1:REPLACE_MINIO_LOOPBACK_PORT
 	}
 	handle {
-		reverse_proxy 127.0.0.1:23010
+		reverse_proxy 127.0.0.1:REPLACE_FRONTEND_LOOPBACK_PORT
 	}
 }
 
-www.fractalstudio.cn {
-	redir https://fractalstudio.cn{uri} 308
+REPLACE_WWW_ORIGIN {
+	redir https://REPLACE_PRODUCTION_ORIGIN{uri} 308
 }
 
-# Keep the existing FRP listener/port here; this hostname is development only.
-fractal.kevin0412.top {
+# Optional: isolated development hostname. The ports below are FRP's
+# VPS-loopback ports; the FRP client forwards them to the development stack's
+# API/MinIO/frontend ports on the dev host. Remove this block entirely when no
+# dev tunnel is used.
+REPLACE_DEV_ORIGIN {
 	encode zstd gzip
 	import security_headers
 	handle_path /platform/* {
-		# These are FRP's VPS-loopback ports. The client forwards them to
-		# Node 1's 18100/19010/3010 development ports.
-		reverse_proxy 127.0.0.1:18110 {
+		reverse_proxy 127.0.0.1:REPLACE_DEV_FRP_API_PORT {
 			flush_interval -1
 		}
 	}
 	handle_path /storage/* {
-		reverse_proxy 127.0.0.1:19020
+		reverse_proxy 127.0.0.1:REPLACE_DEV_FRP_MINIO_PORT
 	}
 	handle /fractal-platform/* {
-		reverse_proxy 127.0.0.1:19020
+		reverse_proxy 127.0.0.1:REPLACE_DEV_FRP_MINIO_PORT
 	}
 	handle {
-		reverse_proxy 127.0.0.1:13010
+		reverse_proxy 127.0.0.1:REPLACE_DEV_FRP_FRONTEND_PORT
 	}
 }

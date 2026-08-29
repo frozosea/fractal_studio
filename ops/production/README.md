@@ -22,12 +22,16 @@ for design history only. It describes pre-migration assumptions and is not an op
 ## Production model
 
 ```text
-fractalstudio.cn -> VPS: Caddy + Next.js + Platform + Gateway + persistent data
+REPLACE_PRODUCTION_ORIGIN -> VPS: Caddy + Next.js + Platform + Gateway + persistent data
                                       |
-                                      | WireGuard 10.66.0.0/24
+                                      | WireGuard REPLACE_WG_SUBNET
                                       v
                          0..N private Compute nodes
 ```
+
+The current deployment's actual origin, WireGuard subnet and node inventory are the dated snapshot's
+job ([STATUS.md](STATUS.md)); every runbook here uses `REPLACE_*` placeholders instead of those
+values. See [INSTALL.md](INSTALL.md) for the fill-in process.
 
 The dated status snapshot currently records two active nodes, but neither the Gateway database nor
 scheduler has a two-node limit. `/etc/fractal-prod/vps.env` owns the complete single-line

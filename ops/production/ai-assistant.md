@@ -160,7 +160,7 @@ key): update `AI_PROVIDER` and the matching key in `vps.env`, then recreate only
 `docker compose ... up -d --no-build api`. The full release still recreates the whole control plane.
 
 Confirm migration completion, API health, unbuffered text/image streaming, suggestion apply/undo,
-history deletion and the free-account 10th/11th request boundary at `https://fractalstudio.cn`.
+history deletion and the free-account 10th/11th request boundary at `https://REPLACE_PRODUCTION_ORIGIN` (the current deployment's value is in STATUS.md).
 Rollback Frontend and Platform to the prior immutable SHA images if needed. For an immediate AI-only
 rollback, set `AI_ENABLED=false` and update the control plane; Studio and every non-AI route remain
 available.

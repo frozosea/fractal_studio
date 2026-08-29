@@ -10,13 +10,13 @@
 
 ## 1. 安全边界和不可变条件
 
-- `fractalstudio.cn` 是唯一生产 origin，`www` 只做保留 `{uri}` 的 308 重定向。
+- 生产 origin 与 `www` 子域由管理员提供（本模板以 `REPLACE_PRODUCTION_ORIGIN`/`REPLACE_WWW_ORIGIN` 表示）；`www` 只做保留 `{uri}` 的 308 重定向。本文所有 `REPLACE_*` 均由管理员替换为实际值；当前仓库线上实例的真实取值见 [STATUS.md](STATUS.md)。
 - VPS 项目固定为 `fractal-prod`，只承载 Caddy、Frontend、Platform、Gateway、两个
   PostgreSQL、Redis、MinIO 和持久数据；不运行 Compute 或支付 stub。
 - 每台 Compute 主机使用独立 Compose 项目、env、runtime、WireGuard 地址和镜像；节点数量
   由 Gateway 的完整节点清单决定。
 - Gateway 从 Docker bridge 经 WireGuard 访问 Compute，不使用 host network。
-- Compute `18080` 只允许 VPS 的 `10.66.0.1/32` 访问，不得绑定公网可达地址。
+- Compute `18080` 只允许 VPS 的 `REPLACE_VPS_WG_IP/32` 访问，不得绑定公网可达地址。
 - 控制面允许以零 Compute 节点启动。此时 health 仍为 200，而 capabilities、preview 和新
   render 必须返回 `503 COMPUTE_CAPACITY_EXHAUSTED`，且不得创建任务或扣额度。
 - PostgreSQL 和 MinIO 中的数据是商业事实来源；Compute runtime 仅保存节点本地运行状态和
@@ -35,13 +35,13 @@ NetworkManager、SSHD 或 Tailscale。
 Internet
   |
   v
-VPS (10.66.0.1)
+VPS (REPLACE_VPS_WG_IP)
   Caddy -> Next.js / Platform API / MinIO
               |
               +-> Redis / Platform PostgreSQL
               +-> Compute Gateway / Gateway PostgreSQL
                             |
-                            | WireGuard 10.66.0.0/24
+                            | WireGuard REPLACE_WG_SUBNET/24
                             +-> compute-<stable-key> (10.66.0.X:18080)
                             +-> compute-<stable-key> (10.66.0.Y:18080)
                             +-> ... 0 到 N 个节点
@@ -52,7 +52,7 @@ VPS (10.66.0.1)
 | 字段 | 规则 |
 |---|---|
 | `nodeKey` | 全局唯一且终身稳定，格式为小写字母、数字和连字符；不要复用退役节点身份 |
-| WireGuard IP | `10.66.0.2` 到 `10.66.0.254` 中唯一的 `/32` |
+| WireGuard IP | `REPLACE_WG_SUBNET` 主机段内唯一的 `/32`（例如 10.66.0.2–10.66.0.254） |
 | Compose 项目 | 每台主机唯一，例如 `fractal-compute-render-a-prod` |
 | runtime | 该主机独立绝对路径；Snap Docker 必须位于 `/var/snap/docker/common/` 下 |
 | Compute image | 与该 GPU 架构兼容的不可变 tag，例如 `...-sm89` 或 `...-sm61` |
@@ -209,7 +209,7 @@ chmod 0600 /etc/wireguard/fractal-private.key /etc/wireguard/fractal-public.key
 
 VPS 从 [wg0.vps.example](wg0.vps.example) 开始，每个 Compute 节点追加一个 `[Peer]`，且
 `AllowedIPs` 只写该节点唯一的 `/32`。Compute 从
-[wg0.compute.example](wg0.compute.example) 开始，只允许到 VPS 的 `10.66.0.1/32`。
+[wg0.compute.example](wg0.compute.example) 开始，只允许到 VPS 的 `REPLACE_VPS_WG_IP/32`。
 
 ```bash
 install -m 0600 wg0.conf /etc/wireguard/wg0.conf
@@ -223,7 +223,7 @@ wg show wg0
 - VPS 公网只开放管理所需 SSH、`80/tcp`、`443/tcp` 和 `51820/udp`；
 - VPS 的 PostgreSQL、Redis 和 Gateway 不发布宿主端口；Frontend、Platform API 和 MinIO
   只发布到 loopback；
-- 每台 Compute 的 `18080/tcp` 只接受源 `10.66.0.1/32`，拒绝 LAN、公网和其他
+- 每台 Compute 的 `18080/tcp` 只接受源 `REPLACE_VPS_WG_IP/32`，拒绝 LAN、公网和其他
   WireGuard peer；
 - 不修改 Docker daemon 网络模式，不把 Gateway 改成 host network。
 
@@ -247,9 +247,8 @@ install -m 0600 ops/production/compute.env.example \
 sudoedit /etc/fractal-compute-prod/compute.env
 ```
 
-这三个身份字段是必填项，模板故意没有 Node 1 默认值。旧 Node 1 在安装新模板前必须先把
-`COMPOSE_PROJECT_NAME=fractal-node1-prod`、`COMPUTE_BIND_IP=10.66.0.2` 和现有 Snap runtime
-绝对路径补入 `/etc/fractal-node1-prod/compute.env`，经 `config --quiet` 验证后再更新模板。
+这三个身份字段是必填项，模板故意没有 Node 1 默认值。从旧模板迁移的节点，必须先把它既有的 `COMPOSE_PROJECT_NAME`、`COMPUTE_BIND_IP`（唯一 WireGuard 地址）和现有 runtime
+绝对路径原样补入 `/etc/<该项目>/compute.env`，经 `config --quiet` 验证后再更新模板。
 
 确认 runtime 对镜像内 `fractal` 用户可写。先查看镜像 UID/GID，再只调整该 runtime 目录，
 不要递归修改 `/srv`：
@@ -287,10 +286,11 @@ docker compose -p fractal-compute-REPLACE-prod \
 ```
 
 普通 Docker 可安装
-[fractal-compute-prod.service.example](fractal-compute-prod.service.example)。Node 1 的 Snap
-Docker 继续使用 [fractal-node1-prod.service.example](fractal-node1-prod.service.example)：
-Compose 的非敏感副本和 runtime 必须位于 `/var/snap/docker/common/`，env 仍由 systemd 从
-`/etc` 注入。不要为规避 Snap confinement 把密钥复制到 Snap 数据目录。
+[fractal-compute-prod.service.example](fractal-compute-prod.service.example)。使用 Snap Docker 的
+主机（如仓库当前部署的 Node 1）继续使用
+[fractal-node1-prod.service.example](fractal-node1-prod.service.example)：Compose 的非敏感副本和
+runtime 必须位于 `/var/snap/docker/common/`，env 仍由 systemd 从 `/etc` 注入。不要为规避 Snap
+confinement 把密钥复制到 Snap 数据目录。
 
 普通 Docker 节点安装 unit：
 
@@ -302,15 +302,15 @@ systemctl enable --now wg-quick@wg0 fractal-compute-prod
 systemctl status wg-quick@wg0 fractal-compute-prod --no-pager
 ```
 
-Snap Node 1 必须先把模板路径替换为当前生产绝对路径，再安装既有专用 unit；不要把普通
-Docker unit 与 Snap unit 混用：
+Snap 主机必须先把模板路径替换为该节点当前的生产绝对路径（项目名、`/var/snap/docker/common/`
+下的 Compose 与 runtime 路径），再安装对应专用 unit；不要把普通 Docker unit 与 Snap unit 混用：
 
 ```bash
 install -m 0644 ops/production/fractal-node1-prod.service.example \
-  /etc/systemd/system/fractal-node1-prod.service
+  /etc/systemd/system/REPLACE_COMPUTE_PROJECT.service
 systemctl daemon-reload
-systemctl enable --now wg-quick@wg0 fractal-node1-prod
-systemctl status wg-quick@wg0 fractal-node1-prod --no-pager
+systemctl enable --now wg-quick@wg0 REPLACE_COMPUTE_PROJECT
+systemctl status wg-quick@wg0 REPLACE_COMPUTE_PROJECT --no-pager
 ```
 
 验证单节点：
@@ -578,10 +578,10 @@ PY
 ### 10.2 公网与路由
 
 ```bash
-curl --noproxy '*' -fsS -o /dev/null -w '%{http_code}\n' https://fractalstudio.cn/
-curl --noproxy '*' -fsS https://fractalstudio.cn/platform/healthz
+curl --noproxy '*' -fsS -o /dev/null -w '%{http_code}\n' https://REPLACE_PRODUCTION_ORIGIN/
+curl --noproxy '*' -fsS https://REPLACE_PRODUCTION_ORIGIN/platform/healthz
 curl --noproxy '*' -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
-  'https://www.fractalstudio.cn/install-probe?x=1'
+  'https://REPLACE_WWW_ORIGIN/install-probe?x=1'
 ```
 
 确认 `/platform/*` 只进入 Platform API；当前签名下载使用保留完整路径的
@@ -659,7 +659,7 @@ Compute runtime 不代替上述备份。普通发布不得清空 runtime；它�
 
 ### Pascal 节点报告 no kernel image
 
-确认镜像是 CUDA 12.x 编译的 `sm_61`，不是 Node 1 的 `sm_89` 镜像；检查 capabilities 中
+确认镜像是 CUDA 12.x 编译的 `sm_61`，不是其它节点（如 Node 1）的 `sm_89` 镜像；检查 capabilities 中
 compiled/runtime 和 compute capability。不要用 CUDA 13 重试 Pascal offline build。
 
 ### Snap Docker 看不到 `/opt` 或 runtime
